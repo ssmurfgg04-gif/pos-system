@@ -7,14 +7,33 @@ DATA="$HOME/.local/share/LedgerPOS"
 URL="http://127.0.0.1:8765"
 
 rm -rf "$DATA"
+
+# Stale instances from earlier runs sometimes squat the desktop port range
+# and hijack every check below. Kill anything listening on 127.0.0.1:8765-8799.
+while read -r line; do
+  p=$(echo "$line" | grep -oE '127\.0\.0\.1:[0-9]+' | head -1 | cut -d: -f2)
+  pid=$(echo "$line" | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
+  if [ -n "$p" ] && [ -n "$pid" ] && [ "$p" -ge 8765 ] && [ "$p" -le 8799 ]; then
+    echo "pre-clean: killing stale pid $pid on port $p"
+    kill "$pid" 2>/dev/null
+  fi
+done < <(ss -tlnpH 2>/dev/null)
+sleep 0.5
+
 "$BIN" > /tmp/desktop-run.log 2>&1 &
 PID=$!
 PASS=0; FAIL=0
 ck() { if [ "$1" = "0" ]; then PASS=$((PASS+1)); echo "PASS: $2"; else FAIL=$((FAIL+1)); echo "FAIL: $2"; fi }
 
+# the app writes the port it picked into app.port — trust that, not a guess
+for i in $(seq 1 40); do [ -s "$DATA/app.port" ] && break; sleep 0.25; done
+PORT=$(cat "$DATA/app.port" 2>/dev/null)
+[ -n "$PORT" ] ; ck $? "app.port readable (picked $PORT)"
+URL="http://127.0.0.1:${PORT:-8765}"
+
 # wait for readiness
 for i in $(seq 1 40); do curl -s -m 1 $URL/api/v1/health >/dev/null 2>&1 && break; sleep 0.25; done
-curl -s -m 2 $URL/api/v1/health | grep -q '"ok"' ; ck $? "health answers on 127.0.0.1:8765"
+curl -s -m 2 $URL/api/v1/health | grep -q '"ok"' ; ck $? "health answers on $URL"
 
 # desktop info
 curl -s -m 2 $URL/api/v1/system/desktop | grep -q '"desktop":true' ; ck $? "desktop status endpoint"
