@@ -10,3 +10,6 @@ frontend/dist/
 .env
 frontend/.vite/
 *.tar.gz
+
+# built binary
+pos-app
