@@ -212,104 +212,24 @@ Stage Summary:
 - GO-POS-Server = source of integration patterns only: PIN quick-switch UX (session swap), zeroconf registration snippet (grandcat/zeroconf, _pos-server._tcp.local.:8000), Fiber graceful shutdown. Its SQLite layer is a cautionary tale: add WAL+busy_timeout+single-writer pool ourselves; hash PINs (bcrypt) + add lockout; its modifier/option/discount catalog model + event_price dual pricing + transaction summary SQL (cash/card split, tips, card fees) are worth porting into the new schema.
 
 ---
-Task ID: 21
+Task ID: 26
 Agent: main (Super Z)
-Task: REBUILD backend after sandbox reset (original code wiped; worklog blueprint preserved)
+Task: Self-hosted downloads on Netlify (no GitHub redirect) + Big-7 landing redesign + thorough review
 
 Work Log:
-- Sandbox reset wiped /home/z/my-project/pos-system + Go install; rebuilt everything from Task 19/20 blueprint + conversation notes
-- Reinstalled Go 1.27.1 user-space; deps via go mod tidy (escpos is v0.0.1 — New(io.Writer), Size(0-5), Print()=flush, PrintAndCut()=cut+flush)
-- Backend rebuilt: config, database (sqlite WAL MaxOpenConns=1 / postgres rebind, versioned migrations, generic seeds via subquery category lookup), models (18-perm catalog), settings (IN-MEMORY CACHE — the structural fix killing the settings-inside-rows deadlock class; AllowedKeys allowlist excludes jwt_secret), auth (JWT 12h, bcrypt via new hash pkg breaking db<->auth cycle, PIN lockout 5→30-300s, sliding-window limiter, per-request principal reload), ws hub, mpesa (Provider iface, Daraja token-cache/STK/query/ParseCallback, Manual ^[A-Z0-9]{10}$, Mock delay+resultCode), printer (58/80mm renderer, tcp/file targets, persistent print_jobs worker 5-attempt), mdns, services (checkout server-side price re-read + override perm gate + guarded stock, completePayment guarded PAID transition + amount-mismatch discrepancy + receipt dedupe, RetrySTKWithPhone, ManualConfirm, void restores stock, sweeper 5s/3min timeout, shifts ms-precision expected, design board, reports), handlers (auth/pin-users/pin, users, roles+catalog, products+categories+CSV import/export/template, orders+receipt.html, payments stk/manual/callback, sync, reports, shifts, design, settings mask/test-print/print-jobs, audit, branding), router (public health/login/pin/pin-users/callback/branding + SPA embed + NoRoute fallback), main (graceful shutdown, worker+sweeper lifecycle, mDNS)
-- DEADLOCK FIXES APPLIED DURING REBUILD: (1) settings cache (structural), (2) completePayment idempotent early-return now rolls back tx BEFORE GetOrder — second self-deadlock variant found by integration test, (3) collect-then-enrich everywhere (ListOrders batch IN queries)
-- Other fixes: import cycle (hash pkg), gin.NoRoute on engine not group, nowStamp() fixed-width ms timestamps (shift expected-cash boundary bug — same-second sales were misattributed), mapErr 403/422 semantic mapping, escpos PrintAndCut flush semantics, multipart test bodies
-- Tests: mpesa (phone norm incl 2541-prefix, receipt validation, real Daraja callback sample parse, mock flows, password format), printer (FormatMoney thousands, 80mm fields+ESC@+GSV, 58mm truncate, target parsing), handlers 21 in-process httptest E2E incl. TestListOrdersConcurrentNoDeadlock (8 goroutines × 10 iterations mixed with settings reads — the regression test for THE bug)
-- E2E smoke (scripts/smoke_test.py) against real binary: 55/55 PASS — includes sweeper-driven STK completion (mock delay 4s → PAID + 10-char receipt), callback amount-mismatch discrepancy, manual dedupe, sync replay, void restore, shift variance, reports, audit, settings masking
+- SANDBOX WIPED AGAIN between messages (pos-system/, build artifacts, Go toolchain, download/ all gone; outer repo rolled back). Full recovery from GitHub: cloned repo @ c98b4e8, downloaded the 4 release assets byte-identical, npm ci for the demo build
+- Web research: Netlify drag-and-drop guidance = deploy <50MB total AND no file over ~10MB (answers.netlify.com staff) — our 10.31-10.39MB installers were over; research on value-prop landing pages: value validation above the fold, ONE primary CTA (single-CTA pages ~13.5% conversion), lean scannable content
+- Repacked all installers under 10,000,000 bytes with byte-identical binaries (sha256-verified): zopfli-deflated zips via scripts/pkgutil.py (raw deflate extracted from zopfli's zlib container, guarded FDICT check; hand-rolled ZIP writer w/ unix perms) — win 10.31->9.92MB, mac-arm 9.56->9.17MB, mac-intel 10.39->9.99MB; Linux switched to tar.xz 10.16->7.32MB; clean member roots (LedgerPOS/, LedgerPOS.app/); fixed mac app_root dirname bug (Contents vs .app — bundle was missing its Contents/ level, caught by member-name verification); checksums.txt generated
+- Landing page redesigned (scripts/assets/download-page.html): hero with ONE auto-detected primary CTA (25-line progressive-enhancement JS; Windows default fallback; mobile note), alt-platform links, trust strip; the Big-7 value props (minute-to-first-sale, offline-first, M-Pesa STK+receipt-code, KRA monthly VAT, existing hardware, data-stays-local, MIT white-label); slim 3-step strip; relative downloads/ links with download attr; OG/Twitter meta; kept Ledger design language
+- scripts/build_site.py: fast-path site assembly (no Go/npm) — renders template, regenerates checksums, href link check, drag-and-drop zip with installers STORED (not double-compressed); 36.5MB / 14 files / ~37MB deployed
+- scripts/package_desktop.py updated to match (pkgutil zopfli zips, tar.xz, size guard, embed-by-default, LEDGERPOS_LIGHT_SITE=1 opt-out); scripts/create_release.py rewritten in-repo; GitHub release v1.0.0 re-synced (4 smaller packages + checksums.txt asset, legacy tar.gz deleted, notes patched)
+- Verification: local http.server — every href 200 with byte-exact sizes; browser E2E — title/Big-7 count 7/CTA auto-detect (Linux host -> Linux tar.xz + alt hidden)/emerald brand button; demo band clickthrough -> /demo/ loads app w/ Demo-mode pill; desktop E2E 17/17 on the repacked tar.xz artifact
+- VLM critique round on the landing page: applied real findings (note text contrast #94A3B8->#475569, dropped 'SQLite WAL' jargon from card 02, softened SmartScreen/Gatekeeper phrasing); rejected false positive ('Download for Linux' hero is correct per-host auto-detection)
+- README updated: downloads served straight from Netlify, build_site.py/repack.py commands, checksums, LEDGERPOS_LIGHT_SITE escape hatch, tar.xz
+- Committed + pushed: ba66960 (self-hosted downloads + Big-7 + sub-10MB packages) then polish commit
 
 Stage Summary:
-- Backend COMPLETE and hardened: binary builds (37.9MB), go vet clean, all tests green
-- Server running on :3000 with demo seed (admin/admin123 PIN 1234, cashier/cashier123 PIN 2222, designer/designer123 PIN 3333; mpesa_env=mock delay 4s)
-- Next: React frontend (Ledger design system), embed, browser E2E, 5× VLM critique, push
-
----
-Task ID: 22
-Agent: main (Super Z)
-Task: REBUILD frontend (Ledger design system) + embed + browser E2E
-
-Work Log:
-- Vite+React18+TS+Tailwind v4 scaffold; @theme Ledger tokens (shell #0F172A, white surfaces, brand #10B981 w/ slate-900 ink 7.04:1, status pairs all AA, hard shadows, system font stack, reduced-motion kill switch, runtime --color-brand override)
-- Core: api client (envelope handling, typed DTOs), money utils (parseToCents/formatMoney/formatMoneyCompact w/ decimal-path fix, VAT incl/excl, KE phone normalization), stores (auth/branding/cart/toasts via zustand), offline (IndexedDB checkout queue keyed by clientUuid + 10s heartbeat + flush-on-reconnect), ws client (first-message token auth, exp backoff reconnect)
-- UI kit: Button 4×3 with press translate+shadow-collapse, Card+sub, Modal 5 sizes ESC-close, Field/Input/Select/Textarea/MoneyInput, StatusPill text+dot (never color-only), Table sticky header, Tabs, EmptyState, Spinner, 3×4 Keypad, ToastHost bottom-center z-60, OfflineBanner
-- Pages: Login, Pin (user picker + keypad + lockout messaging), Pos (65/35 grid, category chips, barcode auto-add, F2 focus, qty steppers, override-price permission-gated, Charge modal cash quick-tender + change calc + offline enqueue, M-Pesa charge w/ phone collection), MpesaModal (phone→pending pulse+poll→success / failed w/ retry + always-available manual 10-char receipt entry), Inventory (CRUD+CSV import/export+categories), Orders (filters+search+drawer+void+manual entry+receipt link), DesignBoard (4-col kanban), Shifts (open/close+variance coloring), Reports (stat cards+CSS 7-day bars+payment split+top products), Users (users CRUD+PIN/password reset+dynamic role permission editor), Settings (store/payments incl Daraja masked secrets/printer+test print/audit log tabs)
-- 28 vitest units green (money incl. compact decimal fix + phone normalization; cart merge/totals/clear)
-- FIXED DURING BUILD: TS errors (apostrophes in JSX strings, missing paren, unused imports, forwardRef Input, paymentMode union), gin static serving bug (group middleware never runs for unmatched routes — assets got index.html w/ text/html MIME killing module scripts; static serving moved INTO NoRoute handler), M-Pesa 422 (charge modal now collects phone; modal opens in pending phase when STK already initiated; charge state resets on open)
-- Browser E2E (agent-browser): login→admin POS; cash sale KES 1,550 toast ORD202609110001 + cart cleared; M-Pesa STK→PAID in 7s w/ receipt MOCK4BIPW3 (sweeper); orders/reports/inventory/settings(Payments+Audit tabs)/design/shifts/people pages verified; PIN quick-switch→cashier scoped nav (Sell/Orders/Shifts only); OFFLINE cash sale queued (banner)→online auto-sync→ORD202609110002 PAID server-side; mobile 390px viewport captured
-- 22 screenshots archived to /home/z/my-project/shots/
-
-Stage Summary:
-- 38MB single binary (SPA+API embedded), tsc clean, 28 FE + 26 Go tests green, 55/55 smoke, full browser E2E verified
-- Next: 5× VLM critique rounds on /home/z/my-project/shots/, fix findings, README/LICENSE, push
-
----
-Task ID: 23
-Agent: main (Super Z)
-Task: 5× VLM critique rounds + fixes + final regression + docs + push
-
-Work Log:
-- Round 1 (core selling screens): fixed dark-on-dark auth-switch links (ink-muted was for white surfaces; now on-shell-muted), quick-tender button gap 1.5→2
-- Round 2 (payment flow): phone number emphasized as boxed black tabular display in STK pending state; fallback link renamed to action-oriented "Enter receipt code manually"; elapsed→expiry countdown "Xs left · auto-checks every 2s"; offline banner upgraded to amber pending treatment both states; product-load error toast suppressed when offline (expected condition)
-- Round 3 (data pages): settings form re-laid-out (paired inputs, textarea full-width); zebra striping added; M-Pesa receipt codes in orders table now mono+dotted+title; chart bars VERIFIED rendering correctly (6×3% zero-days + 100% today — VLM false positive)
-- Round 4 (role screens): auth links → min-h-11 flex targets; Users row actions spaced with gap + Deactivate visually separated (ml-2 border-l); design kanban renders 4 columns even when empty (60% opacity + per-column Empty); shifts duplicate CTA removed
-- Round 5 (final polish): product-tile price whitespace-nowrap + stock label 10px (KES 1,200 no longer wraps); zebra stripe strengthened to full surface-muted #F8FAFC (verified computed style)
-- Final regression: go vet clean, Go tests all green, 28/28 FE units, 55/55 E2E smoke on fresh DB, browser sanity re-verified post-fixes
-- Wrote README (features, quick start, demo accounts, Daraja go-live steps, env vars, dev guide), MIT LICENSE, .env.example
-- Repository pushed to github.com/ssmurfgg04-gif/pos-system with provided token
-
-Stage Summary:
-- Project COMPLETE: single-binary white-label POS, dynamic RBAC (admin/cashier/designer seeded), M-Pesa STK+manual fallback w/ swappable provider, offline sync, ESC/POS, shifts, reports, audit — all tests green, 5 VLM critique rounds applied
-
----
-Task ID: 24
-Agent: main (Super Z)
-Task: Netlify demo mode + user-reported fixes (jwt secret, remove-from-cart, icons) + admin/KRA/backup/barcode/CSV features + 5 more VLM rounds + regression + push
-
-Work Log:
-- Verified prior session's ListOrders deadlock fix landed (DEADLOCK DISCIPLINE comment in queries.go); full Go suite green at baseline
-- FIXED reported "save settings → error jwt secret": settings.Snapshot() no longer returns jwt_secret at all; UpdateSettings silently skips masked (__SET__) echoes of read-only keys (defense in depth); regression tests added (TestSettingsSaveEchoedReadOnlyKey)
-- NETLIFY DEMO MODE (the priority): new frontend/src/demo/{seed,backend}.ts — an in-browser API mirroring the Go server (routes, envelopes, RBAC, money math, STK lifecycle w/ simulated customer-PIN delay, manual receipt dedupe, void+stock restore, CSV import/export, settings masking, monthly KRA report); api.ts gained backend selection (VITE_API_URL → real; VITE_DEMO_MODE/?demo=1 → demo; else probe /api/v1/health requiring JSON → real, else demo), raw()/downloadFile() authenticated CSV downloads; ws client + heartbeat no-op in demo; Login shows 3 one-tap demo role chips; shell shows "Demo mode" pill; Settings→System has Reset demo data; seeded realistic Nairobi print shop (21 products, 6 weeks orders ~170, shifts, design jobs, audit)
-- Removed-from-cart: mobile cart bottom-sheet added (was hidden lg:flex only — phones had NO cart view); desktop remove button upgraded to lucide X with hover state; minus-at-qty-1 removes line
-- Icons: lucide-react installed; ALL emojis replaced across shell nav, App NoPerm, MpesaModal, Orders (PaymentLabel component), Reports, Inventory, Users, Shifts, DesignBoard, Settings, ui.tsx (EmptyState now ReactNode icon, toasts, Modal close); Tabs accept icons
-- Admin role semantics: homeFor() lands admin on /reports (manager-first), designer /design, cashier /; designer without pos.sell auto-redirects from '/'
-- KRA monthly returns: services GetMonthlySummary + handlers MonthlyReport/MonthlyReportCSV + routes; Reports page Monthly tab (gross, nett, VAT, transactions, cash/M-Pesa split, per-day bars w/ baseline axis, CSV download)
-- Backups: services/backup.go (VACUUM INTO, retention, daily 02:00 scheduler, boot snapshot) + POST /system/backup, GET /system/backups + Settings System tab UI (backup now, snapshots table, backup_auto/keep settings) + demo parity
-- Inventory: quick "Stock" receive/adjust modal w/ reason + audit; CSV export switched from broken plain <a href> (401!) to authenticated blob download (works real + demo)
-- Barcode: global HID scanner listener (burst-only, Enter-terminated, ignores focused inputs) — scans add straight to cart; verified via synthetic key events
-- Receipt: new ReceiptModal component (ESC/POS-style, printable via window.print with isolation CSS) wired into POS cash success, MpesaModal success, Orders drawer (replaces broken <a> receipt link)
-- 5 VLM critique rounds on new screens; applied: login link contrast + page scroll, phone display restyle (read-only look, 2xl), progress bar 12px + border, chart baselines + date labels, reset-demo danger styling, modal footer gap-3, quick-tender min-h-12, cash input emphasis, pending-phase bottom padding; verified chart bars + Stock button text were VLM false positives
-- Tests: 4 new Go handler tests (jwt regression, monthly KRA, backup endpoints) + 23 demo backend contract tests (jsdom); 55/55 E2E smoke on fresh server (earlier failures were a stale server process on :3000)
-- Browser E2E on the REAL Go server: cashier login → 2× tee → cash sale ORD202609110001 → receipt modal; orders page + receipt verified; no demo pill; probe-mode build embedded in binary (VITE_DEMO_MODE only for Netlify builds — forced-demo dist zipped to download/pos-netlify-demo-dist.zip)
-- netlify.toml (base/command/publish/VITE_DEMO_MODE) + frontend/public/_redirects + README (Netlify section, new features)
-
-Stage Summary:
-- Same codebase now runs BOTH ways: single Go binary (real backend) AND static Netlify deploy (in-browser demo backend, fully interactive)
-- All user-reported bugs fixed: jwt secret save error, remove-from-cart, emoji icons, mobile cart
-- New: KRA monthly returns + CSV, automatic backups + UI, barcode HID scanning, stock receive flow, printable receipts, role-based landing
-- 51/51 FE tests, 26 Go tests, 55/55 E2E smoke, tsc clean; pushed to github.com/ssmurfgg04-gif/pos-system
-
----
-Task ID: 25
-Agent: main (Super Z)
-Task: Standalone desktop app — download/double-click distribution + GitHub Release v1.0.0 + full commit/push of milestones
-
-Work Log:
-- Desktop mode (no-args launch): per-OS data dir (APPDATA\LedgerPOS / ~/Library/Application Support/LedgerPOS / ~/.local/share/LedgerPOS), first-run detection, port pick 8765-7914, 127.0.0.1-only bind, single-instance via app.port + health probe (second launch just opens a tab), auto-open default browser, desktop.log for GUI-subsystem builds; `serve` subcommand = LAN-appliance mode; `--uninstall` removes the Windows install
-- Windows self-installer: copy to %LOCALAPPDATA%\Programs\LedgerPOS, desktop + Start-menu shortcuts, HKCU Add/Remove entry, reliable self-delete; vendored internal/escpos (MIT, iconv stripped) → CGO-free tree → clean 4-target cross-compile (win-x64 GUI exe w/ icon+manifest+version resources, darwin arm64+amd64 .app bundles with icns/Info.plist, linux-x64 tar.gz — ~10 MB each compressed)
-- New API GET /api/v1/system/desktop {desktop, firstRun, port, version} + POST /api/v1/system/quit (admin-only); frontend: first-run admin-credentials hint on Login, Quit button in shell + "app stopped" overlay
-- Packaging pipeline scripts/{package_desktop.py,make_icon.py,desktop_e2e.sh,desktop_browser_e2e.sh,assets/download-page.html}: one command builds icons, resources, 4 installers, in-browser demo for /demo/, Ledger-styled zero-JS landing page, light Netlify site zip
-- Verification: PE GUI-subsystem + UTF-16 version strings + 9 icon sizes in exe; mac bundles exec-bit'd; serve-mode smoke 55/55; frontend units 51/51; desktop E2E on the distributed Linux artifact — after hardening the script (a stale server squatted 8765 and hijacked checks → pre-clean port range + read port from app.port): 17/17
-- Distribution: pushed commits 21318d0 (desktop core) + ad243c4 (packaging/landing/DEVLOG) to github.com/ssmurfgg04-gif/pos-system; created Release v1.0.0 with all 4 installers as assets; landing page download buttons point at the release URLs (Netlify page stays ~135 KB); re-ran the full E2E against the artifact DOWNLOADED FROM the release — 17/17
-- Netlify: CLI unavailable in sandbox; deliverable is download/ledgerpos-netlify-site.zip (landing + /demo/ + _redirects) for drag-drop deploy; installers also copied to download/
-
-Stage Summary:
-- The POS is now a real distributable desktop app: landing page → GitHub Release → download → double-click → self-setup → sell. No browser/localhost/server issues for the end user — the app opens itself.
-- All milestones committed & pushed; release v1.0.0 live
-- Remaining nice-to-haves: code-signing certs (kills SmartScreen/Gatekeeper warnings), real Daraja creds for production STK
+- Netlify page now serves installers DIRECTLY: drag download/ledgerpos-netlify-site.zip (36.5MB) onto Netlify and the download buttons hand users the file from the same site — no GitHub redirect
+- All packages <10MB (Netlify drag-drop safe), binaries byte-identical to tested release, checksums published (site + release)
+- Landing page conversion-hardened: one-CTA hero w/ OS auto-detect, Big-7 props, VLM-reviewed
+- Repo fully pushed (source + scripts + DEVLOG); release v1.0.0 synced as mirror
