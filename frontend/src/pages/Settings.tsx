@@ -23,7 +23,11 @@ export function Settings() {
   const [backing, setBacking] = useState(false)
   const [demo, setDemo] = useState(false)
 
-  backendMode().then((m) => setDemo(m === 'demo')).catch(() => undefined)
+  useEffect(() => {
+    let alive = true
+    backendMode().then((m) => { if (alive) setDemo(m === 'demo') }).catch(() => undefined)
+    return () => { alive = false }
+  }, [])
 
   const load = async () => {
     try {

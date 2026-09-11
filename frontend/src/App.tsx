@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useRoute, homeFor } from './lib/router'
+import { useRoute, homeFor, withBase } from './lib/router'
 import { useAuth } from './stores/auth'
 import { useBranding } from './stores/branding'
 import { AppShell, Booting } from './components/shell'
@@ -84,7 +84,7 @@ function NoPerm({ perm }: { perm: string }) {
 
 function Redirect({ to }: { to: string }) {
   useEffect(() => {
-    history.replaceState({}, '', to)
+    history.replaceState({}, '', withBase(to))
     window.dispatchEvent(new PopStateEvent('popstate'))
   }, [to])
   return <Booting />

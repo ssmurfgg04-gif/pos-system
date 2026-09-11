@@ -233,3 +233,64 @@ Stage Summary:
 - All packages <10MB (Netlify drag-drop safe), binaries byte-identical to tested release, checksums published (site + release)
 - Landing page conversion-hardened: one-CTA hero w/ OS auto-detect, Big-7 props, VLM-reviewed
 - Repo fully pushed (source + scripts + DEVLOG); release v1.0.0 synced as mirror
+
+---
+
+## Task 28 — GitHub → Netlify continuous deployment + the typing freeze
+
+**User report:** the live Netlify site showed the POS login page instead
+of the download landing page, and typing into any field froze the tab.
+
+**Root causes found (both reproduced before fixing):**
+
+1. **Deployment**: `netlify.toml` still deployed the demo SPA at `/`
+   (base=frontend, npm build, publish dist) — the landing-page work from
+   Task 26/27 only ever produced drag-and-drop zips. With the repo now
+   wired to Netlify auto-deploy, the wrong thing was being deployed.
+2. **Typing freeze**: `Login.tsx` (and `Settings.tsx`) registered
+   promise-`.then(setState)` callbacks **in the render body**. With
+   trusted keyboard events React flushes updates synchronously, the
+   microtask state-sets land as render-phase updates, and the component
+   re-registers new callbacks on every re-render → infinite
+   render-phase loop at 80-100% CPU (stack captured via CDP:
+   Login → useState → updateReducer loop). CDP `Input.insertText`
+   reproduced the hang deterministically; synthetic events did not,
+   which is why it slipped past earlier testing.
+
+**Fixes:**
+
+- `frontend/src/pages/Login.tsx`, `Settings.tsx`: moved the
+  backend-mode/desktop-status promises into `useEffect` with `alive`
+  flags — typing verified smooth via CDP insertText + Playwright
+  fill/type on Login, Settings and POS barcode search.
+- **Continuous deploy**: new `scripts/netlify_build.py` is the Netlify
+  build command (netlify.toml: base=frontend, command, publish=dist).
+  It runs the vite demo build with `VITE_BASE=/demo/`, restructures
+  dist into `demo/`, renders the landing page at `index.html`, copies
+  the installers from the repo (`downloads/`, committed, SHA-256
+  verified against checksums.txt at build time) and writes `_redirects`
+  (`/demo/*` SPA fallback). No network fetches → deterministic builds.
+- **Subdirectory routing**: `lib/router.ts` gained `stripBase`/`withBase`
+  (driven by `import.meta.env.BASE_URL`); `vite.config.ts` reads
+  `VITE_BASE`. Root builds are byte-identical in behavior (BASE='/'
+  identity), demo builds route under `/demo/`.
+- Installers + checksums + icons committed to the repo
+  (`downloads/`, `scripts/assets/icons/`) — the deploy serves them from
+  the same Netlify site as the buttons point to.
+
+**Verification (all green before pushing):**
+
+- typing: CDP insertText + fill/type on login (demo + real), Settings,
+  POS search — no freeze anywhere; console clean
+- demo under `/demo/`: deep-link `/demo/reports` (via a Netlify-like
+  _redirects server) → login → Reports renders; router strips/re-adds
+  base correctly
+- real app: `go vet` clean, `go test ./...` ok, serve smoke 55/55 with
+  the new frontend embedded, browser login → /reports on the real server
+- frontend: tsc clean, vitest 51/51
+- landing: all 14 internal hrefs resolve; download files served (200);
+  VLM critique 9/10
+
+**Deploy expectation:** push to main → Netlify builds
+`netlify_build.py` → live site = landing at `/`, demo at `/demo/`,
+installers at `/downloads/`.
