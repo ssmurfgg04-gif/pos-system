@@ -70,6 +70,42 @@ power cut never corrupts a till.
 - **mDNS discovery** — broadcasts `_pos-server._tcp.local` so terminals
   find the server on the LAN (best-effort; never fatal).
 
+## The desktop app: download, double-click, sell
+
+The recommended way to run this in a real shop is the **standalone
+desktop build** — the same single binary, shipped as an app for Windows,
+macOS and Linux. No terminal, no localhost URL to remember, no server
+to configure:
+
+1. Download the package for your machine from the
+   [releases page](https://github.com/ssmurfgg04-gif/pos-system/releases).
+2. Double-click it. On Windows the exe **installs itself** (desktop +
+   Start-menu shortcuts, Add/Remove Programs entry) and starts; on macOS
+   unzip and open `LedgerPOS.app`; on Linux `tar xf` then `./ledgerpos`.
+3. Your browser opens on the app. First login `admin / admin123`
+   (PIN `1234`) — change it in Settings on first run.
+
+First launch sets up everything by itself: it creates the SQLite
+database, runs migrations, seeds the catalog and users, picks a free
+local port (8765–7914), binds to 127.0.0.1 **only**, and opens the
+browser. Launching it again while it's running just opens a new tab.
+An admin can stop it from the UI (sidebar → Quit). All data lives in a
+per-OS app directory — `%APPDATA%\LedgerPOS`,
+`~/Library/Application Support/LedgerPOS`, `~/.local/share/LedgerPOS` —
+so it survives reinstalls and never leaves the machine.
+
+Build the installers yourself (cross-compiles all four targets,
+CGO-free, from any OS):
+
+```bash
+python3 scripts/package_desktop.py 1.0.0
+```
+
+The old behaviour is still there: `./ledgerpos serve` runs the
+LAN-appliance mode (env-driven, mDNS discovery, 0.0.0.0 bind) for
+multi-terminal setups, and `./ledgerpos --uninstall` removes the
+Windows desktop install.
+
 ## Deploy the demo to Netlify (no server needed)
 
 The SPA ships with an **in-browser demo backend**: when no server answers
