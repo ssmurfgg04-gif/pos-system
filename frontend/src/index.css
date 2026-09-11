@@ -1,0 +1,129 @@
+@import "tailwindcss";
+
+/*
+ * LEDGER design system — dark slate-900 app shell + white content surfaces.
+ * Rationale: critical reading zones get 17.9:1 contrast that survives
+ * bright-store glare; neubrutalism is carried by 2px borders + hard shadows
+ * (hard shadows barely read dark-on-dark, so borders do the work).
+ * All pairs below passed WCAG AA verification (see design spec).
+ */
+@theme {
+  /* Surfaces */
+  --color-shell: #0f172a;        /* slate-900 app chrome */
+  --color-shell-edge: #1e293b;   /* slate-800 raised chrome */
+  --color-surface: #ffffff;      /* cards, tables, modals */
+  --color-surface-muted: #f8fafc;/* slate-50 wells, table stripes */
+
+  /* Ink (text) */
+  --color-ink: #0f172a;          /* 17.85:1 on white */
+  --color-ink-muted: #475569;    /* 7.03:1 on white */
+  --color-ink-subtle: #64748b;   /* 4.76:1 on white (large/secondary only) */
+  --color-on-shell: #e2e8f0;     /* 12.6:1 on slate-900 */
+  --color-on-shell-muted: #94a3b8;
+
+  /* Lines */
+  --color-line: #cbd5e1;         /* slate-300 dividers */
+  --color-line-strong: #0f172a;  /* neubrutalist 2px borders */
+
+  /* Brand (white-label: overridden at runtime via --color-brand) */
+  --color-brand: #10b981;        /* emerald-500 */
+  --color-brand-ink: #0f172a;    /* text ON brand: 7.04:1 — NOT white */
+  --color-brand-strong: #047857; /* emerald-700 hard shadow / pressed */
+
+  /* Status — never color-only; pills carry text too */
+  --color-paid-bg: #ecfdf5;  --color-paid-text: #047857;
+  --color-pending-bg: #fffbeb; --color-pending-text: #b45309;
+  --color-danger: #dc2626; --color-danger-bg: #fef2f2; --color-danger-text: #b91c1c;
+  --color-info-bg: #eff6ff;  --color-info-text: #1d4ed8;
+  --color-void-bg: #f1f5f9;  --color-void-text: #475569;
+
+  /* Radius */
+  --radius-card: 10px;
+  --radius-input: 8px;
+  --radius-pill: 999px;
+
+  /* Hard shadows */
+  --shadow-brutal: 4px 4px 0 0 #0f172a;
+  --shadow-brutal-sm: 2px 2px 0 0 #0f172a;
+  --shadow-brutal-brand: 4px 4px 0 0 #047857;
+  --shadow-brutal-danger: 4px 4px 0 0 #b91c1c;
+  --shadow-inset-line: inset 0 -2px 0 0 #cbd5e1;
+
+  /* Type — system stack (no webfont on flaky connections) */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  /* Motion */
+  --ease-pop: cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+/* Money everywhere: tabular figures so totals don't jitter as digits change */
+.tabular { font-variant-numeric: tabular-nums; }
+
+html, body, #root { height: 100%; }
+body {
+  background: var(--color-shell);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+/* Focus: 2px ring + offset, visible on both white surfaces and the shell */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+/* Keypad/number inputs: numeric keyboards on touch devices */
+input[inputmode="numeric"], input[inputmode="decimal"] { font-variant-numeric: tabular-nums; }
+
+/* Animations */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(0.82); }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes progress-slide {
+  from { width: 0%; } to { width: 100%; }
+}
+
+.anim-toast   { animation: toast-in 180ms var(--ease-pop); }
+.anim-modal   { animation: modal-in 160ms var(--ease-pop); }
+.anim-backdrop{ animation: backdrop-in 140ms ease-out; }
+.anim-pulse-dot { animation: pulse-dot 1.1s ease-in-out infinite; }
+.anim-spin    { animation: spin 0.7s linear infinite; }
+
+/* Reduced-motion kill switch */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Print: receipt pages only print the receipt node */
+@media print {
+  body { background: #fff; }
+  .noprint { display: none !important; }
+}
+
+/* Table zebra striping — easier row tracking on wide data tables */
+tbody tr:nth-child(odd) { background: var(--color-surface-muted); }
+tbody tr:hover { background: var(--color-surface-muted); }
+
+/* Scrollbars: slim, unobtrusive */
+* { scrollbar-width: thin; scrollbar-color: #94a3b8 transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 4px; }

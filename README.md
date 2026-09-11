@@ -1,0 +1,151 @@
+# Point of Sale
+
+A white-label, multi-terminal point-of-sale system for retail — built for
+Kenyan shops (M-Pesa first) but not hardcoded to any of them. One Go binary
+serves the API **and** the React frontend; SQLite runs in WAL mode so a
+power cut never corrupts a till.
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  pos-app  (single ~38MB binary)                            │
+│  ├─ Go API  : Gin, JWT, RBAC, M-Pesa, ESC/POS, mDNS, WS    │
+│  ├─ SQLite  : WAL + busy_timeout (or PostgreSQL)           │
+│  └─ React   : embedded SPA (Ledger design system)          │
+└────────────────────────────────────────────────────────────┘
+```
+
+## Feature highlights
+
+- **Dynamic RBAC** — an admin creates any role and edits its permissions
+  from a catalog (`pos.sell`, `payments.manual`, `products.manage`, …).
+  Seeded system roles: **Admin** (everything), **Cashier** (sell, void,
+  manual M-Pesa entry, shifts), **Designer** (design/production board).
+  Enforcement is server-side only; the UI just hides what you can't do.
+- **M-Pesa, three ways** — provider is swappable behind one interface:
+  `mock` (demos/training, default), Daraja `sandbox`, Daraja `production`.
+  Payment modes: `auto` (STK push, manual fallback), `stk`, `manual`.
+  LAN boxes can't receive webhooks, so a **sweeper polls stkpushquery**
+  every 5s and completes orders itself; the public callback endpoint works
+  too, and both are idempotent.
+- **Manual receipt entry (first-class)** — customer pays to the
+  till/paybill themselves; the cashier types the 10-character M-Pesa
+  receipt code. Format-validated (`^[A-Z0-9]{10}$`), unique-indexed,
+  amount-checked. Paying the wrong amount flags a **discrepancy** for
+  admin review instead of silently trusting it.
+- **Crash-safety everywhere** — integer cents for money, guarded stock
+  deduction (`WHERE status != 'PAID'` — no double-deduct even if two
+  completions race), persistent `print_jobs` (power loss = reprint on
+  boot), idempotent offline sync keyed by `client_uuid`.
+- **Offline-first terminals** — the SPA queues cash sales in IndexedDB
+  when the network drops, shows a banner, and syncs on reconnect. The
+  server replays idempotently, so double-submits are harmless.
+- **ESC/POS printing** — 80mm/58mm receipts over TCP (`tcp://host:9100`)
+  or USB (`file:///dev/usb/lp0`), retry queue with backoff, browser-print
+  fallback at `/api/v1/orders/{id}/receipt`.
+- **Shifts & reconciliation** — open with a float, close counting the
+  drawer; expected cash is computed from completed cash payments, variance
+  highlighted. Full audit log of who did what.
+- **White-label by construction** — every visible string (app name, store
+  name/address/phone, receipt footer, currency, VAT %, brand color, till/
+  paybill numbers) comes from the settings table. No company name is
+  hardcoded anywhere. Secrets are masked (`__SET__`) in the API.
+- **Fast shift handoff** — 4-digit PIN quick-switch (bcrypt-hashed,
+  escalating lockout, rate-limited). JWT 12h, per-request permission
+  reload so role edits apply immediately.
+- **mDNS discovery** — broadcasts `_pos-server._tcp.local` so terminals
+  find the server on the LAN (best-effort; never fatal).
+
+## Quick start
+
+```bash
+# build the single binary (frontend must be built first)
+cd frontend && npm install && npm run build && cd ..
+go build -o pos-app .
+
+# run it (SQLite, demo seed, M-Pesa in mock mode)
+SEED_DEMO=true ./pos-app              # → http://localhost:3000
+```
+
+Demo accounts (seeded once, safe to delete):
+
+| Username | Password   | PIN  | Role    |
+|----------|------------|------|---------|
+| admin    | admin123   | 1234 | Admin   |
+| cashier  | cashier123 | 2222 | Cashier |
+| designer | designer123| 3333 | Designer |
+
+M-Pesa starts in **mock** mode: STK pushes auto-succeed after ~4s so you
+can demo/training the whole flow. Switch the provider in
+**Settings → Payments** when you're ready for Daraja sandbox/production.
+
+### Environment variables
+
+| Var           | Default    | Purpose                              |
+|---------------|------------|--------------------------------------|
+| `PORT`        | `3000`     | HTTP port                            |
+| `DB_DRIVER`   | `sqlite`   | `sqlite` or `postgres`               |
+| `DB_PATH`     | `pos.db`   | SQLite file                          |
+| `POSTGRES_DSN`| —          | e.g. `postgres://user:pw@host/db`    |
+| `SEED_DEMO`   | `true`     | Seed demo catalog + users            |
+| `MDNS_ENABLED`| `true`     | LAN discovery broadcast              |
+
+### Go real with M-Pesa (Daraja)
+
+1. Settings → Payments → environment: `sandbox` (test credentials) or
+   `production`.
+2. Fill shortcode, passkey, consumer key/secret. The callback URL is
+   optional — polling covers LAN deployments.
+3. Leave the mode on `auto`: customers get an STK push; if they pay at
+   the till instead, the cashier enters the receipt code. Both complete
+   the same order.
+
+### Production notes
+
+- Put the binary on a disk that survives reboots; the SQLite file *is*
+  the till. WAL mode + `synchronous=NORMAL` is the right trade for a POS.
+- Run it behind Caddy/nginx for TLS if terminals connect over Wi-Fi you
+  don't fully trust. The API allows all origins by design (LAN appliance)
+  — scope that down if you expose it publicly.
+- `GET /api/v1/health` for uptime checks; the audit log is under
+  Settings → Audit log.
+
+## Development
+
+```bash
+# backend
+go vet ./... && go test ./...
+
+# frontend (Vite dev server proxies /api → :3000)
+cd frontend && npm run dev
+
+# tests
+cd frontend && npm test
+
+# end-to-end smoke (server must be running on :3000)
+python3 scripts/smoke_test.py
+```
+
+Project layout:
+
+```
+internal/
+  config/     env config
+  database/   dual-driver open, migrations, seeds
+  models/     DTOs + permission catalog
+  settings/   key/value store with in-memory cache
+  auth/       JWT, bcrypt, PIN lockout, rate limiter, middleware
+  hash/       bcrypt (dependency-free to avoid import cycles)
+  mpesa/      Provider interface, Daraja, Manual validation, Mock
+  printer/    ESC/POS renderer + persistent print worker
+  mdns/       LAN discovery
+  ws/         websocket hub (token auth on first message)
+  services/   checkout, payments, void, sync, sweeper, shifts, design, reports
+  handlers/   HTTP layer
+  router/     routes + permission gates + embedded SPA
+frontend/     React 18 + Vite + TS + Tailwind v4 (Ledger design system)
+scripts/      E2E smoke test
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -1,0 +1,12 @@
+/bin/
+pos.db
+pos.db-wal
+pos.db-shm
+*.log
+node_modules/
+frontend/node_modules/
+frontend/dist/
+!frontend/dist/.gitkeep
+.env
+frontend/.vite/
+*.tar.gz
