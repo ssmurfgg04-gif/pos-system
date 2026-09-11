@@ -27,6 +27,21 @@ type H struct {
         Printer  *printer.Worker
         LoginRL  *auth.RateLimiter
         PinRL    *auth.RateLimiter
+
+        // Desktop (single-machine) mode. Set by main after New(); when
+        // Desktop.Desktop is true the SPA shows an admin "Quit" affordance.
+        Desktop DesktopStatus
+        // OnQuit is invoked (once) when an admin POSTs /system/quit.
+        OnQuit func()
+}
+
+// DesktopStatus reports how the binary was launched. Server mode keeps
+// the zero value (desktop=false); desktop mode fills it in.
+type DesktopStatus struct {
+        Desktop  bool   `json:"desktop"`
+        Version  string `json:"version,omitempty"`
+        FirstRun bool   `json:"firstRun,omitempty"`
+        Port     string `json:"port,omitempty"`
 }
 
 func New(db *database.DB, st *settings.Store, svc *services.Service, hub *ws.Hub, pw *printer.Worker) *H {

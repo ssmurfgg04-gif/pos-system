@@ -7,10 +7,10 @@ import { startHeartbeat, flushQueue } from '../offline/heartbeat'
 import { connectWs, disconnectWs, onWsEvent } from '../ws/client'
 import { toast } from '../stores/toasts'
 import { useNet } from '../offline/heartbeat'
-import { backendMode, isDemoSync } from '../lib/api'
+import { backendMode, isDemoSync, getDesktopStatus, api, type DesktopStatus } from '../lib/api'
 import {
   ShoppingCart, ReceiptText, Palette, Package, Coins, BarChart3, Users, Settings,
-  LogOut, RefreshCw, FlaskConical,
+  LogOut, RefreshCw, FlaskConical, Power, PowerOff,
 } from 'lucide-react'
 
 // Nav items: shown strictly by permission (server enforces regardless).
@@ -31,12 +31,15 @@ export function AppShell({ current, children }: { current: string; children: Rea
   const branding = useBranding((s) => s.branding)
   const net = useNet()
   const [demo, setDemo] = useState(isDemoSync())
+  const [desk, setDesk] = useState<DesktopStatus | null>(null)
+  const [stopping, setStopping] = useState(false)
 
   useEffect(() => {
     startHeartbeat()
     connectWs()
     let mounted = true
     backendMode().then((m) => { if (mounted) setDemo(m === 'demo') })
+    getDesktopStatus().then((d) => { if (mounted) setDesk(d) }).catch(() => undefined)
     const off = onWsEvent('SETTINGS_UPDATED', () => useBranding.getState().load())
     const offPaid = onWsEvent('ORDER_PAID', (o: any) => {
       // Another terminal completed a sale — surface it.
@@ -56,6 +59,17 @@ export function AppShell({ current, children }: { current: string; children: Rea
     logout()
     disconnectWs()
     navigate('/login')
+  }
+
+  // Desktop app: admin can stop the whole local app from the toolbar.
+  const canQuit = !!(desk?.desktop && user?.permissions.includes('settings.manage'))
+  const quitApp = async () => {
+    if (stopping) return
+    if (!window.confirm(`Quit ${branding.app_name || 'the app'}? The local app and its server will stop — your data is saved on this machine.`)) return
+    setStopping(true)
+    try { await api.post('/system/quit') } catch { /* server is going away — expected */ }
+    logout()
+    disconnectWs()
   }
 
   const items = NAV.filter((n) => user?.permissions.includes(n.perm))
@@ -130,10 +144,37 @@ export function AppShell({ current, children }: { current: string; children: Rea
           >
             <LogOut size={18} aria-hidden />
           </button>
+          {canQuit && (
+            <button
+              onClick={quitApp}
+              className="min-h-11 min-w-11 rounded-input text-on-shell-muted hover:text-danger-text hover:bg-shell-edge/60 flex items-center justify-center"
+              aria-label="Quit application"
+              title={`Quit ${branding.app_name || 'app'} (stops the local app)`}
+            >
+              <Power size={18} aria-hidden />
+            </button>
+          )}
         </div>
       </header>
 
       <OfflineBanner />
+
+      {/* Desktop app stopped — safe-to-close takeover */}
+      {stopping && (
+        <div className="fixed inset-0 z-70 bg-shell flex items-center justify-center p-4" role="status">
+          <div className="bg-surface border-2 border-line-strong rounded-card shadow-brutal p-6 max-w-sm w-full text-center">
+            <div className="w-12 h-12 mx-auto rounded-input bg-surface-muted border-2 border-line-strong flex items-center justify-center mb-3 text-ink-subtle">
+              <PowerOff size={22} aria-hidden />
+            </div>
+            <h2 className="text-ink font-bold text-lg">
+              {branding.app_name || 'The app'} has stopped
+            </h2>
+            <p className="text-ink-muted text-sm mt-1.5">
+              All sales are saved on this machine. You can close this browser tab — start the app again from its shortcut whenever you need it.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Content canvas */}
       <main className="flex-1 min-h-0 overflow-y-auto bg-shell">

@@ -13,3 +13,6 @@ frontend/.vite/
 
 # built binary
 pos-app
+
+# desktop packaging output (binaries hosted on GitHub Releases)
+/build/

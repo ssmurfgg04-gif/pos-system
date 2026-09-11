@@ -5,8 +5,8 @@ import { Button, Input, Field, Spinner } from '../components/ui'
 import { navigate, homeFor } from '../lib/router'
 import { reconnectWs } from '../ws/client'
 import { toast } from '../stores/toasts'
-import { backendMode } from '../lib/api'
-import { ShieldCheck, User, Palette } from 'lucide-react'
+import { backendMode, getDesktopStatus, type DesktopStatus } from '../lib/api'
+import { ShieldCheck, User, Palette, KeyRound } from 'lucide-react'
 
 const DEMO_ACCOUNTS = [
   { username: 'admin', password: 'admin123', label: 'Admin', hint: 'Full control — settings, stock, KRA reports', icon: ShieldCheck },
@@ -22,10 +22,12 @@ export function Login() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [demo, setDemo] = useState(false)
+  const [desk, setDesk] = useState<DesktopStatus | null>(null)
 
   // Demo hint chips appear only when the backend probe settled on demo
   // (static deploy). serverMode() distinguishes probe-forced demo from real.
   backendMode().then((m) => setDemo(m === 'demo')).catch(() => undefined)
+  getDesktopStatus().then(setDesk).catch(() => undefined)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -113,6 +115,20 @@ export function Login() {
             Quick PIN switch instead →
           </button>
         </form>
+
+        {desk?.desktop && desk?.firstRun && (
+          <div className="mt-4 bg-surface border-2 border-brand rounded-card shadow-brutal-brand p-4 flex gap-3 items-start">
+            <span className="w-9 h-9 rounded-input bg-brand border-2 border-brand-strong flex items-center justify-center text-brand-ink shrink-0" aria-hidden>
+              <KeyRound size={17} strokeWidth={2.25} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[13px] font-bold text-ink">First run — your starter login</p>
+              <p className="text-[12px] text-ink-muted mt-0.5">
+                Sign in as <span className="font-mono font-bold text-ink">admin / admin123</span> (PIN <span className="font-mono font-bold text-ink">1234</span>), then change the password in Settings and set your store name. Everything on this machine is yours — nothing leaves it.
+              </p>
+            </div>
+          </div>
+        )}
 
         {demo && (
           <div className="mt-4 bg-surface border-2 border-line-strong rounded-card shadow-brutal p-4">

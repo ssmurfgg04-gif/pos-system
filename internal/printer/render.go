@@ -8,7 +8,7 @@ import (
         "strings"
         "time"
 
-        "github.com/hennedo/escpos"
+        "posapp/internal/escpos"
 
         "posapp/internal/models"
 )
