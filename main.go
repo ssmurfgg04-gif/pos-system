@@ -67,10 +67,11 @@ func main() {
         ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
         defer stop()
 
-        // Background workers: STK sweeper + print queue.
+        // Background workers: STK sweeper + print queue + daily backups.
         sweeper := services.NewSweeper(svc)
         go sweeper.Run(ctx)
         go pw.Run(ctx)
+        svc.StartBackupScheduler()
 
         // LAN discovery broadcast (best-effort).
         if cfg.MDNSEnabled {

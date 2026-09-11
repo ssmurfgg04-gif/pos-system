@@ -6,6 +6,7 @@
 import React, { useEffect, useRef } from 'react'
 import { useToasts } from '../stores/toasts'
 import { useNet } from '../offline/heartbeat'
+import { X, Check, AlertTriangle, Info, Package } from 'lucide-react'
 
 // ---- Button ----
 
@@ -135,14 +136,14 @@ export function Modal({
             <button
               onClick={onClose}
               aria-label="Close"
-              className="min-w-11 min-h-11 -mr-2 flex items-center justify-center text-ink-muted hover:text-ink rounded-input hover:bg-surface-muted text-xl font-bold"
+              className="min-w-11 min-h-11 -mr-2 flex items-center justify-center text-ink-muted hover:text-ink rounded-input hover:bg-surface-muted"
             >
-              ✕
+              <X size={20} strokeWidth={2.5} aria-hidden />
             </button>
           </header>
         )}
         <div className="px-5 py-4 overflow-y-auto">{children}</div>
-        {footer && <footer className="px-5 py-4 border-t-2 border-line flex justify-end gap-2 bg-surface-muted/50">{footer}</footer>}
+        {footer && <footer className="px-5 py-4 border-t-2 border-line flex flex-wrap justify-end gap-3 bg-surface-muted/50">{footer}</footer>}
       </div>
     </div>
   )
@@ -263,7 +264,7 @@ export function Table({ head, children, className = '' }: { head: React.ReactNod
 
 // ---- Tabs ----
 
-export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { key: T; label: string }[]; value: T; onChange: (t: T) => void }) {
+export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { key: T; label: string; icon?: React.ReactNode }[]; value: T; onChange: (t: T) => void }) {
   return (
     <div role="tablist" className="flex gap-1 p-1 bg-surface-muted border-2 border-line rounded-input overflow-x-auto">
       {tabs.map((t) => (
@@ -272,10 +273,11 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { key:
           role="tab"
           aria-selected={value === t.key}
           onClick={() => onChange(t.key)}
-          className={`min-h-9 px-3.5 rounded-[5px] text-sm font-semibold whitespace-nowrap transition-colors ${
+          className={`min-h-9 px-3.5 rounded-[5px] text-sm font-semibold whitespace-nowrap transition-colors inline-flex items-center gap-1.5 ${
             value === t.key ? 'bg-surface text-ink border-2 border-line-strong shadow-brutal-sm' : 'text-ink-muted hover:text-ink'
           }`}
         >
+          {t.icon}
           {t.label}
         </button>
       ))}
@@ -285,11 +287,11 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { key:
 
 // ---- Empty / Spinner ----
 
-export function EmptyState({ icon = '□', title, body, action }: { icon?: string; title: string; body?: string; action?: React.ReactNode }) {
+export function EmptyState({ icon, title, body, action }: { icon?: React.ReactNode; title: string; body?: string; action?: React.ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
-      <div className="w-14 h-14 rounded-card border-2 border-line-strong bg-surface-muted flex items-center justify-center text-2xl mb-3" aria-hidden>
-        {icon}
+      <div className="w-14 h-14 rounded-card border-2 border-line-strong bg-surface-muted flex items-center justify-center text-ink-muted mb-3" aria-hidden>
+        {icon ?? <Package size={24} strokeWidth={2.25} />}
       </div>
       <h3 className="font-bold text-ink">{title}</h3>
       {body && <p className="text-sm text-ink-muted mt-1 max-w-sm">{body}</p>}
@@ -349,8 +351,8 @@ export function ToastHost() {
           }`}
           onClick={() => dismiss(t.id)}
         >
-          <span className="text-lg leading-none mt-0.5" aria-hidden>
-            {t.kind === 'success' ? '✓' : t.kind === 'error' ? '⚠' : 'ℹ'}
+          <span className={`shrink-0 leading-none mt-0.5 ${t.kind === 'success' ? 'text-paid-text' : t.kind === 'error' ? 'text-danger-text' : 'text-info-text'}`} aria-hidden>
+            {t.kind === 'success' ? <Check size={18} strokeWidth={2.5} /> : t.kind === 'error' ? <AlertTriangle size={18} strokeWidth={2.5} /> : <Info size={18} strokeWidth={2.5} />}
           </span>
           <div className="min-w-0">
             <p className="font-bold text-ink text-sm">{t.title}</p>

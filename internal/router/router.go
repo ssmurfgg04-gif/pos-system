@@ -89,6 +89,8 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 
         // Reports / shifts.
         authd.GET("/reports/daily", perm("reports.view"), h.DailyReport)
+        authd.GET("/reports/monthly", perm("reports.view"), h.MonthlyReport)
+        authd.GET("/reports/monthly.csv", perm("reports.view"), h.MonthlyReportCSV)
         authd.POST("/shifts/open", perm("shifts.manage"), h.OpenShift)
         authd.POST("/shifts/close", perm("shifts.manage"), h.CloseShift)
         authd.GET("/shifts/current", perm("shifts.manage"), h.CurrentShift)
@@ -117,12 +119,14 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         roles.PUT("/roles/:id", h.UpdateRole)
         roles.DELETE("/roles/:id", h.DeleteRole)
 
-        // Settings, printer, audit.
+        // Settings, printer, audit, system.
         authd.GET("/settings", perm("settings.manage"), h.GetSettings)
         authd.PUT("/settings", perm("settings.manage"), h.UpdateSettings)
         authd.POST("/settings/test-print", perm("printer.test"), h.TestPrint)
         authd.GET("/print-jobs", perm("printer.test"), h.ListPrintJobs)
         authd.GET("/audit", perm("audit.view"), h.ListAudit)
+        authd.POST("/system/backup", perm("settings.manage"), h.RunBackup)
+        authd.GET("/system/backups", perm("settings.manage"), h.ListBackups)
 
         // ---- Embedded SPA ----
         // NOTE: gin only runs group middleware for matched routes, so the

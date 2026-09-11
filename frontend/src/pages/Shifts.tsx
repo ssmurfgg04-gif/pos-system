@@ -7,6 +7,7 @@ import { Button, Card, EmptyState, Field, MoneyInput, Modal, Spinner, StatusPill
 import { centsToAmount, formatMoney } from '../lib/money'
 import { toast } from '../stores/toasts'
 import { onWsEvent } from '../ws/client'
+import { Coins } from 'lucide-react'
 
 export function Shifts() {
   const { user } = useAuth()
@@ -54,7 +55,7 @@ export function Shifts() {
           </div>
         ) : (
           <EmptyState
-            icon="💰"
+            icon={<Coins size={24} strokeWidth={2.25} />}
             title="Drawer is closed"
             body="Open a shift when you start taking cash so end-of-day reconciliation works."
           />

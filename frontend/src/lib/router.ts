@@ -20,3 +20,19 @@ export function navigate(to: string) {
   history.pushState({}, '', to)
   window.dispatchEvent(new PopStateEvent('popstate'))
 }
+
+/**
+ * Role-appropriate landing page after login. Cashiers land on the terminal;
+ * designers on their board; admins/managers land on Reports — the admin's
+ * job is oversight (stock, passwords, KRA returns, fixing problems), with
+ * the sell screen one click away when a sale needs rescuing.
+ */
+export function homeFor(user: { permissions: string[] } | null | undefined): string {
+  const p = user?.permissions ?? []
+  if (p.includes('reports.view') && p.includes('settings.manage')) return '/reports'
+  if (p.includes('design.view')) return '/design'
+  if (p.includes('pos.sell')) return '/'
+  if (p.includes('orders.view')) return '/orders'
+  if (p.includes('products.view')) return '/inventory'
+  return '/'
+}

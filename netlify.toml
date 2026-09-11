@@ -1,0 +1,19 @@
+# Netlify deployment — static demo build.
+#
+# The SPA ships with an in-browser demo backend (see frontend/src/demo/):
+# when no Go server answers /api/v1/health, the app runs on seeded
+# localStorage data so the deployed site is always demoable. Log in with
+# admin/admin123, cashier/cashier123, or designer/designer123.
+#
+# To connect a REAL backend instead: remove VITE_DEMO_MODE below and set
+# VITE_API_URL=https://your-server.example — the app then talks to that
+# server (and shows connection errors instead of falling back to demo).
+
+[build]
+  base = "frontend"
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+[build.environment]
+  VITE_DEMO_MODE = "true"
+  NODE_VERSION = "20"

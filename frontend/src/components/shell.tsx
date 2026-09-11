@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
 import { navigate } from '../lib/router'
@@ -7,39 +7,47 @@ import { startHeartbeat, flushQueue } from '../offline/heartbeat'
 import { connectWs, disconnectWs, onWsEvent } from '../ws/client'
 import { toast } from '../stores/toasts'
 import { useNet } from '../offline/heartbeat'
+import { backendMode, isDemoSync } from '../lib/api'
+import {
+  ShoppingCart, ReceiptText, Palette, Package, Coins, BarChart3, Users, Settings,
+  LogOut, RefreshCw, FlaskConical,
+} from 'lucide-react'
 
 // Nav items: shown strictly by permission (server enforces regardless).
-const NAV: { to: string; label: string; perm: string; icon: string }[] = [
-  { to: '/', label: 'Sell', perm: 'pos.sell', icon: '🛒' },
-  { to: '/orders', label: 'Orders', perm: 'orders.view', icon: '🧾' },
-  { to: '/design', label: 'Design', perm: 'design.view', icon: '🎨' },
-  { to: '/inventory', label: 'Inventory', perm: 'products.view', icon: '📦' },
-  { to: '/shifts', label: 'Shifts', perm: 'shifts.manage', icon: '💰' },
-  { to: '/reports', label: 'Reports', perm: 'reports.view', icon: '📊' },
-  { to: '/users', label: 'People', perm: 'users.manage', icon: '👥' },
-  { to: '/settings', label: 'Settings', perm: 'settings.manage', icon: '⚙️' },
+// Lucide icons (shadcn's icon set) — no emoji anywhere in the chrome.
+const NAV: { to: string; label: string; perm: string; icon: typeof ShoppingCart }[] = [
+  { to: '/', label: 'Sell', perm: 'pos.sell', icon: ShoppingCart },
+  { to: '/orders', label: 'Orders', perm: 'orders.view', icon: ReceiptText },
+  { to: '/design', label: 'Design', perm: 'design.view', icon: Palette },
+  { to: '/inventory', label: 'Inventory', perm: 'products.view', icon: Package },
+  { to: '/shifts', label: 'Shifts', perm: 'shifts.manage', icon: Coins },
+  { to: '/reports', label: 'Reports', perm: 'reports.view', icon: BarChart3 },
+  { to: '/users', label: 'People', perm: 'users.manage', icon: Users },
+  { to: '/settings', label: 'Settings', perm: 'settings.manage', icon: Settings },
 ]
 
 export function AppShell({ current, children }: { current: string; children: React.ReactNode }) {
   const { user, logout } = useAuth()
   const branding = useBranding((s) => s.branding)
   const net = useNet()
+  const [demo, setDemo] = useState(isDemoSync())
 
   useEffect(() => {
     startHeartbeat()
     connectWs()
+    let mounted = true
+    backendMode().then((m) => { if (mounted) setDemo(m === 'demo') })
     const off = onWsEvent('SETTINGS_UPDATED', () => useBranding.getState().load())
     const offPaid = onWsEvent('ORDER_PAID', (o: any) => {
       // Another terminal completed a sale — surface it.
       toast.success(`Order ${o?.number} paid`)
     })
     const offOffline = onWsEvent('ORDER_CREATED', () => undefined)
-    const offNet = () => undefined
     return () => {
+      mounted = false
       off()
       offPaid()
       offOffline()
-      offNet()
       disconnectWs()
     }
   }, [])
@@ -70,31 +78,44 @@ export function AppShell({ current, children }: { current: string; children: Rea
         </div>
 
         <nav className="flex-1 flex items-center gap-1 overflow-x-auto" aria-label="Main">
-          {items.map((n) => (
-            <button
-              key={n.to}
-              onClick={() => navigate(n.to)}
-              aria-current={active(n.to) ? 'page' : undefined}
-              className={`min-h-11 px-3 rounded-input text-[13px] font-semibold whitespace-nowrap transition-colors ${
-                active(n.to)
-                  ? 'bg-shell-edge text-on-shell border border-on-shell-muted/40'
-                  : 'text-on-shell-muted hover:text-on-shell hover:bg-shell-edge/60'
-              }`}
-            >
-              <span aria-hidden className="mr-1">{n.icon}</span>
-              {n.label}
-            </button>
-          ))}
+          {items.map((n) => {
+            const Icon = n.icon
+            return (
+              <button
+                key={n.to}
+                onClick={() => navigate(n.to)}
+                aria-current={active(n.to) ? 'page' : undefined}
+                className={`min-h-11 px-3 rounded-input text-[13px] font-semibold whitespace-nowrap transition-colors inline-flex items-center gap-1.5 ${
+                  active(n.to)
+                    ? 'bg-shell-edge text-on-shell border border-on-shell-muted/40'
+                    : 'text-on-shell-muted hover:text-on-shell hover:bg-shell-edge/60'
+                }`}
+              >
+                <Icon size={15} strokeWidth={2.25} aria-hidden />
+                {n.label}
+              </button>
+            )
+          })}
         </nav>
 
         <div className="flex items-center gap-2 shrink-0">
+          {demo && (
+            <span
+              className="min-h-8 px-2.5 rounded-pill bg-info-bg text-info-text border border-info-text/40 text-[11px] font-bold inline-flex items-center gap-1.5 whitespace-nowrap"
+              title="No server behind this build — data lives in your browser only"
+            >
+              <FlaskConical size={12} aria-hidden />
+              Demo mode
+            </span>
+          )}
           {net.pending > 0 && (
             <button
               onClick={() => flushQueue()}
               title="Sync queued offline sales"
-              className="min-h-11 px-3 rounded-input bg-pending-bg text-pending-text text-[12px] font-bold border border-pending-text"
+              className="min-h-11 px-3 rounded-input bg-pending-bg text-pending-text text-[12px] font-bold border border-pending-text inline-flex items-center gap-1.5"
             >
-              ↻ {net.pending}
+              <RefreshCw size={13} aria-hidden />
+              {net.pending}
             </button>
           )}
           <div className="hidden md:flex flex-col items-end leading-tight mr-1">
@@ -103,11 +124,11 @@ export function AppShell({ current, children }: { current: string; children: Rea
           </div>
           <button
             onClick={doLogout}
-            className="min-h-11 min-w-11 rounded-input text-on-shell-muted hover:text-on-shell hover:bg-shell-edge/60 flex items-center justify-center text-lg"
+            className="min-h-11 min-w-11 rounded-input text-on-shell-muted hover:text-on-shell hover:bg-shell-edge/60 flex items-center justify-center"
             aria-label="Log out"
             title="Log out"
           >
-            ⎋
+            <LogOut size={18} aria-hidden />
           </button>
         </div>
       </header>

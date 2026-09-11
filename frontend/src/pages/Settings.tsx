@@ -1,22 +1,29 @@
 // Settings — the white-label control panel. Every string the customer sees
 // lives here. Secrets are masked (__SET__ keeps the stored value). Includes
-// M-Pesa (mock/sandbox/production), printer target + test print, and the
-// audit log tab.
+// M-Pesa (mock/sandbox/production), printer target + test print, the
+// audit log, and System (backups + demo data reset).
 
 import { useEffect, useState } from 'react'
-import { api, AuditEntry } from '../lib/api'
+import { api, AuditEntry, BackupResult, backendMode } from '../lib/api'
+import { resetDemo } from '../demo/backend'
 import { useBranding } from '../stores/branding'
 import { Button, Card, Field, Input, Select, Spinner, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
+import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw } from 'lucide-react'
 
 type SettingsMap = Record<string, string>
 
 export function Settings() {
   const reloadBranding = useBranding((s) => s.load)
-  const [tab, setTab] = useState<'store' | 'payments' | 'printer' | 'audit'>('store')
+  const [tab, setTab] = useState<'store' | 'payments' | 'printer' | 'system' | 'audit'>('store')
   const [values, setValues] = useState<SettingsMap | null>(null)
   const [busy, setBusy] = useState(false)
   const [audit, setAudit] = useState<AuditEntry[] | null>(null)
+  const [backups, setBackups] = useState<BackupResult[] | null>(null)
+  const [backing, setBacking] = useState(false)
+  const [demo, setDemo] = useState(false)
+
+  backendMode().then((m) => setDemo(m === 'demo')).catch(() => undefined)
 
   const load = async () => {
     try {
@@ -30,6 +37,9 @@ export function Settings() {
   useEffect(() => {
     if (tab === 'audit' && !audit) {
       api.get<AuditEntry[]>('/api/v1/audit').then(setAudit).catch(() => setAudit([]))
+    }
+    if (tab === 'system' && !backups) {
+      api.get<BackupResult[]>('/api/v1/system/backups').then(setBackups).catch(() => setBackups([]))
     }
   }, [tab])
 
@@ -63,6 +73,7 @@ export function Settings() {
               { key: 'store' as const, label: 'Store' },
               { key: 'payments' as const, label: 'Payments' },
               { key: 'printer' as const, label: 'Printer' },
+              { key: 'system' as const, label: 'System' },
               { key: 'audit' as const, label: 'Audit log' },
             ]}
             value={tab}
@@ -218,9 +229,87 @@ export function Settings() {
                   }
                 }}
               >
-                🖨 Send test print
+                <Printer size={14} strokeWidth={2.5} aria-hidden />
+                Send test print
               </Button>
             </div>
+          </div>
+        )}
+
+        {tab === 'system' && (
+          <div className="px-4 pb-4 sm:px-5 grid sm:grid-cols-2 gap-3">
+            <div className="sm:col-span-2 bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
+              <p><strong className="text-ink">Backups.</strong> A consistent snapshot of the database is written to the
+              <code className="font-mono text-ink"> backups/</code> folder daily at 02:00 (SQLite <code className="font-mono text-ink">VACUUM INTO</code> —
+              safe while sales are running). Copy the folder to a USB drive or cloud folder for off-site protection.</p>
+            </div>
+            <Field label="Automatic daily backup">
+              <Select value={values.backup_auto ?? 'true'} onChange={(e) => set('backup_auto', e.target.value)}>
+                <option value="true">Enabled — daily at 02:00</option>
+                <option value="false">Disabled</option>
+              </Select>
+            </Field>
+            <Field label="Keep last N snapshots">
+              <Input value={values.backup_keep ?? '7'} onChange={(e) => set('backup_keep', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
+            </Field>
+            <div className="sm:col-span-2 flex flex-wrap gap-2">
+              <Button
+                variant="primary"
+                disabled={backing}
+                onClick={async () => {
+                  setBacking(true)
+                  try {
+                    const res = await api.post<BackupResult>('/api/v1/system/backup')
+                    toast.success('Backup created', `${res.file} (${(res.bytes / 1024).toFixed(0)} KB)`)
+                    setBackups(await api.get<BackupResult[]>('/api/v1/system/backups'))
+                  } catch (e: any) {
+                    toast.error('Backup failed', e?.message)
+                  } finally {
+                    setBacking(false)
+                  }
+                }}
+              >
+                {backing ? <Spinner className="border-t-brand-ink" /> : <DatabaseBackup size={15} strokeWidth={2.5} aria-hidden />}
+                Back up now
+              </Button>
+              {demo && (
+                <Button
+                  variant="ghost"
+                  className="text-danger-text border-2 border-danger-text/40 hover:bg-danger-bg ml-2"
+                  onClick={() => {
+                    if (!confirm('Reset all demo data back to the seeded shop? Your demo orders and changes will be lost.')) return
+                    resetDemo()
+                    toast.success('Demo data reset', 'Reloading…')
+                    window.setTimeout(() => location.reload(), 700)
+                  }}
+                >
+                  <RotateCcw size={15} strokeWidth={2.5} aria-hidden />
+                  Reset demo data
+                </Button>
+              )}
+            </div>
+            <div className="sm:col-span-2">
+              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Stored snapshots</p>
+              {!backups ? (
+                <div className="py-6 flex justify-center"><Spinner /></div>
+              ) : backups.length === 0 ? (
+                <p className="text-sm text-ink-muted">No snapshots yet — take one now or wait for the nightly run.</p>
+              ) : (
+                <Table head={['Snapshot', 'Size', 'When']}>
+                  {backups.map((b) => (
+                    <tr key={b.file}>
+                      <td className="px-3 py-2 font-mono text-[12px] text-ink">{b.file}</td>
+                      <td className="px-3 py-2 tabular text-ink-muted">{(b.bytes / 1024).toFixed(0)} KB</td>
+                      <td className="px-3 py-2 text-[12px] text-ink-subtle">{new Date(b.at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </Table>
+              )}
+            </div>
+            <p className="sm:col-span-2 text-[12px] text-ink-subtle flex items-start gap-1.5">
+              <HardDriveDownload size={13} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
+              Snapshots are full SQLite databases — copy the backups folder anywhere and the app can restore from it directly.
+            </p>
           </div>
         )}
 

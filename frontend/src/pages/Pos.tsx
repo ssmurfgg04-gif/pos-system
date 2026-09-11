@@ -1,7 +1,13 @@
 // POS terminal — the money screen. 65/35 split: product grid + barcode
 // search + category chips on the left, sticky cart on the right. Touch
 // targets ≥ 64px on tiles, ≥44px everywhere else. Stacks under 1024px with
-// a bottom-sheet cart.
+// a cart bottom-sheet (view/edit/remove lines on phones too).
+//
+// Barcode entry works two ways: focused typing into the search box (exact
+// match auto-adds) AND a global HID listener so hardware USB/Bluetooth
+// scanners fire straight into the cart with no input focused at all
+// (scanners "type" very fast and press Enter — we buffer rapid keystrokes
+// and only accept the burst pattern, so human typing never triggers it).
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, Category, CheckoutRequest, Order, Product } from '../lib/api'
@@ -11,9 +17,13 @@ import { useAuth } from '../stores/auth'
 import { formatMoneyCompact, formatMoney, normalizePhoneKe } from '../lib/money'
 import { Button, EmptyState, Input, Modal, Field, MoneyInput, Spinner, Tabs } from '../components/ui'
 import { MpesaModal } from '../components/MpesaModal'
+import { ReceiptModal } from '../components/Receipt'
 import { toast } from '../stores/toasts'
 import { enqueue, newClientUuid } from '../offline/queue'
 import { useNet } from '../offline/heartbeat'
+import {
+  ShoppingCart, Search, Banknote, Smartphone, X, Minus, Plus, ScanBarcode, AlertTriangle,
+} from 'lucide-react'
 
 export function Pos() {
   const { user } = useAuth()
@@ -24,8 +34,10 @@ export function Pos() {
   const [search, setSearch] = useState('')
   const [cat, setCat] = useState<number | 'all'>('all')
   const [chargeOpen, setChargeOpen] = useState(false)
+  const [cartSheetOpen, setCartSheetOpen] = useState(false)
   const [mpesaOrder, setMpesaOrder] = useState<Order | null>(null)
   const [mpesaOpen, setMpesaOpen] = useState(false)
+  const [receiptFor, setReceiptFor] = useState<Order | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
   const load = async () => {
@@ -55,6 +67,46 @@ export function Pos() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // Global HID barcode scanner listener — no input focus required.
+  useEffect(() => {
+    let buf = ''
+    let lastKey = 0
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      const inInput = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+      if (inInput) {
+        buf = '' // the focused search box handles scanners itself
+        return
+      }
+      if (e.key === 'Enter') {
+        const burst = buf.length >= 4 && Date.now() - lastKey < 150
+        const code = buf
+        buf = ''
+        if (burst && products) {
+          const hit = products.find((p) => p.active && p.barcode && p.barcode === code)
+          if (hit) {
+            addToCart(hit)
+            if (navigator.vibrate) navigator.vibrate(15)
+          } else {
+            toast.error('Unknown barcode', code)
+          }
+          e.preventDefault()
+        }
+        return
+      }
+      if (e.key.length === 1) {
+        if (Date.now() - lastKey > 150) buf = '' // too slow — human typing
+        buf += e.key
+        lastKey = Date.now()
+      } else if (e.key !== 'Shift') {
+        buf = ''
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products])
+
   const filtered = useMemo(() => {
     if (!products) return []
     const q = search.trim().toLowerCase()
@@ -66,7 +118,7 @@ export function Pos() {
     })
   }, [products, search, cat])
 
-  // Barcode exact-match auto-add (scanner "types" the code + Enter).
+  // Barcode exact-match auto-add (scanner "types" the code + Enter into the focused search).
   useEffect(() => {
     const q = search.trim()
     if (!q || !products) return
@@ -76,6 +128,7 @@ export function Pos() {
       setSearch('')
       toast.success(hit.name, 'Added to cart')
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, products])
 
   const totals = cart.totals()
@@ -93,17 +146,26 @@ export function Pos() {
     <div className="h-full flex flex-col -m-3 sm:-m-4 lg:-m-5">
       {/* Topbar: search + cart summary for small screens */}
       <div className="px-3 sm:px-4 lg:px-5 pt-3 sm:pt-4 lg:pt-5 pb-2 flex gap-2 items-center shrink-0">
-        <Input
-          ref={searchRef as any}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Scan barcode or search products… (F2)"
-          className="flex-1 h-12 text-base"
-          autoFocus
-        />
+        <div className="relative flex-1">
+          <Search size={16} strokeWidth={2.5} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-subtle pointer-events-none" aria-hidden />
+          <Input
+            ref={searchRef as any}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Scan barcode or search products… (F2)"
+            className="flex-1 h-12 text-base pl-9"
+            autoFocus
+          />
+        </div>
         <div className="lg:hidden shrink-0">
-          <Button variant="secondary" onClick={() => setChargeOpen(true)} disabled={cart.lines.length === 0} className="h-12">
-            🛒 {formatMoneyCompact(totals.total)}
+          <Button variant="secondary" onClick={() => setCartSheetOpen(true)} disabled={cart.lines.length === 0} className="h-12 relative">
+            <ShoppingCart size={17} strokeWidth={2.25} aria-hidden />
+            {formatMoneyCompact(totals.total)}
+            {cart.lines.length > 0 && (
+              <span className="absolute -top-2 -right-2 min-w-5 h-5 px-1 rounded-pill bg-danger text-white text-[11px] font-bold flex items-center justify-center border-2 border-surface tabular">
+                {totals.count}
+              </span>
+            )}
           </Button>
         </div>
       </div>
@@ -138,7 +200,7 @@ export function Pos() {
           {!products ? (
             <div className="py-16 flex justify-center"><Spinner className="w-7 h-7 border-4" /></div>
           ) : filtered.length === 0 ? (
-            <EmptyState icon="🔍" title="No products match" body={search ? `Nothing found for “${search}”.` : 'Add products in Inventory first.'} />
+            <EmptyState icon={<ScanBarcode size={24} strokeWidth={2.25} />} title="No products match" body={search ? `Nothing found for “${search}”.` : 'Add products in Inventory first.'} />
           ) : (
             <div className="grid grid-cols-2 min-[480px]:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-2 sm:gap-2.5">
               {filtered.map((p) => {
@@ -178,6 +240,25 @@ export function Pos() {
         </aside>
       </div>
 
+      {/* Mobile cart bottom-sheet — full cart editing on phones */}
+      <Modal
+        open={cartSheetOpen}
+        onClose={() => setCartSheetOpen(false)}
+        title={`Cart — ${formatMoney(totals.total)}`}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => { cart.clear(); setCartSheetOpen(false) }} disabled={cart.lines.length === 0}>
+              Clear all
+            </Button>
+            <Button variant="primary" onClick={() => { setCartSheetOpen(false); setChargeOpen(true) }} disabled={cart.lines.length === 0}>
+              Charge {formatMoneyCompact(totals.total)}
+            </Button>
+          </>
+        }
+      >
+        <CartBody onCharge={() => { setCartSheetOpen(false); setChargeOpen(true) }} sheet />
+      </Modal>
+
       {/* Charge modal (shared by mobile button + desktop charge) */}
       <ChargeModal
         open={chargeOpen}
@@ -189,6 +270,7 @@ export function Pos() {
           load()
           if (o) {
             toast.success(`Sale complete — ${o.number}`, formatMoney(o.totalCents))
+            setReceiptFor(o) // show the printable receipt straight away
           }
         }}
         online={online}
@@ -201,11 +283,18 @@ export function Pos() {
         onClose={() => { setMpesaOpen(false); setMpesaOrder(null); cart.clear(); load() }}
         onPaid={(o) => { load(); setMpesaOrder(o) }}
       />
+
+      <ReceiptModal
+        open={!!receiptFor}
+        order={receiptFor!}
+        branding={useBranding.getState().branding}
+        onClose={() => setReceiptFor(null)}
+      />
     </div>
   )
 }
 
-function CartBody({ onCharge }: { onCharge: () => void }) {
+function CartBody({ onCharge, sheet }: { onCharge: () => void; sheet?: boolean }) {
   const cart = useCart()
   const branding = useBranding((s) => s.branding)
   const totals = cart.totals()
@@ -215,14 +304,16 @@ function CartBody({ onCharge }: { onCharge: () => void }) {
 
   return (
     <>
-      <header className="px-4 pt-4 pb-2 border-b-2 border-line flex items-center justify-between">
-        <h2 className="font-bold text-ink">Cart</h2>
-        <span className="text-ink-muted text-sm tabular font-semibold">{totals.count} item{totals.count === 1 ? '' : 's'}</span>
-      </header>
+      {!sheet && (
+        <header className="px-4 pt-4 pb-2 border-b-2 border-line flex items-center justify-between">
+          <h2 className="font-bold text-ink">Cart</h2>
+          <span className="text-ink-muted text-sm tabular font-semibold">{totals.count} item{totals.count === 1 ? '' : 's'}</span>
+        </header>
+      )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-2">
+      <div className={`${sheet ? '' : 'flex-1 min-h-0'} overflow-y-auto px-1 py-2 space-y-2`}>
         {cart.lines.length === 0 ? (
-          <EmptyState icon="🛒" title="Cart is empty" body="Tap products to add them." />
+          <EmptyState icon={<ShoppingCart size={24} strokeWidth={2.25} />} title="Cart is empty" body="Tap products or scan a barcode to add them." />
         ) : (
           cart.lines.map((l) => (
             <div key={l.productId} className="border-2 border-line rounded-input p-2.5 bg-surface">
@@ -247,29 +338,29 @@ function CartBody({ onCharge }: { onCharge: () => void }) {
                     <p className="text-[13px] font-bold text-ink leading-snug flex-1">{l.name}</p>
                     <button
                       onClick={() => cart.remove(l.productId)}
-                      aria-label={`Remove ${l.name}`}
-                      className="text-ink-subtle hover:text-danger-text min-w-9 min-h-9 flex items-center justify-center"
+                      aria-label={`Remove ${l.name} from cart`}
+                      className="text-ink-subtle hover:text-danger-text min-w-9 min-h-9 flex items-center justify-center rounded-input hover:bg-danger-bg"
                     >
-                      ✕
+                      <X size={16} strokeWidth={2.5} aria-hidden />
                     </button>
                   </div>
                   <div className="flex items-center justify-between gap-2 mt-1.5">
-                    {/* Qty stepper */}
+                    {/* Qty stepper — minus at 0 removes the line */}
                     <div className="flex items-center border-2 border-line-strong rounded-input overflow-hidden h-11">
                       <button
                         onClick={() => cart.setQty(l.productId, l.qty - 1)}
-                        aria-label="Decrease quantity"
-                        className="w-11 h-full bg-surface-muted font-black text-ink active:bg-line"
+                        aria-label={l.qty === 1 ? `Remove ${l.name}` : 'Decrease quantity'}
+                        className="w-11 h-full bg-surface-muted font-black text-ink active:bg-line flex items-center justify-center"
                       >
-                        −
+                        {l.qty === 1 ? <X size={15} strokeWidth={2.75} aria-hidden /> : <Minus size={15} strokeWidth={2.75} aria-hidden />}
                       </button>
                       <span className="w-10 text-center font-black tabular text-ink">{l.qty}</span>
                       <button
                         onClick={() => cart.setQty(l.productId, Math.min(999, l.qty + 1))}
                         aria-label="Increase quantity"
-                        className="w-11 h-full bg-surface-muted font-black text-ink active:bg-line"
+                        className="w-11 h-full bg-surface-muted font-black text-ink active:bg-line flex items-center justify-center"
                       >
-                        +
+                        <Plus size={15} strokeWidth={2.75} aria-hidden />
                       </button>
                     </div>
                     <div className="text-right">
@@ -289,23 +380,25 @@ function CartBody({ onCharge }: { onCharge: () => void }) {
         )}
       </div>
 
-      <footer className="border-t-2 border-line px-4 py-3 space-y-2 bg-surface-muted/60 rounded-b-card">
-        <Row label="Subtotal" value={formatMoney(totals.subtotal)} />
-        <Row label={`${branding.tax_percent}% ${branding.tax_included ? 'VAT (incl.)' : 'VAT'}`} value={formatMoney(totals.tax)} />
-        <div className="flex items-baseline justify-between border-t-2 border-line pt-2">
-          <span className="font-bold text-ink">Total</span>
-          <span className="font-black text-[40px] leading-none text-ink tabular">{formatMoney(totals.total)}</span>
-        </div>
-        <Button
-          variant="primary"
-          size="lg"
-          className="w-full h-16 text-xl"
-          onClick={onCharge}
-          disabled={cart.lines.length === 0}
-        >
-          Charge {formatMoney(totals.total)}
-        </Button>
-      </footer>
+      {!sheet && (
+        <footer className="border-t-2 border-line px-4 py-3 space-y-2 bg-surface-muted/60 rounded-b-card">
+          <Row label="Subtotal" value={formatMoney(totals.subtotal)} />
+          <Row label={`${branding.tax_percent}% ${branding.tax_included ? 'VAT (incl.)' : 'VAT'}`} value={formatMoney(totals.tax)} />
+          <div className="flex items-baseline justify-between border-t-2 border-line pt-2">
+            <span className="font-bold text-ink">Total</span>
+            <span className="font-black text-[40px] leading-none text-ink tabular">{formatMoney(totals.total)}</span>
+          </div>
+          <Button
+            variant="primary"
+            size="lg"
+            className="w-full h-16 text-xl"
+            onClick={onCharge}
+            disabled={cart.lines.length === 0}
+          >
+            Charge {formatMoney(totals.total)}
+          </Button>
+        </footer>
+      )}
     </>
   )
 }
@@ -415,8 +508,8 @@ function ChargeModal({
       <div className="space-y-3">
         <Tabs
           tabs={[
-            { key: 'cash' as const, label: '💵 Cash' },
-            { key: 'mpesa' as const, label: `📱 M-Pesa${branding.mpesa_env === 'mock' ? ' (demo)' : ''}` },
+            { key: 'cash' as const, label: 'Cash', icon: <Banknote size={15} strokeWidth={2.25} aria-hidden /> },
+            { key: 'mpesa' as const, label: `M-Pesa${branding.mpesa_env === 'mock' ? ' (demo)' : ''}`, icon: <Smartphone size={15} strokeWidth={2.25} aria-hidden /> },
           ]}
           value={method}
           onChange={setMethod}
@@ -429,14 +522,14 @@ function ChargeModal({
         {method === 'cash' ? (
           <>
             <Field label="Cash received">
-              <MoneyInput value={received ?? 0} onCents={(c) => setReceived(c)} placeholder="0.00" />
+              <MoneyInput value={received ?? 0} onCents={(c) => setReceived(c)} placeholder="0.00" className="text-lg font-bold" />
             </Field>
             <div className="grid grid-cols-5 gap-2">
               {quick.map((q, i) => (
                 <button
                   key={i}
                   onClick={() => setReceived(q)}
-                  className="min-h-11 text-[12px] font-bold bg-surface-muted border-2 border-line rounded-input hover:border-line-strong active:translate-y-[1px]"
+                  className="min-h-12 text-[12px] font-bold bg-surface-muted border-2 border-line rounded-input hover:border-line-strong active:translate-y-[1px]"
                 >
                   {i === 0 ? 'Exact' : formatMoneyCompact(q)}
                 </button>
@@ -472,7 +565,12 @@ function ChargeModal({
                   <p>Manual receipt-code entry is always available as fallback.</p>
                 </>
               )}
-              {!online && <p className="text-pending-text font-bold">⚠ You're offline — M-Pesa needs a connection. Cash sales keep working.</p>}
+              {!online && (
+                <p className="text-pending-text font-bold flex items-center gap-1.5">
+                  <AlertTriangle size={14} strokeWidth={2.5} aria-hidden />
+                  You're offline — M-Pesa needs a connection. Cash sales keep working.
+                </p>
+              )}
             </div>
           </>
         )}

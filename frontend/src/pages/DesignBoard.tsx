@@ -8,6 +8,7 @@ import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Modal, Spinner, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
 import { onWsEvent } from '../ws/client'
+import { Palette } from 'lucide-react'
 
 const COLUMNS: { key: DesignJob['status']; label: string }[] = [
   { key: 'queue', label: 'Queue' },
@@ -55,7 +56,7 @@ export function DesignBoard() {
         {empty && (
           <div className="mb-3">
             <EmptyState
-              icon="🎨"
+              icon={<Palette size={24} strokeWidth={2.25} />}
               title="No design jobs yet"
               body={canManage ? 'Create the first job — it will land in the Queue column.' : 'Jobs will appear here as they are created.'}
             />

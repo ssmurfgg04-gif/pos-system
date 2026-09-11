@@ -2,11 +2,12 @@
 // products.manage gates mutations; the page itself needs products.view.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, Category, Product } from '../lib/api'
+import { api, downloadFile, Category, Product } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Modal, MoneyInput, Select, Spinner, Table, Tabs } from '../components/ui'
 import { centsToAmount } from '../lib/money'
 import { toast } from '../stores/toasts'
+import { Package, Upload, Download, Plus, PackagePlus } from 'lucide-react'
 
 export function Inventory() {
   const canManage = useAuth((s) => !!s.user?.permissions.includes('products.manage'))
@@ -16,6 +17,7 @@ export function Inventory() {
   const [search, setSearch] = useState('')
   const [catFilter, setCatFilter] = useState('all')
   const [editing, setEditing] = useState<Product | 'new' | null>(null)
+  const [stockFor, setStockFor] = useState<Product | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = async () => {
@@ -63,7 +65,10 @@ export function Inventory() {
           canManage && (
             <>
               <label className="hidden sm:inline-flex">
-                <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()}>↑ Import CSV</Button>
+                <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()}>
+                  <Upload size={14} strokeWidth={2.5} aria-hidden />
+                  Import CSV
+                </Button>
                 <input
                   ref={fileRef}
                   type="file"
@@ -72,10 +77,25 @@ export function Inventory() {
                   onChange={(e) => e.target.files?.[0] && doImport(e.target.files[0])}
                 />
               </label>
-              <a href="/api/v1/products/export" className="hidden sm:inline-flex">
-                <Button variant="secondary" size="sm">↓ Export</Button>
-              </a>
-              <Button variant="primary" size="sm" onClick={() => setEditing('new')}>+ Product</Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    await downloadFile('/api/v1/products/export', 'products.csv')
+                    toast.success('Export downloaded', 'products.csv')
+                  } catch (e: any) {
+                    toast.error('Export failed', e?.message)
+                  }
+                }}
+              >
+                <Download size={14} strokeWidth={2.5} aria-hidden />
+                Export
+              </Button>
+              <Button variant="primary" size="sm" onClick={() => setEditing('new')}>
+                <Plus size={14} strokeWidth={2.5} aria-hidden />
+                Product
+              </Button>
             </>
           )
         }
@@ -110,7 +130,7 @@ export function Inventory() {
           !products ? (
             <div className="py-12 flex justify-center"><Spinner /></div>
           ) : filtered.length === 0 ? (
-            <EmptyState icon="📦" title="No products" body={canManage ? 'Create your first product.' : 'Nothing matches the filter.'} />
+            <EmptyState icon={<Package size={24} strokeWidth={2.25} />} title="No products" body={canManage ? 'Create your first product.' : 'Nothing matches the filter.'} />
           ) : (
             <Table head={['Product', 'Category', 'Price', 'Stock', ...(canManage ? [''] : [])]}>
               {filtered.map((p) => (
@@ -132,7 +152,15 @@ export function Inventory() {
                   </td>
                   {canManage && (
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                      <Button size="sm" variant="ghost" onClick={() => setEditing(p)}>Edit</Button>
+                      <span className="inline-flex items-center gap-1">
+                        {p.trackStock && (
+                          <Button size="sm" variant="ghost" onClick={() => setStockFor(p)} title="Receive / adjust stock">
+                            <PackagePlus size={14} strokeWidth={2.5} aria-hidden />
+                            Stock
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost" onClick={() => setEditing(p)}>Edit</Button>
+                      </span>
                     </td>
                   )}
                 </tr>
@@ -154,7 +182,70 @@ export function Inventory() {
       </Card>
 
       {editing && <ProductModal product={editing === 'new' ? null : editing} categories={categories} onClose={() => setEditing(null)} onSaved={load} />}
+
+      {stockFor && <StockModal product={stockFor} onClose={() => setStockFor(null)} onSaved={load} />}
     </div>
+  )
+}
+
+// StockModal — receive stock / adjust with a reason (the admin's daily
+// "add stock" flow, without opening the full product editor).
+function StockModal({ product, onClose, onSaved }: { product: Product; onClose: () => void; onSaved: () => void }) {
+  const [delta, setDelta] = useState('')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const n = parseInt(delta, 10)
+  const valid = !isNaN(n) && n !== 0
+
+  const save = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.post(`/api/v1/products/${product.id}/adjust-stock`, { delta: n, reason: reason.trim() || undefined })
+      toast.success('Stock updated', `${product.name}: ${product.stockQty} → ${Math.max(0, product.stockQty + n)}`)
+      onSaved()
+      onClose()
+    } catch (e: any) {
+      setError(e?.message || 'Adjust failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Stock — ${product.name}`} size="sm" footer={
+      <>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={save} disabled={busy || !valid}>
+          {busy ? <Spinner className="border-t-brand-ink" /> : 'Apply adjustment'}
+        </Button>
+      </>
+    }>
+      <div className="space-y-3">
+        <p className="text-sm text-ink-muted">Current stock: <strong className="text-ink tabular">{product.stockQty}</strong></p>
+        <Field label="Quantity change" hint="Positive receives stock (e.g. 20), negative corrects overshoots (e.g. -3).">
+          <Input
+            value={delta}
+            onChange={(e) => setDelta(e.target.value.replace(/[^\d-]/g, ''))}
+            inputMode="numeric"
+            placeholder="e.g. 20"
+            className="tabular text-lg font-bold"
+            autoFocus
+          />
+        </Field>
+        <Field label="Reason (optional)" hint="Recorded in the audit log — e.g. “received from supplier”">
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Received from supplier" />
+        </Field>
+        {valid && (
+          <p className="text-[13px] text-ink-muted">
+            New stock level: <strong className={`tabular ${n > 0 ? 'text-paid-text' : 'text-danger-text'}`}>{Math.max(0, product.stockQty + n)}</strong>
+          </p>
+        )}
+        {error && <p role="alert" className="text-danger-text text-sm font-semibold">{error}</p>}
+      </div>
+    </Modal>
   )
 }
 

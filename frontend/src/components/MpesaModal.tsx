@@ -7,9 +7,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, Order } from '../lib/api'
 import { Button, Modal, Input, Field, Spinner, StatusPill } from './ui'
+import { ReceiptModal } from './Receipt'
 import { formatMoney } from '../lib/money'
 import { useBranding } from '../stores/branding'
 import { toast } from '../stores/toasts'
+import { Smartphone, Check, AlertTriangle, RotateCcw } from 'lucide-react'
 
 type Phase = 'phone' | 'pending' | 'success' | 'failed'
 
@@ -32,6 +34,7 @@ export function MpesaModal({
   const [error, setError] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [current, setCurrent] = useState<Order | null>(order)
+  const [receiptOpen, setReceiptOpen] = useState(false)
   const pollRef = useRef<number | null>(null)
   const timerRef = useRef<number | null>(null)
 
@@ -139,8 +142,8 @@ export function MpesaModal({
       title={`M-Pesa — ${current.number}`}
       footer={
         phase === 'success' ? (
-          <Button variant="primary" onClick={() => { stopTimers(); onClose() }}>
-            Done — print receipt
+          <Button variant="primary" onClick={() => setReceiptOpen(true)}>
+            Done — view receipt
           </Button>
         ) : undefined
       }
@@ -183,11 +186,11 @@ export function MpesaModal({
       )}
 
       {phase === 'pending' && (
-        <div className="space-y-5 text-center py-2">
+        <div className="space-y-5 text-center pt-2 pb-6">
           <div className="flex justify-center">
             <span className="relative flex w-16 h-16 items-center justify-center">
               <span className="absolute inset-0 rounded-full bg-pending-bg border-2 border-pending-text/40 anim-pulse-dot" aria-hidden />
-              <span className="text-3xl" aria-hidden>📲</span>
+              <Smartphone size={30} strokeWidth={2.25} className="text-pending-text" aria-hidden />
             </span>
           </div>
           <div>
@@ -195,12 +198,12 @@ export function MpesaModal({
             <p className="text-ink-muted text-sm mt-1">
               An M-Pesa prompt was sent to — ask them to enter their PIN:
             </p>
-            <p className="mt-2 inline-block tabular font-black text-xl text-ink bg-surface-muted border-2 border-line-strong rounded-input px-4 py-2">
+            <p className="mt-2 inline-block tabular font-black text-2xl text-ink bg-surface-muted border-2 border-line rounded-input px-4 py-2 select-none" aria-label="Customer phone number (read-only)">
               {pay?.phone || phone}
             </p>
           </div>
           {/* progress ~180s (backend timeout is 3 min) */}
-          <div className="h-2 bg-surface-muted rounded-pill overflow-hidden border border-line" aria-hidden>
+          <div className="h-3 bg-surface-muted rounded-pill overflow-hidden border-2 border-line" aria-hidden>
             <div
               className="h-full bg-pending-text transition-[width] duration-1000 ease-linear"
               style={{ width: `${Math.min(100, (elapsed / 180) * 100)}%` }}
@@ -225,8 +228,8 @@ export function MpesaModal({
 
       {phase === 'success' && (
         <div className="space-y-4 text-center py-3">
-          <div className="w-16 h-16 mx-auto rounded-full bg-paid-bg border-2 border-paid-text flex items-center justify-center text-3xl" aria-hidden>
-            ✓
+          <div className="w-16 h-16 mx-auto rounded-full bg-paid-bg border-2 border-paid-text flex items-center justify-center text-paid-text" aria-hidden>
+            <Check size={30} strokeWidth={2.75} />
           </div>
           <div>
             <p className="font-black text-ink text-xl">Paid</p>
@@ -247,18 +250,26 @@ export function MpesaModal({
       {phase === 'failed' && (
         <div className="space-y-4">
           <div className="flex items-start gap-3 bg-danger-bg border-2 border-danger-text/30 rounded-input p-3">
-            <span className="text-xl" aria-hidden>⚠</span>
+            <AlertTriangle size={20} strokeWidth={2.5} className="text-danger-text shrink-0 mt-0.5" aria-hidden />
             <div>
               <p className="font-bold text-danger-text text-sm">STK push didn't complete</p>
               <p className="text-[13px] text-ink-muted mt-0.5">{error || pay?.resultDesc || 'The customer may have cancelled or the request timed out.'}</p>
             </div>
           </div>
           <Button variant="secondary" className="w-full" onClick={() => setPhase('phone')}>
-            ↻ Retry with a phone number
+            <RotateCcw size={15} strokeWidth={2.5} aria-hidden />
+            Retry with a phone number
           </Button>
           <ManualEntry code={code} setCode={setCode} busy={busy} onSubmit={submitManual} error={error} highlight />
         </div>
       )}
+
+      <ReceiptModal
+        open={receiptOpen && !!current}
+        order={current!}
+        branding={branding}
+        onClose={() => { setReceiptOpen(false); stopTimers(); onClose() }}
+      />
     </Modal>
   )
 }

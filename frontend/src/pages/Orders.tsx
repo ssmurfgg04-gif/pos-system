@@ -5,8 +5,21 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, Order } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Input, Modal, Spinner, StatusPill, Table, Tabs, Textarea, Field } from '../components/ui'
+import { ReceiptModal } from '../components/Receipt'
+import { useBranding } from '../stores/branding'
 import { centsToAmount, formatMoney } from '../lib/money'
 import { toast } from '../stores/toasts'
+import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer } from 'lucide-react'
+
+export function PaymentLabel({ method }: { method?: string }) {
+  return method === 'cash' ? (
+    <span className="inline-flex items-center gap-1.5"><Banknote size={14} strokeWidth={2.25} aria-hidden />Cash</span>
+  ) : method === 'mpesa' ? (
+    <span className="inline-flex items-center gap-1.5"><Smartphone size={14} strokeWidth={2.25} aria-hidden />M-Pesa</span>
+  ) : (
+    <span>—</span>
+  )
+}
 
 export function Orders() {
   const canVoid = useAuth((s) => !!s.user?.permissions.includes('pos.void'))
@@ -18,6 +31,7 @@ export function Orders() {
   const [voiding, setVoiding] = useState<Order | null>(null)
   const [manualFor, setManualFor] = useState<Order | null>(null)
   const [discrepancyOnly, setDiscrepancyOnly] = useState(false)
+  const [receiptFor, setReceiptFor] = useState<Order | null>(null)
 
   const load = async () => {
     try {
@@ -69,7 +83,7 @@ export function Orders() {
         {!orders ? (
           <div className="py-12 flex justify-center"><Spinner /></div>
         ) : shown.length === 0 ? (
-          <EmptyState icon="🧾" title="No orders" body="Sales will appear here." />
+          <EmptyState icon={<ReceiptText size={24} strokeWidth={2.25} />} title="No orders" body="Sales will appear here." />
         ) : (
           <Table head={['Order', 'Status', 'Items', 'Total', 'Payment', 'Cashier', '']}>
             {shown.map((o) => {
@@ -83,15 +97,16 @@ export function Orders() {
                   <td className="px-3 py-2.5">
                     <StatusPill
                       status={o.status === 'PAID' ? 'paid' : o.status === 'PENDING' ? 'pending' : 'void'}
-                      label={o.discrepancy ? (o.status === 'PAID' ? 'Paid ⚠' : 'Pending ⚠') : undefined}
+                      label={o.discrepancy ? (o.status === 'PAID' ? 'Paid — check amount' : 'Pending — check amount') : undefined}
                     />
                   </td>
                   <td className="px-3 py-2.5 tabular text-ink-muted">{o.items.reduce((n, i) => n + i.qty, 0)}</td>
                   <td className="px-3 py-2.5 font-bold tabular text-ink">{centsToAmount(o.totalCents)}</td>
                   <td className="px-3 py-2.5 text-[13px] text-ink-muted">
-                    {pay?.method === 'cash' ? '💵 Cash' : pay?.method === 'mpesa' ? (
+                    {pay?.method === 'cash' || pay?.method === 'mpesa' ? (
                       <span>
-                        📱 M-Pesa{pay.mpesaReceipt ? <> · <span className="font-mono text-[12px] font-semibold text-ink" title="M-Pesa receipt code">{pay.mpesaReceipt}</span></> : null}
+                        <PaymentLabel method={pay.method} />
+                        {pay.method === 'mpesa' && pay.mpesaReceipt ? <> · <span className="font-mono text-[12px] font-semibold text-ink" title="M-Pesa receipt code">{pay.mpesaReceipt}</span></> : null}
                       </span>
                     ) : '—'}
                   </td>
@@ -124,6 +139,15 @@ export function Orders() {
           onDone={() => { setManualFor(null); load() }}
         />
       )}
+
+      {receiptFor && (
+        <ReceiptModal
+          open={!!receiptFor}
+          order={receiptFor}
+          branding={useBranding.getState().branding}
+          onClose={() => setReceiptFor(null)}
+        />
+      )}
     </div>
   )
 }
@@ -140,6 +164,8 @@ function OrderDrawer({
   onManual?: () => void
 }) {
   const [live, setLive] = useState(order)
+  const [receiptOpen, setReceiptOpen] = useState(false)
+  const branding = useBranding((s) => s.branding)
   useEffect(() => {
     const t = setInterval(async () => {
       try {
@@ -159,9 +185,10 @@ function OrderDrawer({
           {onManual && live.status === 'PENDING' && (
             <Button variant="secondary" onClick={onManual}>Enter receipt code</Button>
           )}
-          <a href={`/api/v1/orders/${live.id}/receipt`} target="_blank" rel="noreferrer">
-            <Button variant="secondary">🧾 Receipt</Button>
-          </a>
+          <Button variant="secondary" onClick={() => setReceiptOpen(true)}>
+            <Printer size={15} strokeWidth={2.25} aria-hidden />
+            Receipt
+          </Button>
           {onVoid && live.status !== 'VOIDED' && (
             <Button variant="danger" onClick={onVoid}>Void order</Button>
           )}
@@ -201,14 +228,14 @@ function OrderDrawer({
       {live.payments.map((p) => (
         <div key={p.id} className="mt-3 border-2 border-line rounded-input p-3 text-[13px]">
           <div className="flex justify-between">
-            <span className="font-bold">{p.method === 'cash' ? '💵 Cash' : '📱 M-Pesa'} <span className="text-ink-subtle font-normal">({p.mode || '—'})</span></span>
+            <span className="font-bold"><PaymentLabel method={p.method} /> <span className="text-ink-subtle font-normal">({p.mode || '—'})</span></span>
             <StatusPill status={p.status === 'COMPLETED' ? 'paid' : p.status === 'PENDING' ? 'pending' : p.status === 'VOIDED' ? 'void' : 'danger'} label={p.status} />
           </div>
           <div className="mt-1 grid grid-cols-2 gap-x-3 text-ink-muted">
             <span>Amount: <span className="tabular text-ink font-semibold">{centsToAmount(p.amountCents)}</span></span>
             {p.phone && <span>Phone: <span className="tabular text-ink">{p.phone}</span></span>}
             {p.mpesaReceipt && <span>Receipt: <span className="tabular text-ink font-bold">{p.mpesaReceipt}</span></span>}
-            {p.discrepancy && <span className="text-danger-text font-bold">⚠ Paid amount mismatch</span>}
+            {p.discrepancy && <span className="text-danger-text font-bold col-span-2 inline-flex items-center gap-1.5"><AlertTriangle size={13} strokeWidth={2.5} aria-hidden />Paid amount mismatch</span>}
             {p.resultDesc && <span className="col-span-2 text-ink-subtle truncate">{p.resultDesc}</span>}
           </div>
         </div>
@@ -218,6 +245,10 @@ function OrderDrawer({
         <p className="mt-3 text-[13px] text-void-text bg-void-bg border-2 border-line rounded-input p-2">
           Voided: {live.voidReason}
         </p>
+      )}
+
+      {receiptOpen && (
+        <ReceiptModal open order={live} branding={branding} onClose={() => setReceiptOpen(false)} />
       )}
     </Modal>
   )

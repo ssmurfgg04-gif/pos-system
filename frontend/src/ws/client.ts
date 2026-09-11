@@ -1,7 +1,8 @@
 // WebSocket client: token auth on the first message, reconnect with
-// backoff, typed event callbacks (ORDER_PAID etc.).
+// backoff, typed event callbacks (ORDER_PAID etc.). In demo mode there is
+// no server to talk to — connect is a no-op.
 
-import { token } from '../lib/api'
+import { token, backendMode } from '../lib/api'
 
 export type WsEvent =
   | 'ORDER_CREATED'
@@ -37,6 +38,16 @@ function dispatch(event: WsEvent, data: any) {
 export function connectWs() {
   closed = false
   if (!token()) return
+  // Static demo build (forced or probed): no server, no socket.
+  backendMode()
+    .then((mode) => {
+      if (mode === 'demo' || closed) return
+      openSocket()
+    })
+    .catch(() => undefined)
+}
+
+function openSocket() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   try {
     ws = new WebSocket(`${proto}://${location.host}/api/v1/ws`)
@@ -71,7 +82,7 @@ function scheduleReconnect() {
   retry++
   const delay = Math.min(15000, 1000 * Math.pow(2, Math.min(retry, 4)))
   setTimeout(() => {
-    if (!closed) connectWs()
+    if (!closed) openSocket()
   }, delay)
 }
 

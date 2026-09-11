@@ -3,7 +3,7 @@ import { api, PinUser } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
 import { Keypad, Spinner } from '../components/ui'
-import { navigate } from '../lib/router'
+import { navigate, homeFor } from '../lib/router'
 import { reconnectWs } from '../ws/client'
 import { toast } from '../stores/toasts'
 
@@ -32,7 +32,7 @@ export function Pin() {
       await pinLogin(userId, code)
       reconnectWs()
       toast.success('Signed in')
-      navigate('/')
+      navigate(homeFor(useAuth.getState().user))
     } catch (err: any) {
       setPin('')
       const msg = err?.message || 'Wrong PIN'

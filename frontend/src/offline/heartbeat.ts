@@ -1,7 +1,9 @@
 // Connectivity heartbeat + queue flush. Pings /health every 10s (cheap,
 // public); on reconnect, replays the queued checkouts through /sync.
+// In demo mode the in-browser backend is always "online" — the loop is a
+// no-op so the offline banner never shows on a static deploy.
 
-import { api, Order } from '../lib/api'
+import { api, Order, demoForced } from '../lib/api'
 import { create } from 'zustand'
 import { drainQueue, queueSize, removeFromQueue } from './queue'
 import { toast } from '../stores/toasts'
@@ -66,6 +68,10 @@ export async function flushQueue(): Promise<Order[]> {
 }
 
 export function startHeartbeat() {
+  if (demoForced()) {
+    useNet.getState().setOnline(true)
+    return
+  }
   useNet.getState().refreshPending()
 
   const check = async () => {

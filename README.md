@@ -45,6 +45,21 @@ power cut never corrupts a till.
 - **Shifts & reconciliation** — open with a float, close counting the
   drawer; expected cash is computed from completed cash payments, variance
   highlighted. Full audit log of who did what.
+- **KRA monthly returns** — Reports → Monthly gives the accountant one
+  calendar month of VAT figures (gross, taxable value, VAT collected,
+  transaction count, cash/M-Pesa split, per-day chart) and downloads it
+  as a CSV to attach to the iTax return.
+- **Automatic backups** — a daily 02:00 `VACUUM INTO` snapshot into
+  `backups/` (consistent even mid-sale) with configurable retention; a
+  manual **Back up now** button lives in Settings → System. Snapshots
+  are plain SQLite files — copy them to USB/cloud for off-site safety.
+- **Barcode scanners (no focus needed)** — hardware USB/Bluetooth
+  scanners fire straight into the cart via a global HID listener that
+  only accepts scanner-speed keystroke bursts; focused typing into the
+  search box works too.
+- **Every screen works on phones** — the POS stacks under 1024px with a
+  full cart bottom-sheet (add/remove/qty), and the charge modal's
+  quick-tender buttons are 48px touch targets.
 - **White-label by construction** — every visible string (app name, store
   name/address/phone, receipt footer, currency, VAT %, brand color, till/
   paybill numbers) comes from the settings table. No company name is
@@ -54,6 +69,32 @@ power cut never corrupts a till.
   reload so role edits apply immediately.
 - **mDNS discovery** — broadcasts `_pos-server._tcp.local` so terminals
   find the server on the LAN (best-effort; never fatal).
+
+## Deploy the demo to Netlify (no server needed)
+
+The SPA ships with an **in-browser demo backend**: when no server answers
+`/api/v1/health`, the app runs on a seeded, fully interactive dataset
+(localStorage) — same login accounts, same M-Pesa STK simulation, same
+RBAC. That means the static Netlify build is a working demo you can show
+anyone.
+
+**Option A — drag & drop (fastest):**
+
+```bash
+cd frontend && npm install
+VITE_DEMO_MODE=true npm run build
+# drag frontend/dist into Netlify → done. Zip included at
+# download/pos-netlify-demo-dist.zip in this workspace.
+```
+
+**Option B — connect the repo:** the included `netlify.toml` already sets
+the build command, publish dir, and `VITE_DEMO_MODE=true`.
+
+To point the deployed site at a **real** server later: remove
+`VITE_DEMO_MODE` and set `VITE_API_URL=https://your-server.example` — the
+app then talks to that backend (and shows connection errors instead of
+falling back to demo). Demo data resets anytime via **Settings → System →
+Reset demo data**.
 
 ## Quick start
 

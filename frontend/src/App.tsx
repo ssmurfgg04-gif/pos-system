@@ -1,8 +1,9 @@
 import { useEffect } from 'react'
-import { useRoute } from './lib/router'
+import { useRoute, homeFor } from './lib/router'
 import { useAuth } from './stores/auth'
 import { useBranding } from './stores/branding'
 import { AppShell, Booting } from './components/shell'
+import { Lock } from 'lucide-react'
 
 import { Login } from './pages/Login'
 import { Pin } from './pages/Pin'
@@ -56,13 +57,22 @@ export function App() {
     }
   })()
 
+  // Users without the sell permission (e.g. a pure designer) never sit on
+  // a "not available" screen — redirect to their role's home instead.
+  if (path === '/' && !user.permissions.includes('pos.sell')) {
+    const home = homeFor(user)
+    if (home !== '/') return <Redirect to={home} />
+  }
+
   return <AppShell current={path}>{page}</AppShell>
 }
 
 function NoPerm({ perm }: { perm: string }) {
   return (
     <div className="bg-surface border-2 border-line-strong rounded-card shadow-brutal p-8 text-center">
-      <p className="text-2xl mb-2" aria-hidden>🔒</p>
+      <div className="w-14 h-14 mx-auto rounded-card border-2 border-line-strong bg-surface-muted flex items-center justify-center text-ink-muted mb-3" aria-hidden>
+        <Lock size={26} strokeWidth={2.25} />
+      </div>
       <h2 className="font-bold text-ink">Not available for your role</h2>
       <p className="text-sm text-ink-muted mt-1">
         This screen requires the <code className="bg-surface-muted px-1.5 py-0.5 rounded text-xs">{perm}</code> permission.
@@ -70,6 +80,14 @@ function NoPerm({ perm }: { perm: string }) {
       </p>
     </div>
   )
+}
+
+function Redirect({ to }: { to: string }) {
+  useEffect(() => {
+    history.replaceState({}, '', to)
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }, [to])
+  return <Booting />
 }
 
 function NotFound() {

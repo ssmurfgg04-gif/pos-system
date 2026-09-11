@@ -113,10 +113,27 @@ input[inputmode="numeric"], input[inputmode="decimal"] { font-variant-numeric: t
   }
 }
 
-/* Print: receipt pages only print the receipt node */
+/* Print: isolate the receipt node — the classic visibility approach works
+ * regardless of DOM depth, so window.print() yields a clean 80mm-style
+ * receipt (or a PDF via the print dialog when no printer is attached). */
 @media print {
   body { background: #fff; }
   .noprint { display: none !important; }
+  body.printing-receipt * { visibility: hidden; }
+  body.printing-receipt #receipt-print,
+  body.printing-receipt #receipt-print * { visibility: visible; }
+  body.printing-receipt #receipt-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    margin: 0 !important;
+    max-width: none !important;
+    width: 100%;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 6mm 4mm !important;
+    font-size: 11pt;
+  }
 }
 
 /* Table zebra striping — easier row tracking on wide data tables */

@@ -615,6 +615,126 @@ func TestSettingsMasking(t *testing.T) {
         }
 }
 
+// TestSettingsSaveEchoedReadOnlyKey is the regression for the reported
+// "Save changes → error jwt secret" bug: the GET /settings snapshot used to
+// include jwt_secret (masked), the frontend echoed the whole map back on
+// save, and the update endpoint rejected the batch. Saving must never fail
+// on a read-only secret echo, and jwt_secret must not appear in snapshots.
+func TestSettingsSaveEchoedReadOnlyKey(t *testing.T) {
+        engine, admin, _, _ := newTestServer(t)
+        // Snapshot must not leak jwt_secret at all.
+        w := do(t, engine, "GET", "/api/v1/settings", admin, nil)
+        if w.Code != 200 {
+                t.Fatalf("get settings: %d", w.Code)
+        }
+        body := w.Body.String()
+        if strings.Contains(body, "jwt_secret") {
+                t.Fatalf("jwt_secret present in snapshot: %s", body)
+        }
+        // A stale frontend echoing the full map (incl. masked jwt_secret)
+        // must still save successfully.
+        w = do(t, engine, "PUT", "/api/v1/settings", admin, map[string]any{
+                "values": map[string]any{
+                        "jwt_secret":           "__SET__",
+                        "store_name":            "Fixed Shop",
+                        "mpesa_consumer_secret": "__SET__",
+                },
+        })
+        if w.Code != 200 {
+                t.Fatalf("save with echoed read-only key failed: %d %s", w.Code, w.Body.String())
+        }
+        d := dataMap(t, w)
+        if d["store_name"] != "Fixed Shop" {
+                t.Fatalf("store_name not saved: %v", d["store_name"])
+        }
+        // Sessions still valid (jwt_secret untouched).
+        w = do(t, engine, "GET", "/api/v1/settings", admin, nil)
+        if w.Code != 200 {
+                t.Fatalf("token invalidated by settings save: %d", w.Code)
+        }
+}
+
+func TestMonthlyReportKRA(t *testing.T) {
+        engine, admin, cashier, _ := newTestServer(t)
+        month := time.Now().Format("2006-01")
+        // A cash sale to have data.
+        w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
+                "items":         []map[string]any{{"productId": 1, "qty": 2}},
+                "paymentMethod": "cash",
+        })
+        if w.Code != 201 {
+                t.Fatalf("checkout: %d %s", w.Code, w.Body.String())
+        }
+        w = do(t, engine, "GET", "/api/v1/reports/monthly?month="+month, admin, nil)
+        if w.Code != 200 {
+                t.Fatalf("monthly: %d %s", w.Code, w.Body.String())
+        }
+        d := dataMap(t, w)
+        if d["month"] != month {
+                t.Fatalf("month echo: %v", d["month"])
+        }
+        gross, _ := d["grossCents"].(float64)
+        vat, _ := d["vatCents"].(float64)
+        nett, _ := d["nettCents"].(float64)
+        if gross <= 0 || vat <= 0 {
+                t.Fatalf("expected sales and VAT > 0, got gross=%v vat=%v", gross, vat)
+        }
+        if nett != gross-vat {
+                t.Fatalf("nett must be gross-vat: %v != %v-%v", nett, gross, vat)
+        }
+        series, _ := d["series"].([]any)
+        if len(series) < 28 {
+                t.Fatalf("expected a full month of series points, got %d", len(series))
+        }
+        // CSV export downloads.
+        w = do(t, engine, "GET", "/api/v1/reports/monthly.csv?month="+month, admin, nil)
+        if w.Code != 200 || !strings.Contains(w.Body.String(), "Gross sales") {
+                t.Fatalf("monthly csv: %d %s", w.Code, w.Body.String()[:minInt(200, len(w.Body.String()))])
+        }
+        // Bad month format rejected.
+        w = do(t, engine, "GET", "/api/v1/reports/monthly?month=garbage", admin, nil)
+        if w.Code != 400 {
+                t.Fatalf("bad month must 400, got %d", w.Code)
+        }
+}
+
+func TestBackupEndpoints(t *testing.T) {
+        engine, admin, cashier, _ := newTestServer(t)
+        w := do(t, engine, "POST", "/api/v1/system/backup", admin, nil)
+        if w.Code != 200 {
+                t.Fatalf("backup: %d %s", w.Code, w.Body.String())
+        }
+        d := dataMap(t, w)
+        file, _ := d["file"].(string)
+        bytesN, _ := d["bytes"].(float64)
+        if file == "" || bytesN <= 0 {
+                t.Fatalf("backup result bad: %v", d)
+        }
+        w = do(t, engine, "GET", "/api/v1/system/backups", admin, nil)
+        if w.Code != 200 {
+                t.Fatalf("list backups: %d", w.Code)
+        }
+        var out struct {
+                Data []map[string]any `json:"data"`
+        }
+        json.Unmarshal(w.Body.Bytes(), &out)
+        if len(out.Data) < 1 {
+                t.Fatalf("expected at least one backup listed")
+        }
+        // Cashier cannot back up.
+        w = do(t, engine, "POST", "/api/v1/system/backup", cashier, nil)
+        if w.Code != 403 {
+                t.Fatalf("cashier backup must 403, got %d", w.Code)
+        }
+}
+
+func minInt(a, b int) int {
+        if a < b {
+                return a
+        }
+        return b
+}
+
 func TestRolesCrud(t *testing.T) {
         engine, admin, _, _ := newTestServer(t)
         // Create a custom role (dynamic RBAC).

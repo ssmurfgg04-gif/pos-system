@@ -7,6 +7,7 @@ import { api, PermissionDef, Role, User } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Modal, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
+import { Users as UsersIcon } from 'lucide-react'
 
 export function Users() {
   const { user: me } = useAuth()
@@ -75,7 +76,7 @@ export function Users() {
           !users ? (
             <div className="py-12 flex justify-center"><Spinner /></div>
           ) : users.length === 0 ? (
-            <EmptyState icon="👥" title="No users" />
+            <EmptyState icon={<UsersIcon size={24} strokeWidth={2.25} />} title="No users" />
           ) : (
             <Table head={['Name', 'Role', 'PIN', 'Status', '']}>
               {users.map((u) => (

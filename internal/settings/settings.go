@@ -19,6 +19,9 @@ import (
 
 const MaskToken = "__SET__" // echoed for configured secrets; never the value
 
+// IsMaskToken reports whether v is the masked-secret sentinel.
+func IsMaskToken(v string) bool { return v == MaskToken }
+
 func isSecretKey(k string) bool {
         k = strings.ToLower(k)
         return strings.Contains(k, "secret") || strings.Contains(k, "passkey") || k == "jwt_secret"
@@ -127,11 +130,17 @@ func (s *Store) Update(kv map[string]string) ([]string, error) {
 }
 
 // Snapshot returns all settings with secrets masked for API responses.
+// jwt_secret is never exposed: it is not API-writable, so echoing it back
+// (even masked) only invites the update endpoint to reject the whole save —
+// the exact bug that broke "Save changes" in admin Settings.
 func (s *Store) Snapshot() map[string]any {
         s.mu.RLock()
         defer s.mu.RUnlock()
         out := make(map[string]any, len(s.cache))
         for k, v := range s.cache {
+                if k == "jwt_secret" {
+                        continue
+                }
                 if isSecretKey(k) {
                         if v == "" {
                                 out[k] = ""

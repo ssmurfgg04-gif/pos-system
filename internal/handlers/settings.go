@@ -18,7 +18,10 @@ type settingsBody struct {
 }
 
 // UpdateSettings (settings.manage). Masked values keep their secret. Every
-// value runs through a key allowlist — no arbitrary writes.
+// value runs through a key allowlist — no arbitrary writes. A masked echo
+// ("__SET__") of a key the API cannot write (e.g. jwt_secret echoed by an
+// older frontend build) is skipped silently instead of failing the whole
+// save — saving the form must never error on read-only secrets.
 func (h *H) UpdateSettings(c *gin.Context) {
         p := h.principal(c)
         var body settingsBody
@@ -29,6 +32,9 @@ func (h *H) UpdateSettings(c *gin.Context) {
         allowed := settings.AllowedKeys()
         for k, v := range body.Values {
                 if !allowed[k] {
+                        if settings.IsMaskToken(v) {
+                                continue // untouched masked echo of a read-only key
+                        }
                         h.fail(c, 400, "unknown setting key: "+k)
                         return
                 }

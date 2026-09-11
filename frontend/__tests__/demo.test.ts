@@ -1,0 +1,312 @@
+// @vitest-environment jsdom
+// Demo backend contract tests — the in-browser dataset must behave exactly
+// like the Go server: same envelopes, same permissions, same money math,
+// same order lifecycle (STK simulate, manual receipt, void+restore).
+
+import { beforeEach, describe, expect, it } from 'vitest'
+import { demoRequest, resetDemo } from '../src/demo/backend'
+import { buildSeed, receiptCode } from '../src/demo/seed'
+
+type Any = Record<string, any>
+
+async function login(username: string, password: string): Promise<string> {
+  const res = await demoRequest<{ token: string }>('POST', '/api/v1/auth/login', { username, password })
+  localStorage.setItem('pos_token', res.token)
+  return res.token
+}
+
+beforeEach(() => {
+  localStorage.clear()
+  resetDemo()
+})
+
+describe('seed', () => {
+  it('builds the three demo roles with server-parity permissions', () => {
+    const db = buildSeed()
+    const admin = db.roles.find((r) => r.name === 'Admin')!
+    const cashier = db.roles.find((r) => r.name === 'Cashier')!
+    const designer = db.roles.find((r) => r.name === 'Designer')!
+    expect(admin.permissions).toHaveLength(16)
+    expect(cashier.permissions).toContain('pos.sell')
+    expect(cashier.permissions).not.toContain('settings.manage')
+    expect(designer.permissions).toContain('design.manage')
+    expect(designer.permissions).not.toContain('pos.sell')
+  })
+
+  it('seeds six weeks of order history with valid receipt codes', () => {
+    const db = buildSeed()
+    expect(db.orders.length).toBeGreaterThan(60)
+    for (const o of db.orders) {
+      expect(o.number).toMatch(/^ORD\d{12}$/)
+      for (const p of o.payments) {
+        if (p.mpesaReceipt) expect(p.mpesaReceipt).toMatch(/^[A-Z0-9]{10}$/)
+      }
+    }
+    // Today has sales so dashboards look alive.
+    const today = new Date().toISOString().slice(0, 10)
+    expect(db.orders.some((o) => o.createdAt.startsWith(today))).toBe(true)
+  })
+
+  it('receiptCode generates 10-char Daraja-style codes', () => {
+    expect(receiptCode()).toMatch(/^[A-Z0-9]{10}$/)
+    expect(receiptCode()).not.toBe(receiptCode())
+  })
+})
+
+describe('demo backend auth', () => {
+  it('logs in with username/password', async () => {
+    const res = await demoRequest<Any>('POST', '/api/v1/auth/login', { username: 'admin', password: 'admin123' })
+    expect(res.token).toMatch(/^demo\.1\./)
+    expect(res.user.roleName).toBe('Admin')
+    expect(res.user.permissions.length).toBeGreaterThan(10)
+  })
+
+  it('rejects bad credentials', async () => {
+    await expect(demoRequest<Any>('POST', '/api/v1/auth/login', { username: 'admin', password: 'nope' }))
+      .rejects.toMatchObject({ status: 401 })
+  })
+
+  it('rejects requests without a token', async () => {
+    await expect(demoRequest<Any>('GET', '/api/v1/products')).rejects.toMatchObject({ status: 401 })
+  })
+
+  it('pin quick-switch works and rejects wrong PINs', async () => {
+    const users = await demoRequest<Any[]>('GET', '/api/v1/auth/pin-users')
+    expect(users.length).toBeGreaterThanOrEqual(3)
+    const res = await demoRequest<Any>('POST', '/api/v1/auth/pin', { userId: 2, pin: '2222' })
+    expect(res.user.username).toBe('cashier')
+    await expect(demoRequest<Any>('POST', '/api/v1/auth/pin', { userId: 2, pin: '9999' }))
+      .rejects.toMatchObject({ status: 401 })
+  })
+})
+
+describe('demo backend RBAC parity', () => {
+  it('cashier cannot read users or settings', async () => {
+    await login('cashier', 'cashier123')
+    await expect(demoRequest<Any>('GET', '/api/v1/users')).rejects.toMatchObject({ status: 403 })
+    await expect(demoRequest<Any>('GET', '/api/v1/settings')).rejects.toMatchObject({ status: 403 })
+    // products/branding are read-accessible to any authenticated user (POS needs them)
+    const products = await demoRequest<Any[]>('GET', '/api/v1/products')
+    expect(products.length).toBeGreaterThan(10)
+  })
+
+  it('designer cannot checkout (no pos.sell)', async () => {
+    await login('designer', 'designer123')
+    await expect(
+      demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+        items: [{ productId: 1, qty: 1 }],
+        paymentMethod: 'cash',
+      }),
+    ).rejects.toMatchObject({ status: 403 })
+  })
+})
+
+describe('demo checkout lifecycle', () => {
+  it('cash sale: PAID immediately, stock decremented, VAT math matches cartTotals', async () => {
+    await login('cashier', 'cashier123')
+    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty
+    const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 1, qty: 2 }],
+      paymentMethod: 'cash',
+      customerName: 'Test Buyer',
+    })
+    expect(o.status).toBe('PAID')
+    expect(o.number).toMatch(/^ORD\d{12}$/)
+    expect(o.customerName).toBe('Test Buyer')
+    // 2 × 550.00 = 1100.00 subtotal, VAT 16% incl → tax = round(110000*16/116)
+    expect(o.subtotalCents).toBe(110000)
+    expect(o.taxCents).toBe(Math.round((110000 * 16) / 116))
+    expect(o.totalCents).toBe(110000)
+    const after = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty
+    expect(after).toBe(before - 2)
+    expect(o.payments[0].method).toBe('cash')
+    expect(o.payments[0].status).toBe('COMPLETED')
+  })
+
+  it('rejects insufficient stock', async () => {
+    await login('cashier', 'cashier123')
+    const products = await demoRequest<Any[]>('GET', '/api/v1/products')
+    const capped = products.find((p: Any) => p.trackStock && p.stockQty < 1000 && p.stockQty > 0)!
+    await expect(
+      demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+        items: [{ productId: capped.id, qty: capped.stockQty + 1 }],
+        paymentMethod: 'cash',
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('rejects price overrides without permission (cashier) but honors them for admin', async () => {
+    await login('cashier', 'cashier123')
+    await expect(
+      demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+        items: [{ productId: 1, qty: 1, unitPriceCents: 100 }],
+        paymentMethod: 'cash',
+      }),
+    ).rejects.toMatchObject({ status: 403 })
+    await login('admin', 'admin123')
+    const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 1, qty: 1, unitPriceCents: 40000 }],
+      paymentMethod: 'cash',
+    })
+    expect(o.items[0].unitPriceCents).toBe(40000)
+    expect(o.totalCents).toBe(40000)
+  })
+
+  it('M-Pesa STK: PENDING → simulated customer pays → PAID with receipt code', async () => {
+    // Admin shrinks the simulated customer-PIN delay so the test runs fast.
+    await login('admin', 'admin123')
+    await demoRequest<Any>('PUT', '/api/v1/settings', { values: { mpesa_mock_delay_ms: '700' } })
+    await login('cashier', 'cashier123')
+    const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 2, qty: 1 }],
+      paymentMethod: 'mpesa',
+      paymentMode: 'auto',
+      customerPhone: '254712345678',
+    })
+    expect(o.status).toBe('PENDING')
+    expect(o.payments[0].checkoutRequestId).toMatch(/^ws_CO_/)
+    expect(o.payments[0].status).toBe('PENDING')
+    // The mock provider "pays" after the configured delay — wait for it,
+    // then the poller sees PAID.
+    await new Promise((r) => setTimeout(r, 1300))
+    const done = await demoRequest<Any>('GET', `/api/v1/orders/${o.id}`)
+    expect(done.status).toBe('PAID')
+    expect(done.payments[0].mpesaReceipt).toMatch(/^[A-Z0-9]{10}$/)
+  }, 8000)
+
+  it('manual receipt: format, dedupe, and completion', async () => {
+    await login('cashier', 'cashier123')
+    // Manual-mode order waits for the code.
+    const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 3, qty: 1 }],
+      paymentMethod: 'mpesa',
+      paymentMode: 'manual',
+    })
+    expect(o.status).toBe('PENDING')
+    await expect(
+      demoRequest<Any>('POST', `/api/v1/orders/${o.id}/manual`, { receiptCode: 'SHORT' }),
+    ).rejects.toMatchObject({ status: 400 })
+    const done = await demoRequest<Any>('POST', `/api/v1/orders/${o.id}/manual`, { receiptCode: 'NLJ7RT61SV' })
+    expect(done.status).toBe('PAID')
+    expect(done.payments[0].mpesaReceipt).toBe('NLJ7RT61SV')
+    // Dedupe: the same code cannot confirm another order.
+    const o2 = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 3, qty: 1 }],
+      paymentMethod: 'mpesa',
+      paymentMode: 'manual',
+    })
+    await expect(
+      demoRequest<Any>('POST', `/api/v1/orders/${o2.id}/manual`, { receiptCode: 'NLJ7RT61SV' }),
+    ).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('void restores stock and records the reason', async () => {
+    await login('cashier', 'cashier123')
+    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 4)!.stockQty
+    const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 4, qty: 3 }],
+      paymentMethod: 'cash',
+    })
+    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 4)!.stockQty).toBe(before - 3)
+    const v = await demoRequest<Any>('POST', `/api/v1/orders/${o.id}/void`, { reason: 'wrong size' })
+    expect(v.status).toBe('VOIDED')
+    expect(v.voidReason).toBe('wrong size')
+    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 4)!.stockQty).toBe(before)
+  })
+
+  it('sync replays queued checkouts idempotently by clientUuid', async () => {
+    await login('cashier', 'cashier123')
+    const tx = {
+      items: [{ productId: 5, qty: 1 }],
+      paymentMethod: 'cash',
+      clientUuid: 'web-test-uuid-1',
+    }
+    const first = await demoRequest<Any[]>('POST', '/api/v1/sync', { transactions: [tx, tx] })
+    expect(first).toHaveLength(2)
+    expect(first[0].orderId).toBe(first[1].orderId) // same order — no double-charge
+    expect(first[0].status).toBe('PAID')
+  })
+})
+
+describe('demo settings + reports parity', () => {
+  it('settings save tolerates the jwt_secret masked echo (regression parity)', async () => {
+    await login('admin', 'admin123')
+    // Old frontend bug: snapshot echoed read-only secrets back on save.
+    const snap = await demoRequest<Any>('PUT', '/api/v1/settings', {
+      values: { jwt_secret: '__SET__', store_name: 'Renamed Shop' },
+    })
+    expect(snap.store_name).toBe('Renamed Shop')
+    expect(snap.jwt_secret).toBeUndefined()
+    // A real attempt to write jwt_secret is still rejected.
+    await expect(
+      demoRequest<Any>('PUT', '/api/v1/settings', { values: { jwt_secret: 'hacked' } }),
+    ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('settings snapshot masks Daraja secrets', async () => {
+    await login('admin', 'admin123')
+    await demoRequest<Any>('PUT', '/api/v1/settings', { values: { mpesa_consumer_secret: 'topsecret' } })
+    const snap = await demoRequest<Any>('GET', '/api/v1/settings')
+    expect(snap.mpesa_consumer_secret).toBe('__SET__')
+    // Masked echo keeps it.
+    const snap2 = await demoRequest<Any>('PUT', '/api/v1/settings', { values: { mpesa_consumer_secret: '__SET__' } })
+    expect(snap2.mpesa_consumer_secret).toBe('__SET__')
+  })
+
+  it('monthly KRA summary: nett = gross - vat and full month series', async () => {
+    await login('admin', 'admin123')
+    const month = new Date().toISOString().slice(0, 7)
+    const m = await demoRequest<Any>('GET', `/api/v1/reports/monthly?month=${month}`)
+    expect(m.month).toBe(month)
+    expect(m.grossCents).toBeGreaterThan(0)
+    expect(m.vatCents).toBeGreaterThan(0)
+    expect(m.nettCents).toBe(m.grossCents - m.vatCents)
+    const [y, mo] = month.split('-').map(Number)
+    expect(m.series).toHaveLength(new Date(y, mo, 0).getDate())
+    await expect(demoRequest<Any>('GET', '/api/v1/reports/monthly?month=nope')).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('daily summary reflects a fresh cash sale', async () => {
+    await login('cashier', 'cashier123')
+    await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 1, qty: 1 }],
+      paymentMethod: 'cash',
+    })
+    const today = new Date().toISOString().slice(0, 10)
+    const d = await demoRequest<Any>('GET', `/api/v1/reports/daily?date=${today}`)
+    expect(d.ordersPaid).toBeGreaterThanOrEqual(1)
+    expect(d.cashCents).toBeGreaterThanOrEqual(55000)
+    expect(d.series).toHaveLength(7)
+  })
+
+  it('users CRUD: admin resets passwords and PINs (the admin workflow)', async () => {
+    await login('admin', 'admin123')
+    const created = await demoRequest<Any>('POST', '/api/v1/users', {
+      username: 'grace', fullName: 'Grace W.', password: 'grace123', roleId: 2, pin: '4321',
+    })
+    expect(created.username).toBe('grace')
+    await expect(
+      demoRequest<Any>('PUT', '/api/v1/users/3/password', { password: 'newpass' }),
+    ).resolves.toMatchObject({ updated: true })
+    // Duplicate username rejected.
+    await expect(
+      demoRequest<Any>('POST', '/api/v1/users', { username: 'grace', password: '123456', roleId: 2 }),
+    ).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('stock adjustment lands in the audit log', async () => {
+    await login('admin', 'admin123')
+    const p = await demoRequest<Any>('POST', '/api/v1/products/1/adjust-stock', { delta: 20, reason: 'received from supplier' })
+    expect(p.stockQty).toBeGreaterThanOrEqual(20)
+    const audit = await demoRequest<Any[]>('GET', '/api/v1/audit')
+    expect(audit[0].action).toBe('STOCK_ADJUSTED')
+    expect(audit[0].details).toContain('+20')
+  })
+
+  it('CSV export and template download', async () => {
+    await login('admin', 'admin123')
+    const csvText = await import('../src/demo/backend').then((m) => m.demoRaw('/api/v1/products/export'))
+    expect(csvText).toContain('sku,barcode,name,category,price,cost,stock,track_stock,active')
+    expect(csvText.split('\n').length).toBeGreaterThan(10)
+  })
+})
