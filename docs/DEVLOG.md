@@ -294,3 +294,22 @@ Stage Summary:
 - All user-reported bugs fixed: jwt secret save error, remove-from-cart, emoji icons, mobile cart
 - New: KRA monthly returns + CSV, automatic backups + UI, barcode HID scanning, stock receive flow, printable receipts, role-based landing
 - 51/51 FE tests, 26 Go tests, 55/55 E2E smoke, tsc clean; pushed to github.com/ssmurfgg04-gif/pos-system
+
+---
+Task ID: 25
+Agent: main (Super Z)
+Task: Standalone desktop app — download/double-click distribution + GitHub Release v1.0.0 + full commit/push of milestones
+
+Work Log:
+- Desktop mode (no-args launch): per-OS data dir (APPDATA\LedgerPOS / ~/Library/Application Support/LedgerPOS / ~/.local/share/LedgerPOS), first-run detection, port pick 8765-7914, 127.0.0.1-only bind, single-instance via app.port + health probe (second launch just opens a tab), auto-open default browser, desktop.log for GUI-subsystem builds; `serve` subcommand = LAN-appliance mode; `--uninstall` removes the Windows install
+- Windows self-installer: copy to %LOCALAPPDATA%\Programs\LedgerPOS, desktop + Start-menu shortcuts, HKCU Add/Remove entry, reliable self-delete; vendored internal/escpos (MIT, iconv stripped) → CGO-free tree → clean 4-target cross-compile (win-x64 GUI exe w/ icon+manifest+version resources, darwin arm64+amd64 .app bundles with icns/Info.plist, linux-x64 tar.gz — ~10 MB each compressed)
+- New API GET /api/v1/system/desktop {desktop, firstRun, port, version} + POST /api/v1/system/quit (admin-only); frontend: first-run admin-credentials hint on Login, Quit button in shell + "app stopped" overlay
+- Packaging pipeline scripts/{package_desktop.py,make_icon.py,desktop_e2e.sh,desktop_browser_e2e.sh,assets/download-page.html}: one command builds icons, resources, 4 installers, in-browser demo for /demo/, Ledger-styled zero-JS landing page, light Netlify site zip
+- Verification: PE GUI-subsystem + UTF-16 version strings + 9 icon sizes in exe; mac bundles exec-bit'd; serve-mode smoke 55/55; frontend units 51/51; desktop E2E on the distributed Linux artifact — after hardening the script (a stale server squatted 8765 and hijacked checks → pre-clean port range + read port from app.port): 17/17
+- Distribution: pushed commits 21318d0 (desktop core) + ad243c4 (packaging/landing/DEVLOG) to github.com/ssmurfgg04-gif/pos-system; created Release v1.0.0 with all 4 installers as assets; landing page download buttons point at the release URLs (Netlify page stays ~135 KB); re-ran the full E2E against the artifact DOWNLOADED FROM the release — 17/17
+- Netlify: CLI unavailable in sandbox; deliverable is download/ledgerpos-netlify-site.zip (landing + /demo/ + _redirects) for drag-drop deploy; installers also copied to download/
+
+Stage Summary:
+- The POS is now a real distributable desktop app: landing page → GitHub Release → download → double-click → self-setup → sell. No browser/localhost/server issues for the end user — the app opens itself.
+- All milestones committed & pushed; release v1.0.0 live
+- Remaining nice-to-haves: code-signing certs (kills SmartScreen/Gatekeeper warnings), real Daraja creds for production STK
