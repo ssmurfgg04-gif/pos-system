@@ -16,3 +16,7 @@ pos-app
 
 # desktop packaging output (binaries hosted on GitHub Releases)
 /build/
+
+# runtime artifacts from local serve/test runs
+backups/
+pos-backup-*.db

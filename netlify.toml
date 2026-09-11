@@ -1,19 +1,24 @@
-# Netlify deployment — static demo build.
+# Netlify deployment — the LedgerPOS download site.
 #
-# The SPA ships with an in-browser demo backend (see frontend/src/demo/):
-# when no Go server answers /api/v1/health, the app runs on seeded
-# localStorage data so the deployed site is always demoable. Log in with
-# admin/admin123, cashier/cashier123, or designer/designer123.
+# What gets deployed (assembled by scripts/netlify_build.py):
 #
-# To connect a REAL backend instead: remove VITE_DEMO_MODE below and set
-# VITE_API_URL=https://your-server.example — the app then talks to that
-# server (and shows connection errors instead of falling back to demo).
+#   /             the download landing page — Big-7 value props, one
+#                 primary CTA that auto-detects the visitor's OS
+#   /downloads/   the 4 installer packages + checksums.txt, served
+#                 straight from this deploy (committed under downloads/
+#                 in the repo; GitHub Releases stays the mirror)
+#   /demo/        the full POS as an in-browser demo (mock M-Pesa,
+#                 seeded Nairobi print shop; log in with
+#                 admin/admin123, cashier/cashier123, designer/designer123)
+#
+# The build is deterministic and offline-safe: everything it needs
+# lives in this repository — no downloads from GitHub or any registry
+# beyond npm ci itself.
 
 [build]
   base = "frontend"
-  command = "npm ci && npm run build"
+  command = "python3 ../scripts/netlify_build.py"
   publish = "dist"
 
 [build.environment]
-  VITE_DEMO_MODE = "true"
   NODE_VERSION = "20"

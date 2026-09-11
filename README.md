@@ -118,15 +118,31 @@ Windows desktop install.
 
 ## The download site on Netlify (landing page + demo + installers)
 
-One drag-and-drop gives you the whole storefront: a Ledger-styled landing
-page with the **Big-7 value propositions**, an auto-detected primary
-download button for the visitor's OS, an in-browser demo of the full app
-at `/demo/`, and the four installer packages served **straight from the
-Netlify site** — no GitHub redirect:
+The site is **wired to GitHub for continuous deployment**: every push to
+`main` auto-deploys on Netlify via `netlify.toml` →
+`scripts/netlify_build.py`, which assembles:
+
+| Path          | What the visitor gets                                            |
+|---------------|------------------------------------------------------------------|
+| `/`           | the landing page — Big-7 value props, OS-detected primary CTA     |
+| `/downloads/` | the four installer packages + `checksums.txt`, served from the deploy |
+| `/demo/`      | the full POS as an in-browser demo (seeded data, mock M-Pesa)     |
+
+The installers are **committed under `downloads/`** (mirrored from the
+GitHub Release, SHA-256-verified at build time), so deploys never depend
+on network fetches — the build is deterministic and offline-safe. After
+`scripts/package_desktop.py` produces new packages, sync them with:
 
 ```bash
-python3 scripts/build_site.py 1.0.0
-# drag download/ledgerpos-netlify-site.zip onto Netlify → done
+# copy fresh build/netlify-site/downloads/* into downloads/, then commit+push
+python3 scripts/create_release.py   # keeps the GitHub Release in sync too
+```
+
+To verify a deploy locally before pushing:
+
+```bash
+python3 scripts/netlify_build.py            # full build, exactly as Netlify runs it
+python3 scripts/netlify_build.py --skip-npm # re-assemble using the existing dist
 ```
 
 The SPA ships with an **in-browser demo backend**: when no server answers
@@ -136,8 +152,8 @@ RBAC. That means the static Netlify build is a working demo you can show
 anyone.
 
 If download traffic grows heavy, host the installers on GitHub Releases
-instead (they're mirrored there) and rebuild the site with
-`LEDGERPOS_LIGHT_SITE=1` — the page footer links to the releases either way.
+instead (they're mirrored there) and change the landing-page links — the
+page footer links to the releases either way.
 
 To point the deployed app at a **real** server later: remove
 `VITE_DEMO_MODE` and set `VITE_API_URL=https://your-server.example` — the

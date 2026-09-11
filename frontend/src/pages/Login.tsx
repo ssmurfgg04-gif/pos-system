@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
 import { Button, Input, Field, Spinner } from '../components/ui'
@@ -26,8 +26,12 @@ export function Login() {
 
   // Demo hint chips appear only when the backend probe settled on demo
   // (static deploy). serverMode() distinguishes probe-forced demo from real.
-  backendMode().then((m) => setDemo(m === 'demo')).catch(() => undefined)
-  getDesktopStatus().then(setDesk).catch(() => undefined)
+  useEffect(() => {
+    let alive = true
+    backendMode().then((m) => { if (alive) setDemo(m === 'demo') }).catch(() => undefined)
+    getDesktopStatus().then((d) => { if (alive) setDesk(d) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [])
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
