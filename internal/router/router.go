@@ -49,6 +49,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         api.GET("/health", func(c *gin.Context) {
                 c.JSON(200, gin.H{"status": "ok"})
         })
+        api.GET("/system/desktop", h.DesktopInfo)
         api.POST("/auth/login", h.Login)
         api.GET("/auth/pin-users", h.PinUsers)
         api.POST("/auth/pin", h.PinLogin)
@@ -127,6 +128,8 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         authd.GET("/audit", perm("audit.view"), h.ListAudit)
         authd.POST("/system/backup", perm("settings.manage"), h.RunBackup)
         authd.GET("/system/backups", perm("settings.manage"), h.ListBackups)
+        // Desktop-mode admin shutdown (no-op in server mode: OnQuit unset).
+        authd.POST("/system/quit", perm("settings.manage"), h.QuitApp)
 
         // ---- Embedded SPA ----
         // NOTE: gin only runs group middleware for matched routes, so the

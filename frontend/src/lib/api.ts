@@ -71,6 +71,38 @@ export function isDemoSync(): boolean {
   return resolvedMode === 'demo'
 }
 
+// ---- Desktop app detection ----
+// The desktop build serves the SPA from 127.0.0.1 and exposes
+// /api/v1/system/desktop; static deploys and plain server deploys answer
+// with desktop:false (or nothing at all — that also means "not desktop").
+
+export interface DesktopStatus {
+  desktop: boolean
+  version?: string
+  firstRun?: boolean
+  port?: string
+}
+
+let desktopStatusCache: DesktopStatus | null = null
+
+export async function getDesktopStatus(): Promise<DesktopStatus> {
+  if (desktopStatusCache) return desktopStatusCache
+  let status: DesktopStatus = { desktop: false }
+  try {
+    if ((await backendMode()) === 'real') {
+      const res = await fetch(BASE + '/api/v1/system/desktop', { cache: 'no-store' })
+      if (res.ok) {
+        const j = await res.json()
+        if (j?.data && typeof j.data.desktop === 'boolean') status = j.data
+      }
+    }
+  } catch {
+    /* no such endpoint → not the desktop app */
+  }
+  desktopStatusCache = status
+  return status
+}
+
 export function token(): string | null {
   return localStorage.getItem('pos_token')
 }

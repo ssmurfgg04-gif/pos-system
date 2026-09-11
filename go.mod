@@ -7,9 +7,9 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/grandcat/zeroconf v1.0.0
-	github.com/hennedo/escpos v0.0.1
 	github.com/lib/pq v1.10.9
 	golang.org/x/crypto v0.40.0
+	golang.org/x/sys v0.35.0
 	modernc.org/sqlite v1.34.4
 )
 
@@ -37,7 +37,6 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
-	github.com/qiniu/iconv v1.2.0 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/quic-go/quic-go v0.54.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -48,7 +47,6 @@ require (
 	golang.org/x/mod v0.25.0 // indirect
 	golang.org/x/net v0.42.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.27.0 // indirect
 	golang.org/x/tools v0.34.0 // indirect
 	google.golang.org/protobuf v1.36.9 // indirect

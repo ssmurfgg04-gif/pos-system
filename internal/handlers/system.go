@@ -3,6 +3,7 @@ package handlers
 import (
         "fmt"
         "strings"
+        "time"
 
         "github.com/gin-gonic/gin"
 )
@@ -79,4 +80,28 @@ func (h *H) RunBackup(c *gin.Context) {
 // ListBackups (settings.manage) — backup history, newest first.
 func (h *H) ListBackups(c *gin.Context) {
         h.ok(c, h.Svc.ListBackups())
+}
+
+// ---- Desktop (single-machine) mode ----
+
+// DesktopInfo (public) — lets the SPA know it is running inside the
+// desktop app so it can offer first-run hints and the Quit action.
+// Zero risk: only booleans and the version string are exposed.
+func (h *H) DesktopInfo(c *gin.Context) {
+        h.ok(c, h.Desktop)
+}
+
+// QuitApp (settings.manage) — admin-only graceful shutdown for desktop
+// mode. The response is flushed before the server stops so the browser
+// can render the "safe to close" state.
+func (h *H) QuitApp(c *gin.Context) {
+        p := h.principal(c)
+        h.Svc.Audit(p.ID, p.Username, "APP_QUIT", "system", "desktop", "")
+        h.ok(c, gin.H{"quitting": true})
+        if h.OnQuit != nil {
+                go func() {
+                        time.Sleep(300 * time.Millisecond) // let the response flush
+                        h.OnQuit()
+                }()
+        }
 }
