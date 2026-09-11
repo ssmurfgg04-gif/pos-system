@@ -8,20 +8,21 @@ Repo-relative and CI-friendly. Run from anywhere:
 Produces, under build/netlify-site/:
   index.html + icons   — the download landing page (drag-drop to Netlify)
   demo/                — in-browser demo build of the full app (/demo/)
-  downloads/           — the installer packages (for GitHub Release upload):
-      ledgerpos-setup-windows-x64.zip      — self-installing exe
-      ledgerpos-macos-apple-silicon.zip    — .app bundle (M-series)
-      ledgerpos-macos-intel.zip            — .app bundle (Intel)
-      ledgerpos-linux-x64.tar.gz           — static binary + first-run notes
+  downloads/           — the installer packages, all <10 MB each so the
+                         whole folder deploys via Netlify drag-and-drop:
+      ledgerpos-setup-windows-x64.zip      — self-installing exe (zopfli zip)
+      ledgerpos-macos-apple-silicon.zip    — .app bundle (M-series, zopfli zip)
+      ledgerpos-macos-intel.zip            — .app bundle (Intel, zopfli zip)
+      ledgerpos-linux-x64.tar.xz           — static binary + first-run notes
+      checksums.txt                        — SHA-256 of every package
 
-The site zip (build/netlify-site.zip + copy in LEDGERPOS_DOWNLOAD_DIR)
-EXCLUDES downloads/ by default — binaries are hosted on GitHub Releases
-and the landing page links there. Set INCLUDE_DOWNLOADS_IN_SITE=1 to
-embed them instead (fully self-contained site, ~40 MB).
+The site zip (download/ledgerpos-netlify-site.zip) INCLUDES downloads/
+by default — visitors download straight from Netlify. Set
+LEDGERPOS_LIGHT_SITE=1 to exclude installers (binaries then go to
+GitHub Releases; the landing page footer links there either way).
 
-Env overrides: LEDGERPOS_RELEASE_BASE (download URL prefix),
-LEDGERPOS_DOWNLOAD_DIR (extra copy of site zip + installers),
-INCLUDE_DOWNLOADS_IN_SITE=1.
+Env overrides: LEDGERPOS_DOWNLOAD_DIR (extra copy of site zip +
+installers).
 """
 import os
 import shutil
@@ -29,6 +30,9 @@ import subprocess
 import sys
 import zipfile
 from datetime import date
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pkgutil
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(ROOT, "scripts")
@@ -39,8 +43,6 @@ DOWNLOAD = (os.environ.get("LEDGERPOS_DOWNLOAD_DIR")
 RELEASES_PAGE = "https://github.com/ssmurfgg04-gif/pos-system/releases"
 
 VERSION = sys.argv[1] if len(sys.argv) > 1 else "1.0.0"
-RELEASE_BASE = (os.environ.get("LEDGERPOS_RELEASE_BASE")
-                or f"{RELEASES_PAGE}/download/v{VERSION}")
 
 GOENV = dict(os.environ, PATH="/home/z/.local/go-sdk/bin:" + os.environ["PATH"])
 if not os.path.isdir("/home/z/.local/go-sdk/bin"):
@@ -82,22 +84,21 @@ def go_build(goos, goarch, out, extra_ldflags=""):
 
 
 def zip_dir(src_dir, arc_root, dest):
-    """zip that preserves unix permissions (mac .app needs the exec bit)."""
+    """zopfli-deflated zip preserving unix permissions (mac .app exec bit)."""
     if os.path.exists(dest):
         os.remove(dest)
-    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-        for base, _dirs, files in os.walk(arc_root):
-            for f in files:
-                full = os.path.join(base, f)
-                rel = os.path.relpath(full, arc_root)
-                zi = zipfile.ZipInfo(os.path.join(os.path.basename(arc_root), rel) if arc_root not in (None, "") else rel)
-                zi.compress_type = zipfile.ZIP_DEFLATED
-                st = os.stat(full)
-                zi.external_attr = (st.st_mode & 0xFFFF) << 16
-                zi.date_time = (2026, 1, 1, 0, 0, 0)
-                with open(full, "rb") as fh:
-                    z.writestr(zi, fh.read())
-    print(f"    → {os.path.basename(dest)}  {os.path.getsize(dest)/1e6:.1f} MB")
+    entries = []
+    for base, _dirs, files in os.walk(arc_root):
+        for f in files:
+            full = os.path.join(base, f)
+            rel = os.path.relpath(full, arc_root)
+            mode = os.stat(full).st_mode & 0o7777
+            if rel.endswith("MacOS/ledgerpos"):
+                mode = 0o755
+            entries.append((os.path.join(os.path.basename(arc_root), rel), full,
+                            0o100000 | (mode & 0o777)))
+    size = pkgutil.write_zip_zopfli(dest, entries)
+    print(f"    → {os.path.basename(dest)}  {size/1e6:.1f} MB")
 
 
 def human_mb(p):
@@ -107,7 +108,7 @@ def human_mb(p):
 ASSETS = ("ledgerpos-setup-windows-x64.zip",
           "ledgerpos-macos-apple-silicon.zip",
           "ledgerpos-macos-intel.zip",
-          "ledgerpos-linux-x64.tar.gz")
+          "ledgerpos-linux-x64.tar.xz")
 
 
 def main():
@@ -196,7 +197,7 @@ def main():
     intel_stage = mac_app("build/out/ledgerpos-intel", "stage-mac-intel")
     zip_dir(intel_stage, intel_stage, os.path.join(dl, "ledgerpos-macos-intel.zip"))
 
-    # ---- Linux: tar.gz ----
+    # ---- Linux: tar.xz (smallest, and every distro handles it) ----
     lin_stage = os.path.join(ROOT, "build", "stage-linux")
     shutil.rmtree(lin_stage, ignore_errors=True)
     os.makedirs(lin_stage)
@@ -205,16 +206,32 @@ def main():
     with open(os.path.join(lin_stage, "README.txt"), "w") as f:
         f.write(
             "LedgerPOS " + VERSION + "\n\n"
-            "  tar xf ledgerpos-linux-x64.tar.gz\n"
+            "  tar xf ledgerpos-linux-x64.tar.xz\n"
             "  ./ledgerpos\n\n"
             "The app opens in your browser. First login: admin / admin123.\n"
             "Data lives in ~/.local/share/LedgerPOS.\n"
         )
-    tar_dest = os.path.join(dl, "ledgerpos-linux-x64.tar.gz")
+    tar_dest = os.path.join(dl, "ledgerpos-linux-x64.tar.xz")
     if os.path.exists(tar_dest):
         os.remove(tar_dest)
-    run(["tar", "-czf", tar_dest, "-C", lin_stage, "ledgerpos", "README.txt"])
-    print(f"    → ledgerpos-linux-x64.tar.gz  {os.path.getsize(tar_dest)/1e6:.1f} MB")
+    with open(tar_dest, "wb") as fh:
+        tar = subprocess.Popen(["tar", "-cf", "-", "-C", lin_stage,
+                                "ledgerpos", "README.txt"],
+                               stdout=subprocess.PIPE)
+        xz = subprocess.Popen(["xz", "-9e", "-T2"], stdin=tar.stdout, stdout=fh)
+        tar.stdout.close()
+        rc = xz.wait()
+        if rc != 0 or tar.wait() != 0:
+            raise SystemExit(f"tar/xz failed rc={rc}")
+    print(f"    → ledgerpos-linux-x64.tar.xz  {os.path.getsize(tar_dest)/1e6:.1f} MB")
+
+    # size guard: every installer must stay under Netlify drag-and-drop guidance
+    for a in ASSETS:
+        pkgutil.assert_netlify_safe(os.path.join(dl, a))
+    with open(os.path.join(dl, "checksums.txt"), "w") as f:
+        f.write(f"LedgerPOS {VERSION} — SHA-256 of the download packages\n\n")
+        for name in ASSETS:
+            f.write(f"{pkgutil.sha256_of(os.path.join(dl, name))}  {name}\n")
 
     print(f"[5/7] demo build for /demo/ (in-browser backend, base=/demo/)")
     demo_out = os.path.join(SITE, "demo")
@@ -234,12 +251,13 @@ def main():
     tpl = (tpl
            .replace("{{VERSION}}", VERSION)
            .replace("{{BUILD_DATE}}", date.today().strftime("%b %Y"))
-           .replace("{{RELEASE_BASE}}", RELEASE_BASE)
            .replace("{{RELEASES_PAGE}}", RELEASES_PAGE)
            .replace("{{WIN_SIZE_MB}}", human_mb(os.path.join(dl, "ledgerpos-setup-windows-x64.zip")))
            .replace("{{MAC_ARM_SIZE_MB}}", human_mb(os.path.join(dl, "ledgerpos-macos-apple-silicon.zip")))
            .replace("{{MAC_INTEL_SIZE_MB}}", human_mb(os.path.join(dl, "ledgerpos-macos-intel.zip")))
            .replace("{{LINUX_SIZE_MB}}", human_mb(tar_dest)))
+    if "{{" in tpl:
+        raise SystemExit("unsubstituted template variable left")
     with open(os.path.join(SITE, "index.html"), "w") as f:
         f.write(tpl)
     with open(os.path.join(SITE, "_redirects"), "w") as f:
@@ -247,7 +265,7 @@ def main():
                 "/demo/*  /demo/index.html  200\n")
 
     print(f"[7/7] site zip for drag-and-drop deploy")
-    embed_downloads = os.environ.get("INCLUDE_DOWNLOADS_IN_SITE") == "1"
+    light = os.environ.get("LEDGERPOS_LIGHT_SITE") == "1"
     os.makedirs(DOWNLOAD, exist_ok=True)
     site_zip = os.path.join(DOWNLOAD, "ledgerpos-netlify-site.zip")
     if os.path.exists(site_zip):
@@ -259,10 +277,16 @@ def main():
             for f in sorted(files):
                 full = os.path.join(base, f)
                 rel = os.path.relpath(full, SITE)
-                if not embed_downloads and rel.startswith("downloads" + os.sep):
+                if light and rel.startswith("downloads" + os.sep):
                     skipped += 1
                     continue
-                z.write(full, rel)
+                # installers are already compressed — store, don't deflate twice
+                if rel.startswith("downloads" + os.sep) and rel.endswith((".zip", ".xz")):
+                    zi = zipfile.ZipInfo(rel, date_time=(2026, 1, 1, 0, 0, 0))
+                    with open(full, "rb") as fh:
+                        z.writestr(zi, fh.read(), compress_type=zipfile.ZIP_STORED)
+                else:
+                    z.write(full, rel)
     print(f"    → {site_zip}  {os.path.getsize(site_zip)/1e6:.1f} MB"
           + (f"  ({skipped} installer files skipped — host them on GitHub Releases)"
              if skipped else ""))

@@ -78,10 +78,13 @@ macOS and Linux. No terminal, no localhost URL to remember, no server
 to configure:
 
 1. Download the package for your machine from the
-   [releases page](https://github.com/ssmurfgg04-gif/pos-system/releases).
+   [releases page](https://github.com/ssmurfgg04-gif/pos-system/releases)
+   — or from the LedgerPOS download page (see the Netlify section below,
+   which serves the installers directly).
 2. Double-click it. On Windows the exe **installs itself** (desktop +
    Start-menu shortcuts, Add/Remove Programs entry) and starts; on macOS
-   unzip and open `LedgerPOS.app`; on Linux `tar xf` then `./ledgerpos`.
+   unzip and open `LedgerPOS.app`; on Linux `tar xf ledgerpos-linux-x64.tar.xz`
+   then `./ledgerpos`.
 3. Your browser opens on the app. First login `admin / admin123`
    (PIN `1234`) — change it in Settings on first run.
 
@@ -98,15 +101,33 @@ Build the installers yourself (cross-compiles all four targets,
 CGO-free, from any OS):
 
 ```bash
-python3 scripts/package_desktop.py 1.0.0
+python3 scripts/package_desktop.py 1.0.0   # full pipeline (needs Go + npm)
+python3 scripts/repack.py                  # re-shrink existing installers
+python3 scripts/build_site.py 1.0.0        # re-assemble the site only
 ```
+
+Packages are zopfli-deflated and kept **under 10 MB each** so the whole
+site (landing page + demo + installers, ~37 MB) deploys via Netlify
+drag-and-drop; `downloads/checksums.txt` carries the SHA-256 of every
+package.
 
 The old behaviour is still there: `./ledgerpos serve` runs the
 LAN-appliance mode (env-driven, mDNS discovery, 0.0.0.0 bind) for
 multi-terminal setups, and `./ledgerpos --uninstall` removes the
 Windows desktop install.
 
-## Deploy the demo to Netlify (no server needed)
+## The download site on Netlify (landing page + demo + installers)
+
+One drag-and-drop gives you the whole storefront: a Ledger-styled landing
+page with the **Big-7 value propositions**, an auto-detected primary
+download button for the visitor's OS, an in-browser demo of the full app
+at `/demo/`, and the four installer packages served **straight from the
+Netlify site** — no GitHub redirect:
+
+```bash
+python3 scripts/build_site.py 1.0.0
+# drag download/ledgerpos-netlify-site.zip onto Netlify → done
+```
 
 The SPA ships with an **in-browser demo backend**: when no server answers
 `/api/v1/health`, the app runs on a seeded, fully interactive dataset
@@ -114,19 +135,11 @@ The SPA ships with an **in-browser demo backend**: when no server answers
 RBAC. That means the static Netlify build is a working demo you can show
 anyone.
 
-**Option A — drag & drop (fastest):**
+If download traffic grows heavy, host the installers on GitHub Releases
+instead (they're mirrored there) and rebuild the site with
+`LEDGERPOS_LIGHT_SITE=1` — the page footer links to the releases either way.
 
-```bash
-cd frontend && npm install
-VITE_DEMO_MODE=true npm run build
-# drag frontend/dist into Netlify → done. Zip included at
-# download/pos-netlify-demo-dist.zip in this workspace.
-```
-
-**Option B — connect the repo:** the included `netlify.toml` already sets
-the build command, publish dir, and `VITE_DEMO_MODE=true`.
-
-To point the deployed site at a **real** server later: remove
+To point the deployed app at a **real** server later: remove
 `VITE_DEMO_MODE` and set `VITE_API_URL=https://your-server.example` — the
 app then talks to that backend (and shows connection errors instead of
 falling back to demo). Demo data resets anytime via **Settings → System →
