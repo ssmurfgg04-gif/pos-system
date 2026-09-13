@@ -44,7 +44,7 @@ RELEASES_PAGE = "https://github.com/ssmurfgg04-gif/pos-system/releases"
 VERSION = "1.0.0"
 
 INSTALLERS = [
-    "ledgerpos-setup-windows-x64.zip",
+    "ledgerpos-setup-windows-x64.exe",
     "ledgerpos-macos-apple-silicon.zip",
     "ledgerpos-macos-intel.zip",
     "ledgerpos-linux-x64.tar.xz",
@@ -134,7 +134,7 @@ def render_landing(sizes: dict) -> None:
             .replace("{{VERSION}}", VERSION)
             .replace("{{BUILD_DATE}}", date.today().strftime("%b %Y"))
             .replace("{{RELEASES_PAGE}}", RELEASES_PAGE)
-            .replace("{{WIN_SIZE_MB}}", sizes["ledgerpos-setup-windows-x64.zip"])
+            .replace("{{WIN_SIZE_MB}}", sizes["ledgerpos-setup-windows-x64.exe"])
             .replace("{{MAC_ARM_SIZE_MB}}", sizes["ledgerpos-macos-apple-silicon.zip"])
             .replace("{{MAC_INTEL_SIZE_MB}}", sizes["ledgerpos-macos-intel.zip"])
             .replace("{{LINUX_SIZE_MB}}", sizes["ledgerpos-linux-x64.tar.xz"]))

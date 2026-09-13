@@ -156,7 +156,7 @@
     no localhost to remember, and it keeps working when the internet doesn't.</p>
 
   <div class="dl-zone">
-    <a class="btn-hero" id="dl-primary" href="downloads/ledgerpos-setup-windows-x64.zip" download>
+    <a class="btn-hero" id="dl-primary" href="downloads/ledgerpos-setup-windows-x64.exe" download>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
       <span id="dl-label">Download for Windows</span>
       <small id="dl-size">{{WIN_SIZE_MB}} MB</small>
@@ -166,7 +166,7 @@
       <a id="alt-mac-arm" href="downloads/ledgerpos-macos-apple-silicon.zip" download>macOS · Apple Silicon</a>·
       <a id="alt-mac-intel" href="downloads/ledgerpos-macos-intel.zip" download>macOS · Intel</a>·
       <a id="alt-linux" href="downloads/ledgerpos-linux-x64.tar.xz" download>Linux</a>·
-      <a id="alt-windows" href="downloads/ledgerpos-setup-windows-x64.zip" download>Windows</a>
+      <a id="alt-windows" href="downloads/ledgerpos-setup-windows-x64.exe" download>Windows</a>
     </div>
     <div class="mobile-note" id="mobile-note">LedgerPOS runs on Windows, macOS and Linux computers —
       save this page and download it from your computer.</div>
@@ -189,8 +189,8 @@
         </div>
         <div><h2>Windows</h2><span>10 &amp; 11 · 64-bit</span></div>
       </div>
-      <p class="desc">One file. Double-click and it installs itself: desktop + Start-menu shortcuts, an Add/Remove Programs entry — then the app opens. Re-download any time; running a newer file updates the install.</p>
-      <a class="btn" href="downloads/ledgerpos-setup-windows-x64.zip" download>
+      <p class="desc">One file. Double-click the installer, click through once: desktop + Start-menu shortcuts, an Add/Remove Programs entry — then the app opens. Re-download any time; running a newer file updates the install.</p>
+      <a class="btn" href="downloads/ledgerpos-setup-windows-x64.exe" download>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
         Download for Windows <small>{{WIN_SIZE_MB}} MB</small>
       </a>
@@ -286,7 +286,7 @@
   else if (/Linux|X11/i.test(ua) && !/Android|Mobile|iPhone|iPad/i.test(ua)) os = 'linux';
   else if (/Android|iPhone|iPad|iPod|Mobile/i.test(ua)) os = 'mobile';
   var map = {
-    windows: {href:'downloads/ledgerpos-setup-windows-x64.zip', label:'Download for Windows', size:'{{WIN_SIZE_MB}} MB', hide:['alt-windows']},
+    windows: {href:'downloads/ledgerpos-setup-windows-x64.exe', label:'Download for Windows', size:'{{WIN_SIZE_MB}} MB', hide:['alt-windows']},
     mac:     {href:'downloads/ledgerpos-macos-apple-silicon.zip', label:'Download for macOS · Apple Silicon', size:'{{MAC_ARM_SIZE_MB}} MB', hide:['alt-mac-arm']},
     linux:   {href:'downloads/ledgerpos-linux-x64.tar.xz', label:'Download for Linux', size:'{{LINUX_SIZE_MB}} MB', hide:['alt-linux']}
   };

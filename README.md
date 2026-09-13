@@ -81,17 +81,19 @@ to configure:
    [releases page](https://github.com/ssmurfgg04-gif/pos-system/releases)
    — or from the LedgerPOS download page (see the Netlify section below,
    which serves the installers directly).
-2. Double-click it. On Windows the exe **installs itself** (desktop +
-   Start-menu shortcuts, Add/Remove Programs entry) and starts; on macOS
-   unzip and open `LedgerPOS.app`; on Linux `tar xf ledgerpos-linux-x64.tar.xz`
-   then `./ledgerpos`.
-3. Your browser opens on the app. First login `admin / admin123`
-   (PIN `1234`) — change it in Settings on first run.
+2. Double-click it. On Windows run the installer once (desktop +
+   Start-menu shortcuts, Add/Remove Programs entry, no extraction
+   needed); on macOS unzip and open `LedgerPOS.app`; on Linux
+   `tar xf ledgerpos-linux-x64.tar.xz` then `./ledgerpos`.
+3. The app opens in its own window — no browser tabs. First login
+   `admin / admin123` (PIN `1234`) — change it in Settings on first run.
 
 First launch sets up everything by itself: it creates the SQLite
 database, runs migrations, seeds the catalog and users, picks a free
-local port (8765–7914), binds to 127.0.0.1 **only**, and opens the
-browser. Launching it again while it's running just opens a new tab.
+local port (8765–7914), binds to 127.0.0.1 **only**, and opens its own
+app window (a Chromium app-mode window; falls back to your default
+browser if none is installed). Launching it again while it's running
+just opens a new window.
 An admin can stop it from the UI (sidebar → Quit). All data lives in a
 per-OS app directory — `%APPDATA%\LedgerPOS`,
 `~/Library/Application Support/LedgerPOS`, `~/.local/share/LedgerPOS` —
@@ -101,10 +103,12 @@ Build the installers yourself (cross-compiles all four targets,
 CGO-free, from any OS):
 
 ```bash
-python3 scripts/package_desktop.py 1.0.0   # full pipeline (needs Go + npm)
+python3 scripts/package_desktop.py 1.1.0   # full pipeline (needs Go + npm + NSIS for the Windows setup.exe)
+python3 scripts/build_installer.py 1.1.0   # Windows setup.exe only
 python3 scripts/repack.py                  # re-shrink existing installers
-python3 scripts/build_site.py 1.0.0        # re-assemble the site only
+python3 scripts/build_site.py 1.1.0        # re-assemble the site only
 ```
+(On Windows use `python` instead of `python3`, and `winget install NSIS.NSIS` for the installer step.)
 
 Packages are zopfli-deflated and kept **under 10 MB each** so the whole
 site (landing page + demo + installers, ~37 MB) deploys via Netlify
