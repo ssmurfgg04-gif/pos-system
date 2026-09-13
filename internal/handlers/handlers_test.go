@@ -38,6 +38,9 @@ func newTestServer(t *testing.T) (*gin.Engine, string, string, string) {
         if err != nil {
                 t.Fatalf("db: %v", err)
         }
+        // Windows locks the SQLite file while open — close before TempDir
+        // cleanup or every test in this package fails on removal.
+        t.Cleanup(func() { _ = db.Close() })
         if err := db.Migrate(); err != nil {
                 t.Fatalf("migrate: %v", err)
         }

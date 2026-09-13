@@ -23,7 +23,7 @@ if not TOKEN:
     sys.exit("GITHUB_TOKEN env var not set")
 
 ASSETS = [
-    ("ledgerpos-setup-windows-x64.zip", "application/zip"),
+    ("ledgerpos-setup-windows-x64.exe", "application/x-msdownload"),
     ("ledgerpos-macos-apple-silicon.zip", "application/zip"),
     ("ledgerpos-macos-intel.zip", "application/zip"),
     ("ledgerpos-linux-x64.tar.xz", "application/x-xz"),
@@ -36,7 +36,7 @@ Download the file for your machine, double-click it, start selling. The whole sh
 
 | File | For |
 |---|---|
-| `ledgerpos-setup-windows-x64.zip` | Windows 10/11 (64-bit) — self-installing exe |
+| `ledgerpos-setup-windows-x64.exe` | Windows 10/11 (64-bit) — one-click installer |
 | `ledgerpos-macos-apple-silicon.zip` | macOS 12+ on Apple Silicon (M1–M4) |
 | `ledgerpos-macos-intel.zip` | macOS 12+ on Intel Macs |
 | `ledgerpos-linux-x64.tar.xz` | Linux x86-64, any distro |

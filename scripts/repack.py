@@ -29,7 +29,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DL = os.path.join(ROOT, "build", "netlify-site", "downloads")
 STAGE = os.path.join(ROOT, "build", "repack")
 
-WIN_ZIP = "ledgerpos-setup-windows-x64.zip"
+WIN_SETUP = "ledgerpos-setup-windows-x64.exe"
 MAC_ARM_ZIP = "ledgerpos-macos-apple-silicon.zip"
 MAC_INTEL_ZIP = "ledgerpos-macos-intel.zip"
 LINUX_TAR_XZ = "ledgerpos-linux-x64.tar.xz"
@@ -78,20 +78,15 @@ def main():
     results = []
 
     # ---------- Windows ----------
-    print("[windows] extracting original zip…")
-    win_orig = os.path.join(DL, WIN_ZIP)
-    orig_exe_sha = member_sha256(win_orig, "LedgerPOS.exe")
-    win_dir = extract_original(WIN_ZIP)
-    exe = find_one(win_dir, "LedgerPOS.exe")
-    first_run = find_one(win_dir, "FIRST-RUN.txt")
-    os.chmod(exe, 0o755)
-    print("[windows] re-zipping with zopfli (this takes ~1 min)…")
-    out = os.path.join(DL, WIN_ZIP)
-    size = pkgutil.write_zip_zopfli(out, [
-        ("LedgerPOS/LedgerPOS.exe", exe, 0o100755),
-        ("LedgerPOS/FIRST-RUN.txt", first_run, 0o100644),
-    ])
-    results.append(("windows", out, size, orig_exe_sha, "LedgerPOS/LedgerPOS.exe"))
+    # The one-click NSIS installer is already final — no re-shrink step
+    # exists for it (rebuilding would invalidate the uninstaller offsets),
+    # so repack only verifies it: size guard + fresh checksum entry.
+    print("[windows] verifying setup.exe (no repack — NSIS output is final)…")
+    out = os.path.join(DL, WIN_SETUP)
+    if not os.path.isfile(out):
+        raise SystemExit(f"missing {out} — run scripts/build_installer.py first")
+    size = os.path.getsize(out)
+    results.append(("windows-exe", out, size, None, None))
 
     # ---------- macOS ----------
     for src_name, member_root in ((MAC_ARM_ZIP, "LedgerPOS.app"),
@@ -169,20 +164,29 @@ def main():
     ok = True
     for tag, path, size, orig_sha, member in results:
         safe = pkgutil.assert_netlify_safe(path)
-        if tag == "linux":
-            with tarfile.open(path) as tf:
-                data = tf.extractfile(member).read()
-        else:
-            with zipfile.ZipFile(path) as zf:
-                data = zf.read(member)
         import hashlib
-        new_sha = hashlib.sha256(data).hexdigest()
-        match = new_sha == orig_sha
-        status = "OK " if (match and safe) else "FAIL"
-        if not (match and safe):
-            ok = False
-        print(f"  [{status}] {os.path.basename(path):42s} {size/1e6:6.2f} MB  "
-              f"binary sha256 {'match' if match else 'MISMATCH!'}")
+        if member is None:
+            # Final installer binary (NSIS setup.exe): no inner member to
+            # byte-compare — size guard plus a fresh checksum entry.
+            match = True
+            print(f"  [{'OK ' if safe else 'FAIL'}] {os.path.basename(path):42s} {size/1e6:6.2f} MB  "
+                  f"installer passthrough (no byte-identity check)")
+            if not safe:
+                ok = False
+        else:
+            if tag == "linux":
+                with tarfile.open(path) as tf:
+                    data = tf.extractfile(member).read()
+            else:
+                with zipfile.ZipFile(path) as zf:
+                    data = zf.read(member)
+            new_sha = hashlib.sha256(data).hexdigest()
+            match = new_sha == orig_sha
+            status = "OK " if (match and safe) else "FAIL"
+            if not (match and safe):
+                ok = False
+            print(f"  [{status}] {os.path.basename(path):42s} {size/1e6:6.2f} MB  "
+                  f"binary sha256 {'match' if match else 'MISMATCH!'}")
         lines.append(f"{pkgutil.sha256_of(path)}  {os.path.basename(path)}")
 
     ck = os.path.join(DL, "checksums.txt")

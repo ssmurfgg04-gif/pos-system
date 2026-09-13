@@ -60,10 +60,10 @@ func runDesktop() int {
 	dbPath := filepath.Join(dir, "pos.db")
 	firstRun := !fileExists(dbPath)
 
-	// Single instance: if our server already answers, just open a tab.
+	// Single instance: if our server already answers, just open a window.
 	if port := readPortFile(dir); port != "" && probeOurs(port) {
-		log.Printf("%s already running on port %s — opening browser", appName, port)
-		openBrowser("http://127.0.0.1:" + port)
+		log.Printf("%s already running on port %s — opening app window", appName, port)
+		openAppWindow("http://127.0.0.1:"+port, dir)
 		return 0
 	}
 
@@ -85,7 +85,7 @@ func runDesktop() int {
 	meta := &desktopMeta{
 		Port:     port,
 		FirstRun: firstRun,
-		OnReady:  func() { openBrowser("http://127.0.0.1:" + port) },
+		OnReady:  func() { openAppWindow("http://127.0.0.1:"+port, dir) },
 	}
 	startApp(config.Load(), "127.0.0.1:"+port, meta, quit)
 	return 0
@@ -171,6 +171,78 @@ func readPortFile(dir string) string {
 func fileExists(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && !st.IsDir()
+}
+
+// chromiumAppBrowser returns a Chromium-based browser binary suitable for
+// --app mode, preferring Edge (ships with Windows) over Chrome. Empty when
+// none is installed — the caller falls back to the default browser.
+func chromiumAppBrowser() string {
+	switch runtimeGOOS {
+	case "windows":
+		programFiles := os.Getenv("ProgramFiles")
+		programFilesX86 := os.Getenv("ProgramFiles(x86)")
+		localAppData := os.Getenv("LOCALAPPDATA")
+		candidates := []string{
+			filepath.Join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+			filepath.Join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+			filepath.Join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+			filepath.Join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+			filepath.Join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+			filepath.Join(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+			filepath.Join(programFilesX86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+			filepath.Join(localAppData, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+		}
+		for _, c := range candidates {
+			if c != "" && fileExists(c) {
+				return c
+			}
+		}
+		return ""
+	case "darwin":
+		for _, c := range []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+		} {
+			if fileExists(c) {
+				return c
+			}
+		}
+		return ""
+	default: // linux and the BSDs
+		for _, c := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge", "brave-browser"} {
+			if p, err := exec.LookPath(c); err == nil {
+				return p
+			}
+		}
+		return ""
+	}
+}
+
+// openAppWindow shows the URL in a dedicated Chromium app-mode window — its
+// own taskbar entry, no tabs or address bar, so the till feels like a
+// desktop app instead of a browser tab. The profile lives under the app
+// data dir, keeping shop cookies/storage separate from personal browsing.
+// Falls back to the default browser (previous behavior) when no Chromium
+// browser is installed; headless machines simply no-op.
+func openAppWindow(url, dataDir string) {
+	if browser := chromiumAppBrowser(); browser != "" {
+		profile := filepath.Join(dataDir, "webprofile")
+		cmd := exec.Command(browser,
+			"--app="+url,
+			"--user-data-dir="+profile,
+			"--no-first-run",
+		)
+		go func() {
+			if err := cmd.Run(); err != nil {
+				log.Printf("app window: %v — falling back to default browser", err)
+				openBrowser(url)
+			}
+		}()
+		return
+	}
+	openBrowser(url)
 }
 
 // openBrowser launches the default browser without blocking or failing

@@ -34,7 +34,21 @@ func installDir() string {
 func installedExe() string { return filepath.Join(installDir(), appName+".exe") }
 
 func desktopShortcut() string {
-        return filepath.Join(os.Getenv("USERPROFILE"), "Desktop", appName+".lnk")
+        return filepath.Join(desktopDir(), appName+".lnk")
+}
+
+// desktopDir resolves the real Desktop folder. %USERPROFILE%\Desktop is
+// wrong when OneDrive folder redirection moves it — read the shell-known
+// location from the registry instead, falling back to the old assumption.
+func desktopDir() string {
+        k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders`, registry.QUERY_VALUE)
+        if err == nil {
+                defer k.Close()
+                if v, _, err := k.GetStringValue("Desktop"); err == nil && v != "" {
+                        return os.ExpandEnv(v)
+                }
+        }
+        return filepath.Join(os.Getenv("USERPROFILE"), "Desktop")
 }
 
 func startMenuShortcut() string {

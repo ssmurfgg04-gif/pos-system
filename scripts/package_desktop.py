@@ -10,7 +10,7 @@ Produces, under build/netlify-site/:
   demo/                — in-browser demo build of the full app (/demo/)
   downloads/           — the installer packages, all <10 MB each so the
                          whole folder deploys via Netlify drag-and-drop:
-      ledgerpos-setup-windows-x64.zip      — self-installing exe (zopfli zip)
+      ledgerpos-setup-windows-x64.exe      — one-click NSIS installer (needs makensis)
       ledgerpos-macos-apple-silicon.zip    — .app bundle (M-series, zopfli zip)
       ledgerpos-macos-intel.zip            — .app bundle (Intel, zopfli zip)
       ledgerpos-linux-x64.tar.xz           — static binary + first-run notes
@@ -61,18 +61,26 @@ def run(cmd, cwd=ROOT, env=None, check=True):
 
 def find_go_winres():
     """Locate go-winres (Windows icon/manifest/version compiler) or install it."""
-    for cand in (os.path.expanduser("~/go/bin/go-winres"),
-                 "/tmp/gobin/go-winres"):
+    cands = [os.path.expanduser("~/go/bin/go-winres"),
+             os.path.expanduser("~/go/bin/go-winres.exe"),
+             "/tmp/gobin/go-winres"]
+    _gp = subprocess.run(["go", "env", "GOPATH"], capture_output=True,
+                         text=True, env=GOENV).stdout.strip()
+    if _gp:
+        cands.append(os.path.join(_gp, "bin", "go-winres.exe" if os.name == "nt" else "go-winres"))
+    for cand in cands:
         if os.path.isfile(cand):
             return cand
     found = shutil.which("go-winres")
     if found:
         return found
-    gobin = "/tmp/gobin"
-    print("  go-winres not found — installing github.com/tc-hib/go-winres@v1.26.0")
-    run(["go", "install", "github.com/tc-hib/go-winres@v1.26.0"],
+    gobin = os.path.join(ROOT, "build", "gobin")
+    os.makedirs(gobin, exist_ok=True)
+    print("  go-winres not found — installing github.com/tc-hib/go-winres@v0.3.3")
+    run(["go", "install", "github.com/tc-hib/go-winres@v0.3.3"],
         env=dict(GOENV, GOBIN=gobin))
-    return os.path.join(gobin, "go-winres")
+    _name = "go-winres.exe" if os.name == "nt" else "go-winres"
+    return os.path.join(gobin, _name)
 
 
 def go_build(goos, goarch, out, extra_ldflags=""):
@@ -105,7 +113,7 @@ def human_mb(p):
     return f"{os.path.getsize(p)/1e6:.0f}"
 
 
-ASSETS = ("ledgerpos-setup-windows-x64.zip",
+ASSETS = ("ledgerpos-setup-windows-x64.exe",
           "ledgerpos-macos-apple-silicon.zip",
           "ledgerpos-macos-intel.zip",
           "ledgerpos-linux-x64.tar.xz")
@@ -113,7 +121,7 @@ ASSETS = ("ledgerpos-setup-windows-x64.zip",
 
 def main():
     print(f"[1/7] icons + windows resources")
-    run(["python3", os.path.join(SCRIPTS, "make_icon.py")], cwd=ROOT)
+    run([sys.executable, os.path.join(SCRIPTS, "make_icon.py")], cwd=ROOT)
     winres = find_go_winres()
     run([winres, "simply", "--icon", "build/app.ico",
          "--manifest", "gui", "--out", "rsrc", "--arch", "amd64",
@@ -135,27 +143,20 @@ def main():
     os.makedirs(dl, exist_ok=True)
 
     print(f"[4/7] assemble installers")
-    # ---- Windows: self-installing exe + first-run note ----
-    win_stage = os.path.join(ROOT, "build", "stage-win")
-    shutil.rmtree(win_stage, ignore_errors=True)
-    os.makedirs(win_stage)
-    shutil.copy2("build/out/LedgerPOS.exe", os.path.join(win_stage, "LedgerPOS.exe"))
-    with open(os.path.join(win_stage, "FIRST-RUN.txt"), "w") as f:
-        f.write(
-            "LedgerPOS " + VERSION + " — Point of Sale\n"
-            "=========================================\n\n"
-            "1. Double-click LedgerPOS.exe.\n"
-            "   It installs itself (desktop + Start menu shortcuts, appears in\n"
-            "   Add/Remove Programs) and opens in your browser.\n"
-            "2. Sign in:  admin / admin123   (PIN 1234)\n"
-            "3. Change that password in Settings, set your store name — done.\n\n"
-            "Windows may show 'Windows protected your PC' (no code-signing\n"
-            "certificate yet): More info -> Run anyway.\n\n"
-            "Everything stays on this machine; data lives in\n"
-            "%APPDATA%\\LedgerPOS. Uninstall from Windows Settings, or:\n"
-            "  LedgerPOS.exe --uninstall\n"
-        )
-    zip_dir(win_stage, win_stage, os.path.join(dl, "ledgerpos-setup-windows-x64.zip"))
+    # ---- Windows: one-click NSIS installer (no zip to extract) ----
+    win_exe = os.path.join(ROOT, "build", "out", "LedgerPOS.exe")
+    installer = os.path.join(dl, "ledgerpos-setup-windows-x64.exe")
+    rc = run([sys.executable, os.path.join(SCRIPTS, "build_installer.py"),
+              VERSION, win_exe, dl], check=False).returncode
+    if rc != 0:
+        raise SystemExit(
+            "Windows installer build failed — install NSIS (makensis) and re-run:\n"
+            "  winget install NSIS.NSIS  |  apt install nsis  |  brew install nsis")
+    _ = installer  # produced by build_installer.py as ledgerpos-setup-windows-x64-<ver>.exe
+    # Normalize to the stable download name the landing page links.
+    for f in os.listdir(dl):
+        if f.startswith("ledgerpos-setup-windows-x64-") and f.endswith(".exe"):
+            os.replace(os.path.join(dl, f), os.path.join(dl, "ledgerpos-setup-windows-x64.exe"))
 
     # ---- macOS: .app bundles ----
     def mac_app(binary, stage_name):
@@ -208,7 +209,7 @@ def main():
             "LedgerPOS " + VERSION + "\n\n"
             "  tar xf ledgerpos-linux-x64.tar.xz\n"
             "  ./ledgerpos\n\n"
-            "The app opens in your browser. First login: admin / admin123.\n"
+            "The app opens in its own window. First login: admin / admin123.\n"
             "Data lives in ~/.local/share/LedgerPOS.\n"
         )
     tar_dest = os.path.join(dl, "ledgerpos-linux-x64.tar.xz")
@@ -252,7 +253,7 @@ def main():
            .replace("{{VERSION}}", VERSION)
            .replace("{{BUILD_DATE}}", date.today().strftime("%b %Y"))
            .replace("{{RELEASES_PAGE}}", RELEASES_PAGE)
-           .replace("{{WIN_SIZE_MB}}", human_mb(os.path.join(dl, "ledgerpos-setup-windows-x64.zip")))
+            .replace("{{WIN_SIZE_MB}}", human_mb(os.path.join(dl, "ledgerpos-setup-windows-x64.exe")))
            .replace("{{MAC_ARM_SIZE_MB}}", human_mb(os.path.join(dl, "ledgerpos-macos-apple-silicon.zip")))
            .replace("{{MAC_INTEL_SIZE_MB}}", human_mb(os.path.join(dl, "ledgerpos-macos-intel.zip")))
            .replace("{{LINUX_SIZE_MB}}", human_mb(tar_dest)))
@@ -281,7 +282,7 @@ def main():
                     skipped += 1
                     continue
                 # installers are already compressed — store, don't deflate twice
-                if rel.startswith("downloads" + os.sep) and rel.endswith((".zip", ".xz")):
+                if rel.startswith("downloads" + os.sep) and rel.endswith((".zip", ".xz", ".exe")):
                     zi = zipfile.ZipInfo(rel, date_time=(2026, 1, 1, 0, 0, 0))
                     with open(full, "rb") as fh:
                         z.writestr(zi, fh.read(), compress_type=zipfile.ZIP_STORED)
