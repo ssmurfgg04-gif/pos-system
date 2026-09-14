@@ -35,7 +35,8 @@ var version = "dev"
 
 const usage = `usage:
   ledgerpos                 desktop mode (default): local app on 127.0.0.1,
-                            data under the OS user directory, opens your browser
+                            data under the OS user directory, opens its own
+                            app window (Windows) or your browser elsewhere
   ledgerpos serve           server/appliance mode: env-driven (PORT, DB_PATH,
                             DB_DRIVER, POSTGRES_DSN, MDNS_ENABLED, …), binds :PORT
   ledgerpos uninstall       remove the desktop app (shortcuts, registry, files)
@@ -150,15 +151,19 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
         if err != nil {
                 log.Fatalf("listen: %v", err)
         }
+        // Serve first, then the ready hook: OnReady may block (the native
+        // app window runs its message loop there until the user closes it),
+        // and Serve must already be accepting or the window loads a dead
+        // page. Shutdown still flows through the quit channel below.
         go func() {
                 log.Printf("%s listening on %s (db=%s, mpesa=%s)", st.GetString("app_name", "Point of Sale"), ln.Addr().String(), cfg.DBDriver, st.GetString("mpesa_env", "mock"))
-                if desk != nil && desk.OnReady != nil {
-                        desk.OnReady()
-                }
                 if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
                         log.Fatalf("serve: %v", err)
                 }
         }()
+        if desk != nil && desk.OnReady != nil {
+                go func() { desk.OnReady() }()
+        }
 
         // Block until OS signal or (desktop mode) admin quit.
         sigDone := make(chan struct{})
