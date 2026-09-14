@@ -1,14 +1,19 @@
 package database
 
 import (
+	"database/sql"
 	"fmt"
+	"strings"
 )
 
-// Migration is one schema step. SQL is split per dialect when needed.
+// Migration is one schema step. SQL is split per dialect when needed; Go
+// covers data backfills that SQL can't express portably (JSON permission
+// merges). A migration may carry SQL, a Go hook, or both.
 type Migration struct {
 	Version int
 	SQLite  string
 	Pg      string // falls back to SQLite body when empty
+	Go      func(d *DB, tx *sql.Tx) error
 }
 
 var migrations = []Migration{
@@ -313,6 +318,73 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 `,
 	},
+	{
+		Version: 2,
+		SQLite: `
+CREATE TABLE IF NOT EXISTS customers (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL,
+	phone TEXT NOT NULL DEFAULT '',
+	credit_limit_cents INTEGER NOT NULL DEFAULT 0,
+	loyalty_points INTEGER NOT NULL DEFAULT 0,
+	balance_cents INTEGER NOT NULL DEFAULT 0,
+	is_active INTEGER NOT NULL DEFAULT 1,
+	created_at TEXT NOT NULL DEFAULT (datetime('now')),
+	updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
+CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
+CREATE TABLE IF NOT EXISTS customer_ledger (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+	order_id INTEGER NOT NULL DEFAULT 0,
+	kind TEXT NOT NULL,
+	amount_cents INTEGER NOT NULL DEFAULT 0,
+	points_delta INTEGER NOT NULL DEFAULT 0,
+	note TEXT NOT NULL DEFAULT '',
+	created_by INTEGER NOT NULL DEFAULT 0,
+	created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_customer ON customer_ledger(customer_id);
+ALTER TABLE orders ADD COLUMN customer_id INTEGER NOT NULL DEFAULT 0;
+`,
+		Pg: `
+CREATE TABLE IF NOT EXISTS customers (
+	id SERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	phone TEXT NOT NULL DEFAULT '',
+	credit_limit_cents BIGINT NOT NULL DEFAULT 0,
+	loyalty_points INTEGER NOT NULL DEFAULT 0,
+	balance_cents BIGINT NOT NULL DEFAULT 0,
+	is_active INTEGER NOT NULL DEFAULT 1,
+	created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
+CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
+CREATE TABLE IF NOT EXISTS customer_ledger (
+	id SERIAL PRIMARY KEY,
+	customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+	order_id INTEGER NOT NULL DEFAULT 0,
+	kind TEXT NOT NULL,
+	amount_cents BIGINT NOT NULL DEFAULT 0,
+	points_delta INTEGER NOT NULL DEFAULT 0,
+	note TEXT NOT NULL DEFAULT '',
+	created_by INTEGER NOT NULL DEFAULT 0,
+	created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_customer ON customer_ledger(customer_id);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_id INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		// v3: shops created before tabs existed have system roles without
+		// the customers.* permissions — union the seeded set in so
+		// cashiers keep working after upgrade. Runs once (admin edits
+		// made afterwards are never touched).
+		Version: 3,
+		Go:      backfillRolePerms,
+	},
 }
 
 // Migrate applies pending migrations in order.
@@ -339,9 +411,17 @@ func (d *DB) Migrate() error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(body); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("migration %d: %w", m.Version, err)
+		if strings.TrimSpace(body) != "" {
+			if _, err := tx.Exec(body); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration %d: %w", m.Version, err)
+			}
+		}
+		if m.Go != nil {
+			if err := m.Go(d, tx); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration %d: %w", m.Version, err)
+			}
 		}
 		if _, err := tx.Exec(d.Rebind(`INSERT INTO schema_migrations (version) VALUES (?)`), m.Version); err != nil {
 			tx.Rollback()

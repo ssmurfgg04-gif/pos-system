@@ -8,6 +8,7 @@ import { Lock } from 'lucide-react'
 import { Login } from './pages/Login'
 import { Pin } from './pages/Pin'
 import { Pos } from './pages/Pos'
+import { Customers } from './pages/Customers'
 import { Inventory } from './pages/Inventory'
 import { Orders } from './pages/Orders'
 import { DesignBoard } from './pages/DesignBoard'
@@ -40,6 +41,8 @@ export function App() {
         return user.permissions.includes('pos.sell') ? <Pos /> : <NoPerm perm="pos.sell" />
       case path.startsWith('/orders'):
         return user.permissions.includes('orders.view') ? <Orders /> : <NoPerm perm="orders.view" />
+      case path.startsWith('/customers'):
+        return user.permissions.includes('customers.view') ? <Customers /> : <NoPerm perm="customers.view" />
       case path.startsWith('/design'):
         return user.permissions.includes('design.view') ? <DesignBoard /> : <NoPerm perm="design.view" />
       case path.startsWith('/inventory'):

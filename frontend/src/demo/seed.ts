@@ -55,10 +55,34 @@ export interface DemoOrderItem {
   lineTotalCents: number
 }
 
+export interface DemoCustomer {
+  id: number
+  name: string
+  phone: string
+  creditLimitCents: number
+  loyaltyPoints: number
+  balanceCents: number
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DemoLedgerEntry {
+  id: number
+  customerId: number
+  orderId: number
+  kind: 'charge' | 'payment' | 'adjustment' | 'loyalty'
+  amountCents: number
+  pointsDelta: number
+  note: string
+  createdBy: number
+  createdAt: string
+}
+
 export interface DemoPayment {
   id: number
   orderId: number
-  method: 'cash' | 'mpesa'
+  method: 'cash' | 'mpesa' | 'account'
   mode: string
   amountCents: number
   status: 'PENDING' | 'COMPLETED' | 'FAILED' | 'VOIDED'
@@ -80,6 +104,7 @@ export interface DemoOrder {
   totalCents: number
   cashierId: number
   customerName: string
+  customerId: number
   note: string
   clientUuid: string
   discrepancy: boolean
@@ -133,11 +158,13 @@ export interface DemoDB {
   categories: DemoCategory[]
   products: DemoProduct[]
   orders: DemoOrder[]
+  customers: DemoCustomer[]
+  ledger: DemoLedgerEntry[]
   shifts: DemoShift[]
   designJobs: DemoDesignJob[]
   audit: DemoAudit[]
   settings: Record<string, string>
-  seq: { user: number; role: number; cat: number; product: number; order: number; item: number; pay: number; shift: number; job: number; audit: number }
+  seq: { user: number; role: number; cat: number; product: number; order: number; item: number; pay: number; shift: number; job: number; audit: number; customer: number; ledger: number }
   dailyOrderSeq: Record<string, number>
 }
 
@@ -145,6 +172,8 @@ export const PERMISSION_CATALOG: { key: string; group: string; label: string }[]
   { key: 'pos.sell', group: 'Selling', label: 'Checkout and sell' },
   { key: 'pos.void', group: 'Selling', label: 'Void / cancel orders' },
   { key: 'orders.view', group: 'Selling', label: 'View order history' },
+  { key: 'customers.view', group: 'Selling', label: 'View customers and tabs' },
+  { key: 'customers.manage', group: 'Selling', label: 'Manage customers, credit and tabs' },
   { key: 'payments.manual', group: 'Payments', label: 'Enter manual M-Pesa receipt codes' },
   { key: 'payments.override_price', group: 'Payments', label: 'Override line item prices' },
   { key: 'products.view', group: 'Catalog', label: 'View products and stock' },
@@ -251,7 +280,7 @@ export function buildSeed(): DemoDB {
 
   const roles: DemoRole[] = [
     { id: 1, name: 'Admin', description: 'Full access: settings, users, stock, reports, KRA returns — and checkout when fixing problems', permissions: [...ALL_PERMS], system: true },
-    { id: 2, name: 'Cashier', description: 'Point of sale: checkout, manual M-Pesa entry, shifts', permissions: ['pos.sell', 'pos.void', 'orders.view', 'payments.manual', 'shifts.manage'], system: true },
+    { id: 2, name: 'Cashier', description: 'Point of sale: checkout, manual M-Pesa entry, shifts', permissions: ['pos.sell', 'pos.void', 'orders.view', 'customers.view', 'payments.manual', 'shifts.manage'], system: true },
     { id: 3, name: 'Designer', description: 'Design & production board, catalog visibility', permissions: ['design.view', 'design.manage', 'products.view', 'orders.view'], system: true },
   ]
 
@@ -278,6 +307,21 @@ export function buildSeed(): DemoDB {
     trackStock: p[7],
     active: true,
     updatedAt: iso(new Date(now.getTime() - Math.floor(rnd() * 20) * 864e5)),
+  }))
+
+  // ---- Tab customers (a few regulars with credit, one cash-only) ----
+  const custSeed: [string, string, number, boolean][] = [
+    ['Zawadi Ventures Ltd', '0722123456', 5000000, true],
+    ['Faith M.', '0733987654', 200000, true],
+    ['Kevin K.', '0711223344', 100000, true],
+    ['Brian O.', '', 0, true],
+    ['Aisha N.', '0755667788', 300000, false],
+  ]
+  const customers: DemoCustomer[] = custSeed.map((c, i) => ({
+    id: i + 1, name: c[0], phone: c[1], creditLimitCents: c[2],
+    loyaltyPoints: 0, balanceCents: 0, active: c[3],
+    createdAt: iso(new Date(now.getTime() - (40 - i * 5) * 864e5)),
+    updatedAt: iso(new Date(now.getTime() - (40 - i * 5) * 864e5)),
   }))
 
   // ---- Order history: ~45 days, weekend-heavy for a retail feel ----
@@ -320,6 +364,7 @@ export function buildSeed(): DemoDB {
     orders.push({
       id: orderId++, number, status, subtotalCents: subtotal, taxCents: tax, totalCents: total,
       cashierId, customerName: CUSTOMERS[Math.floor(rnd() * CUSTOMERS.length)],
+      customerId: 0,
       note: extraNote, clientUuid: '', discrepancy: false,
       createdAt, paidAt: status === 'PAID' ? createdAt : '',
       voidedAt: status === 'VOIDED' ? iso(new Date(d.getTime() + 18 * 36e5)) : '',
@@ -382,9 +427,10 @@ export function buildSeed(): DemoDB {
   ]
 
   return {
-    v: 1, users, roles, categories, products, orders, shifts, designJobs, audit,
+    v: 2, users, roles, categories, products, orders, customers, ledger: [],
+    shifts, designJobs, audit,
     settings: { ...DEMO_SETTINGS },
-    seq: { user: users.length + 1, role: roles.length + 1, cat: categories.length + 1, product: products.length + 1, order: orderId, item: itemId, pay: payId, shift: shifts.length + 1, job: designJobs.length + 1, audit: audit.length + 1 },
+    seq: { user: users.length + 1, role: roles.length + 1, cat: categories.length + 1, product: products.length + 1, order: orderId, item: itemId, pay: payId, shift: shifts.length + 1, job: designJobs.length + 1, audit: audit.length + 1, customer: customers.length + 1, ledger: 1 },
     dailyOrderSeq: dailySeq,
   }
 }

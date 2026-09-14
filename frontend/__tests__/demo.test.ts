@@ -26,7 +26,7 @@ describe('seed', () => {
     const admin = db.roles.find((r) => r.name === 'Admin')!
     const cashier = db.roles.find((r) => r.name === 'Cashier')!
     const designer = db.roles.find((r) => r.name === 'Designer')!
-    expect(admin.permissions).toHaveLength(16)
+    expect(admin.permissions).toHaveLength(18)
     expect(cashier.permissions).toContain('pos.sell')
     expect(cashier.permissions).not.toContain('settings.manage')
     expect(designer.permissions).toContain('design.manage')

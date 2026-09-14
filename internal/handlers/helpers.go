@@ -88,6 +88,8 @@ func (h *H) mapErr(c *gin.Context, err error) {
                 errors.Is(err, services.ErrInvalidState),
                 errors.Is(err, services.ErrOrderAlreadyPaid),
                 errors.Is(err, services.ErrDuplicateReceipt),
+                errors.Is(err, services.ErrCreditLimit),
+                errors.Is(err, services.ErrOverpayment),
                 errors.Is(err, services.ErrShiftOpen):
                 h.fail(c, 409, err.Error())
         case strings.Contains(msg, "phone"), strings.Contains(msg, "receipt code"),

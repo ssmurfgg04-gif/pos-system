@@ -20,6 +20,8 @@ var (
         ErrInvalidState      = errors.New("invalid state transition")
         ErrDuplicateReceipt  = errors.New("receipt code already recorded")
         ErrOrderAlreadyPaid  = errors.New("order already paid")
+        ErrOverpayment       = errors.New("payment exceeds balance")
+        ErrCreditLimit       = errors.New("tab would exceed customer credit limit")
 )
 
 // nowStamp is the fixed-width millisecond timestamp used for all
@@ -66,8 +68,24 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                 default:
                         return nil, fmt.Errorf("invalid payment mode %q", mode)
                 }
-        } else if method != models.MethodCash {
+        } else if method != models.MethodCash && method != models.MethodAccount {
                 return nil, fmt.Errorf("invalid payment method %q", method)
+        }
+        // Tab checkout needs a live customer up front (limit enforced at
+        // insert time inside the transaction).
+        var tabCustomer *models.Customer
+        if method == models.MethodAccount {
+                if req.CustomerID == 0 {
+                        return nil, fmt.Errorf("tab checkout needs a customer")
+                }
+                var err error
+                tabCustomer, err = s.GetCustomer(req.CustomerID)
+                if err != nil {
+                        return nil, err
+                }
+                if !tabCustomer.Active {
+                        return nil, fmt.Errorf("customer is inactive")
+                }
         }
 
         // Validate lines with server-side price re-read (never trust client
@@ -159,9 +177,9 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                         paidAt = now
                 }
                 res, err := tx.Exec(s.db.Rebind(`
-                        INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, cashier_id, customer_name, note, client_uuid, created_at, paid_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-                        number, status, subtotal, tax, total, p.ID, req.CustomerName, req.Note, req.ClientUUID, now, paidAt)
+                        INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                        number, status, subtotal, tax, total, p.ID, req.CustomerName, req.Note, req.ClientUUID, now, paidAt, req.CustomerID)
                 if err != nil {
                         tx.Rollback()
                         if isUniqueViolation(err) {
@@ -232,6 +250,45 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                                 tx.Rollback()
                                 return nil, err
                         }
+                } else if method == models.MethodAccount {
+                        // Tab: like M-Pesa, the order stays PENDING and stock
+                        // deducts once at settle via completePayment — never
+                        // here, or settling would double-deduct. Limit
+                        // enforced here inside the tx (0 = cash only, no tab).
+                        if tabCustomer.CreditLimitCents <= 0 {
+                                tx.Rollback()
+                                return nil, fmt.Errorf("customer has no credit — cash only")
+                        }
+                        if tabCustomer.BalanceCents+total > tabCustomer.CreditLimitCents {
+                                tx.Rollback()
+                                return nil, fmt.Errorf("%w (%s)", ErrCreditLimit, tabCustomer.Name)
+                        }
+                        // Fail fast on stock BEFORE creating the tab (read
+                        // check only — the guarded deduction happens once,
+                        // at settle time, like every other PENDING order).
+                        for _, l := range lines {
+                                if l.trackStock {
+                                        var stock int
+                                        if err := tx.QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, l.productID).Scan(&stock); err != nil {
+                                                tx.Rollback()
+                                                return nil, err
+                                        }
+                                        if stock < l.qty {
+                                                tx.Rollback()
+                                                return nil, fmt.Errorf("%w: %s (have %d, need %d)", ErrInsufficientStock, l.name, stock, l.qty)
+                                        }
+                                }
+                        }
+                        if _, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, created_at)
+                                VALUES (?, 'account', '', ?, 'PENDING', ?)`), id, total, now); err != nil {
+                                tx.Rollback()
+                                return nil, err
+                        }
+                        if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerCharge,
+                                total, 0, "tab charge "+number, p.ID); err != nil {
+                                tx.Rollback()
+                                return nil, err
+                        }
                 } else {
                         // M-Pesa: payment PENDING. STK requests whole shillings; manual
                         // entries use the exact total.
@@ -264,7 +321,11 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
         }
 
         // Post-commit side effects (network + broadcasts never inside the tx).
-        if immediateCash {
+        if method == models.MethodAccount {
+                // Tab charged, not paid: audit only. No receipt print and no
+                // paid broadcast — those happen on settle when money lands.
+                s.Audit(p.ID, p.Username, "TAB_CHARGED", "order", orderNumber, fmt.Sprintf("total %d", total))
+        } else if immediateCash {
                 s.Audit(p.ID, p.Username, "CHECKOUT_CASH", "order", orderNumber, fmt.Sprintf("total %d", total))
                 if order, err := s.GetOrder(orderID); err == nil {
                         s.printer.Enqueue(order)
@@ -605,6 +666,27 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
         if _, err := tx.Exec(`UPDATE payments SET status = 'VOIDED', result_desc = ? WHERE order_id = ? AND status IN ('PENDING','COMPLETED')`,
                 "voided: "+truncStr(reason, 180), orderID); err != nil {
                 return nil, err
+        }
+        // Tab void: reverse the ledger charge so a cancelled sale leaves no
+        // debt on the customer's balance. (Stock needs no restore: PENDING
+        // tabs never deduct; settled tabs restore via the PAID path above.)
+        var tabCustomer, tabTotal int64
+        var tabCount int
+        if err := tx.QueryRow(`SELECT customer_id, total_cents FROM orders WHERE id = ?`, orderID).
+                Scan(&tabCustomer, &tabTotal); err != nil {
+                return nil, err
+        }
+        if tabCustomer != 0 {
+                if err := tx.QueryRow(`SELECT COUNT(*) FROM payments WHERE order_id = ? AND method = 'account'`,
+                        orderID).Scan(&tabCount); err != nil {
+                        return nil, err
+                }
+                if tabCount > 0 {
+                        if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer, orderID, models.LedgerAdjust,
+                                -tabTotal, 0, "void reversal", p.ID); err != nil {
+                                return nil, err
+                        }
+                }
         }
         if err := tx.Commit(); err != nil {
                 return nil, err
