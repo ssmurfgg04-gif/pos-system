@@ -165,6 +165,19 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                 if err != nil {
                         tx.Rollback()
                         if isUniqueViolation(err) {
+                                // A concurrent request won the race. If it was
+                                // our own client_uuid, return the winner instead
+                                // of minting a duplicate (offline sync bursts
+                                // collide here, not on the order number). Spin
+                                // briefly: the winner may not have committed yet.
+                                if req.ClientUUID != "" {
+                                        for i := 0; i < 20; i++ {
+                                                if existing, qerr := s.GetOrderByClientUUID(req.ClientUUID); qerr == nil {
+                                                        return existing, nil
+                                                }
+                                                time.Sleep(25 * time.Millisecond)
+                                        }
+                                }
                                 continue // concurrent number allocation — retry with next seq
                         }
                         return nil, err
@@ -278,13 +291,42 @@ func isUniqueViolation(err error) bool {
 }
 
 // nextOrderNumber allocates ORD{YYYYMMDD}{####} inside the caller's tx.
+// Uses a mutex to serialize order number generation, avoiding
+// race conditions under concurrent load.
 func (s *Service) nextOrderNumber(tx *sql.Tx) (string, error) {
         day := time.Now().Format("20060102")
-        var count int
-        if err := tx.QueryRow(`SELECT COUNT(*) FROM orders WHERE number LIKE ?`, "ORD"+day+"%").Scan(&count); err != nil {
+        
+        // Initialize sequence table if not exists (idempotent)
+        if _, err := tx.Exec(`
+                CREATE TABLE IF NOT EXISTS order_sequences (
+                        day TEXT PRIMARY KEY,
+                        seq INTEGER NOT NULL DEFAULT 0
+                )
+        `); err != nil {
                 return "", err
         }
-        return fmt.Sprintf("ORD%s%04d", day, count+1), nil
+        
+        // Use a mutex to serialize order number generation across goroutines
+        s.orderSeqMu.Lock()
+        defer s.orderSeqMu.Unlock()
+        
+        var seq int
+        err := tx.QueryRow(`SELECT seq FROM order_sequences WHERE day = ?`, day).Scan(&seq)
+        if err == sql.ErrNoRows {
+                seq = 0
+        } else if err != nil {
+                return "", err
+        }
+        
+        seq++
+        if _, err := tx.Exec(`
+                INSERT INTO order_sequences (day, seq) VALUES (?, ?)
+                ON CONFLICT(day) DO UPDATE SET seq = excluded.seq
+        `, day, seq); err != nil {
+                return "", err
+        }
+        
+        return fmt.Sprintf("ORD%s%04d", day, seq), nil
 }
 
 // InitiateSTK sends (or re-sends) the push for a pending order's pending

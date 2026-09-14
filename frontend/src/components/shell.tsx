@@ -80,9 +80,13 @@ export function AppShell({ current, children }: { current: string; children: Rea
       {/* Topbar */}
       <header className="bg-shell border-b border-shell-edge px-3 sm:px-4 h-16 flex items-center gap-3 shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-9 h-9 rounded-input bg-brand border-2 border-brand-strong flex items-center justify-center text-brand-ink font-black text-lg shrink-0">
-            {(branding.store_name || branding.app_name || 'P').slice(0, 1).toUpperCase()}
-          </div>
+          {branding.brand_logo_url ? (
+            <img src={branding.brand_logo_url} alt="" className="w-9 h-9 rounded-input object-contain bg-surface border-2 border-line-strong shrink-0" />
+          ) : (
+            <div className="w-9 h-9 rounded-input bg-brand border-2 border-brand-strong flex items-center justify-center text-brand-ink font-black text-lg shrink-0">
+              {(branding.store_name || branding.app_name || 'P').slice(0, 1).toUpperCase()}
+            </div>
+          )}
           <div className="hidden sm:block min-w-0">
             <p className="text-on-shell font-bold text-sm truncate leading-tight">
               {branding.store_name || branding.app_name}

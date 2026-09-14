@@ -25,6 +25,7 @@ var DefaultSettings = map[string]string{
         "tax_percent":           "16",
         "tax_included":          "true",
         "brand_color":           "#10B981",
+        "brand_logo":            "", // "1" when brand-logo.png is present
         "payment_mode":          "auto", // auto | stk | manual
         "till_number":           "",
         "paybill_number":        "",

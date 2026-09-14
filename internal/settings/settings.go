@@ -160,6 +160,7 @@ func (s *Store) Branding() map[string]any {
         return map[string]any{
                 "app_name":        s.GetString("app_name", "Point of Sale"),
                 "store_name":      s.GetString("store_name", ""),
+                "brand_logo_url":  brandLogoURL(s.Get("brand_logo")),
                 "brand_color":     s.GetString("brand_color", "#10B981"),
                 "currency_symbol": s.GetString("currency_symbol", "KES"),
                 "currency_code":   s.GetString("currency_code", "KES"),
@@ -170,6 +171,14 @@ func (s *Store) Branding() map[string]any {
                 "paybill_number":  s.GetString("paybill_number", ""),
                 "mpesa_env":       s.GetString("mpesa_env", "mock"),
         }
+}
+
+// brandLogoURL is the public logo endpoint when a logo is on file.
+func brandLogoURL(flag string) string {
+        if flag == "1" {
+                return "/api/v1/settings/logo"
+        }
+        return ""
 }
 
 // JWTSecret returns the per-installation signing secret.

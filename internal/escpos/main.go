@@ -10,6 +10,7 @@ import (
 	"image"
 	"io"
 	"math"
+	"strings"
 )
 type Style struct {
 	Bold			bool
@@ -258,8 +259,52 @@ func (e *Escpos) EAN8(code string) (int, error) {
 	return e.WriteRaw(append([]byte{gs, 'k', 3}, byteCode...))
 }
 
-// TODO:
-// CODE39, ITF, CODABAR
+// Prints a CODE39 barcode. code holds 1+ chars from 0-9A-Z and
+// space plus -$/.+%; case-insensitive (uppercased before printing).
+func (e *Escpos) CODE39(code string) (int, error) {
+        if len(code) == 0 {
+                return 0, fmt.Errorf("code must not be empty")
+        }
+        upper := strings.ToUpper(code)
+        for _, c := range upper {
+                if !(c >= '0' && c <= '9') && !(c >= 'A' && c <= 'Z') &&
+                        !strings.ContainsRune(" -. $/+%", c) {
+                        return 0, fmt.Errorf("code contains unsupported CODE39 character %q", c)
+                }
+        }
+        byteCode := append([]byte(upper), 0)
+        return e.WriteRaw(append([]byte{gs, 'k', 4}, byteCode...))
+}
+
+// Prints an ITF (Interleaved 2 of 5) barcode. code holds digits only
+// with an even length.
+func (e *Escpos) ITF(code string) (int, error) {
+        if len(code) == 0 || len(code)%2 != 0 {
+                return 0, fmt.Errorf("code must have a non-zero even length")
+        }
+        if !onlyDigits(code) {
+                return 0, fmt.Errorf("code can only contain numerical characters")
+        }
+        byteCode := append([]byte(code), 0)
+        return e.WriteRaw(append([]byte{gs, 'k', 5}, byteCode...))
+}
+
+// Prints a CODABAR barcode. code holds 1+ chars from 0-9A-D plus
+// -$:/+. (start/stop characters A-D included verbatim).
+func (e *Escpos) CODABAR(code string) (int, error) {
+        if len(code) == 0 {
+                return 0, fmt.Errorf("code must not be empty")
+        }
+        upper := strings.ToUpper(code)
+        for _, c := range upper {
+                if !(c >= '0' && c <= '9') && !(c >= 'A' && c <= 'D') &&
+                        !strings.ContainsRune("-$:/+. ", c) {
+                        return 0, fmt.Errorf("code contains unsupported CODABAR character %q", c)
+                }
+        }
+        byteCode := append([]byte(upper), 0)
+        return e.WriteRaw(append([]byte{gs, 'k', 6}, byteCode...))
+}
 
 // Prints a QR Code.
 // code specifies the data to be printed

@@ -54,6 +54,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         api.GET("/auth/pin-users", h.PinUsers)
         api.POST("/auth/pin", h.PinLogin)
         api.GET("/branding", h.Branding)
+        api.GET("/settings/logo", h.GetLogo)
         api.POST("/payments/mpesa/callback", h.MpesaCallback)
 
         // ---- Authenticated ----
@@ -123,6 +124,8 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         // Settings, printer, audit, system.
         authd.GET("/settings", perm("settings.manage"), h.GetSettings)
         authd.PUT("/settings", perm("settings.manage"), h.UpdateSettings)
+        authd.POST("/settings/logo", perm("settings.manage"), h.UploadLogo)
+        authd.DELETE("/settings/logo", perm("settings.manage"), h.DeleteLogo)
         authd.POST("/settings/test-print", perm("printer.test"), h.TestPrint)
         authd.GET("/print-jobs", perm("printer.test"), h.ListPrintJobs)
         authd.GET("/audit", perm("audit.view"), h.ListAudit)

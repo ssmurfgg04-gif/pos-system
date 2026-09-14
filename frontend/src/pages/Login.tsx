@@ -70,9 +70,13 @@ export function Login() {
     <div className="min-h-full flex flex-col items-center justify-center bg-shell px-4 py-10 overflow-y-auto">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-6">
-          <div className="w-16 h-16 rounded-card bg-brand border-2 border-brand-strong shadow-brutal-brand flex items-center justify-center text-brand-ink font-black text-2xl mb-4">
-            {(branding.store_name || branding.app_name || 'P').slice(0, 1).toUpperCase()}
-          </div>
+          {branding.brand_logo_url ? (
+            <img src={branding.brand_logo_url} alt={branding.store_name || branding.app_name} className="w-16 h-16 rounded-card object-contain bg-surface border-2 border-line-strong shadow-brutal-brand mb-4" />
+          ) : (
+            <div className="w-16 h-16 rounded-card bg-brand border-2 border-brand-strong shadow-brutal-brand flex items-center justify-center text-brand-ink font-black text-2xl mb-4">
+              {(branding.store_name || branding.app_name || 'P').slice(0, 1).toUpperCase()}
+            </div>
+          )}
           <h1 className="text-on-shell text-xl font-bold text-center">
             {branding.store_name || branding.app_name}
           </h1>

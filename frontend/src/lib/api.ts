@@ -258,6 +258,7 @@ export interface Order {
 export interface Branding {
   app_name: string
   store_name: string
+  brand_logo_url: string
   brand_color: string
   currency_symbol: string
   currency_code: string
