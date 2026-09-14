@@ -127,6 +127,60 @@ func (d *DB) seedSettings() error {
         return nil
 }
 
+// backfillRolePerms unions the seeded permission set into same-named
+// system roles (v3 migration — runs once, so later admin edits are safe).
+func backfillRolePerms(d *DB, tx *sql.Tx) error {
+        rows, err := tx.Query(`SELECT id, name, permissions FROM roles WHERE is_system = 1`)
+        if err != nil {
+                return err
+        }
+        type roleRow struct {
+                id    int
+                name  string
+                perms string
+        }
+        var list []roleRow
+        for rows.Next() {
+                var r roleRow
+                if err := rows.Scan(&r.id, &r.name, &r.perms); err != nil {
+                        rows.Close()
+                        return err
+                }
+                list = append(list, r)
+        }
+        rows.Close()
+        for _, r := range list {
+                want, ok := models.SeededRolePermissions[r.name]
+                if !ok {
+                        continue
+                }
+                var have []string
+                if err := json.Unmarshal([]byte(r.perms), &have); err != nil {
+                        have = nil
+                }
+                set := map[string]bool{}
+                for _, p := range have {
+                        set[p] = true
+                }
+                changed := false
+                for _, p := range want {
+                        if !set[p] {
+                                set[p] = true
+                                have = append(have, p)
+                                changed = true
+                        }
+                }
+                if !changed {
+                        continue
+                }
+                merged, _ := json.Marshal(have)
+                if _, err := tx.Exec(d.Rebind(`UPDATE roles SET permissions = ? WHERE id = ?`), string(merged), r.id); err != nil {
+                        return err
+                }
+        }
+        return nil
+}
+
 func (d *DB) seedRoles() error {
         for name, perms := range models.SeededRolePermissions {
                 jsonPerms, _ := json.Marshal(perms)

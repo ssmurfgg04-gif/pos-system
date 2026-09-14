@@ -5,7 +5,7 @@
 
 import { ApiError, token } from '../lib/api'
 import { cartTotals } from '../lib/money'
-import { buildSeed, receiptCode, DemoDB, DemoOrder, DemoUser, PERMISSION_CATALOG } from './seed'
+import { buildSeed, receiptCode, DemoDB, DemoOrder, DemoUser, DemoCustomer, DemoLedgerEntry, PERMISSION_CATALOG } from './seed'
 
 const KEY = 'pos-demo-db-v1'
 const MASK = '__SET__'
@@ -19,8 +19,9 @@ function load(): DemoDB {
     const raw = localStorage.getItem(KEY)
     if (raw) {
       const parsed = JSON.parse(raw) as DemoDB
-      if (parsed && parsed.v === 1) {
+      if (parsed && (parsed.v === 1 || parsed.v === 2)) {
         db = parsed
+        migrateDemo(db)
         return db
       }
     }
@@ -30,6 +31,41 @@ function load(): DemoDB {
   db = buildSeed()
   persist()
   return db
+}
+
+/** Upgrade stored demo DBs (v1 → v2: tabs & credit). Idempotent. */
+function migrateDemo(d: DemoDB) {
+  let dirty = false
+  if (!Array.isArray((d as any).customers) || !Array.isArray((d as any).ledger)) {
+    const fresh = buildSeed()
+    d.customers = fresh.customers
+    d.ledger = []
+    d.seq.customer = fresh.seq.customer
+    d.seq.ledger = 1
+    dirty = true
+  }
+  if (d.seq.customer === undefined) {
+    d.seq.customer = d.customers.length + 1
+    d.seq.ledger = d.ledger.length + 1
+    dirty = true
+  }
+  for (const o of d.orders) {
+    if ((o as any).customerId === undefined) {
+      (o as any).customerId = 0
+      dirty = true
+    }
+  }
+  // Cashiers created before tabs existed need customers.view to use them.
+  const cashier = d.roles.find((r) => r.name === 'Cashier')
+  if (cashier && !cashier.permissions.includes('customers.view')) {
+    cashier.permissions.push('customers.view')
+    dirty = true
+  }
+  if (d.v < 2) {
+    d.v = 2
+    dirty = true
+  }
+  if (dirty) persist()
 }
 
 function persist() {
@@ -111,12 +147,37 @@ function orderDTO(o: DemoOrder) {
     id: o.id, number: o.number, status: o.status,
     subtotalCents: o.subtotalCents, taxCents: o.taxCents, totalCents: o.totalCents,
     cashierId: o.cashierId, cashierName: u ? u.fullName || u.username : '',
-    customerName: o.customerName, note: o.note, clientUuid: o.clientUuid,
+    customerName: o.customerName, customerId: o.customerId || 0, note: o.note, clientUuid: o.clientUuid,
     discrepancy: o.discrepancy, createdAt: o.createdAt, paidAt: o.paidAt,
     voidedAt: o.voidedAt, voidReason: o.voidReason,
     items: o.items.map((i) => ({ ...i })),
     payments: o.payments.map((p) => ({ ...p })),
   }
+}
+
+function customerDTO(c: DemoCustomer) {
+  return { ...c }
+}
+
+/** Append one ledger row and apply it to the balance/points (server parity). */
+function postLedger(customerId: number, orderId: number, kind: DemoLedgerEntry['kind'], amountCents: number, pointsDelta: number, note: string, by: number) {
+  const d = load()
+  const e: DemoLedgerEntry = {
+    id: d.seq.ledger++, customerId, orderId, kind, amountCents,
+    pointsDelta, note, createdBy: by, createdAt: nowIso(),
+  }
+  d.ledger.push(e)
+  const c = d.customers.find((x) => x.id === customerId)
+  if (c) {
+    c.balanceCents += amountCents
+    c.loyaltyPoints += pointsDelta
+  }
+  return e
+}
+
+/** Loyalty: 1 point per 100 KES of paid sales (server parity). */
+function loyaltyFor(totalCents: number) {
+  return Math.floor(totalCents / 10000)
 }
 
 function settingsSnapshot() {
@@ -588,12 +649,24 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const taxPercent = Number(d.settings.tax_percent) || 16
     const taxIncluded = (d.settings.tax_included ?? 'true') === 'true'
     const t = cartTotals(lines.map((l) => ({ qty: l.qty, unitPriceCents: l.unitPriceCents })), taxPercent, taxIncluded)
-    const method = body?.paymentMethod === 'mpesa' ? 'mpesa' : 'cash'
-    const mode = method === 'mpesa' ? (body?.paymentMode || d.settings.payment_mode || 'auto') : 'cash'
+    const rawMethod = body?.paymentMethod
+    const method = rawMethod === 'mpesa' ? 'mpesa' : rawMethod === 'account' ? 'account' : 'cash'
+    const mode = method === 'mpesa' ? (body?.paymentMode || d.settings.payment_mode || 'auto') : method === 'account' ? '' : 'cash'
+    // Tab checkout needs a live customer up front (server parity: active,
+    // has credit, and the charge fits inside the limit).
+    let tabCustomer: DemoCustomer | undefined
+    if (method === 'account') {
+      const cid = Number(body?.customerId) || 0
+      if (!cid) throw new ApiError(400, 'tab checkout needs a customer')
+      tabCustomer = d.customers.find((x) => x.id === cid)
+      if (!tabCustomer) throw new ApiError(404, 'customer not found')
+      if (!tabCustomer.active) throw new ApiError(409, 'customer is inactive')
+    }
     const o: DemoOrder = {
       id: d.seq.order++, number: nextOrderNumber(d), status: 'PENDING',
       subtotalCents: t.subtotal, taxCents: t.tax, totalCents: t.total,
-      cashierId: user.id, customerName: String(body?.customerName || ''), note: String(body?.note || ''),
+      cashierId: user.id, customerName: tabCustomer ? tabCustomer.name : String(body?.customerName || ''),
+      customerId: tabCustomer ? tabCustomer.id : 0, note: String(body?.note || ''),
       clientUuid: String(body?.clientUuid || ''), discrepancy: false,
       createdAt: nowIso(), paidAt: '', voidedAt: '', voidReason: '',
       items: lines.map((l) => ({
@@ -603,11 +676,25 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       payments: [],
     }
     const pay = {
-      id: d.seq.pay++, orderId: o.id, method: method as 'cash' | 'mpesa', mode: mode as string, amountCents: t.total,
+      id: d.seq.pay++, orderId: o.id, method: method as 'cash' | 'mpesa' | 'account', mode: mode as string, amountCents: t.total,
       status: 'PENDING' as const, phone: '', mpesaReceipt: '', checkoutRequestId: '',
       resultDesc: '', discrepancy: false, createdAt: nowIso(), completedAt: '',
     }
-    if (method === 'cash') {
+    if (method === 'account') {
+      const c = tabCustomer!
+      if (c.creditLimitCents <= 0) throw new ApiError(409, 'customer has no credit — cash only')
+      if (c.balanceCents + t.total > c.creditLimitCents) {
+        throw new ApiError(409, `tab would exceed customer credit limit (${c.name})`)
+      }
+      // Stock was fail-fast checked per line above; the guarded deduction
+      // happens once at settle time (server parity — never here).
+      o.payments.push(pay)
+      d.orders.push(o)
+      postLedger(c.id, o.id, 'charge', t.total, 0, `tab charge ${o.number}`, user.id)
+      audit(user.id, user.username, 'TAB_CHARGED', 'order', o.number, `total ${t.total}`)
+      persist()
+      return orderDTO(o) as T
+    } else if (method === 'cash') {
       o.payments.push(pay)
       d.orders.push(o)
       completeOrder(o.id, { method: 'cash', mode: 'cash' })
@@ -633,6 +720,11 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (o.status === 'VOIDED') throw new ApiError(409, 'order already voided')
     if (o.status === 'PAID') {
       for (const it of o.items) adjustStock(it.productId, it.qty) // restore
+    }
+    // Tab void: reverse the ledger charge so a cancelled sale leaves no
+    // debt on the balance (server parity — applies to PENDING and PAID).
+    if (o.customerId && o.payments.some((pay) => pay.method === 'account')) {
+      postLedger(o.customerId, o.id, 'adjustment', -o.totalCents, 0, 'void reversal', user.id)
     }
     o.status = 'VOIDED'
     o.voidedAt = nowIso()
@@ -679,6 +771,39 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     persist()
     return orderDTO(o) as T
   }
+  const settleMatch = p.match(/^\/orders\/(\d+)\/settle$/)
+  if (m === 'POST' && settleMatch) {
+    requirePerm(perms, 'pos.sell')
+    const o = d.orders.find((x) => x.id === Number(settleMatch[1]))
+    if (!o) throw new ApiError(404, 'order not found')
+    if (o.status !== 'PENDING') throw new ApiError(409, 'order is not pending')
+    const tabPay = o.payments.find((pay) => pay.method === 'account' && pay.status === 'PENDING')
+    if (!tabPay || !o.customerId) throw new ApiError(409, 'order has no pending tab payment')
+    const method = body?.method === 'mpesa' ? 'mpesa' : 'cash'
+    if (method === 'mpesa') {
+      const code = String(body?.receiptCode || '').toUpperCase()
+      if (!/^[A-Z0-9]{10}$/.test(code)) throw new ApiError(400, 'receipt code must be 10 letters/digits')
+      if (d.orders.some((x) => x.payments.some((pay) => pay.mpesaReceipt === code))) {
+        throw new ApiError(409, 'this receipt code was already used')
+      }
+      // Manual-confirm path (server parity): receipt on the tab payment.
+      tabPay.mpesaReceipt = code
+      tabPay.mode = 'manual'
+      completeOrder(o.id, { method: 'mpesa', mode: 'manual' })
+    } else {
+      tabPay.mode = 'cash'
+      completeOrder(o.id, { method: 'cash', mode: 'cash' })
+    }
+    // Ledger payment + loyalty, posted after the guarded transition.
+    postLedger(o.customerId, o.id, 'payment', -o.totalCents, 0, `tab settled ${o.number}`, user.id)
+    const points = loyaltyFor(o.totalCents)
+    if (points > 0) {
+      postLedger(o.customerId, o.id, 'loyalty', 0, points, `loyalty earned ${o.number}`, user.id)
+    }
+    audit(user.id, user.username, 'TAB_SETTLED', 'order', o.number, method)
+    persist()
+    return orderDTO(o) as T
+  }
   if (m === 'POST' && p === '/sync') {
     requirePerm(perms, 'pos.sell')
     const txs = Array.isArray(body?.transactions) ? body.transactions : []
@@ -692,6 +817,83 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       }
     }
     return results as T
+  }
+
+  // ---- customers & tabs (mirrors the Go routes + permission gates) ----
+  if (m === 'GET' && p === '/customers') {
+    requirePerm(perms, 'customers.view')
+    const needle = (q.get('search') || '').trim().toLowerCase()
+    const list = d.customers
+      .filter((c) => !needle || c.name.toLowerCase().includes(needle) || (c.phone || '').includes(needle))
+      .sort((a, b) => Number(b.active) - Number(a.active) || b.balanceCents - a.balanceCents || a.name.localeCompare(b.name))
+      .slice(0, 200)
+    return list.map(customerDTO) as T
+  }
+  if (m === 'POST' && p === '/customers') {
+    requirePerm(perms, 'customers.manage')
+    const name = String(body?.name || '').trim()
+    if (!name) throw new ApiError(400, 'customer name required')
+    const limit = Math.round(Number(body?.creditLimitCents) || 0)
+    if (limit < 0) throw new ApiError(400, 'credit limit cannot be negative')
+    const c: DemoCustomer = {
+      id: d.seq.customer++, name, phone: String(body?.phone || '').trim(),
+      creditLimitCents: limit, loyaltyPoints: 0, balanceCents: 0, active: true,
+      createdAt: nowIso(), updatedAt: nowIso(),
+    }
+    d.customers.push(c)
+    audit(user.id, user.username, 'CUSTOMER_CREATED', 'customer', String(c.id), name)
+    persist()
+    return customerDTO(c) as T
+  }
+  const custMatch = p.match(/^\/customers\/(\d+)(\/(ledger|payments|adjustments))?$/)
+  if (custMatch) {
+    const c = d.customers.find((x) => x.id === Number(custMatch[1]))
+    if (!c) throw new ApiError(404, 'customer not found')
+    const sub = custMatch[3] || ''
+    if (m === 'PUT' && !sub) {
+      requirePerm(perms, 'customers.manage')
+      const name = String(body?.name || '').trim()
+      if (!name) throw new ApiError(400, 'customer name required')
+      const limit = Math.round(Number(body?.creditLimitCents) || 0)
+      if (limit < 0) throw new ApiError(400, 'credit limit cannot be negative')
+      c.name = name
+      c.phone = String(body?.phone || '').trim()
+      c.creditLimitCents = limit
+      if (body?.active !== undefined) c.active = !!body.active
+      c.updatedAt = nowIso()
+      audit(user.id, user.username, 'CUSTOMER_UPDATED', 'customer', String(c.id), name)
+      persist()
+      return customerDTO(c) as T
+    }
+    if (m === 'GET' && sub === 'ledger') {
+      requirePerm(perms, 'customers.view')
+      return d.ledger
+        .filter((e) => e.customerId === c.id)
+        .sort((a, b) => b.id - a.id)
+        .slice(0, 200) as T
+    }
+    if (m === 'POST' && sub === 'payments') {
+      // Walk-in till payments ride pos.sell: cashiers take them all day.
+      requirePerm(perms, 'pos.sell')
+      const cents = Math.round(Number(body?.amountCents) || 0)
+      if (!(cents > 0)) throw new ApiError(400, 'payment amount must be positive')
+      if (!c.active) throw new ApiError(409, 'customer is inactive')
+      if (cents > c.balanceCents) throw new ApiError(409, `overpayment: ${cents} against balance ${c.balanceCents}`)
+      postLedger(c.id, 0, 'payment', -cents, 0, String(body?.note || 'walk-in payment'), user.id)
+      audit(user.id, user.username, 'CUSTOMER_PAYMENT', 'customer', String(c.id), String(cents))
+      persist()
+      return customerDTO(c) as T
+    }
+    if (m === 'POST' && sub === 'adjustments') {
+      requirePerm(perms, 'customers.manage')
+      const note = String(body?.note || '').trim()
+      if (!note) throw new ApiError(400, 'adjustment needs a note')
+      const cents = Math.round(Number(body?.amountCents) || 0)
+      postLedger(c.id, 0, 'adjustment', cents, 0, note, user.id)
+      audit(user.id, user.username, 'CUSTOMER_ADJUST', 'customer', String(c.id), note)
+      persist()
+      return customerDTO(c) as T
+    }
   }
 
   // reports

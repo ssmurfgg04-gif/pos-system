@@ -85,6 +85,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         authd.GET("/orders/:id/receipt", perm("orders.view"), h.ReceiptHTML)
         authd.POST("/orders/checkout", perm("pos.sell"), h.Checkout)
         authd.POST("/orders/:id/void", perm("pos.void"), h.VoidOrder)
+        authd.POST("/orders/:id/settle", perm("pos.sell"), h.SettleTab)
         authd.POST("/orders/:id/stkpush", perm("pos.sell"), h.RetrySTK)
         authd.POST("/orders/:id/manual", perm("payments.manual"), h.ManualConfirm)
         authd.POST("/sync", perm("pos.sell"), h.Sync)
@@ -104,6 +105,17 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         design.POST("/design", h.CreateDesignJob)
         design.PUT("/design/:id", h.UpdateDesignJob)
         design.POST("/design/:id/move", h.MoveDesignJob)
+
+        // Customers & tabs.
+        custv := authd.Group("", perm("customers.view"))
+        custv.GET("/customers", h.ListCustomers)
+        custv.GET("/customers/:id/ledger", h.CustomerLedger)
+        custm := authd.Group("", perm("customers.manage"))
+        custm.POST("/customers", h.CreateCustomer)
+        custm.PUT("/customers/:id", h.UpdateCustomer)
+        custm.POST("/customers/:id/adjustments", h.RecordCustomerAdjustment)
+        // Walk-in till payments ride pos.sell: cashiers take them all day.
+        authd.POST("/customers/:id/payments", perm("pos.sell"), h.RecordCustomerPayment)
 
         // Users & roles.
         users := authd.Group("", perm("users.manage"))

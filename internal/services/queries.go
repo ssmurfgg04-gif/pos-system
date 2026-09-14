@@ -30,6 +30,7 @@ func (s *Service) ListOrders(f OrderFilter) ([]models.Order, error) {
         q.WriteString(`
                 SELECT o.id, o.number, o.status, o.subtotal_cents, o.tax_cents, o.total_cents,
                         o.cashier_id, COALESCE(u.full_name, u.username, ''), COALESCE(o.customer_name,''),
+                        COALESCE(o.customer_id,0),
                         COALESCE(o.note,''), COALESCE(o.client_uuid,''), COALESCE(o.discrepancy,0),
                         o.created_at, COALESCE(o.paid_at,''), COALESCE(o.voided_at,''), COALESCE(o.void_reason,'')
                 FROM orders o LEFT JOIN users u ON u.id = o.cashier_id WHERE 1=1`)
@@ -69,7 +70,8 @@ func (s *Service) ListOrders(f OrderFilter) ([]models.Order, error) {
         for rows.Next() {
                 var o models.Order
                 if err := rows.Scan(&o.ID, &o.Number, &o.Status, &o.SubtotalCents, &o.TaxCents, &o.TotalCents,
-                        &o.CashierID, &o.CashierName, &o.CustomerName, &o.Note, &o.ClientUUID, &o.Discrepancy,
+                        &o.CashierID, &o.CashierName, &o.CustomerName, &o.CustomerID,
+                        &o.Note, &o.ClientUUID, &o.Discrepancy,
                         &o.CreatedAt, &o.PaidAt, &o.VoidedAt, &o.VoidReason); err != nil {
                         rows.Close()
                         return nil, err
@@ -167,12 +169,14 @@ func (s *Service) GetOrder(orderID int64) (*models.Order, error) {
         err := s.db.QueryRow(s.db.Rebind(`
                 SELECT o.id, o.number, o.status, o.subtotal_cents, o.tax_cents, o.total_cents,
                         o.cashier_id, COALESCE(u.full_name, u.username, ''), COALESCE(o.customer_name,''),
+                        COALESCE(o.customer_id,0),
                         COALESCE(o.note,''), COALESCE(o.client_uuid,''), COALESCE(o.discrepancy,0),
                         o.created_at, COALESCE(o.paid_at,''), COALESCE(o.voided_at,''), COALESCE(o.void_reason,'')
                 FROM orders o LEFT JOIN users u ON u.id = o.cashier_id
                 WHERE o.id = ?`), orderID).
                 Scan(&o.ID, &o.Number, &o.Status, &o.SubtotalCents, &o.TaxCents, &o.TotalCents,
-                        &o.CashierID, &o.CashierName, &o.CustomerName, &o.Note, &o.ClientUUID, &o.Discrepancy,
+                        &o.CashierID, &o.CashierName, &o.CustomerName, &o.CustomerID,
+                        &o.Note, &o.ClientUUID, &o.Discrepancy,
                         &o.CreatedAt, &o.PaidAt, &o.VoidedAt, &o.VoidReason)
         if err != nil {
                 return nil, ErrNotFound

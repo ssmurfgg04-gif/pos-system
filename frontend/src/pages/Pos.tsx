@@ -10,7 +10,7 @@
 // and only accept the burst pattern, so human typing never triggers it).
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, Category, CheckoutRequest, Order, Product } from '../lib/api'
+import { api, Category, CheckoutRequest, Customer, Order, Product } from '../lib/api'
 import { useCart } from '../stores/cart'
 import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
@@ -22,7 +22,7 @@ import { toast } from '../stores/toasts'
 import { enqueue, newClientUuid } from '../offline/queue'
 import { useNet } from '../offline/heartbeat'
 import {
-  ShoppingCart, Search, Banknote, Smartphone, X, Minus, Plus, ScanBarcode, AlertTriangle,
+  ShoppingCart, Search, Banknote, Smartphone, X, Minus, Plus, ScanBarcode, AlertTriangle, BookUser,
 } from 'lucide-react'
 
 export function Pos() {
@@ -431,12 +431,15 @@ function ChargeModal({
 }) {
   const cart = useCart()
   const branding = useBranding((s) => s.branding)
-  const [method, setMethod] = useState<'cash' | 'mpesa'>('cash')
+  const [method, setMethod] = useState<'cash' | 'mpesa' | 'tab'>('cash')
   const [customerName, setCustomerName] = useState('')
   const [phone, setPhone] = useState('')
   const [received, setReceived] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [tabQuery, setTabQuery] = useState('')
+  const [tabOptions, setTabOptions] = useState<Customer[]>([])
+  const [tabCustomer, setTabCustomer] = useState<Customer | null>(null)
   const totals = cart.totals()
 
   // Fresh slate every time the modal opens (no stale tender amounts).
@@ -447,23 +450,45 @@ function ChargeModal({
       setError('')
       setPhone('')
       setCustomerName(cart.customerName)
+      setTabQuery('')
+      setTabOptions([])
+      setTabCustomer(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
+  // Tab customer search (server enforces the credit limit at charge time).
+  useEffect(() => {
+    if (method !== 'tab' || !open) return
+    const q = tabQuery.trim()
+    if (!q) {
+      setTabOptions([])
+      return
+    }
+    const t = window.setTimeout(async () => {
+      try {
+        setTabOptions(await api.get<Customer[]>(`/api/v1/customers?search=${encodeURIComponent(q)}`))
+      } catch {
+        /* offline — tabs need the server for limit checks */
+      }
+    }, 250)
+    return () => window.clearTimeout(t)
+  }, [method, open, tabQuery])
+
   const change = received !== null ? received - totals.total : null
   const canCash = received === null || change !== null && change >= 0
 
-  const checkout = async (paymentMethod: 'cash' | 'mpesa', paymentMode?: 'auto' | 'stk' | 'manual') => {
+  const checkout = async (paymentMethod: 'cash' | 'mpesa' | 'tab', paymentMode?: 'auto' | 'stk' | 'manual') => {
     setBusy(true)
     setError('')
     const clientUuid = newClientUuid()
     const body: CheckoutRequest = {
       items: cart.lines.map((l) => ({ productId: l.productId, qty: l.qty })),
-      paymentMethod,
+      paymentMethod: paymentMethod === 'tab' ? 'account' : paymentMethod,
       paymentMode,
       customerName: customerName.trim() || undefined,
       customerPhone: phone.trim() || undefined,
+      customerId: paymentMethod === 'tab' ? tabCustomer?.id : undefined,
       clientUuid,
     }
     try {
@@ -510,6 +535,7 @@ function ChargeModal({
           tabs={[
             { key: 'cash' as const, label: 'Cash', icon: <Banknote size={15} strokeWidth={2.25} aria-hidden /> },
             { key: 'mpesa' as const, label: `M-Pesa${branding.mpesa_env === 'mock' ? ' (demo)' : ''}`, icon: <Smartphone size={15} strokeWidth={2.25} aria-hidden /> },
+            { key: 'tab' as const, label: 'Tab', icon: <BookUser size={15} strokeWidth={2.25} aria-hidden /> },
           ]}
           value={method}
           onChange={setMethod}
@@ -544,6 +570,42 @@ function ChargeModal({
                   {formatMoney(Math.abs(change))}
                 </span>
               </div>
+            )}
+          </>
+        ) : method === 'tab' ? (
+          <>
+            <Field label="Tab customer" hint="Server enforces their credit limit at charge time.">
+              <Input
+                value={tabCustomer ? `${tabCustomer.name} · owes ${formatMoney(tabCustomer.balanceCents)}` : tabQuery}
+                onChange={(e) => { setTabCustomer(null); setTabQuery(e.target.value) }}
+                placeholder="Type a name or phone…"
+              />
+            </Field>
+            {!tabCustomer && tabOptions.length > 0 && (
+              <div className="border-2 border-line rounded-input overflow-hidden">
+                {tabOptions.slice(0, 6).map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => { setTabCustomer(c); setTabQuery('') }}
+                    className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-surface-muted active:bg-surface-muted"
+                  >
+                    <span>
+                      <span className="block text-[13px] font-bold text-ink">{c.name}</span>
+                      <span className="block text-[11px] text-ink-subtle">{c.phone || 'no phone'}</span>
+                    </span>
+                    <span className={`text-[12px] font-bold ${c.creditLimitCents <= 0 ? 'text-ink-subtle' : c.balanceCents >= c.creditLimitCents ? 'text-danger-text' : 'text-ink-muted'}`}>
+                      {c.creditLimitCents <= 0 ? 'cash only' : `owes ${formatMoney(c.balanceCents)} / ${formatMoney(c.creditLimitCents)}`}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {tabCustomer && tabCustomer.creditLimitCents <= 0 && (
+              <p className="text-danger-text text-[13px] font-semibold">This customer is cash-only — pick someone with credit.</p>
+            )}
+            {!online && (
+              <p className="text-pending-text text-[13px] font-bold">You're offline — tabs need the server for limit checks.</p>
             )}
           </>
         ) : (
@@ -581,10 +643,10 @@ function ChargeModal({
           variant="primary"
           size="lg"
           className="w-full h-16 text-xl"
-          disabled={busy || (method === 'cash' && !canCash) || (method === 'mpesa' && branding.payment_mode !== 'manual' && !normalizePhoneKe(phone))}
+          disabled={busy || (method === 'cash' && !canCash) || (method === 'mpesa' && branding.payment_mode !== 'manual' && !normalizePhoneKe(phone)) || (method === 'tab' && (!online || !tabCustomer || tabCustomer.creditLimitCents <= 0))}
           onClick={() => checkout(method, method === 'mpesa' ? (branding.payment_mode as 'auto' | 'stk' | 'manual') : undefined)}
         >
-          {busy ? <Spinner className="border-t-brand-ink" /> : method === 'cash' ? `Take ${formatMoney(totals.total)}` : 'Charge via M-Pesa →'}
+          {busy ? <Spinner className="border-t-brand-ink" /> : method === 'cash' ? `Take ${formatMoney(totals.total)}` : method === 'tab' ? `Charge ${formatMoney(totals.total)} to tab` : 'Charge via M-Pesa →'}
         </Button>
         <p className="text-center text-[11px] text-ink-subtle">Served by {cashierName}</p>
       </div>

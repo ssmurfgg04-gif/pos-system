@@ -9,21 +9,29 @@ import { ReceiptModal } from '../components/Receipt'
 import { useBranding } from '../stores/branding'
 import { centsToAmount, formatMoney } from '../lib/money'
 import { toast } from '../stores/toasts'
-import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer } from 'lucide-react'
+import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer, BookUser } from 'lucide-react'
 
 export function PaymentLabel({ method }: { method?: string }) {
   return method === 'cash' ? (
     <span className="inline-flex items-center gap-1.5"><Banknote size={14} strokeWidth={2.25} aria-hidden />Cash</span>
   ) : method === 'mpesa' ? (
     <span className="inline-flex items-center gap-1.5"><Smartphone size={14} strokeWidth={2.25} aria-hidden />M-Pesa</span>
+  ) : method === 'account' ? (
+    <span className="inline-flex items-center gap-1.5"><BookUser size={14} strokeWidth={2.25} aria-hidden />Tab</span>
   ) : (
     <span>—</span>
   )
 }
 
+function isTabOrder(o: Order) {
+  return o.payments.some((p) => p.method === 'account')
+}
+
 export function Orders() {
   const canVoid = useAuth((s) => !!s.user?.permissions.includes('pos.void'))
   const canManual = useAuth((s) => !!s.user?.permissions.includes('payments.manual'))
+  const canSell = useAuth((s) => !!s.user?.permissions.includes('pos.sell'))
+  const [settleFor, setSettleFor] = useState<Order | null>(null)
   const [orders, setOrders] = useState<Order[] | null>(null)
   const [status, setStatus] = useState<'all' | 'PAID' | 'PENDING' | 'VOIDED'>('all')
   const [search, setSearch] = useState('')
@@ -103,7 +111,7 @@ export function Orders() {
                   <td className="px-3 py-2.5 tabular text-ink-muted">{o.items.reduce((n, i) => n + i.qty, 0)}</td>
                   <td className="px-3 py-2.5 font-bold tabular text-ink">{centsToAmount(o.totalCents)}</td>
                   <td className="px-3 py-2.5 text-[13px] text-ink-muted">
-                    {pay?.method === 'cash' || pay?.method === 'mpesa' ? (
+                    {pay?.method === 'cash' || pay?.method === 'mpesa' || pay?.method === 'account' ? (
                       <span>
                         <PaymentLabel method={pay.method} />
                         {pay.method === 'mpesa' && pay.mpesaReceipt ? <> · <span className="font-mono text-[12px] font-semibold text-ink" title="M-Pesa receipt code">{pay.mpesaReceipt}</span></> : null}
@@ -127,6 +135,15 @@ export function Orders() {
           onClose={() => setSelected(null)}
           onVoid={canVoid ? () => { setVoiding(selected); setSelected(null) } : undefined}
           onManual={canManual && selected.status === 'PENDING' ? () => { setManualFor(selected); setSelected(null) } : undefined}
+          onSettle={canSell && selected.status === 'PENDING' && isTabOrder(selected) ? () => { setSettleFor(selected); setSelected(null) } : undefined}
+        />
+      )}
+
+      {settleFor && (
+        <SettleModal
+          order={settleFor}
+          onClose={() => setSettleFor(null)}
+          onDone={() => { setSettleFor(null); load() }}
         />
       )}
 
@@ -157,11 +174,13 @@ function OrderDrawer({
   onClose,
   onVoid,
   onManual,
+  onSettle,
 }: {
   order: Order
   onClose: () => void
   onVoid?: () => void
   onManual?: () => void
+  onSettle?: () => void
 }) {
   const [live, setLive] = useState(order)
   const [receiptOpen, setReceiptOpen] = useState(false)
@@ -184,6 +203,9 @@ function OrderDrawer({
         <>
           {onManual && live.status === 'PENDING' && (
             <Button variant="secondary" onClick={onManual}>Enter receipt code</Button>
+          )}
+          {onSettle && live.status === 'PENDING' && isTabOrder(live) && (
+            <Button variant="primary" onClick={onSettle}>Settle tab</Button>
           )}
           <Button variant="secondary" onClick={() => setReceiptOpen(true)}>
             <Printer size={15} strokeWidth={2.25} aria-hidden />
@@ -250,6 +272,57 @@ function OrderDrawer({
       {receiptOpen && (
         <ReceiptModal open order={live} branding={branding} onClose={() => setReceiptOpen(false)} />
       )}
+    </Modal>
+  )
+}
+
+function SettleModal({ order, onClose, onDone }: { order: Order; onClose: () => void; onDone: () => void }) {
+  const [method, setMethod] = useState<'cash' | 'mpesa'>('cash')
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const valid = method === 'cash' || /^[A-Z0-9]{10}$/.test(code)
+
+  const go = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.post(`/api/v1/orders/${order.id}/settle`, method === 'cash' ? { method } : { method, receiptCode: code })
+      toast.success('Tab settled', `${order.number} — ${formatMoney(order.totalCents)}`)
+      onDone()
+    } catch (e: any) {
+      setError(e?.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Settle tab — ${order.number}`} size="sm" footer={
+      <>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={go} disabled={busy || !valid}>Settle {formatMoney(order.totalCents)}</Button>
+      </>
+    }>
+      <p className="text-[13px] text-ink-muted mb-3">
+        Owed <strong className="text-danger-text">{formatMoney(order.totalCents)}</strong> — settling marks the order paid and clears the tab.
+      </p>
+      <Tabs
+        tabs={[
+          { key: 'cash' as const, label: 'Cash', icon: <Banknote size={15} strokeWidth={2.25} aria-hidden /> },
+          { key: 'mpesa' as const, label: 'M-Pesa receipt', icon: <Smartphone size={15} strokeWidth={2.25} aria-hidden /> },
+        ]}
+        value={method}
+        onChange={setMethod}
+      />
+      {method === 'mpesa' && (
+        <div className="mt-3">
+          <Field label="M-Pesa receipt code" hint="10 characters, as printed on their confirmation SMS.">
+            <Input value={code} autoFocus onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))} placeholder="AAAAAAAAAA" className="font-mono" />
+          </Field>
+        </div>
+      )}
+      {error && <p role="alert" className="text-danger-text text-sm font-semibold mt-2">{error}</p>}
     </Modal>
   )
 }

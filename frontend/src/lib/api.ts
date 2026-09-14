@@ -221,7 +221,7 @@ export interface OrderItem {
 export interface Payment {
   id: number
   orderId: number
-  method: 'cash' | 'mpesa'
+  method: 'cash' | 'mpesa' | 'account'
   mode: string
   amountCents: number
   status: string
@@ -244,6 +244,7 @@ export interface Order {
   cashierId: number
   cashierName: string
   customerName: string
+  customerId: number
   note: string
   clientUuid: string
   discrepancy: boolean
@@ -272,10 +273,11 @@ export interface Branding {
 
 export interface CheckoutRequest {
   items: { productId: number; qty: number; unitPriceCents?: number }[]
-  paymentMethod: 'cash' | 'mpesa'
+  paymentMethod: 'cash' | 'mpesa' | 'account'
   paymentMode?: 'auto' | 'stk' | 'manual'
   customerPhone?: string
   customerName?: string
+  customerId?: number
   note?: string
   clientUuid?: string
 }
@@ -364,3 +366,27 @@ export interface Role {
 }
 
 export interface PermissionDef { key: string; group: string; label: string }
+
+export interface Customer {
+  id: number
+  name: string
+  phone: string
+  creditLimitCents: number
+  loyaltyPoints: number
+  balanceCents: number
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface LedgerEntry {
+  id: number
+  customerId: number
+  orderId: number
+  kind: 'charge' | 'payment' | 'adjustment' | 'loyalty'
+  amountCents: number
+  pointsDelta: number
+  note: string
+  createdBy: number
+  createdAt: string
+}

@@ -13,6 +13,8 @@ var PermissionCatalog = []PermissionDef{
 	{Key: "pos.sell", Group: "Selling", Label: "Checkout and sell"},
 	{Key: "pos.void", Group: "Selling", Label: "Void / cancel orders"},
 	{Key: "orders.view", Group: "Selling", Label: "View order history"},
+	{Key: "customers.view", Group: "Selling", Label: "View customers and tabs"},
+	{Key: "customers.manage", Group: "Selling", Label: "Manage customers, credit and tabs"},
 	{Key: "payments.manual", Group: "Payments", Label: "Enter manual M-Pesa receipt codes"},
 	{Key: "payments.override_price", Group: "Payments", Label: "Override line item prices"},
 	{Key: "products.view", Group: "Catalog", Label: "View products and stock"},
@@ -61,6 +63,6 @@ func AllPermissions() []string {
 // SeededRolePermissions defines the three system default roles.
 var SeededRolePermissions = map[string][]string{
 	"Admin":    AllPermissions(),
-	"Cashier":  {"pos.sell", "pos.void", "orders.view", "payments.manual", "shifts.manage"},
+	"Cashier":  {"pos.sell", "pos.void", "orders.view", "payments.manual", "shifts.manage", "customers.view"},
 	"Designer": {"design.view", "design.manage", "products.view", "orders.view"},
 }

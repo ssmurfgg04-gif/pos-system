@@ -15,8 +15,9 @@ const (
 	PaymentFailed     = "FAILED"
 	PaymentVoided     = "VOIDED"
 
-	MethodCash  = "cash"
-	MethodMpesa = "mpesa"
+	MethodCash    = "cash"
+	MethodMpesa   = "mpesa"
+	MethodAccount = "account" // charge to a customer tab (customer credit)
 
 	ModeAuto   = "auto"   // STK push first, manual fallback available
 	ModeSTK    = "stk"    // force STK push
@@ -112,10 +113,11 @@ type CheckoutItem struct {
 
 type CheckoutRequest struct {
 	Items             []CheckoutItem `json:"items" binding:"required,min=1"`
-	PaymentMethod     string         `json:"paymentMethod" binding:"required,oneof=cash mpesa"`
+	PaymentMethod     string         `json:"paymentMethod" binding:"required,oneof=cash mpesa account"`
 	PaymentMode       string         `json:"paymentMode"`   // auto|stk|manual (mpesa only)
 	CustomerPhone     string         `json:"customerPhone"`
 	CustomerName      string         `json:"customerName"`
+	CustomerID        int64          `json:"customerId"` // required for account tabs
 	Note              string         `json:"note"`
 	ClientUUID        string         `json:"clientUuid"` // offline idempotency key
 }
@@ -156,6 +158,7 @@ type Order struct {
 	CashierID     int64       `json:"cashierId"`
 	CashierName   string      `json:"cashierName"`
 	CustomerName  string      `json:"customerName"`
+	CustomerID    int64       `json:"customerId"`
 	Note          string      `json:"note"`
 	ClientUUID    string      `json:"clientUuid"`
 	Discrepancy   bool        `json:"discrepancy"`
@@ -173,6 +176,42 @@ func (o *Order) PaidAtOrCreated() string {
 		return o.PaidAt
 	}
 	return o.CreatedAt
+}
+
+// ---- Customers (tabs & credit) ----
+
+// Ledger entry kinds: charge raises what the customer owes, payment lowers
+// it, adjustment is a manual correction (signed amount), loyalty only moves
+// points.
+const (
+	LedgerCharge  = "charge"
+	LedgerPayment = "payment"
+	LedgerAdjust  = "adjustment"
+	LedgerLoyalty = "loyalty"
+)
+
+type Customer struct {
+	ID               int64  `json:"id"`
+	Name             string `json:"name"`
+	Phone            string `json:"phone"`
+	CreditLimitCents int64  `json:"creditLimitCents"` // 0 = no tab allowed
+	LoyaltyPoints    int64  `json:"loyaltyPoints"`
+	BalanceCents     int64  `json:"balanceCents"` // >0 means the customer owes the shop
+	Active           bool   `json:"active"`
+	CreatedAt        string `json:"createdAt"`
+	UpdatedAt        string `json:"updatedAt"`
+}
+
+type LedgerEntry struct {
+	ID          int64  `json:"id"`
+	CustomerID  int64  `json:"customerId"`
+	OrderID     int64  `json:"orderId"`
+	Kind        string `json:"kind"`
+	AmountCents int64  `json:"amountCents"` // signed: +charge, -payment
+	PointsDelta int64  `json:"pointsDelta"`
+	Note        string `json:"note"`
+	CreatedBy   int64  `json:"createdBy"`
+	CreatedAt   string `json:"createdAt"`
 }
 
 // ---- Shifts ----
