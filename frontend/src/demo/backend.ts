@@ -148,6 +148,7 @@ function brandingDTO() {
   return {
     app_name: s.app_name || 'Point of Sale',
     store_name: s.store_name || '',
+    brand_logo_url: '',
     brand_color: s.brand_color || '#10B981',
     currency_symbol: s.currency_symbol || 'KES',
     currency_code: s.currency_code || 'KES',

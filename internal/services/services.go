@@ -10,6 +10,7 @@ package services
 
 import (
         "log"
+        "sync"
         "time"
 
         "posapp/internal/database"
@@ -28,6 +29,8 @@ type Service struct {
 
         darajaKey string
         daraja    *mpesa.Daraja
+
+        orderSeqMu sync.Mutex
 }
 
 func New(db *database.DB, st *settings.Store, hub *ws.Hub, pw *printer.Worker) *Service {

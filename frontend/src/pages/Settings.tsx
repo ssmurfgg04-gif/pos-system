@@ -3,7 +3,7 @@
 // M-Pesa (mock/sandbox/production), printer target + test print, the
 // audit log, and System (backups + demo data reset).
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, AuditEntry, BackupResult, backendMode } from '../lib/api'
 import { resetDemo } from '../demo/backend'
 import { useBranding } from '../stores/branding'
@@ -138,6 +138,9 @@ export function Settings() {
             </Field>
             <Field label="Receipt footer" hint="Printed at the bottom of every receipt">
               <Textarea value={values.receipt_footer ?? ''} onChange={(e) => set('receipt_footer', e.target.value)} />
+            </Field>
+            <Field label="Brand logo" hint="PNG or JPEG, 2 MB max. Shown on login and the topbar.">
+              <BrandLogoField />
             </Field>
           </div>
         )}
@@ -337,6 +340,73 @@ export function Settings() {
           )
         )}
       </Card>
+    </div>
+  )
+}
+
+// Brand logo upload (Store tab). PNG/JPEG ≤2 MB; preview busts cache per
+// upload so the new mark shows immediately. Server validates magic bytes.
+function BrandLogoField() {
+  const branding = useBranding((s) => s.branding)
+  const reloadBranding = useBranding((s) => s.load)
+  const [busy, setBusy] = useState(false)
+  const [tick, setTick] = useState(0)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const url = branding.brand_logo_url ? `${branding.brand_logo_url}?t=${tick}` : ''
+  const upload = async (file: File) => {
+    setBusy(true)
+    try {
+      const form = new FormData()
+      form.append('logo', file)
+      await api.form('/api/v1/settings/logo', form)
+      await reloadBranding()
+      setTick((t) => t + 1)
+      toast.success('Brand logo updated')
+    } catch (e: any) {
+      toast.error('Logo upload failed', e?.message)
+    } finally {
+      setBusy(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+  const remove = async () => {
+    setBusy(true)
+    try {
+      await api.del('/api/v1/settings/logo')
+      await reloadBranding()
+      setTick((t) => t + 1)
+      toast.success('Brand logo removed')
+    } catch (e: any) {
+      toast.error('Remove failed', e?.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="flex items-center gap-3">
+      <div className="w-14 h-14 rounded-input bg-surface-muted border-2 border-line-strong flex items-center justify-center overflow-hidden shrink-0">
+        {url
+          ? <img src={url} alt="Brand logo" className="w-full h-full object-contain" />
+          : <span className="text-ink-subtle text-xs font-bold">none</span>}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={busy}>
+          Upload
+        </Button>
+        {url && (
+          <Button variant="secondary" size="sm" onClick={remove} disabled={busy}>
+            Remove
+          </Button>
+        )}
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/png,image/jpeg"
+          className="hidden"
+          aria-label="Brand logo file"
+          onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])}
+        />
+      </div>
     </div>
   )
 }

@@ -5,6 +5,7 @@ import { configureMoney } from '../lib/money'
 const fallback: Branding = {
   app_name: 'Point of Sale',
   store_name: '',
+  brand_logo_url: '',
   brand_color: '#10B981',
   currency_symbol: 'KES',
   currency_code: 'KES',

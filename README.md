@@ -62,8 +62,10 @@ power cut never corrupts a till.
   quick-tender buttons are 48px touch targets.
 - **White-label by construction** — every visible string (app name, store
   name/address/phone, receipt footer, currency, VAT %, brand color, till/
-  paybill numbers) comes from the settings table. No company name is
-  hardcoded anywhere. Secrets are masked (`__SET__`) in the API.
+  paybill numbers) comes from the settings table, plus an uploadable
+  **brand logo** (Settings → Store) shown on login and the topbar.
+  No company name is hardcoded anywhere. Secrets are masked (`__SET__`)
+  in the API.
 - **Fast shift handoff** — 4-digit PIN quick-switch (bcrypt-hashed,
   escalating lockout, rate-limited). JWT 12h, per-request permission
   reload so role edits apply immediately.
