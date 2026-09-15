@@ -35,6 +35,15 @@ export function AppShell({ current, children }: { current: string; children: Rea
   const [demo, setDemo] = useState(isDemoSync())
   const [desk, setDesk] = useState<DesktopStatus | null>(null)
   const [stopping, setStopping] = useState(false)
+  const [updateNote, setUpdateNote] = useState<{ latest: string } | null>(null)
+  useEffect(() => {
+    if (!user?.permissions.includes('settings.manage')) return
+    let live = true
+    api.get<{ updateAvailable: boolean; latest: string }>('/api/v1/system/update')
+      .then((s) => { if (live && s.updateAvailable) setUpdateNote({ latest: s.latest }) })
+      .catch(() => undefined)
+    return () => { live = false }
+  }, [user?.id])
 
   useEffect(() => {
     startHeartbeat()
@@ -79,6 +88,14 @@ export function AppShell({ current, children }: { current: string; children: Rea
 
   return (
     <div className="h-full flex flex-col bg-shell">
+      {updateNote && (
+        <button
+          onClick={() => navigate('/settings')}
+          className="bg-pending-bg border-b-2 border-pending-text/30 px-3 py-2 text-[13px] font-bold text-pending-text text-center hover:underline"
+        >
+          Update {updateNote.latest} is ready — install it in Settings → System
+        </button>
+      )}
       {/* Topbar */}
       <header className="bg-shell border-b border-shell-edge px-3 sm:px-4 h-16 flex items-center gap-3 shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">

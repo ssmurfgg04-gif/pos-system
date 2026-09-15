@@ -74,6 +74,10 @@ power cut never corrupts a till.
 - **Remote owner playbook** — `docs/REMOTE-OWNER.md`: Tailscale tunnel +
   a read-only Owner role, so the owner watches sales, shifts, voids, and
   stock from anywhere without touching the till.
+- **Self-updating** — the app checks GitHub Releases on boot and shows
+  admins a banner when a newer build exists; one click downloads it and
+  launches the installer (Windows), then quits so the install can land.
+  Set `update_channel` to `off` to stay manual.
 - **Barcode scanners (no focus needed)** — hardware USB/Bluetooth
   scanners fire straight into the cart via a global HID listener that
   only accepts scanner-speed keystroke bursts; focused typing into the

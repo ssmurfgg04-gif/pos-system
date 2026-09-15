@@ -4,7 +4,7 @@
 // audit log, and System (backups + demo data reset).
 
 import { useEffect, useRef, useState } from 'react'
-import { api, AuditEntry, BackupResult, OffsiteStatus, backendMode } from '../lib/api'
+import { api, AuditEntry, BackupResult, OffsiteStatus, UpdateStatus, backendMode } from '../lib/api'
 import { resetDemo } from '../demo/backend'
 import { useBranding } from '../stores/branding'
 import { Button, Card, Field, Input, Select, Spinner, Table, Tabs, Textarea } from '../components/ui'
@@ -22,6 +22,8 @@ export function Settings() {
   const [backups, setBackups] = useState<BackupResult[] | null>(null)
   const [backing, setBacking] = useState(false)
   const [offsite, setOffsite] = useState<OffsiteStatus | null>(null)
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [updating, setUpdating] = useState(false)
   const [demo, setDemo] = useState(false)
 
   useEffect(() => {
@@ -48,6 +50,9 @@ export function Settings() {
     }
     if (tab === 'system' && !offsite) {
       api.get<OffsiteStatus>('/api/v1/system/offsite').then(setOffsite).catch(() => setOffsite(null))
+    }
+    if (tab === 'system' && !update) {
+      api.get<UpdateStatus>('/api/v1/system/update').then(setUpdate).catch(() => setUpdate(null))
     }
   }, [tab])
 
@@ -343,6 +348,78 @@ export function Settings() {
               <HardDriveDownload size={13} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
               Snapshots are full SQLite databases — copy the backups folder anywhere and the app can restore from it directly.
             </p>
+            <div className="sm:col-span-2 border-t-2 border-line pt-3">
+              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Software updates</p>
+              {!update ? (
+                <div className="py-4 flex justify-center"><Spinner /></div>
+              ) : update.updateAvailable ? (
+                <div className="space-y-2">
+                  <p className="text-[13px] font-bold text-pending-text">Version {update.latest} is ready (this box: {update.current || 'dev'}).</p>
+                  {update.notes && <p className="text-[12px] text-ink-muted whitespace-pre-wrap">{update.notes.slice(0, 500)}</p>}
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="primary" disabled={updating} onClick={async () => {
+                      setUpdating(true)
+                      try {
+                        await api.post('/api/v1/system/update/download')
+                        setUpdate(await api.get<UpdateStatus>('/api/v1/system/update'))
+                        toast.success('Update downloaded', 'Install when the till is quiet.')
+                      } catch (e: any) {
+                        toast.error('Download failed', e?.message)
+                      } finally {
+                        setUpdating(false)
+                      }
+                    }}>
+                      {updating ? <Spinner /> : 'Download'}
+                    </Button>
+                    {update.staged && (
+                      <Button size="sm" variant="secondary" disabled={updating} onClick={async () => {
+                        if (!confirm('Install the update now? The app will close to finish installing — finish the current sale first.')) return
+                        setUpdating(true)
+                        try {
+                          await api.post('/api/v1/system/update/install')
+                          toast.success('Installing', 'The app is closing to finish the update.')
+                        } catch (e: any) {
+                          toast.error('Install failed', e?.message)
+                        } finally {
+                          setUpdating(false)
+                        }
+                      }}>
+                        Install now
+                      </Button>
+                    )}
+                    <Button size="sm" variant="ghost" disabled={updating} onClick={async () => {
+                      setUpdating(true)
+                      try {
+                        setUpdate(await api.post<UpdateStatus>('/api/v1/system/update/refresh'))
+                      } catch (e: any) {
+                        toast.error('Check failed', e?.message)
+                      } finally {
+                        setUpdating(false)
+                      }
+                    }}>
+                      Check again
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <p className="text-[13px] text-ink-muted">Up to date{update.latest ? ` (${update.latest})` : ''}.</p>
+                  <Button size="sm" variant="ghost" disabled={updating} onClick={async () => {
+                    setUpdating(true)
+                    try {
+                      setUpdate(await api.post<UpdateStatus>('/api/v1/system/update/refresh'))
+                    } catch (e: any) {
+                      toast.error('Check failed', e?.message)
+                    } finally {
+                      setUpdating(false)
+                    }
+                  }}>
+                    Check again
+                  </Button>
+                </div>
+              )}
+              {update && update.lastError && <p className="text-[12px] text-danger-text mt-1">Last check error: {update.lastError}</p>}
+            </div>
             <div className="sm:col-span-2 border-t-2 border-line pt-3">
               <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Off-site backup (encrypted, automatic)</p>
               <p className="text-[13px] text-ink-muted mb-3">

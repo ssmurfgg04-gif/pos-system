@@ -291,6 +291,17 @@ export interface OffsiteStatus {
   lastAt: string
 }
 
+export interface UpdateStatus {
+  current: string
+  latest: string
+  notes: string
+  url: string
+  updateAvailable: boolean
+  checkedAt: string
+  lastError: string
+  staged: boolean
+}
+
 export interface Shift {
   id: number
   userId: number
