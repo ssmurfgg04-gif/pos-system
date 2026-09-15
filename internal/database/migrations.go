@@ -399,6 +399,117 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS must_rotate INTEGER NOT NULL DEFAULT 
 UPDATE users SET must_rotate = 1;
 `,
 	},
+	{
+		// v5: suppliers & stock-in — supplier records, purchase orders
+		// (receive posts stock + weighted-average cost), stock takes.
+		Version: 5,
+		SQLite: `
+CREATE TABLE IF NOT EXISTS suppliers (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL,
+	phone TEXT NOT NULL DEFAULT '',
+	email TEXT NOT NULL DEFAULT '',
+	address TEXT NOT NULL DEFAULT '',
+	notes TEXT NOT NULL DEFAULT '',
+	is_active INTEGER NOT NULL DEFAULT 1,
+	created_at TEXT NOT NULL DEFAULT (datetime('now')),
+	updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_suppliers_name ON suppliers(name);
+CREATE TABLE IF NOT EXISTS purchase_orders (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	number TEXT NOT NULL UNIQUE,
+	supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+	status TEXT NOT NULL DEFAULT 'PENDING',
+	subtotal_cents INTEGER NOT NULL DEFAULT 0,
+	note TEXT NOT NULL DEFAULT '',
+	created_by INTEGER NOT NULL DEFAULT 0,
+	created_at TEXT NOT NULL DEFAULT (datetime('now')),
+	received_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS purchase_order_items (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	po_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+	product_id INTEGER NOT NULL REFERENCES products(id),
+	name TEXT NOT NULL DEFAULT '',
+	sku TEXT NOT NULL DEFAULT '',
+	qty INTEGER NOT NULL DEFAULT 0,
+	cost_cents INTEGER NOT NULL DEFAULT 0,
+	line_total_cents INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS stock_takes (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	number TEXT NOT NULL UNIQUE,
+	status TEXT NOT NULL DEFAULT 'OPEN',
+	note TEXT NOT NULL DEFAULT '',
+	created_by INTEGER NOT NULL DEFAULT 0,
+	created_at TEXT NOT NULL DEFAULT (datetime('now')),
+	applied_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS stock_take_items (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	take_id INTEGER NOT NULL REFERENCES stock_takes(id) ON DELETE CASCADE,
+	product_id INTEGER NOT NULL REFERENCES products(id),
+	name TEXT NOT NULL DEFAULT '',
+	sku TEXT NOT NULL DEFAULT '',
+	expected_qty INTEGER NOT NULL DEFAULT 0,
+	counted_qty INTEGER NOT NULL DEFAULT 0
+);
+`,
+		Pg: `
+CREATE TABLE IF NOT EXISTS suppliers (
+	id SERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	phone TEXT NOT NULL DEFAULT '',
+	email TEXT NOT NULL DEFAULT '',
+	address TEXT NOT NULL DEFAULT '',
+	notes TEXT NOT NULL DEFAULT '',
+	is_active INTEGER NOT NULL DEFAULT 1,
+	created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_suppliers_name ON suppliers(name);
+CREATE TABLE IF NOT EXISTS purchase_orders (
+	id SERIAL PRIMARY KEY,
+	number TEXT NOT NULL UNIQUE,
+	supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+	status TEXT NOT NULL DEFAULT 'PENDING',
+	subtotal_cents BIGINT NOT NULL DEFAULT 0,
+	note TEXT NOT NULL DEFAULT '',
+	created_by INTEGER NOT NULL DEFAULT 0,
+	created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+	received_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS purchase_order_items (
+	id SERIAL PRIMARY KEY,
+	po_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+	product_id INTEGER NOT NULL REFERENCES products(id),
+	name TEXT NOT NULL DEFAULT '',
+	sku TEXT NOT NULL DEFAULT '',
+	qty INTEGER NOT NULL DEFAULT 0,
+	cost_cents BIGINT NOT NULL DEFAULT 0,
+	line_total_cents BIGINT NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS stock_takes (
+	id SERIAL PRIMARY KEY,
+	number TEXT NOT NULL UNIQUE,
+	status TEXT NOT NULL DEFAULT 'OPEN',
+	note TEXT NOT NULL DEFAULT '',
+	created_by INTEGER NOT NULL DEFAULT 0,
+	created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+	applied_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS stock_take_items (
+	id SERIAL PRIMARY KEY,
+	take_id INTEGER NOT NULL REFERENCES stock_takes(id) ON DELETE CASCADE,
+	product_id INTEGER NOT NULL REFERENCES products(id),
+	name TEXT NOT NULL DEFAULT '',
+	sku TEXT NOT NULL DEFAULT '',
+	expected_qty INTEGER NOT NULL DEFAULT 0,
+	counted_qty INTEGER NOT NULL DEFAULT 0
+);
+`,
+	},
 }
 
 // Migrate applies pending migrations in order.
