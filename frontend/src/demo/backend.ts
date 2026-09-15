@@ -1155,6 +1155,14 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     requirePerm(perms, 'settings.manage')
     return { enabled: false, pending: 0, lastOk: '', lastError: '', lastAt: '' } as T
   }
+  if (m === 'GET' && p === '/system/update') {
+    requirePerm(perms, 'settings.manage')
+    return { current: 'demo', latest: '', notes: '', url: '', updateAvailable: false, checkedAt: nowIso(), lastError: '', staged: false } as T
+  }
+  if (m === 'POST' && (p === '/system/update/refresh' || p === '/system/update/download' || p === '/system/update/install')) {
+    requirePerm(perms, 'settings.manage')
+    throw new ApiError(501, 'updates are not available in the demo')
+  }
 
   // reports
   if (m === 'GET' && p === '/reports/daily') return dailySummary(q.get('date') || '') as T
