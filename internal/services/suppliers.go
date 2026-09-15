@@ -236,6 +236,27 @@ func (s *Service) ListPOs() ([]models.PurchaseOrder, error) {
         return out, rows.Err()
 }
 
+// ListTakes returns newest-first stock takes (without lines; fetch one for detail).
+func (s *Service) ListTakes() ([]models.StockTake, error) {
+        rows, err := s.db.Query(s.db.Rebind(`
+                SELECT id, number, status, COALESCE(note,''), created_at, COALESCE(applied_at,'')
+                FROM stock_takes ORDER BY id DESC LIMIT 200`))
+        if err != nil {
+                return nil, err
+        }
+        defer rows.Close()
+        out := []models.StockTake{}
+        for rows.Next() {
+                var t models.StockTake
+                if err := rows.Scan(&t.ID, &t.Number, &t.Status, &t.Note, &t.CreatedAt, &t.AppliedAt); err != nil {
+                        return nil, err
+                }
+                t.Items = []models.StockTakeItem{}
+                out = append(out, t)
+        }
+        return out, rows.Err()
+}
+
 // avgCost returns the weighted-average unit cost in cents, rounded half-up.
 // Zero stock (or zero receipt) falls back to the incoming unit cost.
 func avgCost(oldStock int, oldCost int64, recvQty int, unitCost int64) int64 {
