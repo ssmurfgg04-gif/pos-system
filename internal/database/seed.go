@@ -44,6 +44,15 @@ var DefaultSettings = map[string]string{
         "low_stock_threshold":   "5",
         "backup_auto":           "true", // daily 02:00 VACUUM INTO snapshot
         "backup_keep":           "7",    // snapshots retained
+        "offsite_enabled":       "false", // encrypted push of each snapshot
+        "offsite_endpoint":      "",     // e.g. https://<account>.r2.cloudflarestorage.com
+        "offsite_bucket":        "",
+        "offsite_region":        "auto",
+        "offsite_access_key":    "",
+        "offsite_secret_key":    "", // SECRET — masked in API
+        "offsite_prefix":        "", // defaults to OS hostname
+        "offsite_keep":          "30", // remote copies retained
+        "offsite_passphrase":    "", // SECRET — encrypts snapshots; owner keeps a copy
 }
 
 type seedProduct struct {
