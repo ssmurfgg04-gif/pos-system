@@ -96,7 +96,8 @@ to configure:
    needed); on macOS unzip and open `LedgerPOS.app`; on Linux
    `tar xf ledgerpos-linux-x64.tar.xz` then `./ledgerpos`.
 3. The app opens in its own window — no browser tabs. First login
-   `admin / admin123` (PIN `1234`) — change it in Settings on first run.
+   `admin / admin123` (PIN `1234`) — the app forces you to set your own
+   password + PIN before anything else works (seeded defaults never serve).
 
 First launch sets up everything by itself: it creates the SQLite
 database, runs migrations, seeds the catalog and users, picks a free

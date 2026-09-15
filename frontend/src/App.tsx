@@ -7,6 +7,7 @@ import { Lock } from 'lucide-react'
 
 import { Login } from './pages/Login'
 import { Pin } from './pages/Pin'
+import { Rotate } from './pages/Rotate'
 import { Pos } from './pages/Pos'
 import { Customers } from './pages/Customers'
 import { Inventory } from './pages/Inventory'
@@ -34,6 +35,9 @@ export function App() {
     if (path === '/pin') return <Pin />
     return <Login />
   }
+
+  // Seeded defaults stop here until rotated (server enforces the same gate).
+  if (user.mustRotate) return <Rotate onDone={refresh} />
 
   const page = (() => {
     switch (true) {

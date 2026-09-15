@@ -46,7 +46,7 @@ describe('typing repro', () => {
 
   test('logged-in POS search accepts typing without crashing', async () => {
     useAuth.setState({
-      user: { id: 1, username: 'admin', fullName: 'Admin', roleId: 1, roleName: 'Admin', permissions: ['pos.sell'], active: true, pinSet: true, createdAt: '' },
+      user: { id: 1, username: 'admin', fullName: 'Admin', roleId: 1, roleName: 'Admin', permissions: ['pos.sell'], active: true, pinSet: true, mustRotate: false, createdAt: '' },
       ready: true,
     })
     useBranding.setState({ loaded: true } as any)
@@ -85,6 +85,23 @@ describe('typing repro', () => {
       if (useAuth.getState().user) break
     }
     expect(useAuth.getState().user?.username).toBe('admin')
+    // Seeded logins must rotate first: complete the Rotate screen.
+    for (let i = 0; i < 50; i++) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+      if (document.body.innerHTML.includes('Set your login details')) break
+    }
+    const pwBox = document.querySelector('input[placeholder="••••••"]') as HTMLInputElement
+    const pinBox = document.querySelector('input[placeholder="••••"]') as HTMLInputElement
+    expect(pwBox).toBeTruthy()
+    typeText(pwBox, 'admin123')
+    typeText(pinBox, '1234')
+    const saveBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Save & continue'))!
+    await act(async () => { saveBtn.click() })
+    for (let i = 0; i < 50; i++) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+      if (useAuth.getState().user && !useAuth.getState().user!.mustRotate) break
+    }
+    expect(useAuth.getState().user?.mustRotate).toBe(false)
     // Admins land on /reports by design; go to the sell screen explicitly.
     const { navigate } = await import('../src/lib/router')
     await act(async () => { navigate('/') })
