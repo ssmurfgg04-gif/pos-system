@@ -24,7 +24,8 @@ func IsMaskToken(v string) bool { return v == MaskToken }
 
 func isSecretKey(k string) bool {
         k = strings.ToLower(k)
-        return strings.Contains(k, "secret") || strings.Contains(k, "passkey") || k == "jwt_secret"
+        return strings.Contains(k, "secret") || strings.Contains(k, "passkey") ||
+                strings.Contains(k, "passphrase") || k == "jwt_secret"
 }
 
 type Store struct {
