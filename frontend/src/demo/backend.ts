@@ -225,10 +225,13 @@ const ALLOWED_KEYS = new Set([
   'mpesa_passkey', 'mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_callback_url',
   'mpesa_mock_delay_ms', 'mpesa_mock_result_code', 'printer_target', 'printer_width',
   'auto_print_receipts', 'receipt_logo', 'low_stock_threshold', 'backup_auto', 'backup_keep',
+  'offsite_enabled', 'offsite_endpoint', 'offsite_bucket', 'offsite_region',
+  'offsite_access_key', 'offsite_secret_key', 'offsite_prefix', 'offsite_keep',
+  'offsite_passphrase', 'onboarding_done', 'update_channel', 'update_api_base',
 ])
 
 function isSecretKey(k: string) {
-  return k.includes('secret') || k.includes('passkey')
+  return k.includes('secret') || k.includes('passkey') || k.includes('passphrase')
 }
 
 function brandingDTO() {
@@ -1147,6 +1150,10 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     // No hardware in the demo: surface the same 422 the server returns
     // with no target configured.
     throw new ApiError(422, 'no printer target configured')
+  }
+  if (m === 'GET' && p === '/system/offsite') {
+    requirePerm(perms, 'settings.manage')
+    return { enabled: false, pending: 0, lastOk: '', lastError: '', lastAt: '' } as T
   }
 
   // reports

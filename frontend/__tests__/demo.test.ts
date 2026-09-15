@@ -323,6 +323,22 @@ describe('demo printer parity', () => {
   })
 })
 
+describe('demo off-site settings parity', () => {
+  it('off-site keys save and secrets mask', async () => {
+    await login('admin', 'admin123')
+    await demoRequest('PUT', '/api/v1/settings', {
+      values: { offsite_enabled: 'true', offsite_bucket: 'shop-backups', offsite_secret_key: 's3cr3t', offsite_passphrase: 'correct horse' },
+    })
+    const snap = await demoRequest<Any>('GET', '/api/v1/settings')
+    expect(snap.offsite_enabled).toBe('true')
+    expect(snap.offsite_secret_key).toBe('__SET__')
+    expect(snap.offsite_passphrase).toBe('__SET__')
+    const st = await demoRequest<Any>('GET', '/api/v1/system/offsite')
+    expect(st.enabled).toBe(false)
+    expect(st.pending).toBe(0)
+  })
+})
+
 describe('demo suppliers & stock-in parity', () => {
   it('PO receive posts stock with weighted-average cost', async () => {
     await login('admin', 'admin123')

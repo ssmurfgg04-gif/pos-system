@@ -66,6 +66,14 @@ power cut never corrupts a till.
   `backups/` (consistent even mid-sale) with configurable retention; a
   manual **Back up now** button lives in Settings → System. Snapshots
   are plain SQLite files — copy them to USB/cloud for off-site safety.
+- **Encrypted off-site backup** — every snapshot can encrypt itself
+  (AES-256-GCM, your passphrase) and push to your own S3-compatible
+  storage (Cloudflare R2 free tier works), retrying on its own until it
+  lands. Nobody commutes to copy files; `ledgerpos restore-backup`
+  pulls the newest copy back down and decrypts it.
+- **Remote owner playbook** — `docs/REMOTE-OWNER.md`: Tailscale tunnel +
+  a read-only Owner role, so the owner watches sales, shifts, voids, and
+  stock from anywhere without touching the till.
 - **Barcode scanners (no focus needed)** — hardware USB/Bluetooth
   scanners fire straight into the cart via a global HID listener that
   only accepts scanner-speed keystroke bursts; focused typing into the
