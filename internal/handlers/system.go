@@ -82,6 +82,16 @@ func (h *H) ListBackups(c *gin.Context) {
         h.ok(c, h.Svc.ListBackups())
 }
 
+// OffsiteStatus (settings.manage) — encrypted-upload worker state.
+func (h *H) OffsiteStatus(c *gin.Context) {
+        if h.Offsite == nil {
+                h.ok(c, gin.H{"enabled": false, "pending": 0, "lastOk": "", "lastError": "", "lastAt": ""})
+                return
+        }
+        enabled, pending, lastOk, lastErr, lastAt := h.Offsite.Status()
+        h.ok(c, gin.H{"enabled": enabled, "pending": pending, "lastOk": lastOk, "lastError": lastErr, "lastAt": lastAt})
+}
+
 // ---- Desktop (single-machine) mode ----
 
 // DesktopInfo (public) — lets the SPA know it is running inside the

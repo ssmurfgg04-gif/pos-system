@@ -20,6 +20,7 @@ import (
         "posapp/internal/database"
         "posapp/internal/handlers"
         "posapp/internal/mdns"
+        "posapp/internal/offsite"
         "posapp/internal/printer"
         "posapp/internal/router"
         "posapp/internal/services"
@@ -107,6 +108,13 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
         svc := services.New(db, st, hub, pw)
         h := handlers.New(db, st, svc, hub, pw)
 
+        // Encrypted off-site uploads (async; inert unless configured).
+        ow := offsite.NewWorker(st, func(action, entity, entityID, details string) {
+                svc.Audit(0, "system", action, entity, entityID, details)
+        })
+        svc.AttachOffsite(ow)
+        h.Offsite = ow
+
         if desk != nil {
                 h.Desktop = handlers.DesktopStatus{
                         Desktop:  true,
@@ -129,10 +137,11 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
         ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
         defer stop()
 
-        // Background workers: STK sweeper + print queue + daily backups.
+        // Background workers: STK sweeper + print queue + daily backups + uploads.
         sweeper := services.NewSweeper(svc)
         go sweeper.Run(ctx)
         go pw.Run(ctx)
+        go ow.Run(ctx)
         svc.StartBackupScheduler()
 
         // LAN discovery broadcast (best-effort, server mode only).

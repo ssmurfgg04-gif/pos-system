@@ -16,10 +16,9 @@ import (
 // even while the database is being written (it reads through the WAL). We
 // keep the last N snapshots in a `backups/` directory next to the database
 // and take one automatically each day when enabled (settings: backup_auto,
-// default on; backup_keep, default 7). Remote object-storage upload is a
-// deliberate non-goal until credentials exist — the on-disk rotation is the
-// crash/ransomware story for a LAN box, and the files are plain SQLite any
-// tooling can copy onward.
+// default on; backup_keep, default 7). When off-site is enabled, each
+// snapshot is also encrypted and pushed to S3-compatible storage by the
+// offsite worker (async, retried) — nobody commutes to copy files.
 
 // BackupResult describes one completed snapshot.
 type BackupResult struct {
@@ -46,12 +45,14 @@ func (s *Service) BackupNow() (*BackupResult, error) {
 	if _, err := s.db.Exec(fmt.Sprintf("VACUUM INTO '%s'", strings.ReplaceAll(dst, "'", "''"))); err != nil {
 		return nil, fmt.Errorf("vacuum into: %w", err)
 	}
-	st, err := os.Stat(dst)
-	if err != nil {
-		return nil, err
-	}
-	s.pruneBackups(dir)
-	return &BackupResult{File: name, Bytes: st.Size(), At: time.Now().Format(time.RFC3339)}, nil
+        st, err := os.Stat(dst)
+        if err != nil {
+                return nil, err
+        }
+        s.pruneBackups(dir)
+        // Off-site push is async and best-effort: sales never wait for it.
+        s.enqueueOffsite(dst)
+        return &BackupResult{File: name, Bytes: st.Size(), At: time.Now().Format(time.RFC3339)}, nil
 }
 
 // ListBackups returns stored snapshots, newest first.

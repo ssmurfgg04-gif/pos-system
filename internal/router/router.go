@@ -179,6 +179,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         authd.GET("/audit", perm("audit.view"), h.ListAudit)
         authd.POST("/system/backup", perm("settings.manage"), h.RunBackup)
         authd.GET("/system/backups", perm("settings.manage"), h.ListBackups)
+        authd.GET("/system/offsite", perm("settings.manage"), h.OffsiteStatus)
         // Desktop-mode admin shutdown (no-op in server mode: OnQuit unset).
         authd.POST("/system/quit", perm("settings.manage"), h.QuitApp)
 
