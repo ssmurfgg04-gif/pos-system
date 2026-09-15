@@ -13,6 +13,7 @@ import (
 
         "posapp/internal/auth"
         "posapp/internal/database"
+        "posapp/internal/offsite"
         "posapp/internal/printer"
         "posapp/internal/services"
         "posapp/internal/settings"
@@ -25,6 +26,7 @@ type H struct {
         Svc      *services.Service
         Hub      *ws.Hub
         Printer  *printer.Worker
+        Offsite  *offsite.Worker
         LoginRL  *auth.RateLimiter
         PinRL    *auth.RateLimiter
 

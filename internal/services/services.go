@@ -15,6 +15,7 @@ import (
 
         "posapp/internal/database"
         "posapp/internal/mpesa"
+        "posapp/internal/offsite"
         "posapp/internal/printer"
         "posapp/internal/settings"
         "posapp/internal/ws"
@@ -25,6 +26,7 @@ type Service struct {
         settings *settings.Store
         hub      *ws.Hub
         printer  *printer.Worker
+        offsite  *offsite.Worker
         mock     *mpesa.Mock
 
         darajaKey string
@@ -35,6 +37,19 @@ type Service struct {
 
 func New(db *database.DB, st *settings.Store, hub *ws.Hub, pw *printer.Worker) *Service {
         return &Service{db: db, settings: st, hub: hub, printer: pw, mock: mpesa.NewMock(4*time.Second, 0)}
+}
+
+// AttachOffsite wires the encrypted-upload worker (set by main; nil = local only).
+func (s *Service) AttachOffsite(w *offsite.Worker) {
+        s.offsite = w
+}
+
+// enqueueOffsite schedules an encrypted push; no-op unless enabled + attached.
+func (s *Service) enqueueOffsite(snapshotPath string) {
+        if s.offsite == nil || !s.settings.GetBool("offsite_enabled", false) {
+                return
+        }
+        s.offsite.Enqueue(snapshotPath)
 }
 
 // Audit records an action in the audit log (best-effort).
