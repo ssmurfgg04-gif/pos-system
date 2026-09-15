@@ -10,7 +10,7 @@ import { useNet } from '../offline/heartbeat'
 import { backendMode, isDemoSync, getDesktopStatus, api, type DesktopStatus } from '../lib/api'
 import {
   ShoppingCart, ReceiptText, Palette, Package, Coins, BarChart3, Users, Settings,
-  LogOut, RefreshCw, FlaskConical, Power, PowerOff, BookUser,
+  LogOut, RefreshCw, FlaskConical, Power, PowerOff, BookUser, Truck,
 } from 'lucide-react'
 
 // Nav items: shown strictly by permission (server enforces regardless).
@@ -21,6 +21,7 @@ const NAV: { to: string; label: string; perm: string; icon: typeof ShoppingCart 
   { to: '/customers', label: 'Customers', perm: 'customers.view', icon: BookUser },
   { to: '/design', label: 'Design', perm: 'design.view', icon: Palette },
   { to: '/inventory', label: 'Inventory', perm: 'products.view', icon: Package },
+  { to: '/suppliers', label: 'Suppliers', perm: 'suppliers.view', icon: Truck },
   { to: '/shifts', label: 'Shifts', perm: 'shifts.manage', icon: Coins },
   { to: '/reports', label: 'Reports', perm: 'reports.view', icon: BarChart3 },
   { to: '/users', label: 'People', perm: 'users.manage', icon: Users },

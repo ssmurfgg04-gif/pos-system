@@ -30,7 +30,7 @@ describe('seed', () => {
     const admin = db.roles.find((r) => r.name === 'Admin')!
     const cashier = db.roles.find((r) => r.name === 'Cashier')!
     const designer = db.roles.find((r) => r.name === 'Designer')!
-    expect(admin.permissions).toHaveLength(18)
+    expect(admin.permissions).toHaveLength(20)
     expect(cashier.permissions).toContain('pos.sell')
     expect(cashier.permissions).not.toContain('settings.manage')
     expect(designer.permissions).toContain('design.manage')
@@ -311,6 +311,44 @@ describe('demo tabs & credit parity', () => {
     await demoRequest<Any>('POST', `/api/v1/orders/${o.id}/void`, { reason: 'test' })
     const list = await demoRequest<Any[]>('GET', '/api/v1/customers?search=Faith')
     expect(list[0].balanceCents).toBe(0)
+  })
+})
+
+describe('demo suppliers & stock-in parity', () => {
+  it('PO receive posts stock with weighted-average cost', async () => {
+    await login('admin', 'admin123')
+    const sup = await demoRequest<Any>('POST', '/api/v1/suppliers', { name: 'Test Wholesaler' })
+    expect(sup.id).toBeGreaterThan(0)
+    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!
+    const po = await demoRequest<Any>('POST', '/api/v1/purchase-orders', {
+      supplierId: sup.id,
+      items: [{ productId: 1, qty: 10, costCents: 40000 }],
+    })
+    expect(po.status).toBe('PENDING')
+    expect(po.number).toMatch(/^PO\d{12}$/)
+    const received = await demoRequest<Any>('POST', `/api/v1/purchase-orders/${po.id}/receive`, {})
+    expect(received.status).toBe('RECEIVED')
+    const after = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!
+    expect(after.stockQty).toBe(before.stockQty + 10)
+    const newStock = before.stockQty + 10
+    expect(after.costCents).toBe(Math.floor((before.stockQty * before.costCents + 10 * 40000 + newStock / 2) / newStock))
+    await expect(
+      demoRequest('POST', `/api/v1/purchase-orders/${po.id}/receive`, {}),
+    ).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('stock take counts variance and applies', async () => {
+    await login('admin', 'admin123')
+    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!
+    const take = await demoRequest<Any>('POST', '/api/v1/stock-takes', { productIds: [1] })
+    expect(take.status).toBe('OPEN')
+    expect(take.items[0].expectedQty).toBe(before.stockQty)
+    const counted = await demoRequest<Any>('POST', `/api/v1/stock-takes/${take.id}/count`, { counts: { '1': before.stockQty + 5 } })
+    expect(counted.items[0].countedQty).toBe(before.stockQty + 5)
+    const applied = await demoRequest<Any>('POST', `/api/v1/stock-takes/${take.id}/apply`, {})
+    expect(applied.status).toBe('APPLIED')
+    const after = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!
+    expect(after.stockQty).toBe(before.stockQty + 5)
   })
 })
 

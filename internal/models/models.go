@@ -278,6 +278,7 @@ type StockTake struct {
 	Status    string          `json:"status"`
 	Note      string          `json:"note"`
 	Items     []StockTakeItem `json:"items"`
+	ItemCount int             `json:"itemCount"`
 	CreatedAt string          `json:"createdAt"`
 	AppliedAt string          `json:"appliedAt"`
 }
