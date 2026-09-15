@@ -180,6 +180,10 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         authd.POST("/system/backup", perm("settings.manage"), h.RunBackup)
         authd.GET("/system/backups", perm("settings.manage"), h.ListBackups)
         authd.GET("/system/offsite", perm("settings.manage"), h.OffsiteStatus)
+        authd.GET("/system/update", perm("settings.manage"), h.UpdateStatus)
+        authd.POST("/system/update/refresh", perm("settings.manage"), h.UpdateRefresh)
+        authd.POST("/system/update/download", perm("settings.manage"), h.UpdateDownload)
+        authd.POST("/system/update/install", perm("settings.manage"), h.UpdateInstall)
         // Desktop-mode admin shutdown (no-op in server mode: OnQuit unset).
         authd.POST("/system/quit", perm("settings.manage"), h.QuitApp)
 

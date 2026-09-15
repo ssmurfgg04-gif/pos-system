@@ -15,6 +15,7 @@ import (
         "posapp/internal/database"
         "posapp/internal/offsite"
         "posapp/internal/printer"
+        "posapp/internal/update"
         "posapp/internal/services"
         "posapp/internal/settings"
         "posapp/internal/ws"
@@ -27,6 +28,7 @@ type H struct {
         Hub      *ws.Hub
         Printer  *printer.Worker
         Offsite  *offsite.Worker
+        Updater  *update.Checker
         LoginRL  *auth.RateLimiter
         PinRL    *auth.RateLimiter
 
@@ -49,6 +51,9 @@ type DesktopStatus struct {
 func New(db *database.DB, st *settings.Store, svc *services.Service, hub *ws.Hub, pw *printer.Worker) *H {
         return &H{
                 DB: db, Settings: st, Svc: svc, Hub: hub, Printer: pw,
+                // Dev checker by default (version "dev" never reports updates);
+                // main overrides with the stamped build version.
+                Updater: update.NewChecker("dev", update.Repo, st),
                 LoginRL: auth.NewRateLimiter(60*time.Second, 10),
                 PinRL:   auth.NewRateLimiter(60*time.Second, 15),
         }

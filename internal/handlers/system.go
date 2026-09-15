@@ -2,6 +2,8 @@ package handlers
 
 import (
         "fmt"
+        "os/exec"
+        "runtime"
         "strings"
         "time"
 
@@ -80,6 +82,58 @@ func (h *H) RunBackup(c *gin.Context) {
 // ListBackups (settings.manage) — backup history, newest first.
 func (h *H) ListBackups(c *gin.Context) {
         h.ok(c, h.Svc.ListBackups())
+}
+
+// UpdateStatus (settings.manage) — cached release check state.
+func (h *H) UpdateStatus(c *gin.Context) {
+        h.ok(c, h.Updater.Status())
+}
+
+// UpdateRefresh (settings.manage) — force a live check now.
+func (h *H) UpdateRefresh(c *gin.Context) {
+        p := h.principal(c)
+        h.Updater.Refresh(c.Request.Context())
+        h.Svc.Audit(p.ID, p.Username, "UPDATE_CHECKED", "system", "update", "")
+        h.ok(c, h.Updater.Status())
+}
+
+// UpdateDownload (settings.manage) — stage the picked asset into temp.
+func (h *H) UpdateDownload(c *gin.Context) {
+        p := h.principal(c)
+        staged, err := h.Updater.Download(c.Request.Context())
+        if err != nil {
+                h.fail(c, 502, err.Error())
+                return
+        }
+        h.Svc.Audit(p.ID, p.Username, "UPDATE_DOWNLOADED", "system", "update", staged)
+        h.ok(c, gin.H{"staged": staged})
+}
+
+// UpdateInstall (settings.manage) — Windows: launch the staged NSIS setup
+// and quit so it can replace the install. Other platforms: 501 + URL.
+func (h *H) UpdateInstall(c *gin.Context) {
+        p := h.principal(c)
+        if runtime.GOOS != "windows" {
+                h.fail(c, 501, "one-click install is Windows-only; download from the status URL")
+                return
+        }
+        staged := h.Updater.Staged()
+        if staged == "" {
+                h.fail(c, 409, "nothing staged — download first")
+                return
+        }
+        if err := exec.Command(staged).Start(); err != nil {
+                h.fail(c, 500, err.Error())
+                return
+        }
+        h.Svc.Audit(p.ID, p.Username, "UPDATE_INSTALLED", "system", "update", staged)
+        h.ok(c, gin.H{"installing": true})
+        if h.OnQuit != nil {
+                go func() {
+                        time.Sleep(300 * time.Millisecond) // let the response flush
+                        h.OnQuit()
+                }()
+        }
 }
 
 // OffsiteStatus (settings.manage) — encrypted-upload worker state.
