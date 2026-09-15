@@ -44,6 +44,7 @@ var DefaultSettings = map[string]string{
         "low_stock_threshold":   "5",
         "backup_auto":           "true", // daily 02:00 VACUUM INTO snapshot
         "backup_keep":           "7",    // snapshots retained
+        "onboarding_done":       "false", // guided first-run wizard completed
         "offsite_enabled":       "false", // encrypted push of each snapshot
         "offsite_endpoint":      "",     // e.g. https://<account>.r2.cloudflarestorage.com
         "offsite_bucket":        "",
