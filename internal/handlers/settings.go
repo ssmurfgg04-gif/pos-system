@@ -75,6 +75,17 @@ func (h *H) TestPrint(c *gin.Context) {
         h.ok(c, gin.H{"printed": true})
 }
 
+// KickDrawer (printer.test) — pulses the cash drawer for a till test.
+func (h *H) KickDrawer(c *gin.Context) {
+        p := h.principal(c)
+        if err := h.Printer.Kick(); err != nil {
+                h.fail(c, 422, err.Error())
+                return
+        }
+        h.Svc.Audit(p.ID, p.Username, "DRAWER_KICKED", "printer", h.Settings.Get("printer_target"), "")
+        h.ok(c, gin.H{"kicked": true})
+}
+
 // ListPrintJobs (printer.test) — queue diagnostics.
 func (h *H) ListPrintJobs(c *gin.Context) {
         jobs := h.Printer.ListJobs(50)
