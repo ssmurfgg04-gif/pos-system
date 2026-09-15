@@ -352,9 +352,14 @@ func isUniqueViolation(err error) bool {
 }
 
 // nextOrderNumber allocates ORD{YYYYMMDD}{####} inside the caller's tx.
-// Uses a mutex to serialize order number generation, avoiding
-// race conditions under concurrent load.
 func (s *Service) nextOrderNumber(tx *sql.Tx) (string, error) {
+        return s.nextDocNumber(tx, "ORD")
+}
+
+// nextDocNumber allocates PREFIX{YYYYMMDD}{####} inside the caller's tx.
+// Uses a mutex to serialize number generation, avoiding race conditions
+// under concurrent load. The day sequence is shared across prefixes.
+func (s *Service) nextDocNumber(tx *sql.Tx, prefix string) (string, error) {
         day := time.Now().Format("20060102")
         
         // Initialize sequence table if not exists (idempotent)
@@ -387,7 +392,7 @@ func (s *Service) nextOrderNumber(tx *sql.Tx) (string, error) {
                 return "", err
         }
         
-        return fmt.Sprintf("ORD%s%04d", day, seq), nil
+        return fmt.Sprintf(prefix+"%s%04d", day, seq), nil
 }
 
 // InitiateSTK sends (or re-sends) the push for a pending order's pending
