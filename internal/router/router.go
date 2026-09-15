@@ -174,6 +174,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         authd.POST("/settings/logo", perm("settings.manage"), h.UploadLogo)
         authd.DELETE("/settings/logo", perm("settings.manage"), h.DeleteLogo)
         authd.POST("/settings/test-print", perm("printer.test"), h.TestPrint)
+        authd.POST("/printer/kick", perm("printer.test"), h.KickDrawer)
         authd.GET("/print-jobs", perm("printer.test"), h.ListPrintJobs)
         authd.GET("/audit", perm("audit.view"), h.ListAudit)
         authd.POST("/system/backup", perm("settings.manage"), h.RunBackup)

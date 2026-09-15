@@ -1,6 +1,7 @@
 package printer
 
 import (
+        "bytes"
         "context"
         "database/sql"
         "fmt"
@@ -9,6 +10,7 @@ import (
         "time"
 
         "posapp/internal/database"
+        "posapp/internal/escpos"
         "posapp/internal/models"
         "posapp/internal/settings"
 )
@@ -251,6 +253,31 @@ func (w *Worker) TestPrint() error {
                 return err
         }
         _, err = wc.Write(raw)
+        return err
+}
+
+// Kick pulses the cash drawer on the configured target (pin 0, 50ms on,
+// 500ms off). No job row — fire-and-forget like a test page.
+func (w *Worker) Kick() error {
+        target := w.settings.Get("printer_target")
+        t := Target(target)
+        if !t.Enabled() {
+                return fmt.Errorf("no printer target configured")
+        }
+        wc, err := t.Open()
+        if err != nil {
+                return err
+        }
+        defer wc.Close()
+        var buf bytes.Buffer
+        e := escpos.New(&buf)
+        if _, err := e.KickDrawer(0, 25, 250); err != nil {
+                return err
+        }
+        if err := e.Print(); err != nil {
+                return err
+        }
+        _, err = wc.Write(buf.Bytes())
         return err
 }
 

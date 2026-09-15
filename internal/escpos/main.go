@@ -63,6 +63,16 @@ func (e *Escpos) PrintAndCut() error {
 }
 
 
+// KickDrawer pulses the cash-drawer kick connector: ESC p m t1 t2.
+// Pin is 0 or 1 (clamped); on/off times are in 2ms units
+// (typical: pin 0, on 25, off 250).
+func (e *Escpos) KickDrawer(pin, onTime, offTime uint8) (int, error) {
+	if pin > 1 {
+		pin = 0
+	}
+	return e.WriteRaw([]byte{esc, 'p', pin, onTime, offTime})
+}
+
 // WriteRaw write raw bytes to the printer
 func (e *Escpos) WriteRaw(data []byte) (int, error) {
 	if len(data) > 0 {
