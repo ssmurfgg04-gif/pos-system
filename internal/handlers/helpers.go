@@ -96,6 +96,10 @@ func (h *H) mapErr(c *gin.Context, err error) {
                 strings.Contains(msg, "invalid payment"), strings.Contains(msg, "quantity"),
                 strings.Contains(msg, "invalid design status"), strings.Contains(msg, "invalid payment mode"):
                 h.fail(c, 422, err.Error())
+        case strings.Contains(msg, "needs a customer"):
+                h.fail(c, 400, err.Error())
+        case strings.Contains(msg, "is inactive"), strings.Contains(msg, "no credit"):
+                h.fail(c, 409, err.Error())
         case strings.Contains(msg, "permission"):
                 h.fail(c, 403, err.Error())
         default:
