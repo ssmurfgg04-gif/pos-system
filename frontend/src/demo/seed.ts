@@ -68,6 +68,63 @@ export interface DemoCustomer {
   updatedAt: string
 }
 
+export interface DemoSupplier {
+  id: number
+  name: string
+  phone: string
+  email: string
+  address: string
+  notes: string
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DemoPOItem {
+  id: number
+  poId: number
+  productId: number
+  name: string
+  sku: string
+  qty: number
+  costCents: number
+  lineTotalCents: number
+}
+
+export interface DemoPurchaseOrder {
+  id: number
+  number: string
+  supplierId: number
+  supplierName: string
+  status: 'PENDING' | 'RECEIVED' | 'CANCELLED'
+  subtotalCents: number
+  note: string
+  items: DemoPOItem[]
+  createdAt: string
+  receivedAt: string
+}
+
+export interface DemoTakeItem {
+  id: number
+  takeId: number
+  productId: number
+  name: string
+  sku: string
+  expectedQty: number
+  countedQty: number
+}
+
+export interface DemoStockTake {
+  id: number
+  number: string
+  status: 'OPEN' | 'APPLIED' | 'CANCELLED'
+  note: string
+  items: DemoTakeItem[]
+  itemCount: number
+  createdAt: string
+  appliedAt: string
+}
+
 export interface DemoLedgerEntry {
   id: number
   customerId: number
@@ -161,11 +218,14 @@ export interface DemoDB {
   orders: DemoOrder[]
   customers: DemoCustomer[]
   ledger: DemoLedgerEntry[]
+  suppliers: DemoSupplier[]
+  purchaseOrders: DemoPurchaseOrder[]
+  stockTakes: DemoStockTake[]
   shifts: DemoShift[]
   designJobs: DemoDesignJob[]
   audit: DemoAudit[]
   settings: Record<string, string>
-  seq: { user: number; role: number; cat: number; product: number; order: number; item: number; pay: number; shift: number; job: number; audit: number; customer: number; ledger: number }
+  seq: { user: number; role: number; cat: number; product: number; order: number; item: number; pay: number; shift: number; job: number; audit: number; customer: number; ledger: number; supplier: number; po: number; poItem: number; take: number; takeItem: number }
   dailyOrderSeq: Record<string, number>
 }
 
@@ -175,6 +235,8 @@ export const PERMISSION_CATALOG: { key: string; group: string; label: string }[]
   { key: 'orders.view', group: 'Selling', label: 'View order history' },
   { key: 'customers.view', group: 'Selling', label: 'View customers and tabs' },
   { key: 'customers.manage', group: 'Selling', label: 'Manage customers, credit and tabs' },
+  { key: 'suppliers.view', group: 'Catalog', label: 'View suppliers and purchase orders' },
+  { key: 'suppliers.manage', group: 'Catalog', label: 'Manage suppliers, receive stock, stock takes' },
   { key: 'payments.manual', group: 'Payments', label: 'Enter manual M-Pesa receipt codes' },
   { key: 'payments.override_price', group: 'Payments', label: 'Override line item prices' },
   { key: 'products.view', group: 'Catalog', label: 'View products and stock' },
@@ -325,6 +387,12 @@ export function buildSeed(): DemoDB {
     updatedAt: iso(new Date(now.getTime() - (40 - i * 5) * 864e5)),
   }))
 
+  // ---- Suppliers (two wholesalers) ----
+  const suppliers: DemoSupplier[] = [
+    { id: 1, name: 'Nairobi Wholesalers', phone: '0722000000', email: 'orders@nbwholesale.co.ke', address: 'River Road, Nairobi', notes: 'Delivery Tue/Thu', active: true, createdAt: iso(new Date(now.getTime() - 50 * 864e5)), updatedAt: iso(new Date(now.getTime() - 50 * 864e5)) },
+    { id: 2, name: 'Kiambu Prints Supply', phone: '0733111222', email: '', address: 'Kiambu Town', notes: '', active: true, createdAt: iso(new Date(now.getTime() - 30 * 864e5)), updatedAt: iso(new Date(now.getTime() - 30 * 864e5)) },
+  ]
+
   // ---- Order history: ~45 days, weekend-heavy for a retail feel ----
   const orders: DemoOrder[] = []
   const TAX = 16
@@ -428,10 +496,11 @@ export function buildSeed(): DemoDB {
   ]
 
   return {
-    v: 2, users, roles, categories, products, orders, customers, ledger: [],
+    v: 3, users, roles, categories, products, orders, customers, ledger: [],
+    suppliers, purchaseOrders: [], stockTakes: [],
     shifts, designJobs, audit,
     settings: { ...DEMO_SETTINGS },
-    seq: { user: users.length + 1, role: roles.length + 1, cat: categories.length + 1, product: products.length + 1, order: orderId, item: itemId, pay: payId, shift: shifts.length + 1, job: designJobs.length + 1, audit: audit.length + 1, customer: customers.length + 1, ledger: 1 },
+    seq: { user: users.length + 1, role: roles.length + 1, cat: categories.length + 1, product: products.length + 1, order: orderId, item: itemId, pay: payId, shift: shifts.length + 1, job: designJobs.length + 1, audit: audit.length + 1, customer: customers.length + 1, ledger: 1, supplier: suppliers.length + 1, po: 1, poItem: 1, take: 1, takeItem: 1 },
     dailyOrderSeq: dailySeq,
   }
 }

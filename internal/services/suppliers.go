@@ -212,7 +212,7 @@ func (s *Service) GetPO(poID int64) (*models.PurchaseOrder, error) {
         return &o, rows.Err()
 }
 
-// ListPOs returns newest-first orders (all suppliers).
+// ListPOs returns newest-first orders with their lines (one extra query).
 func (s *Service) ListPOs() ([]models.PurchaseOrder, error) {
         rows, err := s.db.Query(s.db.Rebind(`
                 SELECT o.id, o.number, o.supplier_id, COALESCE(s.name,''), o.status,
@@ -224,6 +224,8 @@ func (s *Service) ListPOs() ([]models.PurchaseOrder, error) {
         }
         defer rows.Close()
         out := []models.PurchaseOrder{}
+        byID := map[int64]*models.PurchaseOrder{}
+        var ids []int64
         for rows.Next() {
                 var o models.PurchaseOrder
                 if err := rows.Scan(&o.ID, &o.Number, &o.SupplierID, &o.SupplierName,
@@ -232,15 +234,47 @@ func (s *Service) ListPOs() ([]models.PurchaseOrder, error) {
                 }
                 o.Items = []models.POItem{}
                 out = append(out, o)
+                byID[o.ID] = &out[len(out)-1]
+                ids = append(ids, o.ID)
         }
-        return out, rows.Err()
+        if err := rows.Err(); err != nil {
+                return nil, err
+        }
+        if len(ids) == 0 {
+                return out, nil
+        }
+        holders := make([]string, len(ids))
+        args := make([]any, len(ids))
+        for i, id := range ids {
+                holders[i] = "?"
+                args[i] = id
+        }
+        irows, err := s.db.Query(s.db.Rebind(`
+                SELECT id, po_id, product_id, name, sku, qty, cost_cents, line_total_cents
+                FROM purchase_order_items WHERE po_id IN (`+strings.Join(holders, ",")+`) ORDER BY id`), args...)
+        if err != nil {
+                return nil, err
+        }
+        defer irows.Close()
+        for irows.Next() {
+                var it models.POItem
+                if err := irows.Scan(&it.ID, &it.POID, &it.ProductID, &it.Name,
+                        &it.SKU, &it.Qty, &it.CostCents, &it.LineTotalCents); err != nil {
+                        return nil, err
+                }
+                if o, ok := byID[it.POID]; ok {
+                        o.Items = append(o.Items, it)
+                }
+        }
+        return out, irows.Err()
 }
 
-// ListTakes returns newest-first stock takes (without lines; fetch one for detail).
+// ListTakes returns newest-first stock takes with line counts (open one for lines).
 func (s *Service) ListTakes() ([]models.StockTake, error) {
         rows, err := s.db.Query(s.db.Rebind(`
-                SELECT id, number, status, COALESCE(note,''), created_at, COALESCE(applied_at,'')
-                FROM stock_takes ORDER BY id DESC LIMIT 200`))
+                SELECT t.id, t.number, t.status, COALESCE(t.note,''), t.created_at, COALESCE(t.applied_at,''),
+                        (SELECT COUNT(*) FROM stock_take_items WHERE take_id = t.id)
+                FROM stock_takes t ORDER BY t.id DESC LIMIT 200`))
         if err != nil {
                 return nil, err
         }
@@ -248,7 +282,7 @@ func (s *Service) ListTakes() ([]models.StockTake, error) {
         out := []models.StockTake{}
         for rows.Next() {
                 var t models.StockTake
-                if err := rows.Scan(&t.ID, &t.Number, &t.Status, &t.Note, &t.CreatedAt, &t.AppliedAt); err != nil {
+                if err := rows.Scan(&t.ID, &t.Number, &t.Status, &t.Note, &t.CreatedAt, &t.AppliedAt, &t.ItemCount); err != nil {
                         return nil, err
                 }
                 t.Items = []models.StockTakeItem{}

@@ -380,6 +380,63 @@ export interface Customer {
   updatedAt: string
 }
 
+export interface Supplier {
+  id: number
+  name: string
+  phone: string
+  email: string
+  address: string
+  notes: string
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface POItem {
+  id: number
+  poId: number
+  productId: number
+  name: string
+  sku: string
+  qty: number
+  costCents: number
+  lineTotalCents: number
+}
+
+export interface PurchaseOrder {
+  id: number
+  number: string
+  supplierId: number
+  supplierName: string
+  status: 'PENDING' | 'RECEIVED' | 'CANCELLED'
+  subtotalCents: number
+  note: string
+  items: POItem[]
+  createdAt: string
+  receivedAt: string
+}
+
+export interface StockTakeItem {
+  id: number
+  takeId: number
+  productId: number
+  name: string
+  sku: string
+  expectedQty: number
+  countedQty: number
+}
+
+export interface StockTake {
+  id: number
+  number: string
+  status: 'OPEN' | 'APPLIED' | 'CANCELLED'
+  note: string
+  items: StockTakeItem[]
+  itemCount: number
+  createdAt: string
+  appliedAt: string
+}
+
 export interface LedgerEntry {
   id: number
   customerId: number

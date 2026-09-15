@@ -11,6 +11,7 @@ import { Rotate } from './pages/Rotate'
 import { Pos } from './pages/Pos'
 import { Customers } from './pages/Customers'
 import { Inventory } from './pages/Inventory'
+import { Suppliers } from './pages/Suppliers'
 import { Orders } from './pages/Orders'
 import { DesignBoard } from './pages/DesignBoard'
 import { Shifts } from './pages/Shifts'
@@ -51,6 +52,8 @@ export function App() {
         return user.permissions.includes('design.view') ? <DesignBoard /> : <NoPerm perm="design.view" />
       case path.startsWith('/inventory'):
         return user.permissions.includes('products.view') ? <Inventory /> : <NoPerm perm="products.view" />
+      case path.startsWith('/suppliers'):
+        return user.permissions.includes('suppliers.view') ? <Suppliers /> : <NoPerm perm="suppliers.view" />
       case path.startsWith('/shifts'):
         return user.permissions.includes('shifts.manage') ? <Shifts /> : <NoPerm perm="shifts.manage" />
       case path.startsWith('/reports'):

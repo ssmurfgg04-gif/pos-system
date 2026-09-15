@@ -5,7 +5,7 @@
 
 import { ApiError, token } from '../lib/api'
 import { cartTotals } from '../lib/money'
-import { buildSeed, receiptCode, DemoDB, DemoOrder, DemoUser, DemoCustomer, DemoLedgerEntry, PERMISSION_CATALOG } from './seed'
+import { buildSeed, receiptCode, DemoDB, DemoOrder, DemoUser, DemoCustomer, DemoLedgerEntry, DemoSupplier, DemoPurchaseOrder, DemoStockTake, PERMISSION_CATALOG } from './seed'
 
 const KEY = 'pos-demo-db-v1'
 const MASK = '__SET__'
@@ -19,7 +19,7 @@ function load(): DemoDB {
     const raw = localStorage.getItem(KEY)
     if (raw) {
       const parsed = JSON.parse(raw) as DemoDB
-      if (parsed && (parsed.v === 1 || parsed.v === 2)) {
+      if (parsed && (parsed.v === 1 || parsed.v === 2 || parsed.v === 3)) {
         db = parsed
         migrateDemo(db)
         return db
@@ -67,8 +67,28 @@ function migrateDemo(d: DemoDB) {
     cashier.permissions.push('customers.view')
     dirty = true
   }
-  if (d.v < 2) {
-    d.v = 2
+  if (!Array.isArray((d as any).suppliers)) {
+    const fresh = buildSeed()
+    d.suppliers = fresh.suppliers
+    d.purchaseOrders = []
+    d.stockTakes = []
+    d.seq.supplier = fresh.seq.supplier
+    d.seq.po = 1
+    d.seq.poItem = 1
+    d.seq.take = 1
+    d.seq.takeItem = 1
+    dirty = true
+  }
+  if (d.seq.supplier === undefined) {
+    d.seq.supplier = d.suppliers.length + 1
+    d.seq.po = d.purchaseOrders.length + 1
+    d.seq.poItem = 1
+    d.seq.take = d.stockTakes.length + 1
+    d.seq.takeItem = 1
+    dirty = true
+  }
+  if (d.v < 3) {
+    d.v = 3
     dirty = true
   }
   if (dirty) persist()
@@ -243,6 +263,28 @@ function nextOrderNumber(d: DemoDB) {
   const day = new Date().toISOString().slice(0, 10)
   d.dailyOrderSeq[day] = (d.dailyOrderSeq[day] || 0) + 1
   return `ORD${day.replace(/-/g, '')}${String(d.dailyOrderSeq[day]).padStart(4, '0')}`
+}
+
+function nextDocNumber(d: DemoDB, prefix: string) {
+  const day = new Date().toISOString().slice(0, 10)
+  const key = `${prefix}:${day}`
+  d.dailyOrderSeq[key] = (d.dailyOrderSeq[key] || 0) + 1
+  return `${prefix}${day.replace(/-/g, '')}${String(d.dailyOrderSeq[key]).padStart(4, '0')}`
+}
+
+/** Weighted-average unit cost in cents, half-up (server parity). */
+function avgCost(oldStock: number, oldCost: number, recvQty: number, unitCost: number) {
+  const newStock = oldStock + recvQty
+  if (newStock <= 0 || recvQty <= 0) return unitCost
+  return Math.floor((oldStock * oldCost + recvQty * unitCost + newStock / 2) / newStock)
+}
+
+function supplierDTO(s: DemoSupplier) {
+  return { ...s }
+}
+
+function takeDTO(t: DemoStockTake) {
+  return { ...t, itemCount: t.items.length }
 }
 
 function adjustStock(productId: number, delta: number) {
@@ -907,6 +949,196 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       audit(user.id, user.username, 'CUSTOMER_ADJUST', 'customer', String(c.id), note)
       persist()
       return customerDTO(c) as T
+    }
+  }
+
+  // ---- suppliers & stock-in (mirrors the Go routes + gates) ----
+  if (m === 'GET' && p === '/suppliers') {
+    requirePerm(perms, 'suppliers.view')
+    const needle = (q.get('search') || '').trim().toLowerCase()
+    const list = d.suppliers
+      .filter((s) => !needle || s.name.toLowerCase().includes(needle) || (s.phone || '').includes(needle))
+      .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name))
+      .slice(0, 200)
+    return list.map(supplierDTO) as T
+  }
+  if (m === 'POST' && p === '/suppliers') {
+    requirePerm(perms, 'suppliers.manage')
+    const name = String(body?.name || '').trim()
+    if (!name) throw new ApiError(400, 'supplier name required')
+    const s: DemoSupplier = {
+      id: d.seq.supplier++, name, phone: String(body?.phone || '').trim(),
+      email: String(body?.email || '').trim(), address: String(body?.address || '').trim(),
+      notes: String(body?.notes || '').trim(), active: true,
+      createdAt: nowIso(), updatedAt: nowIso(),
+    }
+    d.suppliers.push(s)
+    audit(user.id, user.username, 'SUPPLIER_CREATED', 'supplier', String(s.id), name)
+    persist()
+    return supplierDTO(s) as T
+  }
+  const supMatch = p.match(/^\/suppliers\/(\d+)$/)
+  if (m === 'PUT' && supMatch) {
+    requirePerm(perms, 'suppliers.manage')
+    const s = d.suppliers.find((x) => x.id === Number(supMatch[1]))
+    if (!s) throw new ApiError(404, 'supplier not found')
+    const name = String(body?.name || '').trim()
+    if (!name) throw new ApiError(400, 'supplier name required')
+    s.name = name
+    s.phone = String(body?.phone || '').trim()
+    s.email = String(body?.email || '').trim()
+    s.address = String(body?.address || '').trim()
+    s.notes = String(body?.notes || '').trim()
+    if (body?.active !== undefined) s.active = !!body.active
+    s.updatedAt = nowIso()
+    audit(user.id, user.username, 'SUPPLIER_UPDATED', 'supplier', String(s.id), name)
+    persist()
+    return supplierDTO(s) as T
+  }
+  if (m === 'GET' && p === '/purchase-orders') {
+    requirePerm(perms, 'suppliers.view')
+    return [...d.purchaseOrders].sort((a, b) => b.id - a.id).slice(0, 200) as T
+  }
+  if (m === 'POST' && p === '/purchase-orders') {
+    requirePerm(perms, 'suppliers.manage')
+    const sup = d.suppliers.find((x) => x.id === Number(body?.supplierId))
+    if (!sup) throw new ApiError(404, 'supplier not found')
+    if (!sup.active) throw new ApiError(409, 'supplier is inactive')
+    const items = Array.isArray(body?.items) ? body.items : []
+    if (items.length === 0) throw new ApiError(400, 'purchase order needs at least one line')
+    const o: DemoPurchaseOrder = {
+      id: d.seq.po++, number: nextDocNumber(d, 'PO'), supplierId: sup.id, supplierName: sup.name,
+      status: 'PENDING', subtotalCents: 0, note: String(body?.note || ''),
+      items: [], createdAt: nowIso(), receivedAt: '',
+    }
+    for (const it of items) {
+      const prod = d.products.find((x) => x.id === Number(it.productId))
+      if (!prod || !prod.active) throw new ApiError(400, `product ${it.productId} not found or inactive`)
+      const qty = Math.max(1, Math.round(Number(it.qty)) || 0)
+      if (!(qty > 0)) throw new ApiError(400, 'quantity must be positive')
+      const cost = Math.max(0, Math.round(Number(it.costCents)) || 0)
+      o.items.push({
+        id: d.seq.poItem++, poId: o.id, productId: prod.id, name: prod.name, sku: prod.sku,
+        qty, costCents: cost, lineTotalCents: qty * cost,
+      })
+    }
+    o.subtotalCents = o.items.reduce((s, i) => s + i.lineTotalCents, 0)
+    d.purchaseOrders.push(o)
+    audit(user.id, user.username, 'PO_CREATED', 'purchase_order', o.number, `total ${o.subtotalCents}`)
+    persist()
+    return o as T
+  }
+  const poMatch = p.match(/^\/purchase-orders\/(\d+)(\/(receive|cancel))?$/)
+  if (poMatch) {
+    const o = d.purchaseOrders.find((x) => x.id === Number(poMatch[1]))
+    if (!o) throw new ApiError(404, 'purchase order not found')
+    const op = poMatch[3] || ''
+    if (m === 'GET' && !op) {
+      requirePerm(perms, 'suppliers.view')
+      return o as T
+    }
+    if (m === 'POST' && op === 'receive') {
+      requirePerm(perms, 'suppliers.manage')
+      if (o.status !== 'PENDING') throw new ApiError(409, 'only pending orders receive')
+      for (const it of o.items) {
+        const prod = d.products.find((x) => x.id === it.productId)
+        if (!prod) throw new ApiError(400, `product ${it.productId} not found`)
+        if (prod.trackStock) {
+          prod.stockQty += it.qty
+          prod.costCents = avgCost(prod.stockQty - it.qty, prod.costCents, it.qty, it.costCents)
+        }
+      }
+      o.status = 'RECEIVED'
+      o.receivedAt = nowIso()
+      audit(user.id, user.username, 'PO_RECEIVED', 'purchase_order', o.number, `total ${o.subtotalCents}`)
+      persist()
+      return o as T
+    }
+    if (m === 'POST' && op === 'cancel') {
+      requirePerm(perms, 'suppliers.manage')
+      if (o.status !== 'PENDING') throw new ApiError(409, 'only pending orders cancel')
+      o.status = 'CANCELLED'
+      audit(user.id, user.username, 'PO_CANCELLED', 'purchase_order', o.number, String(body?.reason || ''))
+      persist()
+      return o as T
+    }
+  }
+  if (m === 'GET' && p === '/stock-takes') {
+    requirePerm(perms, 'suppliers.view')
+    return [...d.stockTakes].sort((a, b) => b.id - a.id).slice(0, 200).map(takeDTO) as T
+  }
+  if (m === 'POST' && p === '/stock-takes') {
+    requirePerm(perms, 'suppliers.manage')
+    const ids: number[] = Array.isArray(body?.productIds) ? body.productIds.map(Number) : []
+    let prods = d.products.filter((x) => x.active && x.trackStock)
+    if (ids.length > 0) {
+      prods = ids.map((id) => {
+        const prod = d.products.find((x) => x.id === id)
+        if (!prod) throw new ApiError(400, `product ${id} not found`)
+        return prod
+      })
+    }
+    const t: DemoStockTake = {
+      id: d.seq.take++, number: nextDocNumber(d, 'STK'), status: 'OPEN',
+      note: String(body?.note || ''), items: [], itemCount: 0,
+      createdAt: nowIso(), appliedAt: '',
+    }
+    for (const prod of prods) {
+      t.items.push({
+        id: d.seq.takeItem++, takeId: t.id, productId: prod.id, name: prod.name, sku: prod.sku,
+        expectedQty: prod.stockQty, countedQty: prod.stockQty,
+      })
+    }
+    t.itemCount = t.items.length
+    d.stockTakes.push(t)
+    audit(user.id, user.username, 'TAKE_CREATED', 'stock_take', t.number, t.note)
+    persist()
+    return t as T
+  }
+  const takeMatch = p.match(/^\/stock-takes\/(\d+)(\/(count|apply|cancel))?$/)
+  if (takeMatch) {
+    const t = d.stockTakes.find((x) => x.id === Number(takeMatch[1]))
+    if (!t) throw new ApiError(404, 'stock take not found')
+    const op = takeMatch[3] || ''
+    if (m === 'GET' && !op) {
+      requirePerm(perms, 'suppliers.view')
+      return t as T
+    }
+    if (m === 'POST' && op === 'count') {
+      requirePerm(perms, 'suppliers.manage')
+      if (t.status !== 'OPEN') throw new ApiError(409, 'only open takes take counts')
+      const counts = body?.counts || {}
+      for (const [pid, qty] of Object.entries(counts)) {
+        const line = t.items.find((i) => i.productId === Number(pid))
+        if (!line) throw new ApiError(400, `product ${pid} is not on this take`)
+        const q = Math.round(Number(qty))
+        if (!(q >= 0)) throw new ApiError(400, 'count cannot be negative')
+        line.countedQty = q
+      }
+      audit(user.id, user.username, 'TAKE_COUNTED', 'stock_take', String(t.id), `${Object.keys(counts).length} lines`)
+      persist()
+      return t as T
+    }
+    if (m === 'POST' && op === 'apply') {
+      requirePerm(perms, 'suppliers.manage')
+      if (t.status !== 'OPEN') throw new ApiError(409, 'only open takes apply')
+      for (const line of t.items) {
+        const prod = d.products.find((x) => x.id === line.productId)
+        if (prod && prod.trackStock) prod.stockQty = line.countedQty
+      }
+      t.status = 'APPLIED'
+      t.appliedAt = nowIso()
+      audit(user.id, user.username, 'TAKE_APPLIED', 'stock_take', t.number, `${t.items.length} lines`)
+      persist()
+      return t as T
+    }
+    if (m === 'POST' && op === 'cancel') {
+      requirePerm(perms, 'suppliers.manage')
+      if (t.status !== 'OPEN') throw new ApiError(409, 'only open takes cancel')
+      t.status = 'CANCELLED'
+      audit(user.id, user.username, 'TAKE_CANCELLED', 'stock_take', String(t.id), String(body?.reason || ''))
+      persist()
+      return t as T
     }
   }
 

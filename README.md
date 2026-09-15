@@ -22,6 +22,9 @@ power cut never corrupts a till.
   **Admin** (everything), **Cashier** (sell, void, manual M-Pesa entry,
   shifts, customer tabs), **Designer** (design/production board).
   Enforcement is server-side only; the UI just hides what you can't do.
+- **Suppliers & stock-in** — supplier records, purchase orders that post
+  stock with weighted-average costing on receive, and stock takes that
+  reconcile counted vs expected with a per-line variance report.
 - **Customer tabs & credit** — regulars take goods now and pay later.
   Each customer has a credit limit (0 = cash only), a live balance, and
   a loyalty balance (1 pt per 100 KES of settled sales). The till shows
