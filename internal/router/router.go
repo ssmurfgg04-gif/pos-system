@@ -132,6 +132,24 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         // Walk-in till payments ride pos.sell: cashiers take them all day.
         authd.POST("/customers/:id/payments", perm("pos.sell"), h.RecordCustomerPayment)
 
+        // Suppliers & stock-in.
+        supv := authd.Group("", perm("suppliers.view"))
+        supv.GET("/suppliers", h.ListSuppliers)
+        supv.GET("/purchase-orders", h.ListPOs)
+        supv.GET("/purchase-orders/:id", h.GetPO)
+        supv.GET("/stock-takes", h.ListTakes)
+        supv.GET("/stock-takes/:id", h.GetTake)
+        supm := authd.Group("", perm("suppliers.manage"))
+        supm.POST("/suppliers", h.CreateSupplier)
+        supm.PUT("/suppliers/:id", h.UpdateSupplier)
+        supm.POST("/purchase-orders", h.CreatePO)
+        supm.POST("/purchase-orders/:id/receive", h.ReceivePO)
+        supm.POST("/purchase-orders/:id/cancel", h.CancelPO)
+        supm.POST("/stock-takes", h.CreateTake)
+        supm.POST("/stock-takes/:id/count", h.CountTake)
+        supm.POST("/stock-takes/:id/apply", h.ApplyTake)
+        supm.POST("/stock-takes/:id/cancel", h.CancelTake)
+
         // Users & roles.
         users := authd.Group("", perm("users.manage"))
         users.GET("/users", h.ListUsers)
