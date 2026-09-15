@@ -224,7 +224,7 @@ const ALLOWED_KEYS = new Set([
   'payment_mode', 'till_number', 'paybill_number', 'mpesa_env', 'mpesa_shortcode',
   'mpesa_passkey', 'mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_callback_url',
   'mpesa_mock_delay_ms', 'mpesa_mock_result_code', 'printer_target', 'printer_width',
-  'auto_print_receipts', 'low_stock_threshold', 'backup_auto', 'backup_keep',
+  'auto_print_receipts', 'receipt_logo', 'low_stock_threshold', 'backup_auto', 'backup_keep',
 ])
 
 function isSecretKey(k: string) {
@@ -1140,6 +1140,13 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       persist()
       return t as T
     }
+  }
+
+  if (m === 'POST' && p === '/printer/kick') {
+    requirePerm(perms, 'printer.test')
+    // No hardware in the demo: surface the same 422 the server returns
+    // with no target configured.
+    throw new ApiError(422, 'no printer target configured')
   }
 
   // reports

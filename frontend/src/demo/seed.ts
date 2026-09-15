@@ -279,6 +279,7 @@ const DEMO_SETTINGS: Record<string, string> = {
   printer_target: '',
   printer_width: '80',
   auto_print_receipts: 'true',
+  receipt_logo: 'true',
   low_stock_threshold: '5',
   backup_auto: 'true',
   backup_keep: '7',

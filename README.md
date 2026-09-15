@@ -52,7 +52,9 @@ power cut never corrupts a till.
   server replays idempotently, so double-submits are harmless.
 - **ESC/POS printing** — 80mm/58mm receipts over TCP (`tcp://host:9100`)
   or USB (`file:///dev/usb/lp0`), retry queue with backoff, browser-print
-  fallback at `/api/v1/orders/{id}/receipt`.
+  fallback at `/api/v1/orders/{id}/receipt`. The brand logo prints atop
+  every receipt (toggleable), and the cash drawer kicks automatically on
+  cash sales (plus a test button in Settings → Printer).
 - **Shifts & reconciliation** — open with a float, close counting the
   drawer; expected cash is computed from completed cash payments, variance
   highlighted. Full audit log of who did what.

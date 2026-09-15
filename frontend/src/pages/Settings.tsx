@@ -224,7 +224,7 @@ export function Settings() {
               />
               Auto-print receipts when payment completes
             </label>
-            <div className="sm:col-span-2">
+            <div className="sm:col-span-2 flex flex-wrap gap-2">
               <Button
                 variant="secondary"
                 onClick={async () => {
@@ -239,7 +239,29 @@ export function Settings() {
                 <Printer size={14} strokeWidth={2.5} aria-hidden />
                 Send test print
               </Button>
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  try {
+                    await api.post('/api/v1/printer/kick')
+                    toast.success('Drawer kicked', 'Till should have popped')
+                  } catch (e: any) {
+                    toast.error('Kick failed', e?.message)
+                  }
+                }}
+              >
+                Kick cash drawer
+              </Button>
             </div>
+            <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={(values.receipt_logo ?? 'true') === 'true'}
+                onChange={(e) => set('receipt_logo', String(e.target.checked))}
+                className="w-5 h-5 accent-[#10B981]"
+              />
+              Print brand logo on receipts (when a logo is uploaded)
+            </label>
           </div>
         )}
 
