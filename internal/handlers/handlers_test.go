@@ -30,7 +30,7 @@ import (
 // newTestServer boots the full app on a temp SQLite file with the mock
 // M-Pesa provider configured fast (200ms) and returns (engine, adminToken,
 // cashierToken, designerToken).
-func newTestServer(t *testing.T) (*gin.Engine, string, string, string) {
+func newTestEngine(t *testing.T) *gin.Engine {
         t.Helper()
         gin.SetMode(gin.TestMode)
         dir := t.TempDir()
@@ -61,11 +61,43 @@ func newTestServer(t *testing.T) (*gin.Engine, string, string, string) {
         svc := services.New(db, st, hub, pw)
         h := handlers.New(db, st, svc, hub, pw)
         engine := router.New(h, nil)
+        return engine
+}
 
+// newTestServer boots the engine and rotates all seeded credentials through
+// the real self-service path, so tests exercise the post-rotation steady
+// state. Tests for rotation itself use newTestEngine directly.
+func newTestServer(t *testing.T) (*gin.Engine, string, string, string) {
+        t.Helper()
+        engine := newTestEngine(t)
         admin := login(t, engine, "admin", "admin123")
         cashier := login(t, engine, "cashier", "cashier123")
         designer := login(t, engine, "designer", "designer123")
+        rotateFresh(t, engine, admin)
+        rotateFresh(t, engine, cashier)
+        rotateFresh(t, engine, designer)
         return engine, admin, cashier, designer
+}
+
+// rotatedPassword is what rotateFresh sets, so tests needing fresh logins
+// after newTestServer know the current seeded-user password.
+const rotatedPassword = "rotated-fresh-1"
+
+// rotateFresh clears must_rotate for a token holder (seeded logins start
+// flagged). Self-service rotation needs no extra permission.
+func rotateFresh(t *testing.T, engine *gin.Engine, token string) {
+        t.Helper()
+        me := do(t, engine, "GET", "/api/v1/me", token, nil)
+        if me.Code != 200 {
+                t.Fatalf("me: %d", me.Code)
+        }
+        id := itoa64(dataMap(t, me)["id"])
+        w := do(t, engine, "PUT", "/api/v1/users/"+id+"/password", token, map[string]any{
+                "password": rotatedPassword,
+        })
+        if w.Code != 200 {
+                t.Fatalf("rotate: %d %s", w.Code, w.Body.String())
+        }
 }
 
 func login(t *testing.T, engine *gin.Engine, user, pass string) string {
@@ -340,8 +372,9 @@ func TestPriceOverridePermissionGate(t *testing.T) {
         if w.Code != 403 {
                 t.Fatalf("cashier override should 403, got %d %s", w.Code, w.Body.String())
         }
-        // Admin override is honored (log in on the same server).
-        admin := login(t, engine, "admin", "admin123")
+        // Admin override is honored (log in on the same server; seeded
+        // password already rotated by newTestServer).
+        admin := login(t, engine, "admin", rotatedPassword)
         w = do(t, engine, "POST", "/api/v1/orders/checkout", admin, map[string]any{
                 "items": []map[string]any{{"productId": 1, "qty": 1, "unitPriceCents": 1000}},
                 "paymentMethod": "cash",
@@ -875,8 +908,8 @@ func TestReportsDaily(t *testing.T) {
                 t.Fatalf("cashier reports should 403, got %d", w.Code)
         }
         // Do a designer login for a token that lacks it too, then admin? We
-        // didn't keep admin — log in.
-        admin := login(t, engine, "admin", "admin123")
+        // didn't keep admin — log in (seeded password already rotated).
+        admin := login(t, engine, "admin", rotatedPassword)
         w = do(t, engine, "GET", "/api/v1/reports/daily", admin, nil)
         if w.Code != 200 {
                 t.Fatalf("admin reports: %d %s", w.Code, w.Body.String())
@@ -999,6 +1032,42 @@ func TestOfflineSyncReplaySafety(t *testing.T) {
         list, _ := out["data"].([]any)
         if list[0].(map[string]any)["stockQty"].(float64) != 148 {
                 t.Fatalf("stock after 3 replays: %v", list[0].(map[string]any)["stockQty"])
+        }
+}
+
+// Seeded credentials force rotation: login flags it, other endpoints 403,
+// rotating clears it.
+func TestForcedRotation(t *testing.T) {
+        engine := newTestEngine(t)
+        admin := login(t, engine, "admin", "admin123")
+        w := do(t, engine, "POST", "/api/v1/auth/login", "", map[string]any{
+                "username": "admin", "password": "admin123",
+        })
+        if w.Code != 200 {
+                t.Fatalf("login: %d %s", w.Code, w.Body.String())
+        }
+        user := dataMap(t, w)["user"].(map[string]any)
+        if user["mustRotate"] != true {
+                t.Fatal("seeded admin login must flag mustRotate")
+        }
+        w = do(t, engine, "GET", "/api/v1/products", admin, nil)
+        if w.Code != 403 {
+                t.Fatalf("pre-rotation products should 403, got %d", w.Code)
+        }
+        me := do(t, engine, "GET", "/api/v1/me", admin, nil)
+        if me.Code != 200 {
+                t.Fatalf("me must stay reachable, got %d", me.Code)
+        }
+        adminID := int64(dataMap(t, me)["id"].(float64))
+        w = do(t, engine, "PUT", "/api/v1/users/"+itoa64(adminID)+"/password", admin, map[string]any{
+                "password": "new-secret-1",
+        })
+        if w.Code != 200 {
+                t.Fatalf("rotate password: %d %s", w.Code, w.Body.String())
+        }
+        w = do(t, engine, "GET", "/api/v1/products", admin, nil)
+        if w.Code != 200 {
+                t.Fatalf("post-rotation products should 200, got %d", w.Code)
         }
 }
 

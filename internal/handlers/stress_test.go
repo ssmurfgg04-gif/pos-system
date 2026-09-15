@@ -131,7 +131,8 @@ func TestStressLoginBurst(t *testing.T) {
                         defer wg.Done()
                         <-start
                         w := do(t, engine, "POST", "/api/v1/auth/login", "", map[string]any{
-                                "username": "cashier", "password": "cashier123",
+                                // newTestServer rotates seeded credentials.
+                                "username": "cashier", "password": rotatedPassword,
                         })
                         switch w.Code {
                         case 200:

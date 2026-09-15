@@ -130,11 +130,15 @@ type passwordBody struct {
         Password string `json:"password" binding:"required,min=6"`
 }
 
-// SetPassword (users.manage).
+// SetPassword (self-service, or users.manage for others).
 func (h *H) SetPassword(c *gin.Context) {
         p := h.principal(c)
         id, ok := h.pathID(c, "id")
         if !ok {
+                return
+        }
+        if id != p.ID && !p.Can("users.manage") {
+                h.fail(c, 403, "missing permission: users.manage")
                 return
         }
         var body passwordBody
@@ -147,7 +151,7 @@ func (h *H) SetPassword(c *gin.Context) {
                 h.fail(c, 500, err.Error())
                 return
         }
-        res, err := h.DB.Exec(h.DB.Rebind(`UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, id)
+        res, err := h.DB.Exec(h.DB.Rebind(`UPDATE users SET password_hash = ?, must_rotate = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, id)
         if err != nil || n(res) != 1 {
                 h.fail(c, 404, "user not found")
                 return
@@ -160,11 +164,15 @@ type pinBody2 struct {
         PIN string `json:"pin" binding:"required,len=4"`
 }
 
-// SetPIN (users.manage).
+// SetPIN (self-service, or users.manage for others).
 func (h *H) SetPIN(c *gin.Context) {
         p := h.principal(c)
         id, ok := h.pathID(c, "id")
         if !ok {
+                return
+        }
+        if id != p.ID && !p.Can("users.manage") {
+                h.fail(c, 403, "missing permission: users.manage")
                 return
         }
         var body pinBody2
@@ -178,7 +186,7 @@ func (h *H) SetPIN(c *gin.Context) {
                 return
         }
         res, err := h.DB.Exec(h.DB.Rebind(
-                `UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '', updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, id)
+                `UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '', must_rotate = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, id)
         if err != nil || n(res) != 1 {
                 h.fail(c, 404, "user not found")
                 return

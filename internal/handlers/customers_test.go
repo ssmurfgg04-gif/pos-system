@@ -24,7 +24,7 @@ func itoa64(v any) string {
 // Tab lifecycle: charge within limit, reject over limit, settle in cash,
 // balance returns to zero with loyalty earned.
 func TestCustomerTabLifecycle(t *testing.T) {
-	engine, admin, cashier, _ := newTestServer(t)
+        engine, admin, cashier, _ := newTestServer(t)
 
 	// Cashier cannot manage customers but can view them.
 	w := do(t, engine, "POST", "/api/v1/customers", cashier, map[string]any{"name": "X"})
@@ -119,7 +119,7 @@ func TestCustomerTabLifecycle(t *testing.T) {
 // Walk-in payment reduces balance; overpayment rejected. Void of a tab
 // reverses its ledger charge.
 func TestCustomerWalkInPaymentAndVoidReversal(t *testing.T) {
-	engine, admin, cashier, _ := newTestServer(t)
+        engine, admin, cashier, _ := newTestServer(t)
 
 	w := do(t, engine, "POST", "/api/v1/customers", admin, map[string]any{
 		"name": "Juma", "creditLimitCents": 100000,
