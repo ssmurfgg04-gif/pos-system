@@ -49,6 +49,12 @@ TOKEN=$(curl -s -m 3 -X POST $URL/api/v1/auth/login -H 'Content-Type: applicatio
   -d '{"username":"admin","password":"admin123"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['token'])" 2>/dev/null)
 [ -n "$TOKEN" ] ; ck $? "admin login"
 
+# seeded creds must rotate before gated endpoints (rotation gate contract)
+AID=$(curl -s -m 3 $URL/api/v1/me -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])" 2>/dev/null)
+curl -s -m 3 $URL/api/v1/products -H "Authorization: Bearer $TOKEN" | grep -q 'rotation required' ; ck $? "gated endpoint 403s pre-rotation"
+curl -s -m 3 -X PUT $URL/api/v1/users/$AID/password -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"password":"e2e-rotated-1"}' | grep -q '"updated":true' ; ck $? "self rotation clears flag"
+
 # cash sale
 PROD=$(curl -s -m 3 $URL/api/v1/products -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json;print(json.load(sys.stdin)['data'][0]['id'])" 2>/dev/null)
 SALE=$(curl -s -m 5 -X POST $URL/api/v1/orders/checkout -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \

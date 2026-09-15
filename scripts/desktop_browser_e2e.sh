@@ -20,6 +20,19 @@ $AB open "$URL" >/dev/null 2>&1
 $AB set viewport 1440 900 >/dev/null 2>&1
 sleep 2
 
+# 1b. first-run gates, API contract (rotation + onboarding flags).
+TOKEN=$(curl -s -m 2 -X POST $URL/api/v1/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin123"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['token'])")
+[ -n "$TOKEN" ] ; ck $? "seeded login issues token"
+ME=$(curl -s -m 2 $URL/api/v1/me -H "Authorization: Bearer $TOKEN")
+echo "$ME" | grep -q '"mustRotate":true' ; ck $? "seeded admin flagged mustRotate"
+curl -s -m 2 $URL/api/v1/products -H "Authorization: Bearer $TOKEN" | grep -q 'rotation required' ; ck $? "gated endpoint 403s pre-rotation"
+AID=$(echo "$ME" | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['id'])")
+curl -s -m 2 -X PUT $URL/api/v1/users/$AID/password -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"password":"e2e-admin-1"}' | grep -q '"updated":true' ; ck $? "self rotation clears flag"
+curl -s -m 2 $URL/api/v1/settings -H "Authorization: Bearer $TOKEN" | grep -q '"onboarding_done":"false"' ; ck $? "fresh box reports onboarding pending"
+curl -s -m 2 -X PUT $URL/api/v1/settings -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"values":{"onboarding_done":"true"}}' | grep -q '"onboarding_done":"true"' ; ck $? "onboarding completes via API"
+# Browser flow below uses the rotated password on an onboarded box.
+E2E_PW="e2e-admin-1"
+
 # 1. first-run hint
 $AB snapshot -i > /tmp/snap-login.txt 2>&1
 grep -qi "First run" /tmp/snap-login.txt ; ck $? "login shows first-run starter-login hint"
@@ -31,7 +44,7 @@ echo "refs: user=$U pass=$P submit=$S"
 
 # 2. admin login → Quit button
 $AB fill @$U "admin" >/dev/null 2>&1
-$AB fill @$P "admin123" >/dev/null 2>&1
+$AB fill @$P "${E2E_PW:-admin123}" >/dev/null 2>&1
 $AB click @$S >/dev/null 2>&1
 sleep 3
 $AB snapshot -i > /tmp/snap-admin.txt 2>&1
@@ -59,13 +72,18 @@ PID2=$!
 for i in $(seq 1 40); do curl -s -m 1 $URL/api/v1/health >/dev/null 2>&1 && break; sleep 0.25; done
 $AB open "$URL" >/dev/null 2>&1
 sleep 2
+# Cashier still on seeded creds → rotate via API so the browser exercises
+# the steady-state shell (rotation itself is covered in section 1b).
+CTOK=$(curl -s -m 2 -X POST $URL/api/v1/auth/login -H 'Content-Type: application/json' -d '{"username":"cashier","password":"cashier123"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['token'])")
+CID=$(curl -s -m 2 $URL/api/v1/me -H "Authorization: Bearer $CTOK" | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['id'])")
+curl -s -m 2 -X PUT $URL/api/v1/users/$CID/password -H "Authorization: Bearer $CTOK" -H 'Content-Type: application/json' -d '{"password":"e2e-cashier-1"}' | grep -q '"updated":true' ; ck $? "cashier rotation via API"
 $AB snapshot -i > /tmp/snap-login2.txt 2>&1
 grep -qi "First run" /tmp/snap-login2.txt ; [ $? -ne 0 ] ; ck $? "second run: no first-run hint"
 U2=$(grep -o 'textbox "Username" \[required, ref=e[0-9]*\]' /tmp/snap-login2.txt | grep -o 'e[0-9]*$')
 P2=$(grep -o 'textbox "Password" \[required, ref=e[0-9]*\]' /tmp/snap-login2.txt | grep -o 'e[0-9]*$')
 S2=$(grep -o 'button "Sign in" \[ref=e[0-9]*\]' /tmp/snap-login2.txt | grep -o 'e[0-9]*$')
 $AB fill @$U2 "cashier" >/dev/null 2>&1
-$AB fill @$P2 "cashier123" >/dev/null 2>&1
+$AB fill @$P2 "e2e-cashier-1" >/dev/null 2>&1
 $AB click @$S2 >/dev/null 2>&1
 sleep 3
 $AB snapshot -i > /tmp/snap-cashier.txt 2>&1

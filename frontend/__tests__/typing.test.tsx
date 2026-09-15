@@ -32,6 +32,48 @@ function typeText(el: HTMLInputElement, text: string) {
   }
 }
 
+async function waitForText(t: string) {
+  for (let i = 0; i < 60; i++) {
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+    if (document.body.innerHTML.includes(t)) return
+  }
+  throw new Error(`timed out waiting for ${t}`)
+}
+
+async function clickButton(label: string) {
+  for (let i = 0; i < 60; i++) {
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes(label))
+    if (btn && !(btn as HTMLButtonElement).disabled) {
+      await act(async () => { btn.click() })
+      return
+    }
+  }
+  throw new Error(`timed out waiting for button ${label}`)
+}
+
+function fillPlaceholder(placeholder: string, text: string) {
+  const el = document.querySelector(`input[placeholder="${placeholder}"]`) as HTMLInputElement
+  expect(el).toBeTruthy()
+  typeText(el, text)
+}
+
+// Walks the five onboarding wizard steps with minimal valid input.
+async function walkOnboarding() {
+  await waitForText('Set up your shop')
+  fillPlaceholder('e.g. Zawadi Prints', 'Test Shop')
+  await clickButton('Save & continue') // store
+  await waitForText('Skip for now')
+  await clickButton('Skip for now') // logo skipped → receipt step
+  await waitForText('Receipt footer')
+  await clickButton('Save & continue') // receipt (defaults kept)
+  await clickButton('Save & continue') // printer (blank target kept)
+  await waitForText('Your admin login')
+  fillPlaceholder('6+ characters', 'admin123')
+  fillPlaceholder('4 digits', '1234')
+  await clickButton('Open shop') // staff → done
+}
+
 describe('typing repro', () => {
   test('typing a username on Login does not crash', async () => {
     const root = createRoot(document.getElementById('root')!)
@@ -86,22 +128,20 @@ describe('typing repro', () => {
     }
     expect(useAuth.getState().user?.username).toBe('admin')
     // Seeded logins must rotate first: complete the Rotate screen.
-    for (let i = 0; i < 50; i++) {
-      await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
-      if (document.body.innerHTML.includes('Set your login details')) break
-    }
+    await waitForText('Set your login details')
     const pwBox = document.querySelector('input[placeholder="••••••"]') as HTMLInputElement
     const pinBox = document.querySelector('input[placeholder="••••"]') as HTMLInputElement
     expect(pwBox).toBeTruthy()
     typeText(pwBox, 'admin123')
     typeText(pinBox, '1234')
-    const saveBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Save & continue'))!
-    await act(async () => { saveBtn.click() })
+    await clickButton('Save & continue')
     for (let i = 0; i < 50; i++) {
       await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
       if (useAuth.getState().user && !useAuth.getState().user!.mustRotate) break
     }
     expect(useAuth.getState().user?.mustRotate).toBe(false)
+    // Fresh demo boxes onboard next: walk the five wizard steps.
+    await walkOnboarding()
     // Admins land on /reports by design; go to the sell screen explicitly.
     const { navigate } = await import('../src/lib/router')
     await act(async () => { navigate('/') })
