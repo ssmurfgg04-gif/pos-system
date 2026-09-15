@@ -314,6 +314,15 @@ describe('demo tabs & credit parity', () => {
   })
 })
 
+describe('demo printer parity', () => {
+  it('kick needs the printer permission and reports no target', async () => {
+    await login('cashier', 'cashier123')
+    await expect(demoRequest('POST', '/api/v1/printer/kick')).rejects.toMatchObject({ status: 403 })
+    await login('admin', 'admin123')
+    await expect(demoRequest('POST', '/api/v1/printer/kick')).rejects.toMatchObject({ status: 422 })
+  })
+})
+
 describe('demo suppliers & stock-in parity', () => {
   it('PO receive posts stock with weighted-average cost', async () => {
     await login('admin', 'admin123')
