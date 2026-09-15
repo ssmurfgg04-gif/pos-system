@@ -4,7 +4,7 @@
 // audit log, and System (backups + demo data reset).
 
 import { useEffect, useRef, useState } from 'react'
-import { api, AuditEntry, BackupResult, backendMode } from '../lib/api'
+import { api, AuditEntry, BackupResult, OffsiteStatus, backendMode } from '../lib/api'
 import { resetDemo } from '../demo/backend'
 import { useBranding } from '../stores/branding'
 import { Button, Card, Field, Input, Select, Spinner, Table, Tabs, Textarea } from '../components/ui'
@@ -21,6 +21,7 @@ export function Settings() {
   const [audit, setAudit] = useState<AuditEntry[] | null>(null)
   const [backups, setBackups] = useState<BackupResult[] | null>(null)
   const [backing, setBacking] = useState(false)
+  const [offsite, setOffsite] = useState<OffsiteStatus | null>(null)
   const [demo, setDemo] = useState(false)
 
   useEffect(() => {
@@ -44,6 +45,9 @@ export function Settings() {
     }
     if (tab === 'system' && !backups) {
       api.get<BackupResult[]>('/api/v1/system/backups').then(setBackups).catch(() => setBackups([]))
+    }
+    if (tab === 'system' && !offsite) {
+      api.get<OffsiteStatus>('/api/v1/system/offsite').then(setOffsite).catch(() => setOffsite(null))
     }
   }, [tab])
 
@@ -339,6 +343,60 @@ export function Settings() {
               <HardDriveDownload size={13} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
               Snapshots are full SQLite databases — copy the backups folder anywhere and the app can restore from it directly.
             </p>
+            <div className="sm:col-span-2 border-t-2 border-line pt-3">
+              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Off-site backup (encrypted, automatic)</p>
+              <p className="text-[13px] text-ink-muted mb-3">
+                Every snapshot is encrypted on this machine and pushed to your own S3-compatible storage
+                (Cloudflare R2 free tier works). Uploads retry by themselves — nobody has to be around.
+                <strong className="text-danger-text"> Keep the passphrase somewhere safe: without it the copies cannot be opened.</strong>
+              </p>
+            </div>
+            <Field label="Off-site backup">
+              <Select value={values.offsite_enabled ?? 'false'} onChange={(e) => set('offsite_enabled', e.target.value)}>
+                <option value="false">Disabled</option>
+                <option value="true">Enabled — push after every snapshot</option>
+              </Select>
+            </Field>
+            <Field label="Keep last N remote copies">
+              <Input value={values.offsite_keep ?? '30'} onChange={(e) => set('offsite_keep', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
+            </Field>
+            <Field label="Endpoint">
+              <Input value={values.offsite_endpoint ?? ''} onChange={(e) => set('offsite_endpoint', e.target.value.trim())} placeholder="https://<account>.r2.cloudflarestorage.com" className="font-mono" />
+            </Field>
+            <Field label="Bucket">
+              <Input value={values.offsite_bucket ?? ''} onChange={(e) => set('offsite_bucket', e.target.value.trim())} placeholder="ledgerpos-backups" className="font-mono" />
+            </Field>
+            <Field label="Region">
+              <Input value={values.offsite_region ?? 'auto'} onChange={(e) => set('offsite_region', e.target.value.trim())} placeholder="auto" className="font-mono" />
+            </Field>
+            <Field label="Key prefix">
+              <Input value={values.offsite_prefix ?? ''} onChange={(e) => set('offsite_prefix', e.target.value.trim())} placeholder="Defaults to this machine's name" className="font-mono" />
+            </Field>
+            <Field label="Access key">
+              <Input value={values.offsite_access_key ?? ''} onChange={(e) => set('offsite_access_key', e.target.value.trim())} className="font-mono" />
+            </Field>
+            <Field label="Secret key">
+              <Input value={values.offsite_secret_key ?? ''} onChange={(e) => set('offsite_secret_key', e.target.value)} type="password" className="font-mono" />
+            </Field>
+            <Field label="Backup passphrase" hint="Encrypts every copy. Shows as __SET__ once saved — write it down now.">
+              <Input value={values.offsite_passphrase ?? ''} onChange={(e) => set('offsite_passphrase', e.target.value)} type="password" className="font-mono" />
+            </Field>
+            <div className="sm:col-span-2">
+              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Upload status</p>
+              {!offsite ? (
+                <div className="py-4 flex justify-center"><Spinner /></div>
+              ) : !offsite.enabled ? (
+                <p className="text-sm text-ink-muted">Off-site is disabled — enable it above and save.</p>
+              ) : (
+                <div className="text-[13px] space-y-1">
+                  {offsite.pending > 0 && <p className="font-bold text-pending-text">{offsite.pending} upload(s) queued — retrying automatically.</p>}
+                  {offsite.lastOk && <p className="text-paid-text">Last upload: <span className="font-mono text-[12px]">{offsite.lastOk}</span> ({offsite.lastAt ? new Date(offsite.lastAt).toLocaleString() : ''})</p>}
+                  {offsite.lastError && <p className="text-danger-text font-semibold">Last error: {offsite.lastError}</p>}
+                  {!offsite.lastOk && !offsite.lastError && offsite.pending === 0 && <p className="text-ink-muted">No uploads yet — take a backup above.</p>}
+                  <Button size="sm" variant="ghost" onClick={() => api.get<OffsiteStatus>('/api/v1/system/offsite').then(setOffsite).catch(() => undefined)}>Refresh status</Button>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

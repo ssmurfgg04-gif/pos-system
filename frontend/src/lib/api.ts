@@ -283,6 +283,14 @@ export interface CheckoutRequest {
   clientUuid?: string
 }
 
+export interface OffsiteStatus {
+  enabled: boolean
+  pending: number
+  lastOk: string
+  lastError: string
+  lastAt: string
+}
+
 export interface Shift {
   id: number
   userId: number
