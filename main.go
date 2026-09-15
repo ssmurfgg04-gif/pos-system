@@ -3,7 +3,9 @@ package main
 import (
         "context"
         "embed"
+        "flag"
         "fmt"
+        "io"
         "io/fs"
         "log"
         "net"
@@ -41,7 +43,10 @@ const usage = `usage:
   ledgerpos serve           server/appliance mode: env-driven (PORT, DB_PATH,
                             DB_DRIVER, POSTGRES_DSN, MDNS_ENABLED, …), binds :PORT
   ledgerpos uninstall       remove the desktop app (shortcuts, registry, files)
-  ledgerpos version         print build version`
+  ledgerpos version         print build version
+  ledgerpos restore-backup  download + decrypt an off-site snapshot:
+                            --endpoint URL --bucket NAME --key KEY
+                            --passphrase PASS [--out FILE] [--force] [--list]`
 
 func main() {
         args := os.Args[1:]
@@ -56,6 +61,8 @@ func main() {
                 os.Exit(runUninstall())
         case "version", "--version", "-v":
                 fmt.Printf("%s %s (%s/%s)\n", appName, version, runtimeGOOS, runtimeGOARCH)
+        case "restore-backup":
+                os.Exit(runRestoreBackup(args[1:]))
         case "help", "--help", "-h":
                 fmt.Println(usage)
         default:
@@ -199,4 +206,107 @@ func atoi(s string) int {
                 return 0
         }
         return n
+}
+
+// runRestoreBackup downloads (latest or named key) and decrypts an off-site
+// snapshot. Flags only — scriptable for a dead-box recovery.
+func runRestoreBackup(args []string) int {
+        fs := flag.NewFlagSet("restore-backup", flag.ContinueOnError)
+        endpoint := fs.String("endpoint", "", "S3-compatible endpoint URL")
+        bucket := fs.String("bucket", "", "bucket name")
+        region := fs.String("region", "auto", "region (auto works on R2)")
+        access := fs.String("access-key", "", "access key (or env OFFSITE_ACCESS_KEY)")
+        secret := fs.String("secret-key", "", "secret key (or env OFFSITE_SECRET_KEY)")
+        pass := fs.String("passphrase", "", "backup passphrase (or env OFFSITE_PASSPHRASE)")
+        key := fs.String("key", "", "exact remote key (default: newest under --prefix)")
+        prefix := fs.String("prefix", "shop", "key prefix for --list / newest lookup")
+        out := fs.String("out", "pos-restored.db", "decrypted output file")
+        list := fs.Bool("list", false, "list remote keys and exit")
+        force := fs.Bool("force", false, "overwrite existing --out file")
+        if err := fs.Parse(args); err != nil {
+                fmt.Fprintln(os.Stderr, err)
+                return 2
+        }
+        if *access == "" {
+                *access = os.Getenv("OFFSITE_ACCESS_KEY")
+        }
+        if *secret == "" {
+                *secret = os.Getenv("OFFSITE_SECRET_KEY")
+        }
+        if *pass == "" {
+                *pass = os.Getenv("OFFSITE_PASSPHRASE")
+        }
+        cfg := offsite.Config{Endpoint: *endpoint, Bucket: *bucket, Region: *region,
+                AccessKey: *access, SecretKey: *secret, Prefix: *prefix}
+        if cfg.Endpoint == "" || cfg.Bucket == "" || cfg.AccessKey == "" || cfg.SecretKey == "" {
+                fmt.Fprintln(os.Stderr, "restore-backup: endpoint, bucket, and keys are required")
+                return 2
+        }
+        ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+        defer cancel()
+        if *list {
+                keys, err := offsite.ListObjects(ctx, cfg, *prefix+"/")
+                if err != nil {
+                        fmt.Fprintln(os.Stderr, "list:", err)
+                        return 1
+                }
+                for _, k := range keys {
+                        fmt.Printf("%s  %s\n", k.LastModified, k.Name)
+                }
+                return 0
+        }
+        if *key == "" {
+                keys, err := offsite.ListObjects(ctx, cfg, *prefix+"/")
+                if err != nil {
+                        fmt.Fprintln(os.Stderr, "list:", err)
+                        return 1
+                }
+                if len(keys) == 0 {
+                        fmt.Fprintln(os.Stderr, "restore-backup: no snapshots under prefix "+*prefix)
+                        return 1
+                }
+                best := keys[0].Name
+                for _, k := range keys[1:] {
+                        if k.Name > best {
+                                best = k.Name
+                        }
+                }
+                *key = best
+        }
+        if *pass == "" {
+                fmt.Fprintln(os.Stderr, "restore-backup: passphrase is required")
+                return 2
+        }
+        if _, err := os.Stat(*out); err == nil && !*force {
+                fmt.Fprintf(os.Stderr, "restore-backup: %s exists (use --force)\n", *out)
+                return 1
+        }
+        rc, err := offsite.GetObject(ctx, cfg, *key)
+        if err != nil {
+                fmt.Fprintln(os.Stderr, "download:", err)
+                return 1
+        }
+        tmp, err := os.CreateTemp("", "restore-*.enc")
+        if err != nil {
+                rc.Close()
+                fmt.Fprintln(os.Stderr, err)
+                return 1
+        }
+        tmpName := tmp.Name()
+        _, err = io.Copy(tmp, rc)
+        rc.Close()
+        tmp.Close()
+        if err != nil {
+                os.Remove(tmpName)
+                fmt.Fprintln(os.Stderr, "download:", err)
+                return 1
+        }
+        if err := offsite.DecryptFile(tmpName, *pass, *out); err != nil {
+                os.Remove(tmpName)
+                fmt.Fprintln(os.Stderr, "decrypt:", err)
+                return 1
+        }
+        os.Remove(tmpName)
+        fmt.Printf("restored %s -> %s\n", *key, *out)
+        return 0
 }
