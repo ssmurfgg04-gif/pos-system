@@ -24,6 +24,7 @@ import (
         "posapp/internal/mdns"
         "posapp/internal/offsite"
         "posapp/internal/printer"
+        "posapp/internal/update"
         "posapp/internal/router"
         "posapp/internal/services"
         "posapp/internal/settings"
@@ -114,6 +115,7 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
 
         svc := services.New(db, st, hub, pw)
         h := handlers.New(db, st, svc, hub, pw)
+        h.Updater = update.NewChecker(version, update.Repo, st)
 
         // Encrypted off-site uploads (async; inert unless configured).
         ow := offsite.NewWorker(st, func(action, entity, entityID, details string) {
@@ -144,11 +146,12 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
         ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
         defer stop()
 
-        // Background workers: STK sweeper + print queue + daily backups + uploads.
+        // Background workers: STK sweeper + print queue + daily backups + uploads + update checks.
         sweeper := services.NewSweeper(svc)
         go sweeper.Run(ctx)
         go pw.Run(ctx)
         go ow.Run(ctx)
+        go h.Updater.StartLoop(ctx)
         svc.StartBackupScheduler()
 
         // LAN discovery broadcast (best-effort, server mode only).
