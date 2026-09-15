@@ -175,3 +175,38 @@ func TestCustomerWalkInPaymentAndVoidReversal(t *testing.T) {
 		t.Fatalf("ledger: %d", w.Code)
 	}
 }
+
+// Tab input validation carries proper status codes: a missing customer is a
+// 400, charging an inactive customer is a 409.
+func TestCustomerTabInputCodes(t *testing.T) {
+	engine, admin, cashier, _ := newTestServer(t)
+
+	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
+		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"paymentMethod": "account",
+		"clientUuid":    "tab-nocust",
+	})
+	if w.Code != 400 {
+		t.Fatalf("tab without customer should 400, got %d %s", w.Code, w.Body.String())
+	}
+
+	w = do(t, engine, "POST", "/api/v1/customers", admin, map[string]any{
+		"name": "Inactive Joe", "creditLimitCents": 100000,
+	})
+	cid := int64(dataMap(t, w)["id"].(float64))
+	w = do(t, engine, "PUT", "/api/v1/customers/"+itoa64(cid), admin, map[string]any{
+		"name": "Inactive Joe", "creditLimitCents": 100000, "active": false,
+	})
+	if w.Code != 200 {
+		t.Fatalf("deactivate: %d %s", w.Code, w.Body.String())
+	}
+	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
+		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"paymentMethod": "account",
+		"customerId":    cid,
+		"clientUuid":    "tab-inactive",
+	})
+	if w.Code != 409 {
+		t.Fatalf("inactive customer tab should 409, got %d %s", w.Code, w.Body.String())
+	}
+}

@@ -17,10 +17,18 @@ power cut never corrupts a till.
 ## Feature highlights
 
 - **Dynamic RBAC** — an admin creates any role and edits its permissions
-  from a catalog (`pos.sell`, `payments.manual`, `products.manage`, …).
-  Seeded system roles: **Admin** (everything), **Cashier** (sell, void,
-  manual M-Pesa entry, shifts), **Designer** (design/production board).
+  from a catalog (`pos.sell`, `payments.manual`, `products.manage`,
+  `customers.view`, `customers.manage`, …). Seeded system roles:
+  **Admin** (everything), **Cashier** (sell, void, manual M-Pesa entry,
+  shifts, customer tabs), **Designer** (design/production board).
   Enforcement is server-side only; the UI just hides what you can't do.
+- **Customer tabs & credit** — regulars take goods now and pay later.
+  Each customer has a credit limit (0 = cash only), a live balance, and
+  a loyalty balance (1 pt per 100 KES of settled sales). The till shows
+  who owes what while tendering, the server enforces the limit at charge
+  time, and every charge / payment / correction lands in an auditable
+  per-customer ledger. Tabs settle in cash or against an M-Pesa receipt;
+  voiding a tab reverses its charge so cancelled sales leave no debt.
 - **M-Pesa, three ways** — provider is swappable behind one interface:
   `mock` (demos/training, default), Daraja `sandbox`, Daraja `production`.
   Payment modes: `auto` (STK push, manual fallback), `stk`, `manual`.

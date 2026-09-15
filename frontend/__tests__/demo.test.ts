@@ -228,6 +228,77 @@ describe('demo checkout lifecycle', () => {
   })
 })
 
+describe('demo tabs & credit parity', () => {
+  it('tab lifecycle: charge, limit reject, pay, settle with loyalty', async () => {
+    await login('cashier', 'cashier123')
+    const customers = await demoRequest<Any[]>('GET', '/api/v1/customers?search=')
+    expect(customers.length).toBeGreaterThanOrEqual(5)
+    const kevin = customers.find((c: Any) => c.name === 'Kevin K.')!
+    expect(kevin.creditLimitCents).toBe(100000)
+
+    const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 1, qty: 1 }],
+      paymentMethod: 'account',
+      customerId: kevin.id,
+    })
+    expect(o.status).toBe('PENDING')
+    expect(o.customerId).toBe(kevin.id)
+    expect(o.payments[0].method).toBe('account')
+    expect(o.payments[0].status).toBe('PENDING')
+
+    let list = await demoRequest<Any[]>('GET', '/api/v1/customers?search=Kevin')
+    expect(list[0].balanceCents).toBe(o.totalCents)
+
+    // Over-limit rejected: 55000 owed + 2 x 55000 > 100000 limit.
+    await expect(
+      demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+        items: [{ productId: 1, qty: 2 }],
+        paymentMethod: 'account',
+        customerId: kevin.id,
+      }),
+    ).rejects.toMatchObject({ status: 409 })
+
+    // Cash-only customer rejected.
+    const brian = customers.find((c: Any) => c.name === 'Brian O.')!
+    await expect(
+      demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+        items: [{ productId: 1, qty: 1 }],
+        paymentMethod: 'account',
+        customerId: brian.id,
+      }),
+    ).rejects.toMatchObject({ status: 409 })
+
+    // Walk-in overpayment rejected.
+    await expect(
+      demoRequest<Any>('POST', `/api/v1/customers/${kevin.id}/payments`, { amountCents: o.totalCents + 1 }),
+    ).rejects.toMatchObject({ status: 409 })
+
+    // Settle in cash: PAID, balance zero, loyalty earned (1 pt / 100 KES).
+    const settled = await demoRequest<Any>('POST', `/api/v1/orders/${o.id}/settle`, { method: 'cash' })
+    expect(settled.status).toBe('PAID')
+    list = await demoRequest<Any[]>('GET', '/api/v1/customers?search=Kevin')
+    expect(list[0].balanceCents).toBe(0)
+    expect(list[0].loyaltyPoints).toBe(Math.floor(o.totalCents / 10000))
+
+    const ledger = await demoRequest<Any[]>('GET', `/api/v1/customers/${kevin.id}/ledger`)
+    expect(ledger.map((e: Any) => e.kind)).toEqual(expect.arrayContaining(['charge', 'payment', 'loyalty']))
+  })
+
+  it('voiding a pending tab reverses the charge', async () => {
+    await login('cashier', 'cashier123')
+    const faith = (await demoRequest<Any[]>('GET', '/api/v1/customers?search=Faith'))[0]
+    const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 1, qty: 1 }],
+      paymentMethod: 'account',
+      customerId: faith.id,
+    })
+    expect(o.status).toBe('PENDING')
+    await demoRequest<Any>('POST', `/api/v1/orders/${o.id}/void`, { reason: 'test' })
+    const list = await demoRequest<Any[]>('GET', '/api/v1/customers?search=Faith')
+    expect(list[0].balanceCents).toBe(0)
+  })
+})
+
 describe('demo settings + reports parity', () => {
   it('settings save tolerates the jwt_secret masked echo (regression parity)', async () => {
     await login('admin', 'admin123')
