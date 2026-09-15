@@ -4,7 +4,7 @@
 
 **Goal:** Shops can record buying stock: supplier records, purchase orders that add stock with weighted-average costing on receive, and stock-takes that reconcile counted vs expected with a variance report.
 
-**Architecture:** Mirrors the customers/tabs implementation exactly (same authors' patterns): migration v4 for tables, `models` types, `services/suppliers.go` with transactional receive/apply, `handlers/suppliers.go` with permission groups, router groups, `Suppliers.tsx` page, demo-backend parity, handler + demo tests. Supplier permissions are Admin-only (seeded), so the existing v3 `backfillRolePerms` grants them to upgraded Admins with zero extra code.
+**Architecture:** Mirrors the customers/tabs implementation exactly (same authors' patterns): migration v5 for tables, `models` types, `services/suppliers.go` with transactional receive/apply, `handlers/suppliers.go` with permission groups, router groups, `Suppliers.tsx` page, demo-backend parity, handler + demo tests. Supplier permissions are Admin-only (seeded), so the existing v3 `backfillRolePerms` grants them to upgraded Admins with zero extra code.
 
 **Tech Stack:** Go (gin, sqlite/postgres), React frontend, demo backend mirror in `frontend/src/demo/`.
 
@@ -19,20 +19,20 @@
 
 ---
 
-### Task 1: Migration v4 — suppliers, purchase_orders, stock_takes
+### Task 1: Migration v5 — suppliers, purchase_orders, stock_takes
 
 **Files:**
-- Modify: `internal/database/migrations.go` (append v4 after v3; file uses tabs, SQL bodies use tabs)
+- Modify: `internal/database/migrations.go` (append v5 after v3; file uses tabs, SQL bodies use tabs)
 
 **Interfaces:**
 - Consumes: `Migration` struct.
 - Produces: 5 new tables on both dialects.
 
-- [ ] **Step 1: Add the v4 migration**
+- [ ] **Step 1: Add the v5 migration**
 
 ```go
 {
-        Version: 4,
+        Version: 5,
         SQLite: `
 CREATE TABLE IF NOT EXISTS suppliers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,7 +104,7 @@ Expected: all five present.
 
 ```bash
 git add internal/database/migrations.go
-git commit -m "feat: v4 migration adds suppliers, purchase orders, stock takes"
+git commit -m "feat: v5 migration adds suppliers, purchase orders, stock takes"
 ```
 
 ### Task 2: Models + permissions

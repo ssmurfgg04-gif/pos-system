@@ -208,8 +208,8 @@ func (d *DB) seedUsers() error {
                 if err != nil {
                         return err
                 }
-                q := d.Rebind(`INSERT INTO users (username, full_name, password_hash, pin_hash, role_id)
-                        SELECT ?, ?, ?, ?, (SELECT id FROM roles WHERE name = ?)
+                q := d.Rebind(`INSERT INTO users (username, full_name, password_hash, pin_hash, role_id, must_rotate)
+                        SELECT ?, ?, ?, ?, (SELECT id FROM roles WHERE name = ?), 1
                         WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = ?)`)
                 if _, err := d.Exec(q, u.username, u.fullName, pwHash, pinHash, u.role, u.username); err != nil {
                         return err

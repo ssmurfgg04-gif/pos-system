@@ -4,7 +4,7 @@
 
 **Goal:** No LedgerPOS box keeps working with seeded default credentials — every seeded user must set their own password and PIN on first login before any other API call succeeds.
 
-**Architecture:** A `must_rotate` column on `users` (migration v5) checked in the auth middleware allowlist style: login succeeds and returns `mustRotate: true`, and every other authenticated endpoint (except `/me`, password/PIN change, branding, health) returns 403 `password rotation required` until rotated. Seeded users ship with `must_rotate = 1`; admin-created users default to 0.
+**Architecture:** A `must_rotate` column on `users` (migration v4) checked in the auth middleware allowlist style: login succeeds and returns `mustRotate: true`, and every other authenticated endpoint (except `/me`, password/PIN change, branding, health) returns 403 `password rotation required` until rotated. Seeded users ship with `must_rotate = 1`; admin-created users default to 0.
 
 **Tech Stack:** Go (gin, modernc.org/sqlite + postgres via `Rebind`), React frontend (custom `useRoute` router in `frontend/src/lib/router.ts`, `api` client in `frontend/src/lib/api.ts`).
 
@@ -19,7 +19,7 @@
 
 ---
 
-### Task 1: Migration v5 — `users.must_rotate`
+### Task 1: Migration v4 — `users.must_rotate`
 
 **Files:**
 - Modify: `internal/database/migrations.go` (append v5 entry after v3 block)
