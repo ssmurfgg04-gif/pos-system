@@ -570,6 +570,12 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
                 return nil, err
         }
         s.printer.Enqueue(order)
+        if payMethod == models.MethodCash {
+                // Best-effort drawer kick after commit — never fails the sale.
+                if err := s.printer.Kick(); err != nil {
+                        s.Audit(0, payMethod, "DRAWER_KICK_FAILED", "order", order.Number, err.Error())
+                }
+        }
         s.broadcast(EventOrderPaid, order)
         s.Audit(0, payMethod, "PAYMENT_COMPLETED", "order", order.Number, fmt.Sprintf("payment %d, receipt %s, amount %d", paymentID, receipt, payAmount))
         return order, nil
