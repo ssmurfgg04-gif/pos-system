@@ -402,7 +402,10 @@ UPDATE users SET must_rotate = 1;
 	{
 		// v5: suppliers & stock-in — supplier records, purchase orders
 		// (receive posts stock + weighted-average cost), stock takes.
+		// Also re-runs the role backfill so upgraded Admins gain the new
+		// suppliers.* permissions (same once-only union semantics as v3).
 		Version: 5,
+		Go:      backfillRolePerms,
 		SQLite: `
 CREATE TABLE IF NOT EXISTS suppliers (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,

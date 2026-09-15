@@ -215,6 +215,73 @@ type LedgerEntry struct {
 	CreatedAt   string `json:"createdAt"`
 }
 
+// ---- Suppliers & stock-in ----
+
+const (
+	POPending   = "PENDING"
+	POReceived  = "RECEIVED"
+	POCancelled = "CANCELLED"
+	TakeOpen      = "OPEN"
+	TakeApplied   = "APPLIED"
+	TakeCancelled = "CANCELLED"
+)
+
+type Supplier struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Phone     string `json:"phone"`
+	Email     string `json:"email"`
+	Address   string `json:"address"`
+	Notes     string `json:"notes"`
+	Active    bool   `json:"active"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+type POItem struct {
+	ID             int64  `json:"id"`
+	POID           int64  `json:"poId"`
+	ProductID      int64  `json:"productId"`
+	Name           string `json:"name"`
+	SKU            string `json:"sku"`
+	Qty            int    `json:"qty"`
+	CostCents      int64  `json:"costCents"`
+	LineTotalCents int64  `json:"lineTotalCents"`
+}
+
+type PurchaseOrder struct {
+	ID            int64    `json:"id"`
+	Number        string   `json:"number"`
+	SupplierID    int64    `json:"supplierId"`
+	SupplierName  string   `json:"supplierName"`
+	Status        string   `json:"status"`
+	SubtotalCents int64    `json:"subtotalCents"`
+	Note          string   `json:"note"`
+	Items         []POItem `json:"items"`
+	CreatedAt     string   `json:"createdAt"`
+	ReceivedAt    string   `json:"receivedAt"`
+}
+
+type StockTakeItem struct {
+	ID          int64  `json:"id"`
+	TakeID      int64  `json:"takeId"`
+	ProductID   int64  `json:"productId"`
+	Name        string `json:"name"`
+	SKU         string `json:"sku"`
+	ExpectedQty int    `json:"expectedQty"`
+	CountedQty  int    `json:"countedQty"`
+}
+
+type StockTake struct {
+	ID        int64           `json:"id"`
+	Number    string          `json:"number"`
+	Status    string          `json:"status"`
+	Note      string          `json:"note"`
+	Items     []StockTakeItem `json:"items"`
+	CreatedAt string          `json:"createdAt"`
+	AppliedAt string          `json:"appliedAt"`
+}
+
 // ---- Shifts ----
 
 type Shift struct {

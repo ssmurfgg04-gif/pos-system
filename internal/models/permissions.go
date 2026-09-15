@@ -15,6 +15,8 @@ var PermissionCatalog = []PermissionDef{
 	{Key: "orders.view", Group: "Selling", Label: "View order history"},
 	{Key: "customers.view", Group: "Selling", Label: "View customers and tabs"},
 	{Key: "customers.manage", Group: "Selling", Label: "Manage customers, credit and tabs"},
+	{Key: "suppliers.view", Group: "Catalog", Label: "View suppliers and purchase orders"},
+	{Key: "suppliers.manage", Group: "Catalog", Label: "Manage suppliers, receive stock, stock takes"},
 	{Key: "payments.manual", Group: "Payments", Label: "Enter manual M-Pesa receipt codes"},
 	{Key: "payments.override_price", Group: "Payments", Label: "Override line item prices"},
 	{Key: "products.view", Group: "Catalog", Label: "View products and stock"},
