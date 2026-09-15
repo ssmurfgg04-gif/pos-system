@@ -2,6 +2,8 @@ package printer
 
 import (
         "bytes"
+        "image"
+        "image/color"
         "strings"
         "testing"
 
@@ -126,5 +128,48 @@ func TestTargetParsing(t *testing.T) {
         // Unsupported scheme must fail to open.
         if _, err := Target("http://printer").Open(); err == nil {
                 t.Error("http target should not open")
+        }
+}
+
+func TestRenderWithLogoEmitsRaster(t *testing.T) {
+        // 16x16 solid black square → GS v 0 raster header must appear.
+        img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+        for y := 0; y < 16; y++ {
+                for x := 0; x < 16; x++ {
+                        img.Set(x, y, color.Black)
+                }
+        }
+        data := BuildReceiptData(sampleOrder(), "My Store", "", "", "", "KES")
+        data.Logo = img
+        raw, err := Render(data, 48)
+        if err != nil {
+                t.Fatalf("render: %v", err)
+        }
+        if !bytes.Contains(raw, []byte{0x1D, 'v', 48, 0}) {
+                t.Error("logo render missing GS v 0 raster header")
+        }
+        // Without a logo the raster header must be absent.
+        data.Logo = nil
+        raw, err = Render(data, 48)
+        if err != nil {
+                t.Fatalf("render: %v", err)
+        }
+        if bytes.Contains(raw, []byte{0x1D, 'v', 48, 0}) {
+                t.Error("logo-less render must not contain raster data")
+        }
+}
+
+func TestScaleToWidthKeepsAspect(t *testing.T) {
+        img := image.NewRGBA(image.Rect(0, 0, 100, 50))
+        scaled := scaleToWidth(img, 200)
+        if scaled.Bounds().Dx() != 200 || scaled.Bounds().Dy() != 100 {
+                t.Fatalf("want 200x100, got %v", scaled.Bounds())
+        }
+        tall := image.NewRGBA(image.Rect(0, 0, 10, 1000))
+        if h := scaleToWidth(tall, 100).Bounds().Dy(); h != 256 {
+                t.Fatalf("tall logo height should cap at 256, got %d", h)
+        }
+        if scaleToWidth(image.NewRGBA(image.Rect(0, 0, 0, 0)), 100) != nil {
+                t.Fatal("empty image must yield nil")
         }
 }
