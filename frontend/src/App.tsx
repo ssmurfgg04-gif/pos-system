@@ -1,13 +1,15 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useRoute, homeFor, withBase } from './lib/router'
 import { useAuth } from './stores/auth'
 import { useBranding } from './stores/branding'
 import { AppShell, Booting } from './components/shell'
 import { Lock } from 'lucide-react'
 
+import { api, User } from './lib/api'
 import { Login } from './pages/Login'
 import { Pin } from './pages/Pin'
 import { Rotate } from './pages/Rotate'
+import { Onboarding } from './pages/Onboarding'
 import { Pos } from './pages/Pos'
 import { Customers } from './pages/Customers'
 import { Inventory } from './pages/Inventory'
@@ -39,6 +41,29 @@ export function App() {
 
   // Seeded defaults stop here until rotated (server enforces the same gate).
   if (user.mustRotate) return <Rotate onDone={refresh} />
+
+  return <GatedApp path={path} user={user} />
+}
+
+function GatedApp({ path, user }: { path: string; user: User }) {
+  const [onboarded, setOnboarded] = useState<boolean | null>(null)
+  const isAdmin = user.permissions.includes('users.manage')
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setOnboarded(true)
+      return
+    }
+    let live = true
+    api.get<Record<string, string>>('/api/v1/settings')
+      .then((s) => { if (live) setOnboarded(s.onboarding_done === 'true') })
+      .catch(() => { if (live) setOnboarded(true) })
+    return () => { live = false }
+  }, [isAdmin])
+
+  // Guided first run for admins; everyone else (and errors) skips it.
+  if (isAdmin && onboarded === false) return <Onboarding onDone={() => setOnboarded(true)} />
+  if (isAdmin && onboarded === null) return <Booting />
 
   const page = (() => {
     switch (true) {
