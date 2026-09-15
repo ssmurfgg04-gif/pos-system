@@ -385,6 +385,20 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_id INTEGER NOT NULL DEFAULT
 		Version: 3,
 		Go:      backfillRolePerms,
 	},
+	{
+		// v4: forced credential rotation — seeded defaults stop working
+		// until changed. Existing rows are flagged so every current user
+		// rotates once on next login.
+		Version: 4,
+		SQLite: `
+ALTER TABLE users ADD COLUMN must_rotate INTEGER NOT NULL DEFAULT 0;
+UPDATE users SET must_rotate = 1;
+`,
+		Pg: `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_rotate INTEGER NOT NULL DEFAULT 0;
+UPDATE users SET must_rotate = 1;
+`,
+	},
 }
 
 // Migrate applies pending migrations in order.
