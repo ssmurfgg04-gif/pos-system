@@ -39,6 +39,21 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
                         return
                 }
                 auth.WithPrincipal(c, p)
+                // Seeded defaults stop working until rotated: only identity,
+                // rotation, and public-config endpoints stay reachable.
+                if p.MustRotate {
+                        path := c.Request.URL.Path
+                        allowed := path == "/api/v1/me" ||
+                                path == "/api/v1/branding" ||
+                                path == "/api/v1/health" ||
+                                strings.HasPrefix(path, "/api/v1/auth/") ||
+                                strings.HasSuffix(path, "/password") ||
+                                strings.HasSuffix(path, "/pin")
+                        if !allowed {
+                                c.AbortWithStatusJSON(403, gin.H{"error": "password rotation required"})
+                                return
+                        }
+                }
                 c.Next()
         }
         perm := auth.RequirePermission
@@ -122,9 +137,11 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         users.GET("/users", h.ListUsers)
         users.POST("/users", h.CreateUser)
         users.PUT("/users/:id", h.UpdateUser)
-        users.PUT("/users/:id/password", h.SetPassword)
-        users.PUT("/users/:id/pin", h.SetPIN)
         users.DELETE("/users/:id", h.DeactivateUser)
+        // Everyone rotates their own credentials (self-service); managing
+        // others still needs users.manage (enforced inside the handlers).
+        authd.PUT("/users/:id/password", h.SetPassword)
+        authd.PUT("/users/:id/pin", h.SetPIN)
 
         roles := authd.Group("", perm("roles.manage"))
         roles.GET("/roles", h.ListRoles)

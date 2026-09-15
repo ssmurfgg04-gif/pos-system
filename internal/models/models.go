@@ -48,6 +48,7 @@ type User struct {
 	RoleName    string   `json:"roleName"`
 	Permissions []string `json:"permissions"`
 	Active      bool     `json:"active"`
+	MustRotate  bool     `json:"mustRotate"`
 	PINSet      bool     `json:"pinSet"`
 	CreatedAt   string   `json:"createdAt"`
 }
