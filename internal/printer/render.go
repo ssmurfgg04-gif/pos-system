@@ -5,6 +5,7 @@ package printer
 import (
         "bytes"
         "fmt"
+        "image"
         "strings"
         "time"
 
@@ -55,6 +56,7 @@ type ReceiptData struct {
         StoreName    string
         StoreAddress string
         StorePhone   string
+        Logo         image.Image // nil = skip; printed centered above the name
         Footer       string
         OrderNumber  string
         When         string
@@ -96,6 +98,12 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 
         p.Initialize()
         p.Justify(escpos.JustifyCenter)
+        if d.Logo != nil {
+                if _, err := p.PrintImage(d.Logo); err != nil {
+                        return nil, err
+                }
+                p.Write("\n")
+        }
         p.Size(1, 1)
         p.Bold(true)
         p.Write(truncate(strings.ToUpper(d.StoreName), widthCols) + "\n")

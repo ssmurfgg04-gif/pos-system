@@ -5,8 +5,12 @@ import (
         "context"
         "database/sql"
         "fmt"
+        "image"
+        _ "image/jpeg"
+        _ "image/png"
         "io"
         "log"
+        "os"
         "time"
 
         "posapp/internal/database"
@@ -14,6 +18,48 @@ import (
         "posapp/internal/models"
         "posapp/internal/settings"
 )
+
+// logoFileName mirrors the upload handler's stored file (brand logo).
+const logoFileName = "brand-logo.png"
+
+// loadLogo decodes the brand logo scaled to dots wide (nil on any failure —
+// receipts must print with or without a logo).
+func loadLogo(dots int) image.Image {
+        f, err := os.Open(logoFileName)
+        if err != nil {
+                return nil
+        }
+        defer f.Close()
+        src, _, err := image.Decode(f)
+        if err != nil {
+                return nil
+        }
+        return scaleToWidth(src, dots)
+}
+
+// scaleToWidth nearest-neighbor scales src to width dots, keeping aspect
+// (height capped so a tall logo can't waterfall paper).
+func scaleToWidth(src image.Image, width int) image.Image {
+        b := src.Bounds()
+        sw, sh := b.Dx(), b.Dy()
+        if sw <= 0 || sh <= 0 {
+                return nil
+        }
+        dh := sh * width / sw
+        if dh > 256 {
+                dh = 256
+        }
+        if dh <= 0 {
+                dh = 1
+        }
+        dst := image.NewRGBA(image.Rect(0, 0, width, dh))
+        for y := 0; y < dh; y++ {
+                for x := 0; x < width; x++ {
+                        dst.Set(x, y, src.At(b.Min.X+x*sw/width, b.Min.Y+y*sh/dh))
+                }
+        }
+        return dst
+}
 
 // Worker drains a persistent print_jobs queue. Jobs survive reboots: on
 // startup anything stuck "printing" is re-queued (power-loss = reprint).
@@ -110,6 +156,13 @@ func (w *Worker) printJob(ctx context.Context, jobID int64) {
         cols := 48
         if width <= 58 {
                 cols = 32
+        }
+        if w.settings.GetBool("receipt_logo", true) {
+                dots := 576
+                if cols <= 32 {
+                        dots = 384
+                }
+                data.Logo = loadLogo(dots)
         }
         raw, err := Render(data, cols)
         if err == nil {
@@ -235,8 +288,13 @@ func (w *Worker) TestPrint() error {
         }
         defer wc.Close()
         items := []models.OrderItem{{ID: 1, ProductID: 0, Name: "Test item", Qty: 1, UnitPriceCents: 100, LineTotalCents: 100}}
+        var logo image.Image
+        if w.settings.GetBool("receipt_logo", true) {
+                logo = loadLogo(576)
+        }
         data := ReceiptData{
                 StoreName: w.settings.GetString("store_name", "My Store"),
+                Logo:      logo,
                 Footer:    w.settings.Get("receipt_footer"),
                 OrderNumber: "TEST",
                 When:       time.Now().Format("2006-01-02 15:04"),

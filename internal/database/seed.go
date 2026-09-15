@@ -40,6 +40,7 @@ var DefaultSettings = map[string]string{
         "printer_target":        "", // e.g. tcp://192.168.1.200:9100 or file:///dev/usb/lp0
         "printer_width":         "80",
         "auto_print_receipts":   "true",
+        "receipt_logo":            "true", // print brand-logo.png atop receipts when present
         "low_stock_threshold":   "5",
         "backup_auto":           "true", // daily 02:00 VACUUM INTO snapshot
         "backup_keep":           "7",    // snapshots retained
