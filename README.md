@@ -116,8 +116,10 @@ First launch sets up everything by itself: it creates the SQLite
 database, runs migrations, seeds the catalog and users, picks a free
 local port (8765–7914), binds to 127.0.0.1 **only**, and opens its own
 app window (a Chromium app-mode window; falls back to your default
-browser if none is installed). Launching it again while it's running
-just opens a new window.
+browser if none is installed). The first admin through the door gets a
+five-step setup wizard — store name, logo, receipt, printer test,
+staff + PINs — and seeded passwords never serve until changed.
+Launching it again while it's running just opens a new window.
 An admin can stop it from the UI (sidebar → Quit). All data lives in a
 per-OS app directory — `%APPDATA%\LedgerPOS`,
 `~/Library/Application Support/LedgerPOS`, `~/.local/share/LedgerPOS` —
