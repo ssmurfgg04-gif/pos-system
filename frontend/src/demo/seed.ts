@@ -13,6 +13,7 @@ export interface DemoUser {
   pin: string
   roleId: number
   active: boolean
+  mustRotate: boolean
   createdAt: string
 }
 
@@ -285,9 +286,9 @@ export function buildSeed(): DemoDB {
   ]
 
   const users: DemoUser[] = [
-    { id: 1, username: 'admin', fullName: 'Amina Hassan', password: 'admin123', pin: '1234', roleId: 1, active: true, createdAt: iso(new Date(now.getTime() - 90 * 864e5)) },
-    { id: 2, username: 'cashier', fullName: 'Brian Otieno', password: 'cashier123', pin: '2222', roleId: 2, active: true, createdAt: iso(new Date(now.getTime() - 60 * 864e5)) },
-    { id: 3, username: 'designer', fullName: 'Wanjiru Mwangi', password: 'designer123', pin: '3333', roleId: 3, active: true, createdAt: iso(new Date(now.getTime() - 45 * 864e5)) },
+    { id: 1, username: 'admin', fullName: 'Amina Hassan', password: 'admin123', pin: '1234', roleId: 1, active: true, mustRotate: true, createdAt: iso(new Date(now.getTime() - 90 * 864e5)) },
+    { id: 2, username: 'cashier', fullName: 'Brian Otieno', password: 'cashier123', pin: '2222', roleId: 2, active: true, mustRotate: true, createdAt: iso(new Date(now.getTime() - 60 * 864e5)) },
+    { id: 3, username: 'designer', fullName: 'Wanjiru Mwangi', password: 'designer123', pin: '3333', roleId: 3, active: true, mustRotate: true, createdAt: iso(new Date(now.getTime() - 45 * 864e5)) },
   ]
 
   const categories: DemoCategory[] = CATEGORIES.map(([name, slug], i) => ({ id: i + 1, name, slug, sortOrder: i }))

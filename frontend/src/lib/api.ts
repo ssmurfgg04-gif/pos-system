@@ -186,6 +186,7 @@ export interface User {
   permissions: string[]
   active: boolean
   pinSet: boolean
+  mustRotate: boolean
   createdAt: string
 }
 

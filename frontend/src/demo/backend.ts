@@ -55,6 +55,12 @@ function migrateDemo(d: DemoDB) {
       dirty = true
     }
   }
+  for (const u of d.users) {
+    if ((u as any).mustRotate === undefined) {
+      (u as any).mustRotate = true
+      dirty = true
+    }
+  }
   // Cashiers created before tabs existed need customers.view to use them.
   const cashier = d.roles.find((r) => r.name === 'Cashier')
   if (cashier && !cashier.permissions.includes('customers.view')) {
@@ -116,6 +122,7 @@ function userDTO(u: DemoUser) {
     permissions: role ? role.permissions : [],
     active: u.active,
     pinSet: !!u.pin,
+    mustRotate: !!u.mustRotate,
     createdAt: u.createdAt,
   }
 }
@@ -448,6 +455,13 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
 
   // ---------- everything else needs auth ----------
   const { user, perms } = userFromToken()
+
+  // Forced rotation parity: seeded defaults stop here until changed.
+  if (user.mustRotate) {
+    const rotAllow = p === '/me' || p === '/branding' ||
+      p.startsWith('/auth/') || /\/users\/\d+\/(password|pin)$/.test(p)
+    if (!rotAllow) throw new ApiError(403, 'password rotation required')
+  }
 
   if (m === 'GET' && p === '/me') return userDTO(user) as T
 
@@ -1008,7 +1022,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const u: DemoUser = {
       id: d.seq.user++, username, fullName: String(body?.fullName || ''),
       password: String(body.password), pin: body?.pin ? String(body.pin) : '',
-      roleId: Number(body?.roleId) || 2, active: true, createdAt: nowIso(),
+      roleId: Number(body?.roleId) || 2, active: true, mustRotate: false, createdAt: nowIso(),
     }
     d.users.push(u)
     audit(user.id, user.username, 'USER_CREATED', 'user', String(u.id), username)
@@ -1017,24 +1031,27 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   }
   const userMatch = p.match(/^\/users\/(\d+)(\/(password|pin))?$/)
   if (userMatch) {
-    requirePerm(perms, 'users.manage')
     const u = d.users.find((x) => x.id === Number(userMatch[1]))
     if (!u) throw new ApiError(404, 'user not found')
     const kind = userMatch[3]
-    if (m === 'PUT' && kind === 'password') {
-      if (!body?.password || String(body.password).length < 6) throw new ApiError(400, 'password must be at least 6 characters')
-      u.password = String(body.password)
-      audit(user.id, user.username, 'PASSWORD_RESET', 'user', String(u.id), u.username)
+    if (m === 'PUT' && (kind === 'password' || kind === 'pin')) {
+      // Self-service rotation; managing others needs users.manage.
+      if (u.id !== user.id) requirePerm(perms, 'users.manage')
+      if (kind === 'password') {
+        if (!body?.password || String(body.password).length < 6) throw new ApiError(400, 'password must be at least 6 characters')
+        u.password = String(body.password)
+        u.mustRotate = false
+        audit(user.id, user.username, 'PASSWORD_RESET', 'user', String(u.id), u.username)
+      } else {
+        if (!/^\d{4}$/.test(String(body?.pin || ''))) throw new ApiError(400, 'PIN must be exactly 4 digits')
+        u.pin = String(body.pin)
+        u.mustRotate = false
+        audit(user.id, user.username, 'PIN_UPDATED', 'user', String(u.id), u.username)
+      }
       persist()
       return { updated: true } as T
     }
-    if (m === 'PUT' && kind === 'pin') {
-      if (!/^\d{4}$/.test(String(body?.pin || ''))) throw new ApiError(400, 'PIN must be exactly 4 digits')
-      u.pin = String(body.pin)
-      audit(user.id, user.username, 'PIN_UPDATED', 'user', String(u.id), u.username)
-      persist()
-      return { updated: true } as T
-    }
+    requirePerm(perms, 'users.manage')
     if (m === 'PUT' && !kind) {
       if (body?.fullName !== undefined) u.fullName = String(body.fullName)
       if (body?.roleId !== undefined) u.roleId = Number(body.roleId)

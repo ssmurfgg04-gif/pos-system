@@ -12,6 +12,10 @@ type Any = Record<string, any>
 async function login(username: string, password: string): Promise<string> {
   const res = await demoRequest<{ token: string }>('POST', '/api/v1/auth/login', { username, password })
   localStorage.setItem('pos_token', res.token)
+  // Seeded logins start flagged: rotate through the real self-service path.
+  // Same password keeps every test's credentials valid for re-login.
+  const me = await demoRequest<{ id: number }>('GET', '/api/v1/me')
+  await demoRequest('PUT', `/api/v1/users/${me.id}/password`, { password })
   return res.token
 }
 
@@ -86,6 +90,17 @@ describe('demo backend RBAC parity', () => {
     await expect(demoRequest<Any>('GET', '/api/v1/users')).rejects.toMatchObject({ status: 403 })
     await expect(demoRequest<Any>('GET', '/api/v1/settings')).rejects.toMatchObject({ status: 403 })
     // products/branding are read-accessible to any authenticated user (POS needs them)
+    const products = await demoRequest<Any[]>('GET', '/api/v1/products')
+    expect(products.length).toBeGreaterThan(10)
+  })
+
+  it('seeded logins must rotate before gated endpoints', async () => {
+    const res = await demoRequest<{ token: string; user: Any }>('POST', '/api/v1/auth/login', { username: 'cashier', password: 'cashier123' })
+    expect(res.user.mustRotate).toBe(true)
+    localStorage.setItem('pos_token', res.token)
+    await expect(demoRequest('GET', '/api/v1/products')).rejects.toMatchObject({ status: 403 })
+    const me = await demoRequest<{ id: number }>('GET', '/api/v1/me')
+    await demoRequest('PUT', `/api/v1/users/${me.id}/password`, { password: 'cashier123' })
     const products = await demoRequest<Any[]>('GET', '/api/v1/products')
     expect(products.length).toBeGreaterThan(10)
   })
