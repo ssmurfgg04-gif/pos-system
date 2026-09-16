@@ -232,12 +232,17 @@ func NewPool(reg *Registry, driver, pgDSN string) *Pool {
 }
 
 // Open returns the cached handle for a shop, migrating on first open.
+// Postgres deployments are single-tenant (one DSN = one shop): opening a
+// second shop there errors instead of silently sharing data.
 func (p *Pool) Open(shopID string) (*database.DB, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if db, ok := p.open[shopID]; ok {
-		return db, nil
-	}
+        p.mu.Lock()
+        defer p.mu.Unlock()
+        if db, ok := p.open[shopID]; ok {
+                return db, nil
+        }
+        if p.driver == "postgres" && len(p.open) > 0 {
+                return nil, fmt.Errorf("multi-tenancy requires SQLite files")
+        }
 	shop, ok := p.reg.Find(shopID)
 	if !ok {
 		return nil, fmt.Errorf("unknown shop")

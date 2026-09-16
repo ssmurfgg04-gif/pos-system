@@ -81,14 +81,29 @@ func (h *H) CreateUser(c *gin.Context) {
         if body.Active != nil && !*body.Active {
                 active = 0
         }
+        shopID := h.shopID(c)
+        if h.Tenants != nil {
+                if _, taken := h.Tenants.ShopForUser(body.Username); taken {
+                        h.fail(c, 409, "username already exists")
+                        return
+                }
+        }
         res, err := h.db(c).Exec(h.db(c).Rebind(`
-                INSERT INTO users (username, full_name, password_hash, pin_hash, role_id, is_active)
-                VALUES (?, ?, ?, ?, ?, ?)`), body.Username, body.FullName, pwHash, pinHash, body.RoleID, active)
+                INSERT INTO users (username, full_name, password_hash, pin_hash, role_id, is_active, must_rotate)
+                VALUES (?, ?, ?, ?, ?, ?, 1)`), body.Username, body.FullName, pwHash, pinHash, body.RoleID, active)
         if err != nil {
                 h.fail(c, 409, "username already exists")
                 return
         }
         id, _ := res.LastInsertId()
+        // Registry routing or the new user can never log in; rotation forced
+        // because an admin chose this password, not its owner.
+        if h.Tenants != nil {
+                if err := h.Tenants.RegisterUser(body.Username, shopID); err != nil {
+                        h.fail(c, 409, err.Error())
+                        return
+                }
+        }
         h.svc(c).Audit(p.ID, p.Username, "USER_CREATED", "user", body.Username, "")
         h.created(c, gin.H{"id": id})
 }
@@ -130,7 +145,9 @@ type passwordBody struct {
         Password string `json:"password" binding:"required,min=6"`
 }
 
-// SetPassword (self-service, or users.manage for others).
+// SetPassword (self-service, or users.manage for others). Resetting someone
+// else's password re-arms rotation (they must pick their own on next login);
+// changing your own clears it.
 func (h *H) SetPassword(c *gin.Context) {
         p := h.principal(c)
         id, ok := h.pathID(c, "id")
@@ -151,7 +168,11 @@ func (h *H) SetPassword(c *gin.Context) {
                 h.fail(c, 500, err.Error())
                 return
         }
-        res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET password_hash = ?, must_rotate = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, id)
+        rotate := 0
+        if id != p.ID {
+                rotate = 1
+        }
+        res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET password_hash = ?, must_rotate = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, rotate, id)
         if err != nil || n(res) != 1 {
                 h.fail(c, 404, "user not found")
                 return
@@ -164,7 +185,8 @@ type pinBody2 struct {
         PIN string `json:"pin" binding:"required,len=4"`
 }
 
-// SetPIN (self-service, or users.manage for others).
+// SetPIN (self-service, or users.manage for others). Same rotation rule
+// as SetPassword: resetting others re-arms it.
 func (h *H) SetPIN(c *gin.Context) {
         p := h.principal(c)
         id, ok := h.pathID(c, "id")
@@ -185,8 +207,12 @@ func (h *H) SetPIN(c *gin.Context) {
                 h.fail(c, 500, err.Error())
                 return
         }
+        rotate := 0
+        if id != p.ID {
+                rotate = 1
+        }
         res, err := h.db(c).Exec(h.db(c).Rebind(
-                `UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '', must_rotate = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, id)
+                `UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '', must_rotate = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, rotate, id)
         if err != nil || n(res) != 1 {
                 h.fail(c, 404, "user not found")
                 return

@@ -11,6 +11,7 @@ export function Signup() {
   const refresh = useAuth((s) => s.refresh)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [pin, setPin] = useState('')
   const [shopName, setShopName] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -18,14 +19,21 @@ export function Signup() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    if (pin && !/^\d{4}$/.test(pin)) {
+      setError('PIN must be exactly 4 digits')
+      return
+    }
     setBusy(true)
     try {
-      const res = await api.post<{ token: string }>('/api/v1/auth/signup', {
+      const res = await api.post<{ token: string; user: { id: number } }>('/api/v1/auth/signup', {
         username: username.trim(),
         password,
         shopName: shopName.trim(),
       })
       localStorage.setItem('pos_token', res.token)
+      if (pin) {
+        await api.put(`/api/v1/users/${res.user.id}/pin`, { pin })
+      }
       await refresh()
       navigate('/')
     } catch (err: any) {
@@ -54,6 +62,9 @@ export function Signup() {
           </Field>
           <Field label="Shop name">
             <Input value={shopName} onChange={(e) => setShopName(e.target.value)} required placeholder="e.g. Zawadi Prints" />
+          </Field>
+          <Field label="PIN (optional)" hint="For fast sign-in at the till. You can set it later.">
+            <Input value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} inputMode="numeric" placeholder="4 digits" />
           </Field>
           {error && (
             <p role="alert" className="text-danger-text text-sm font-semibold bg-danger-bg border border-danger-text/30 rounded-input px-3 py-2">

@@ -1280,7 +1280,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const u: DemoUser = {
       id: d.seq.user++, username, fullName: String(body?.fullName || ''),
       password: String(body.password), pin: body?.pin ? String(body.pin) : '',
-      roleId: Number(body?.roleId) || 2, active: true, mustRotate: false, createdAt: nowIso(),
+      roleId: Number(body?.roleId) || 2, active: true, mustRotate: true, createdAt: nowIso(),
     }
     d.users.push(u)
     audit(user.id, user.username, 'USER_CREATED', 'user', String(u.id), username)
@@ -1294,16 +1294,18 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const kind = userMatch[3]
     if (m === 'PUT' && (kind === 'password' || kind === 'pin')) {
       // Self-service rotation; managing others needs users.manage.
-      if (u.id !== user.id) requirePerm(perms, 'users.manage')
+      // Resetting someone else re-arms rotation (server parity).
+      const self = u.id === user.id
+      if (!self) requirePerm(perms, 'users.manage')
       if (kind === 'password') {
         if (!body?.password || String(body.password).length < 6) throw new ApiError(400, 'password must be at least 6 characters')
         u.password = String(body.password)
-        u.mustRotate = false
+        u.mustRotate = !self
         audit(user.id, user.username, 'PASSWORD_RESET', 'user', String(u.id), u.username)
       } else {
         if (!/^\d{4}$/.test(String(body?.pin || ''))) throw new ApiError(400, 'PIN must be exactly 4 digits')
         u.pin = String(body.pin)
-        u.mustRotate = false
+        u.mustRotate = !self
         audit(user.id, user.username, 'PIN_UPDATED', 'user', String(u.id), u.username)
       }
       persist()
