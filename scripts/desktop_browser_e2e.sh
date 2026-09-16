@@ -37,9 +37,9 @@ E2E_PW="e2e-admin-1"
 $AB snapshot -i > /tmp/snap-login.txt 2>&1
 grep -qi "First run" /tmp/snap-login.txt ; ck $? "login shows first-run starter-login hint"
 $AB screenshot $SHOTS/desk-01-login-firstrun.png >/dev/null 2>&1
-U=$(grep -o 'textbox "Username" \[required, ref=e[0-9]*\]' /tmp/snap-login.txt | grep -o 'e[0-9]*$')
-P=$(grep -o 'textbox "Password" \[required, ref=e[0-9]*\]' /tmp/snap-login.txt | grep -o 'e[0-9]*$')
-S=$(grep -o 'button "Sign in" \[ref=e[0-9]*\]' /tmp/snap-login.txt | grep -o 'e[0-9]*$')
+U=e$(grep -o 'textbox "Username" \[required, ref=e[0-9]*\]' /tmp/snap-login.txt | grep -o 'ref=e[0-9]*' | grep -o '[0-9]\+$')
+P=e$(grep -o 'textbox "Password" \[required, ref=e[0-9]*\]' /tmp/snap-login.txt | grep -o 'ref=e[0-9]*' | grep -o '[0-9]\+$')
+S=e$(grep -o 'button "Sign in" \[ref=e[0-9]*\]' /tmp/snap-login.txt | grep -o 'ref=e[0-9]*' | grep -o '[0-9]\+$')
 echo "refs: user=$U pass=$P submit=$S"
 
 # 2. admin login → Quit button
@@ -54,7 +54,7 @@ $AB screenshot $SHOTS/desk-02-admin-shell-quit.png >/dev/null 2>&1
 
 # 3. quit via button (auto-accept confirm)
 $AB eval "window.confirm = () => true" >/dev/null 2>&1
-Q=$(grep -o 'button "Quit application" \[ref=e[0-9]*\]' /tmp/snap-admin.txt | grep -o 'e[0-9]*$')
+Q=e$(grep -o 'button "Quit application" \[ref=e[0-9]*\]' /tmp/snap-admin.txt | grep -o 'ref=e[0-9]*' | grep -o '[0-9]\+$')
 echo "quit ref: $Q"
 $AB click @$Q >/dev/null 2>&1
 sleep 3
@@ -79,9 +79,9 @@ CID=$(curl -s -m 2 $URL/api/v1/me -H "Authorization: Bearer $CTOK" | python3 -c 
 curl -s -m 2 -X PUT $URL/api/v1/users/$CID/password -H "Authorization: Bearer $CTOK" -H 'Content-Type: application/json' -d '{"password":"e2e-cashier-1"}' | grep -q '"updated":true' ; ck $? "cashier rotation via API"
 $AB snapshot -i > /tmp/snap-login2.txt 2>&1
 grep -qi "First run" /tmp/snap-login2.txt ; [ $? -ne 0 ] ; ck $? "second run: no first-run hint"
-U2=$(grep -o 'textbox "Username" \[required, ref=e[0-9]*\]' /tmp/snap-login2.txt | grep -o 'e[0-9]*$')
-P2=$(grep -o 'textbox "Password" \[required, ref=e[0-9]*\]' /tmp/snap-login2.txt | grep -o 'e[0-9]*$')
-S2=$(grep -o 'button "Sign in" \[ref=e[0-9]*\]' /tmp/snap-login2.txt | grep -o 'e[0-9]*$')
+U2=e$(grep -o 'textbox "Username" \[required, ref=e[0-9]*\]' /tmp/snap-login2.txt | grep -o 'ref=e[0-9]*' | grep -o '[0-9]\+$')
+P2=e$(grep -o 'textbox "Password" \[required, ref=e[0-9]*\]' /tmp/snap-login2.txt | grep -o 'ref=e[0-9]*' | grep -o '[0-9]\+$')
+S2=e$(grep -o 'button "Sign in" \[ref=e[0-9]*\]' /tmp/snap-login2.txt | grep -o 'ref=e[0-9]*' | grep -o '[0-9]\+$')
 $AB fill @$U2 "cashier" >/dev/null 2>&1
 $AB fill @$P2 "e2e-cashier-1" >/dev/null 2>&1
 $AB click @$S2 >/dev/null 2>&1
