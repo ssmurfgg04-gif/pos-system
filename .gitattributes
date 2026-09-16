@@ -1,0 +1,5 @@
+# Shell scripts must stay LF or Linux/WSL bash chokes on CR bytes.
+*.sh text eol=lf
+# Windows batch files stay CRLF.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
