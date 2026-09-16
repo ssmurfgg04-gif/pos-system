@@ -249,7 +249,7 @@ func ListObjects(ctx context.Context, cfg Config, prefix string) ([]ObjectKey, e
 	return out, nil
 }
 
-// DeleteObjects removes keys in one call.
+// DeleteObjects removes keys in one call (API takes {"prefixes": [...]}).
 func DeleteObjects(ctx context.Context, cfg Config, keys []string) error {
 	if len(keys) == 0 {
 		return nil
@@ -259,7 +259,7 @@ func DeleteObjects(ctx context.Context, cfg Config, keys []string) error {
 		return err
 	}
 	h.Set("Content-Type", "application/json")
-	payload, _ := json.Marshal(keys)
+	payload, _ := json.Marshal(map[string]any{"prefixes": keys})
 	req, err := http.NewRequestWithContext(ctx, "DELETE",
 		storageBase(cfg)+"/object/"+cfg.Bucket, bytes.NewReader(payload))
 	if err != nil {
