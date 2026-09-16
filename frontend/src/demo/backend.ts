@@ -495,6 +495,10 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     persist()
     return { token: issueToken(u), user: userDTO(u) } as T
   }
+  if (m === 'POST' && p === '/auth/signup') {
+    // Single-shop demo: no tenant provisioning here.
+    throw new ApiError(501, 'signup is not available in the demo')
+  }
   if (m === 'GET' && p === '/branding') return brandingDTO() as T
   if (m === 'POST' && p === '/payments/mpesa/callback') return { ResultCode: 0 } as T
 
