@@ -15,6 +15,7 @@ import (
         "posapp/internal/database"
         "posapp/internal/offsite"
         "posapp/internal/printer"
+        "posapp/internal/tenants"
         "posapp/internal/update"
         "posapp/internal/services"
         "posapp/internal/settings"
@@ -29,6 +30,11 @@ type H struct {
         Printer  *printer.Worker
         Offsite  *offsite.Worker
         Updater  *update.Checker
+        // Multi-tenancy (set post-New; DefaultShop keeps single-shop behavior).
+        Tenants      *tenants.Registry
+        Shops        *services.ShopPool
+        DefaultShop  string
+        MasterSecret []byte
         LoginRL  *auth.RateLimiter
         PinRL    *auth.RateLimiter
 
@@ -42,10 +48,11 @@ type H struct {
 // DesktopStatus reports how the binary was launched. Server mode keeps
 // the zero value (desktop=false); desktop mode fills it in.
 type DesktopStatus struct {
-        Desktop  bool   `json:"desktop"`
-        Version  string `json:"version,omitempty"`
-        FirstRun bool   `json:"firstRun,omitempty"`
-        Port     string `json:"port,omitempty"`
+        Desktop       bool   `json:"desktop"`
+        Version       string `json:"version,omitempty"`
+        FirstRun      bool   `json:"firstRun,omitempty"`
+        Port          string `json:"port,omitempty"`
+        SignupAllowed bool   `json:"signupAllowed,omitempty"`
 }
 
 func New(db *database.DB, st *settings.Store, svc *services.Service, hub *ws.Hub, pw *printer.Worker) *H {
@@ -72,6 +79,67 @@ func (h *H) fail(c *gin.Context, code int, msg string) {
 }
 
 func (h *H) principal(c *gin.Context) *auth.Principal { return auth.FromContext(c) }
+
+const ctxShopSvc = "shopSvc"
+
+// WithShopService stores the request's resolved tenant service (set by the
+// auth middleware after opening the shop from the token claim).
+func WithShopService(c *gin.Context, s *services.Service) { c.Set(ctxShopSvc, s) }
+
+// shopID resolves the request's tenant (empty = legacy/default context).
+func (h *H) shopID(c *gin.Context) string {
+        if id := auth.ShopID(c); id != "" {
+                return id
+        }
+        return h.DefaultShop
+}
+
+// publicShopID resolves the tenant for unauthenticated endpoints from
+// ?shop= (a terminal belongs to one shop), else the default shop.
+func (h *H) publicShopID(c *gin.Context) string {
+        if q := strings.TrimSpace(c.Query("shop")); q != "" {
+                return q
+        }
+        return h.DefaultShop
+}
+
+// shopDB opens the public (unauthenticated) request's shop database.
+func (h *H) shopDB(c *gin.Context) (*database.DB, error) {
+        if h.Shops == nil {
+                return h.DB, nil
+        }
+        return h.Shops.DB(h.publicShopID(c))
+}
+
+// shopSettings opens the public request's shop settings store.
+func (h *H) shopSettings(c *gin.Context) (*settings.Store, error) {
+        if h.Shops == nil {
+                return h.Settings, nil
+        }
+        return h.Shops.Settings(h.publicShopID(c))
+}
+
+// svc returns the request's shop service. The auth middleware stores the
+// resolved handle per request; the field fallback covers direct calls.
+// Isolation by construction: every query below runs on the tenant's file.
+func (h *H) svc(c *gin.Context) *services.Service {
+        if v, ok := c.Get(ctxShopSvc); ok {
+                if s, ok := v.(*services.Service); ok && s != nil {
+                        return s
+                }
+        }
+        return h.Svc
+}
+
+// db returns the request's shop database handle.
+func (h *H) db(c *gin.Context) *database.DB {
+        return h.svc(c).DB()
+}
+
+// settings returns the request's shop settings store.
+func (h *H) settings(c *gin.Context) *settings.Store {
+        return h.svc(c).Settings()
+}
 
 func (h *H) pathID(c *gin.Context, param string) (int64, bool) {
         id, err := strconv.ParseInt(c.Param(param), 10, 64)

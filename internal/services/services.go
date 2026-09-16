@@ -39,6 +39,15 @@ func New(db *database.DB, st *settings.Store, hub *ws.Hub, pw *printer.Worker) *
         return &Service{db: db, settings: st, hub: hub, printer: pw, mock: mpesa.NewMock(4*time.Second, 0)}
 }
 
+// Settings exposes the shop's settings store (per-tenant).
+func (s *Service) Settings() *settings.Store { return s.settings }
+
+// DB exposes the shop's database handle.
+func (s *Service) DB() *database.DB { return s.db }
+
+// SetPrinter swaps the shared printer worker (pool wiring after construction).
+func (s *Service) SetPrinter(pw *printer.Worker) { s.printer = pw }
+
 // AttachOffsite wires the encrypted-upload worker (set by main; nil = local only).
 func (s *Service) AttachOffsite(w *offsite.Worker) {
         s.offsite = w

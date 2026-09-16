@@ -6,6 +6,7 @@ import (
         "encoding/hex"
         "encoding/json"
         "fmt"
+        "strings"
 
         "posapp/internal/hash"
         "posapp/internal/models"
@@ -225,6 +226,43 @@ func (d *DB) seedUsers() error {
                 if _, err := d.Exec(q, u.username, u.fullName, pwHash, pinHash, u.role, u.username); err != nil {
                         return err
                 }
+        }
+        return nil
+}
+
+// SeedShop provisions a fresh tenant: settings (with the shop's own name),
+// roles, catalog, and exactly ONE admin holding chosen credentials
+// (must_rotate = 0 — they just set them; no default passwords exist here).
+func (d *DB) SeedShop(storeName, adminUser, adminPass string) error {
+        if strings.TrimSpace(storeName) == "" {
+                return fmt.Errorf("shop name required")
+        }
+        if strings.TrimSpace(adminUser) == "" || len(adminPass) < 6 {
+                return fmt.Errorf("admin username and 6+ character password required")
+        }
+        if err := d.seedSettings(); err != nil {
+                return fmt.Errorf("seed settings: %w", err)
+        }
+        if _, err := d.Exec(d.Rebind(`UPDATE settings SET value = ? WHERE key = 'store_name'`),
+                strings.TrimSpace(storeName)); err != nil {
+                return fmt.Errorf("store name: %w", err)
+        }
+        if err := d.seedRoles(); err != nil {
+                return fmt.Errorf("seed roles: %w", err)
+        }
+        if err := d.seedCatalog(); err != nil {
+                return fmt.Errorf("seed catalog: %w", err)
+        }
+        pwHash, err := hash.Password(adminPass)
+        if err != nil {
+                return err
+        }
+        q := d.Rebind(`INSERT INTO users (username, full_name, password_hash, pin_hash, role_id, must_rotate)
+                SELECT ?, ?, ?, '', (SELECT id FROM roles WHERE name = 'Admin'), 0
+                WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = ?)`)
+        if _, err := d.Exec(q, strings.TrimSpace(adminUser), strings.TrimSpace(adminUser),
+                pwHash, strings.TrimSpace(adminUser)); err != nil {
+                return err
         }
         return nil
 }

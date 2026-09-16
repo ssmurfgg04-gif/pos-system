@@ -109,7 +109,9 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
                 conn.Close()
                 return
         }
-        if _, err := auth.ParseToken(h.secretFn(), hs.Token); err != nil {
+        // Hub is box-shared: any valid token authenticates (per-shop
+        // broadcasts stay server-side; the secret must be the master one).
+        if _, _, err := auth.ParseToken(h.secretFn(), hs.Token); err != nil {
                 conn.WriteJSON(map[string]string{"type": "ERROR", "data": "invalid token"})
                 conn.Close()
                 return

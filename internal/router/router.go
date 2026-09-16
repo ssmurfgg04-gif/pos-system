@@ -20,7 +20,8 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         r.Use(gin.Recovery())
         r.Use(corsMiddleware())
 
-        // Auth middleware: Bearer token → fresh principal from DB.
+        // Auth middleware: Bearer token → shop from claim → fresh principal
+        // from that shop's file. Unknown shops and cross-shop tokens 403.
         authRequired := func(c *gin.Context) {
                 header := c.GetHeader("Authorization")
                 token := strings.TrimPrefix(header, "Bearer ")
@@ -28,17 +29,28 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
                         c.AbortWithStatusJSON(401, gin.H{"error": "Authorization header required"})
                         return
                 }
-                userID, err := auth.ParseToken(h.Settings.JWTSecret(), token)
+                userID, shopID, err := auth.ParseToken(h.MasterSecret, token)
                 if err != nil {
                         c.AbortWithStatusJSON(401, gin.H{"error": "invalid or expired token"})
                         return
                 }
-                p, err := auth.LoadPrincipal(h.DB, userID)
+                if shopID == "" {
+                        shopID = h.DefaultShop // legacy pre-tenancy tokens
+                }
+                svc, err := h.Shops.Service(shopID)
+                if err != nil {
+                        c.AbortWithStatusJSON(403, gin.H{"error": "unknown shop"})
+                        return
+                }
+                p, err := auth.LoadPrincipal(svc.DB(), userID)
                 if err != nil {
                         c.AbortWithStatusJSON(403, gin.H{"error": "account unavailable"})
                         return
                 }
+                p.ShopID = shopID
                 auth.WithPrincipal(c, p)
+                auth.WithShopID(c, shopID)
+                handlers.WithShopService(c, svc)
                 // Seeded defaults stop working until rotated: only identity,
                 // rotation, and public-config endpoints stay reachable.
                 if p.MustRotate {
@@ -68,6 +80,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         api.POST("/auth/login", h.Login)
         api.GET("/auth/pin-users", h.PinUsers)
         api.POST("/auth/pin", h.PinLogin)
+        api.POST("/auth/signup", h.Signup)
         api.GET("/branding", h.Branding)
         api.GET("/settings/logo", h.GetLogo)
         api.POST("/payments/mpesa/callback", h.MpesaCallback)

@@ -49,6 +49,7 @@ type User struct {
 	Permissions []string `json:"permissions"`
 	Active      bool     `json:"active"`
 	MustRotate  bool     `json:"mustRotate"`
+	ShopID      string   `json:"shopId,omitempty"`
 	PINSet      bool     `json:"pinSet"`
 	CreatedAt   string   `json:"createdAt"`
 }
