@@ -37,7 +37,7 @@ func (h *H) ListOrders(c *gin.Context) {
 		}
 	}
 	f.From, f.To = c.Query("from"), c.Query("to")
-	orders, err := h.Svc.ListOrders(f)
+	orders, err := h.svc(c).ListOrders(f)
 	if err != nil {
 		h.fail(c, 500, err.Error())
 		return
@@ -54,7 +54,7 @@ func (h *H) GetOrder(c *gin.Context) {
 	if !ok {
 		return
 	}
-	order, err := h.Svc.GetOrder(id)
+	order, err := h.svc(c).GetOrder(id)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -73,7 +73,7 @@ func (h *H) Checkout(c *gin.Context) {
 	if req.ClientUUID == "" {
 		req.ClientUUID = fmt.Sprintf("srv-%d-%d", time.Now().UnixNano(), p.ID)
 	}
-	order, err := h.Svc.Checkout(c.Request.Context(), p, req)
+	order, err := h.svc(c).Checkout(c.Request.Context(), p, req)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -93,7 +93,7 @@ func (h *H) VoidOrder(c *gin.Context) {
 		h.fail(c, 400, "reason required")
 		return
 	}
-	order, err := h.Svc.Void(id, body.Reason, p)
+	order, err := h.svc(c).Void(id, body.Reason, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -113,7 +113,7 @@ func (h *H) RetrySTK(c *gin.Context) {
 		h.fail(c, 400, "phone required")
 		return
 	}
-	order, err := h.Svc.RetrySTKWithPhone(c.Request.Context(), id, body.Phone, p)
+	order, err := h.svc(c).RetrySTKWithPhone(c.Request.Context(), id, body.Phone, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -133,7 +133,7 @@ func (h *H) ManualConfirm(c *gin.Context) {
 		h.fail(c, 400, "receiptCode required")
 		return
 	}
-	order, err := h.Svc.ManualConfirm(id, body.ReceiptCode, p)
+	order, err := h.svc(c).ManualConfirm(id, body.ReceiptCode, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -155,7 +155,7 @@ func (h *H) MpesaCallback(c *gin.Context) {
 		c.JSON(400, gin.H{"ResultCode": 1, "ResultDesc": "unparseable callback"})
 		return
 	}
-	if _, err := h.Svc.HandleCallback(cb); err != nil {
+	if _, err := h.svc(c).HandleCallback(cb); err != nil {
 		// Answer Daraja politely either way (retries would duplicate);
 		// unknown checkout ids are logged server-side.
 		c.JSON(200, gin.H{"ResultCode": 0, "ResultDesc": "accepted"})
@@ -172,7 +172,7 @@ func (h *H) Sync(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	results := h.Svc.Sync(c.Request.Context(), p, req.Transactions)
+	results := h.svc(c).Sync(c.Request.Context(), p, req.Transactions)
 	if results == nil {
 		results = []models.SyncResult{}
 	}
@@ -186,12 +186,12 @@ func (h *H) ReceiptHTML(c *gin.Context) {
 	if !ok {
 		return
 	}
-	order, err := h.Svc.GetOrder(id)
+	order, err := h.svc(c).GetOrder(id)
 	if err != nil {
 		h.fail(c, 404, "order not found")
 		return
 	}
-	symbol := h.Settings.GetString("currency_symbol", "KES")
+	symbol := h.settings(c).GetString("currency_symbol", "KES")
 	fm := func(cents int64) string { return printer.FormatMoney(cents, symbol) }
 	when := order.PaidAtOrCreated()
 	if t, err := time.Parse(time.RFC3339, when); err == nil {
@@ -214,10 +214,10 @@ func (h *H) ReceiptHTML(c *gin.Context) {
 		payLines = append(payLines, "*** VOIDED ***")
 	}
 	data := map[string]any{
-		"Store":     h.Settings.GetString("store_name", "My Store"),
-		"Address":   h.Settings.Get("store_address"),
-		"Phone":     h.Settings.Get("store_phone"),
-		"Footer":    h.Settings.Get("receipt_footer"),
+		"Store":     h.settings(c).GetString("store_name", "My Store"),
+		"Address":   h.settings(c).Get("store_address"),
+		"Phone":     h.settings(c).Get("store_phone"),
+		"Footer":    h.settings(c).Get("receipt_footer"),
 		"Number":    order.Number,
 		"When":      when,
 		"Cashier":   order.CashierName,

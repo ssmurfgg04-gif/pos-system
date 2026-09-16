@@ -53,10 +53,12 @@ func TestOffsiteUploadFlow(t *testing.T) {
                         }
                         w.Write([]byte(`{"Key":"shop/k"}`))
                 case r.Method == "DELETE":
-                        var keys []string
+                        var del struct {
+                                Prefixes []string `json:"prefixes"`
+                        }
                         body, _ := io.ReadAll(r.Body)
-                        _ = json.Unmarshal(body, &keys)
-                        deleted = append(deleted, keys...)
+                        _ = json.Unmarshal(body, &del)
+                        deleted = append(deleted, del.Prefixes...)
                         w.Write([]byte(`[]`))
                 default:
                         w.WriteHeader(400)

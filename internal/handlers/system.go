@@ -15,7 +15,7 @@ import (
 // MonthlyReport (reports.view) — one calendar month of VAT figures for the
 // accountant's KRA return. ?month=YYYY-MM (defaults to current month).
 func (h *H) MonthlyReport(c *gin.Context) {
-        summary, err := h.Svc.GetMonthlySummary(c.Query("month"))
+        summary, err := h.svc(c).GetMonthlySummary(c.Query("month"))
         if err != nil {
                 h.fail(c, 400, err.Error())
                 return
@@ -26,12 +26,12 @@ func (h *H) MonthlyReport(c *gin.Context) {
 // MonthlyReportCSV (reports.view) — the same month as a CSV the accountant
 // can attach to the iTax return.
 func (h *H) MonthlyReportCSV(c *gin.Context) {
-        m, err := h.Svc.GetMonthlySummary(c.Query("month"))
+        m, err := h.svc(c).GetMonthlySummary(c.Query("month"))
         if err != nil {
                 h.fail(c, 400, err.Error())
                 return
         }
-        store := h.Settings.GetString("store_name", "Store")
+        store := h.settings(c).GetString("store_name", "Store")
         var b strings.Builder
         b.WriteString("KRA MONTHLY VAT RETURN SUMMARY\n")
         b.WriteString(fmt.Sprintf("Business,%s\n", csvField(store)))
@@ -70,18 +70,18 @@ func csvField(s string) string {
 // RunBackup (settings.manage) — manual snapshot now (SQLite VACUUM INTO).
 func (h *H) RunBackup(c *gin.Context) {
         p := h.principal(c)
-        res, err := h.Svc.BackupNow()
+        res, err := h.svc(c).BackupNow()
         if err != nil {
                 h.fail(c, 500, err.Error())
                 return
         }
-        h.Svc.Audit(p.ID, p.Username, "BACKUP_CREATED", "backup", res.File, fmt.Sprintf("%d bytes", res.Bytes))
+        h.svc(c).Audit(p.ID, p.Username, "BACKUP_CREATED", "backup", res.File, fmt.Sprintf("%d bytes", res.Bytes))
         h.ok(c, res)
 }
 
 // ListBackups (settings.manage) — backup history, newest first.
 func (h *H) ListBackups(c *gin.Context) {
-        h.ok(c, h.Svc.ListBackups())
+        h.ok(c, h.svc(c).ListBackups())
 }
 
 // UpdateStatus (settings.manage) — cached release check state.
@@ -93,7 +93,7 @@ func (h *H) UpdateStatus(c *gin.Context) {
 func (h *H) UpdateRefresh(c *gin.Context) {
         p := h.principal(c)
         h.Updater.Refresh(c.Request.Context())
-        h.Svc.Audit(p.ID, p.Username, "UPDATE_CHECKED", "system", "update", "")
+        h.svc(c).Audit(p.ID, p.Username, "UPDATE_CHECKED", "system", "update", "")
         h.ok(c, h.Updater.Status())
 }
 
@@ -105,7 +105,7 @@ func (h *H) UpdateDownload(c *gin.Context) {
                 h.fail(c, 502, err.Error())
                 return
         }
-        h.Svc.Audit(p.ID, p.Username, "UPDATE_DOWNLOADED", "system", "update", staged)
+        h.svc(c).Audit(p.ID, p.Username, "UPDATE_DOWNLOADED", "system", "update", staged)
         h.ok(c, gin.H{"staged": staged})
 }
 
@@ -126,7 +126,7 @@ func (h *H) UpdateInstall(c *gin.Context) {
                 h.fail(c, 500, err.Error())
                 return
         }
-        h.Svc.Audit(p.ID, p.Username, "UPDATE_INSTALLED", "system", "update", staged)
+        h.svc(c).Audit(p.ID, p.Username, "UPDATE_INSTALLED", "system", "update", staged)
         h.ok(c, gin.H{"installing": true})
         if h.OnQuit != nil {
                 go func() {
@@ -160,7 +160,7 @@ func (h *H) DesktopInfo(c *gin.Context) {
 // can render the "safe to close" state.
 func (h *H) QuitApp(c *gin.Context) {
         p := h.principal(c)
-        h.Svc.Audit(p.ID, p.Username, "APP_QUIT", "system", "desktop", "")
+        h.svc(c).Audit(p.ID, p.Username, "APP_QUIT", "system", "desktop", "")
         h.ok(c, gin.H{"quitting": true})
         if h.OnQuit != nil {
                 go func() {

@@ -87,12 +87,12 @@ func (h *H) UploadLogo(c *gin.Context) {
 		h.fail(c, 500, err.Error())
 		return
 	}
-	if err := h.Settings.Set("brand_logo", "1"); err != nil {
+	if err := h.settings(c).Set("brand_logo", "1"); err != nil {
 		h.fail(c, 500, err.Error())
 		return
 	}
-	h.Svc.Audit(p.ID, p.Username, "BRAND_LOGO_UPDATED", "settings", "", "brand_logo")
-	h.Hub.BroadcastJSON(services.EventSettingsUpdate, h.Settings.Branding())
+	h.svc(c).Audit(p.ID, p.Username, "BRAND_LOGO_UPDATED", "settings", "", "brand_logo")
+	h.Hub.BroadcastJSON(services.EventSettingsUpdate, h.settings(c).Branding())
 	h.ok(c, gin.H{"brand_logo_url": "/api/v1/settings/logo"})
 }
 
@@ -104,18 +104,18 @@ func (h *H) DeleteLogo(c *gin.Context) {
 		h.fail(c, 500, err.Error())
 		return
 	}
-	if err := h.Settings.Set("brand_logo", ""); err != nil {
+	if err := h.settings(c).Set("brand_logo", ""); err != nil {
 		h.fail(c, 500, err.Error())
 		return
 	}
-	h.Svc.Audit(p.ID, p.Username, "BRAND_LOGO_REMOVED", "settings", "", "brand_logo")
-	h.Hub.BroadcastJSON(services.EventSettingsUpdate, h.Settings.Branding())
+	h.svc(c).Audit(p.ID, p.Username, "BRAND_LOGO_REMOVED", "settings", "", "brand_logo")
+	h.Hub.BroadcastJSON(services.EventSettingsUpdate, h.settings(c).Branding())
 	h.ok(c, gin.H{"brand_logo_url": ""})
 }
 
 // GetLogo — public (the login screen shows it pre-auth, like branding).
 func (h *H) GetLogo(c *gin.Context) {
-	if h.Settings.Get("brand_logo") != "1" {
+	if h.settings(c).Get("brand_logo") != "1" {
 		c.Status(http.StatusNotFound)
 		return
 	}

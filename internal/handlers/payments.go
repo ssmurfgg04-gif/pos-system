@@ -23,7 +23,7 @@ func parseI64(s string) (int64, error) {
 // DailyReport (reports.view).
 func (h *H) DailyReport(c *gin.Context) {
 	date := c.Query("date")
-	summary, err := h.Svc.GetDailySummary(date)
+	summary, err := h.svc(c).GetDailySummary(date)
 	if err != nil {
 		h.fail(c, 500, err.Error())
 		return
@@ -44,7 +44,7 @@ func (h *H) OpenShift(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	shift, err := h.Svc.OpenShift(p, body.OpeningFloatCents)
+	shift, err := h.svc(c).OpenShift(p, body.OpeningFloatCents)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -63,7 +63,7 @@ func (h *H) CloseShift(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	shift, err := h.Svc.CloseShift(p, body.CountedCents)
+	shift, err := h.svc(c).CloseShift(p, body.CountedCents)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -72,7 +72,7 @@ func (h *H) CloseShift(c *gin.Context) {
 }
 
 func (h *H) CurrentShift(c *gin.Context) {
-	shift, err := h.Svc.CurrentShift(h.principal(c).ID)
+	shift, err := h.svc(c).CurrentShift(h.principal(c).ID)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -91,7 +91,7 @@ func (h *H) ListShifts(c *gin.Context) {
 			userID = id
 		}
 	}
-	shifts := h.Svc.ListShifts(userID, 30)
+	shifts := h.svc(c).ListShifts(userID, 30)
 	if shifts == nil {
 		shifts = []models.Shift{}
 	}
@@ -101,7 +101,7 @@ func (h *H) ListShifts(c *gin.Context) {
 // ---- Design board ----
 
 func (h *H) ListDesignJobs(c *gin.Context) {
-	jobs := h.Svc.ListDesignJobs(c.Query("status"))
+	jobs := h.svc(c).ListDesignJobs(c.Query("status"))
 	if jobs == nil {
 		jobs = []models.DesignJob{}
 	}
@@ -115,7 +115,7 @@ func (h *H) CreateDesignJob(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	job, err := h.Svc.CreateDesignJob(p, in)
+	job, err := h.svc(c).CreateDesignJob(p, in)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -134,7 +134,7 @@ func (h *H) UpdateDesignJob(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	job, err := h.Svc.UpdateDesignJob(p, id, in)
+	job, err := h.svc(c).UpdateDesignJob(p, id, in)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -155,7 +155,7 @@ func (h *H) MoveDesignJob(c *gin.Context) {
 		h.fail(c, 400, "status required")
 		return
 	}
-	job, err := h.Svc.MoveDesignJob(p, id, body.Status)
+	job, err := h.svc(c).MoveDesignJob(p, id, body.Status)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -166,7 +166,7 @@ func (h *H) MoveDesignJob(c *gin.Context) {
 // ---- Audit ----
 
 func (h *H) ListAudit(c *gin.Context) {
-	entries := h.Svc.ListAudit(200)
+	entries := h.svc(c).ListAudit(200)
 	if entries == nil {
 		entries = []models.AuditEntry{}
 	}

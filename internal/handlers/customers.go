@@ -6,7 +6,7 @@ import (
 
 // ListCustomers (customers.view) — ?search=name-or-phone.
 func (h *H) ListCustomers(c *gin.Context) {
-	list, err := h.Svc.ListCustomers(c.Query("search"))
+	list, err := h.svc(c).ListCustomers(c.Query("search"))
 	if err != nil {
 		h.fail(c, 500, err.Error())
 		return
@@ -26,7 +26,7 @@ func (h *H) CreateCustomer(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	customer, err := h.Svc.CreateCustomer(body.Name, body.Phone, body.LimitCents, p)
+	customer, err := h.svc(c).CreateCustomer(body.Name, body.Phone, body.LimitCents, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -55,7 +55,7 @@ func (h *H) UpdateCustomer(c *gin.Context) {
 	if body.Active != nil {
 		active = *body.Active
 	}
-	customer, err := h.Svc.UpdateCustomer(id, body.Name, body.Phone, body.LimitCents, active, p)
+	customer, err := h.svc(c).UpdateCustomer(id, body.Name, body.Phone, body.LimitCents, active, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -69,7 +69,7 @@ func (h *H) CustomerLedger(c *gin.Context) {
 	if !ok {
 		return
 	}
-	entries, err := h.Svc.CustomerLedger(id)
+	entries, err := h.svc(c).CustomerLedger(id)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -92,7 +92,7 @@ func (h *H) RecordCustomerPayment(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	customer, err := h.Svc.RecordCustomerPayment(id, body.AmountCents, body.Note, p)
+	customer, err := h.svc(c).RecordCustomerPayment(id, body.AmountCents, body.Note, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -115,7 +115,7 @@ func (h *H) RecordCustomerAdjustment(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	customer, err := h.Svc.RecordCustomerAdjustment(id, body.AmountCents, body.Note, p)
+	customer, err := h.svc(c).RecordCustomerAdjustment(id, body.AmountCents, body.Note, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -138,7 +138,7 @@ func (h *H) SettleTab(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	order, err := h.Svc.SettleTab(id, body.Method, body.ReceiptCode, p)
+	order, err := h.svc(c).SettleTab(id, body.Method, body.ReceiptCode, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return

@@ -70,10 +70,10 @@ func (h *H) ListProducts(c *gin.Context) {
 	}
 	q += ` ORDER BY p.name COLLATE NOCASE`
 	// COLLATE NOCASE is SQLite-only — strip for Postgres.
-	if !h.DB.IsSQLite() {
+	if !h.db(c).IsSQLite() {
 		q = strings.ReplaceAll(q, " COLLATE NOCASE", "")
 	}
-	rows, err := h.DB.Query(h.DB.Rebind(q), args...)
+	rows, err := h.db(c).Query(h.db(c).Rebind(q), args...)
 	if err != nil {
 		h.fail(c, 500, err.Error())
 		return
@@ -84,8 +84,8 @@ func (h *H) ListProducts(c *gin.Context) {
 
 // ListLowStock (products.view) — restock list.
 func (h *H) ListLowStock(c *gin.Context) {
-	threshold := h.Settings.GetInt("low_stock_threshold", 5)
-	rows, err := h.DB.Query(h.DB.Rebind(`
+	threshold := h.settings(c).GetInt("low_stock_threshold", 5)
+	rows, err := h.db(c).Query(h.db(c).Rebind(`
 		SELECT p.id, COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, p.category_id, COALESCE(c.name,''),
 			p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at
 		FROM products p LEFT JOIN categories c ON c.id = p.category_id
@@ -112,16 +112,16 @@ func (h *H) CreateProduct(c *gin.Context) {
 	if body.Active != nil && !*body.Active {
 		active = 0
 	}
-	res, err := h.DB.Exec(h.DB.Rebind(`
+	res, err := h.db(c).Exec(h.db(c).Rebind(`
 		INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-		uniqueSKU(h.DB, body.SKU), body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active)
+		uniqueSKU(h.db(c), body.SKU), body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active)
 	if err != nil {
 		h.fail(c, 500, err.Error())
 		return
 	}
 	id, _ := res.LastInsertId()
-	h.Svc.Audit(p.ID, p.Username, "PRODUCT_CREATED", "product", body.Name, "")
+	h.svc(c).Audit(p.ID, p.Username, "PRODUCT_CREATED", "product", body.Name, "")
 	h.created(c, gin.H{"id": id})
 }
 
@@ -172,10 +172,10 @@ func (h *H) UpdateProduct(c *gin.Context) {
 	sku := strings.TrimSpace(body.SKU)
 	if sku == "" {
 		var existing string
-		h.DB.QueryRow(`SELECT COALESCE(sku,'') FROM products WHERE id = ?`, id).Scan(&existing)
+		h.db(c).QueryRow(`SELECT COALESCE(sku,'') FROM products WHERE id = ?`, id).Scan(&existing)
 		sku = existing
 	}
-	res, err := h.DB.Exec(h.DB.Rebind(`
+	res, err := h.db(c).Exec(h.db(c).Rebind(`
 		UPDATE products SET sku = ?, barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
 			stock_qty = ?, track_stock = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`), sku, body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active, id)
@@ -187,7 +187,7 @@ func (h *H) UpdateProduct(c *gin.Context) {
 		h.fail(c, 404, "product not found")
 		return
 	}
-	h.Svc.Audit(p.ID, p.Username, "PRODUCT_UPDATED", "product", body.Name, "")
+	h.svc(c).Audit(p.ID, p.Username, "PRODUCT_UPDATED", "product", body.Name, "")
 	h.ok(c, gin.H{"updated": true})
 }
 
@@ -205,14 +205,14 @@ func (h *H) AdjustStock(c *gin.Context) {
 		h.fail(c, 400, "delta required")
 		return
 	}
-	res, err := h.DB.Exec(h.DB.Rebind(
+	res, err := h.db(c).Exec(h.db(c).Rebind(
 		`UPDATE products SET stock_qty = MAX(0, stock_qty + ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`),
 		body.Delta, id)
 	if err != nil || n(res) != 1 {
 		h.fail(c, 404, "product not found")
 		return
 	}
-	h.Svc.Audit(p.ID, p.Username, "STOCK_ADJUSTED", "product", itoa64(id), strconv.Itoa(body.Delta))
+	h.svc(c).Audit(p.ID, p.Username, "STOCK_ADJUSTED", "product", itoa64(id), strconv.Itoa(body.Delta))
 	h.ok(c, gin.H{"adjusted": true})
 }
 
@@ -223,12 +223,12 @@ func (h *H) DeactivateProduct(c *gin.Context) {
 	if !ok {
 		return
 	}
-	res, err := h.DB.Exec(h.DB.Rebind(`UPDATE products SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), id)
+	res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE products SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), id)
 	if err != nil || n(res) != 1 {
 		h.fail(c, 404, "product not found")
 		return
 	}
-	h.Svc.Audit(p.ID, p.Username, "PRODUCT_DEACTIVATED", "product", itoa64(id), "")
+	h.svc(c).Audit(p.ID, p.Username, "PRODUCT_DEACTIVATED", "product", itoa64(id), "")
 	h.ok(c, gin.H{"deactivated": true})
 }
 
@@ -265,7 +265,7 @@ func slugify(s string) string {
 
 // ListCategories (authed).
 func (h *H) ListCategories(c *gin.Context) {
-	rows, err := h.DB.Query(`
+	rows, err := h.db(c).Query(`
 		SELECT c.id, c.name, c.slug, (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id AND p.is_active = 1)
 		FROM categories c ORDER BY c.sort_order, c.name`)
 	if err != nil {
@@ -297,7 +297,7 @@ func (h *H) CreateCategory(c *gin.Context) {
 	if slug == "" {
 		slug = slugify(body.Name)
 	}
-	res, err := h.DB.Exec(h.DB.Rebind(
+	res, err := h.db(c).Exec(h.db(c).Rebind(
 		`INSERT INTO categories (name, slug, sort_order) VALUES (?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM categories))`),
 		body.Name, slug)
 	if err != nil {
@@ -305,7 +305,7 @@ func (h *H) CreateCategory(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	h.Svc.Audit(p.ID, p.Username, "CATEGORY_CREATED", "category", body.Name, "")
+	h.svc(c).Audit(p.ID, p.Username, "CATEGORY_CREATED", "category", body.Name, "")
 	h.created(c, gin.H{"id": id})
 }
 
@@ -321,13 +321,13 @@ func (h *H) UpdateCategory(c *gin.Context) {
 		h.fail(c, 400, "name required")
 		return
 	}
-	res, err := h.DB.Exec(h.DB.Rebind(`UPDATE categories SET name = ?, slug = ? WHERE id = ?`),
+	res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE categories SET name = ?, slug = ? WHERE id = ?`),
 		body.Name, slugify(body.Name), id)
 	if err != nil || n(res) != 1 {
 		h.fail(c, 404, "category not found")
 		return
 	}
-	h.Svc.Audit(p.ID, p.Username, "CATEGORY_UPDATED", "category", body.Name, "")
+	h.svc(c).Audit(p.ID, p.Username, "CATEGORY_UPDATED", "category", body.Name, "")
 	h.ok(c, gin.H{"updated": true})
 }
 
@@ -339,7 +339,7 @@ func (h *H) DeleteCategory(c *gin.Context) {
 		return
 	}
 	var count int
-	if err := h.DB.QueryRow(`SELECT COUNT(*) FROM products WHERE category_id = ?`, id).Scan(&count); err != nil {
+	if err := h.db(c).QueryRow(`SELECT COUNT(*) FROM products WHERE category_id = ?`, id).Scan(&count); err != nil {
 		h.fail(c, 500, err.Error())
 		return
 	}
@@ -347,10 +347,10 @@ func (h *H) DeleteCategory(c *gin.Context) {
 		h.fail(c, 409, "category still has products")
 		return
 	}
-	if _, err := h.DB.Exec(`DELETE FROM categories WHERE id = ?`, id); err != nil {
+	if _, err := h.db(c).Exec(`DELETE FROM categories WHERE id = ?`, id); err != nil {
 		h.fail(c, 500, err.Error())
 		return
 	}
-	h.Svc.Audit(p.ID, p.Username, "CATEGORY_DELETED", "category", itoa64(id), "")
+	h.svc(c).Audit(p.ID, p.Username, "CATEGORY_DELETED", "category", itoa64(id), "")
 	h.ok(c, gin.H{"deleted": true})
 }

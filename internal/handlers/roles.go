@@ -17,7 +17,7 @@ type roleBody struct {
 // ListRoles (roles.manage to see; users.manage screens need it too — gate
 // with the looser of the two at the router).
 func (h *H) ListRoles(c *gin.Context) {
-	rows, err := h.DB.Query(`
+	rows, err := h.db(c).Query(`
 		SELECT r.id, r.name, COALESCE(r.description,''), r.is_system, r.permissions,
 			(SELECT COUNT(*) FROM users u WHERE u.role_id = r.id)
 		FROM roles r ORDER BY r.id`)
@@ -82,7 +82,7 @@ func (h *H) CreateRole(c *gin.Context) {
 		h.fail(c, 400, "unknown permission key")
 		return
 	}
-	res, err := h.DB.Exec(h.DB.Rebind(
+	res, err := h.db(c).Exec(h.db(c).Rebind(
 		`INSERT INTO roles (name, description, is_system, permissions) VALUES (?, ?, 0, ?)`),
 		body.Name, body.Description, permsJSON)
 	if err != nil {
@@ -90,7 +90,7 @@ func (h *H) CreateRole(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	h.Svc.Audit(p.ID, p.Username, "ROLE_CREATED", "role", body.Name, permsJSON)
+	h.svc(c).Audit(p.ID, p.Username, "ROLE_CREATED", "role", body.Name, permsJSON)
 	h.created(c, gin.H{"id": id})
 }
 
@@ -113,13 +113,13 @@ func (h *H) UpdateRole(c *gin.Context) {
 		h.fail(c, 400, "unknown permission key")
 		return
 	}
-	res, err := h.DB.Exec(h.DB.Rebind(
+	res, err := h.db(c).Exec(h.db(c).Rebind(
 		`UPDATE roles SET description = ?, permissions = ? WHERE id = ?`), body.Description, permsJSON, id)
 	if err != nil || n(res) != 1 {
 		h.fail(c, 404, "role not found")
 		return
 	}
-	h.Svc.Audit(p.ID, p.Username, "ROLE_UPDATED", "role", itoa64(id), permsJSON)
+	h.svc(c).Audit(p.ID, p.Username, "ROLE_UPDATED", "role", itoa64(id), permsJSON)
 	h.ok(c, gin.H{"updated": true})
 }
 
@@ -131,7 +131,7 @@ func (h *H) DeleteRole(c *gin.Context) {
 		return
 	}
 	var isSystem, userCount int
-	err := h.DB.QueryRow(`SELECT is_system, (SELECT COUNT(*) FROM users u WHERE u.role_id = roles.id) FROM roles WHERE id = ?`, id).
+	err := h.db(c).QueryRow(`SELECT is_system, (SELECT COUNT(*) FROM users u WHERE u.role_id = roles.id) FROM roles WHERE id = ?`, id).
 		Scan(&isSystem, &userCount)
 	if err != nil {
 		h.fail(c, 404, "role not found")
@@ -145,10 +145,10 @@ func (h *H) DeleteRole(c *gin.Context) {
 		h.fail(c, 409, "role still has users assigned")
 		return
 	}
-	if _, err := h.DB.Exec(`DELETE FROM roles WHERE id = ?`, id); err != nil {
+	if _, err := h.db(c).Exec(`DELETE FROM roles WHERE id = ?`, id); err != nil {
 		h.fail(c, 500, err.Error())
 		return
 	}
-	h.Svc.Audit(p.ID, p.Username, "ROLE_DELETED", "role", itoa64(id), "")
+	h.svc(c).Audit(p.ID, p.Username, "ROLE_DELETED", "role", itoa64(id), "")
 	h.ok(c, gin.H{"deleted": true})
 }

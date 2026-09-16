@@ -10,7 +10,7 @@ import (
 
 // GetSettings (settings.manage) — secrets masked as "__SET__".
 func (h *H) GetSettings(c *gin.Context) {
-        h.ok(c, h.Settings.Snapshot())
+        h.ok(c, h.settings(c).Snapshot())
 }
 
 type settingsBody struct {
@@ -43,14 +43,14 @@ func (h *H) UpdateSettings(c *gin.Context) {
                         return
                 }
         }
-        changed, err := h.Settings.Update(body.Values)
+        changed, err := h.settings(c).Update(body.Values)
         if err != nil {
                 h.fail(c, 500, err.Error())
                 return
         }
-        h.Svc.Audit(p.ID, p.Username, "SETTINGS_UPDATED", "settings", "", joinKeys(changed))
-        h.Hub.BroadcastJSON(services.EventSettingsUpdate, h.Settings.Branding())
-        h.ok(c, h.Settings.Snapshot())
+        h.svc(c).Audit(p.ID, p.Username, "SETTINGS_UPDATED", "settings", "", joinKeys(changed))
+        h.Hub.BroadcastJSON(services.EventSettingsUpdate, h.settings(c).Branding())
+        h.ok(c, h.settings(c).Snapshot())
 }
 
 func joinKeys(keys []string) string {
@@ -71,7 +71,7 @@ func (h *H) TestPrint(c *gin.Context) {
                 h.fail(c, 422, err.Error())
                 return
         }
-        h.Svc.Audit(p.ID, p.Username, "PRINTER_TESTED", "printer", h.Settings.Get("printer_target"), "")
+        h.svc(c).Audit(p.ID, p.Username, "PRINTER_TESTED", "printer", h.settings(c).Get("printer_target"), "")
         h.ok(c, gin.H{"printed": true})
 }
 
@@ -82,7 +82,7 @@ func (h *H) KickDrawer(c *gin.Context) {
                 h.fail(c, 422, err.Error())
                 return
         }
-        h.Svc.Audit(p.ID, p.Username, "DRAWER_KICKED", "printer", h.Settings.Get("printer_target"), "")
+        h.svc(c).Audit(p.ID, p.Username, "DRAWER_KICKED", "printer", h.settings(c).Get("printer_target"), "")
         h.ok(c, gin.H{"kicked": true})
 }
 
