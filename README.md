@@ -80,6 +80,12 @@ power cut never corrupts a till.
   admins a banner when a newer build exists; one click downloads it and
   launches the installer (Windows), then quits so the install can land.
   Set `update_channel` to `off` to stay manual.
+- **Windows install note** — the installer is currently **unsigned**, so
+  SmartScreen shows "Windows protected your PC". Verify first: the file
+  must come from our GitHub Releases page, match the published SHA-256,
+  and show ProductVersion in file Properties → Details. Then **More
+  info → Run anyway**. Never disable SmartScreen, never run copies from
+  anywhere else. Full policy: `docs/DISTRIBUTION-TRUST.md`.
 - **Barcode scanners (no focus needed)** — hardware USB/Bluetooth
   scanners fire straight into the cart via a global HID listener that
   only accepts scanner-speed keystroke bursts; focused typing into the
