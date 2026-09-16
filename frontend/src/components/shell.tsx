@@ -78,7 +78,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
     if (stopping) return
     if (!window.confirm(`Quit ${branding.app_name || 'the app'}? The local app and its server will stop — your data is saved on this machine.`)) return
     setStopping(true)
-    try { await api.post('/system/quit') } catch { /* server is going away — expected */ }
+    try { await api.post('/api/v1/system/quit') } catch { /* server is going away — expected */ }
     logout()
     disconnectWs()
   }
