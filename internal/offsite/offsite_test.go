@@ -74,6 +74,13 @@ func TestUploadListDownloadDeleteAgainstStub(t *testing.T) {
 		case r.Method == "GET":
 			w.Write([]byte("bytes"))
 		case r.Method == "DELETE":
+			var del struct {
+				Prefixes []string `json:"prefixes"`
+			}
+			_ = json.Unmarshal(body, &del)
+			if len(del.Prefixes) == 0 {
+				t.Error("delete must send {prefixes:[...]}")
+			}
 			w.Write([]byte(`[]`))
 		default:
 			w.WriteHeader(400)
