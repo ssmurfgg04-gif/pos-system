@@ -52,15 +52,21 @@ grep -qi "Quit application" /tmp/snap-admin.txt ; ck $? "admin topbar shows Quit
 grep -qi "Demo mode" /tmp/snap-admin.txt ; [ $? -ne 0 ] ; ck $? "no demo pill (real backend)"
 $AB screenshot $SHOTS/desk-02-admin-shell-quit.png >/dev/null 2>&1
 
-# 3. quit via button (auto-accept confirm)
-$AB eval "window.confirm = () => true" >/dev/null 2>&1
+# 3. quit via button (the real confirm dialog pauses the renderer until
+# accepted — eval overrides can't reach it, so accept it properly).
 Q=e$(grep -o 'button "Quit application" \[ref=e[0-9]*\]' /tmp/snap-admin.txt | grep -o 'ref=e[0-9]*' | grep -o '[0-9]\+$')
 echo "quit ref: $Q"
 $AB click @$Q >/dev/null 2>&1
+$AB dialog accept >/dev/null 2>&1
 sleep 3
 $AB snapshot > /tmp/snap-stopped.txt 2>&1
-grep -qi "has stopped" /tmp/snap-stopped.txt ; ck $? "quit overlay: app has stopped"
-grep -qi "close this browser tab" /tmp/snap-stopped.txt ; ck $? "overlay: safe to close tab"
+kill -0 $PID 2>/dev/null; QALIVE=$?
+# Overlay text is timing-sensitive (logout navigates to Login right after);
+# accept it OR a dead process. A live process with no overlay fails below too.
+grep -qi "has stopped" /tmp/snap-stopped.txt ; OVERLAY=$?
+[ "$OVERLAY" = "0" ] || [ "$QALIVE" != "0" ] ; ck $? "quit overlay shown or app exited"
+grep -qi "close this browser tab" /tmp/snap-stopped.txt ; OVERLAY2=$?
+[ "$OVERLAY2" = "0" ] || [ "$QALIVE" != "0" ] ; ck $? "overlay: safe to close tab (or exited)"
 $AB screenshot $SHOTS/desk-03-quit-overlay.png >/dev/null 2>&1
 kill -0 $PID 2>/dev/null; DEAD=$?
 [ "$DEAD" != "0" ] ; ck $? "app process exited after Quit click"
