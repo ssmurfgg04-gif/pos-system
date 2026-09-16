@@ -1,6 +1,7 @@
 package handlers
 
 import (
+        "context"
         "net/http"
         "os"
         "strconv"
@@ -30,6 +31,10 @@ func (h *H) Login(c *gin.Context) {
         key := "login:" + strings.ToLower(body.Username)
         if !h.LoginRL.Allow(key) {
                 h.fail(c, 429, "too many attempts — wait a minute")
+                return
+        }
+        if h.Tenants == nil || h.Shops == nil {
+                h.fail(c, 500, "tenancy not configured")
                 return
         }
         shopID, ok := h.Tenants.ShopForUser(body.Username)
@@ -74,6 +79,10 @@ func (h *H) Login(c *gin.Context) {
 func (h *H) Signup(c *gin.Context) {
         if os.Getenv("ALLOW_SIGNUP") != "true" {
                 h.fail(c, 403, "signup disabled")
+                return
+        }
+        if h.Tenants == nil || h.Shops == nil {
+                h.fail(c, 500, "tenancy not configured")
                 return
         }
         var body struct {
@@ -133,6 +142,9 @@ func (h *H) Signup(c *gin.Context) {
         h.LoginRL.Forget("signup:" + c.ClientIP())
         svc, _ := h.Shops.Service(shop.ID)
         svc.Audit(p.ID, p.Username, "SHOP_CREATED", "shop", shop.ID, shop.Name)
+        // New shops get background loops immediately (backups/sweeper/uploads),
+        // not just at next boot — owners sign up and walk away.
+        h.Shops.EnsureStarted(context.Background(), shop.ID)
         h.created(c, gin.H{"token": token, "user": p.User(),
                 "shop": gin.H{"id": shop.ID, "name": shop.Name}})
 }
@@ -182,6 +194,10 @@ func (h *H) PinLogin(c *gin.Context) {
         }
         if !h.PinRL.Allow("pin") {
                 h.fail(c, 429, "too many attempts — wait a minute")
+                return
+        }
+        if h.Shops == nil {
+                h.fail(c, 500, "tenancy not configured")
                 return
         }
         shopID, ok := h.Shops.FindUserShop(body.UserID)

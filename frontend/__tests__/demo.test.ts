@@ -437,6 +437,12 @@ describe('demo settings + reports parity', () => {
     await expect(
       demoRequest<Any>('PUT', '/api/v1/users/3/password', { password: 'newpass' }),
     ).resolves.toMatchObject({ updated: true })
+    // Admin-created users rotate on first login; resetting someone else
+    // re-arms rotation too.
+    const users = await demoRequest<Any[]>('GET', '/api/v1/users')
+    expect(users.find((u: Any) => u.username === 'grace')!.mustRotate).toBe(true)
+    const graceLogin = await demoRequest<{ user: Any }>('POST', '/api/v1/auth/login', { username: 'grace', password: 'grace123' })
+    expect(graceLogin.user.mustRotate).toBe(true)
     // Duplicate username rejected.
     await expect(
       demoRequest<Any>('POST', '/api/v1/users', { username: 'grace', password: '123456', roleId: 2 }),
