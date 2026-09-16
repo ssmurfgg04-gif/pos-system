@@ -91,9 +91,130 @@ def find_makensis():
     return None
 
 
+GOVERSIONINFO = "github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0"
+
+
+def version_parts():
+    nums = (VERSION.lstrip("v") + ".0.0.0").split(".")[:4]
+    return [int(n) if n.isdigit() else 0 for n in nums]
+
+
+def stamp_version_info():
+    """Embed FileDescription/CompanyName/ProductVersion in the Windows exe.
+
+    Unsigned exes without version info look maximally suspicious to
+    SmartScreen; this is the cheapest trust signal available (docs:
+    DISTRIBUTION-TRUST.md). Generated files are gitignored build artifacts.
+    """
+    import json
+
+    major, minor, patch, build = version_parts()
+    info = {
+        "FixedFileInfo": {
+            "FileVersion": {"Major": major, "Minor": minor, "Patch": patch, "Build": build},
+            "ProductVersion": {"Major": major, "Minor": minor, "Patch": patch, "Build": build},
+            "FileFlagsMask": "3f",
+            "FileFlags": "00",
+            "FileOS": "040004",
+            "FileType": "01",
+            "FileSubType": "00",
+        },
+        "StringFileInfo": {
+            "Comments": "Point of sale for Kenyan retail shops",
+            "CompanyName": "LedgerPOS",
+            "FileDescription": "LedgerPOS point of sale",
+            "FileVersion": VERSION.lstrip("v"),
+            "InternalName": "ledgerpos",
+            "LegalCopyright": "",
+            "OriginalFilename": "LedgerPOS.exe",
+            "ProductName": "LedgerPOS",
+            "ProductVersion": VERSION.lstrip("v"),
+        },
+        "VarFileInfo": {"Translation": {"LangID": "0409", "CharsetID": "04B0"}},
+    }
+    # Icon + manifest merge into the same syso (replaces the old committed
+    # rsrc_windows_amd64.syso blob — its sources now live in version control:
+    # scripts/assets/app.manifest and build/app.ico from make_icon.py).
+    ico_path = os.path.join(ROOT, "build", "app.ico")
+    manifest_path = os.path.join(ROOT, "scripts", "assets", "app.manifest")
+    if os.path.isfile(ico_path):
+        info["IconPath"] = ico_path.replace("/", "\\")
+    else:
+        print("no build/app.ico (run scripts/make_icon.py) — exe ships without icon")
+    if os.path.isfile(manifest_path):
+        info["ManifestPath"] = manifest_path.replace("/", "\\")
+    else:
+        print("no scripts/assets/app.manifest — exe ships without manifest")
+    json_path = os.path.join(ROOT, "versioninfo.json")
+    syso_path = os.path.join(ROOT, "resource_windows_amd64.syso")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(info, f, indent=2)
+    print(f"$ go run {GOVERSIONINFO} -o {syso_path}")
+    go = (
+        os.environ.get("GO_BIN")
+        or shutil.which("go")
+        or next(
+            (p for p in (
+                r"C:\Program Files\Go\bin\go.exe",
+                r"C:\Go\bin\go.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\go\bin\go.exe"),
+            ) if os.path.isfile(p)),
+            None,
+        )
+    )
+    if not go:
+        print("go toolchain not found (PATH or GO_BIN env) — cannot stamp version info")
+        return 1
+    subprocess.run(
+        [go, "run", GOVERSIONINFO, "-o", syso_path, json_path],
+        check=True,
+        cwd=ROOT,
+    )
+    print(f"-> versioninfo {VERSION} stamped into {syso_path}")
+    return 0
+
+
+def find_go():
+    return (
+        os.environ.get("GO_BIN")
+        or shutil.which("go")
+        or next(
+            (p for p in (
+                r"C:\Program Files\Go\bin\go.exe",
+                r"C:\Program Files (x86)\Go\bin\go.exe",
+                r"C:\Go\bin\go.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\go\bin\go.exe"),
+            ) if os.path.isfile(p)),
+            None,
+        )
+    )
+
+
+def build_exe():
+    """Build the version-stamped Windows exe (picks up resource_*.syso)."""
+    go = find_go()
+    if not go:
+        print("go toolchain not found (PATH or GO_BIN env)")
+        return 1
+    os.makedirs(os.path.dirname(os.path.abspath(EXE)), exist_ok=True)
+    env = dict(os.environ, GOOS="windows", GOARCH="amd64", CGO_ENABLED="0")
+    cmd = [
+        go, "build", "-trimpath",
+        "-ldflags", f"-s -w -X main.version={VERSION} -H=windowsgui",
+        "-o", os.path.abspath(EXE), ".",
+    ]
+    print("$ " + " ".join(cmd))
+    subprocess.run(cmd, check=True, cwd=ROOT, env=env)
+    return 0
+
+
 def main():
+    if stamp_version_info() != 0:
+        return 2
+    if build_exe() != 0:
+        return 2
     if not os.path.isfile(EXE):
-        print(f"missing exe: {EXE} (build it first: go build)")
+        print(f"missing exe after build: {EXE}")
         return 2
     os.makedirs(OUTDIR, exist_ok=True)
     outname = f"ledgerpos-setup-windows-x64-{VERSION}.exe"
