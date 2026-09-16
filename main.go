@@ -12,6 +12,7 @@ import (
         "net/http"
         "os"
         "os/signal"
+        "path/filepath"
         "strconv"
         "syscall"
         "time"
@@ -24,6 +25,7 @@ import (
         "posapp/internal/mdns"
         "posapp/internal/offsite"
         "posapp/internal/printer"
+        "posapp/internal/tenants"
         "posapp/internal/update"
         "posapp/internal/router"
         "posapp/internal/services"
@@ -79,6 +81,37 @@ func runServer() {
         startApp(cfg, ":"+cfg.Port, nil, nil)
 }
 
+// ensureDefaultShop adopts the pre-tenancy database as the "default" shop
+// (zero data migration) and registers every existing username for routing.
+// Returns the default shop id.
+func ensureDefaultShop(reg *tenants.Registry, db *database.DB, dbPath, storeName string) string {
+        for _, s := range reg.ShopList {
+                if s.Name != "" {
+                        return s.ID
+                }
+        }
+        abs, err := filepath.Abs(dbPath)
+        if err != nil {
+                abs = dbPath
+        }
+        shop, err := reg.CreateShop(storeName, abs, time.Now().UTC().Format(time.RFC3339))
+        if err != nil {
+                log.Fatalf("tenant registry: %v", err)
+        }
+        rows, err := db.Query(`SELECT username FROM users`)
+        if err == nil {
+                defer rows.Close()
+                for rows.Next() {
+                        var u string
+                        if err := rows.Scan(&u); err == nil {
+                                _ = reg.RegisterUser(u, shop.ID) // best-effort; dupes impossible here
+                        }
+                }
+        }
+        log.Printf("adopted %s as default shop %s", abs, shop.ID)
+        return shop.ID
+}
+
 // desktopMeta carries the desktop-mode facts into startApp.
 type desktopMeta struct {
         Port     string
@@ -106,31 +139,57 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
                 log.Fatalf("settings: %v", err)
         }
 
-        hub := ws.NewHub(st.JWTSecret)
+        // Tenant registry: existing single-shop boxes adopt their database
+        // as the "default" shop (zero data migration); new boxes start empty.
+        regDir := filepath.Dir(cfg.SQLitePath)
+        if regDir == "" || regDir == "." {
+                regDir = "."
+        }
+        reg, err := tenants.Load(regDir)
+        if err != nil {
+                log.Fatalf("tenants: %v", err)
+        }
+        storeName := st.Get("store_name")
+        if storeName == "" {
+                storeName = "My Shop"
+        }
+        defaultShop := ensureDefaultShop(reg, db, cfg.SQLitePath, storeName)
+        masterSecret := reg.EnsureJWTSecret(st.Get("jwt_secret"))
+
+        hub := ws.NewHub(func() []byte { return []byte(masterSecret) })
         go hub.Run()
 
-        pw := printer.NewWorker(db, st)
+        dbPool := tenants.NewPool(reg, cfg.DBDriver, cfg.PostgresDSN)
+        dbPool.Inject(defaultShop, db)
+        shopPool := services.NewShopPool(dbPool, hub, nil)
+        defSvc, err := shopPool.Service(defaultShop)
+        if err != nil {
+                log.Fatalf("shop service: %v", err)
+        }
+        pw := printer.NewWorker(db, defSvc.Settings())
         if err := pw.Recover(); err != nil {
                 log.Printf("[printer] recover: %v", err)
         }
+        shopPool.SetPrinter(pw)
 
-        svc := services.New(db, st, hub, pw)
-        h := handlers.New(db, st, svc, hub, pw)
-        h.Updater = update.NewChecker(version, update.Repo, st)
+        h := handlers.New(db, defSvc.Settings(), defSvc, hub, pw)
+        h.Tenants = reg
+        h.Shops = shopPool
+        h.DefaultShop = defaultShop
+        h.MasterSecret = []byte(masterSecret)
+        h.Updater = update.NewChecker(version, update.Repo, defSvc.Settings())
+        if ow, err := shopPool.Uploader(defaultShop); err == nil {
+                h.Offsite = ow
+        }
 
-        // Encrypted off-site uploads (async; inert unless configured).
-        ow := offsite.NewWorker(st, func(action, entity, entityID, details string) {
-                svc.Audit(0, "system", action, entity, entityID, details)
-        })
-        svc.AttachOffsite(ow)
-        h.Offsite = ow
-
+        h.Desktop.SignupAllowed = os.Getenv("ALLOW_SIGNUP") == "true"
         if desk != nil {
                 h.Desktop = handlers.DesktopStatus{
-                        Desktop:  true,
-                        Version:  version,
-                        FirstRun: desk.FirstRun,
-                        Port:     desk.Port,
+                        Desktop:       true,
+                        Version:       version,
+                        FirstRun:      desk.FirstRun,
+                        Port:          desk.Port,
+                        SignupAllowed: os.Getenv("ALLOW_SIGNUP") == "true",
                 }
                 if onQuit != nil {
                         h.OnQuit = func() { close(onQuit) }
@@ -147,13 +206,11 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
         ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
         defer stop()
 
-        // Background workers: STK sweeper + print queue + daily backups + uploads + update checks.
-        sweeper := services.NewSweeper(svc)
-        go sweeper.Run(ctx)
+        // Background workers: print queue shared; sweeper, backups, and
+        // uploads run per shop (default shop starts here, rest on open).
         go pw.Run(ctx)
-        go ow.Run(ctx)
+        h.Shops.EnsureStarted(ctx, h.DefaultShop)
         go h.Updater.StartLoop(ctx)
-        svc.StartBackupScheduler()
 
         // LAN discovery broadcast (best-effort, server mode only).
         if cfg.MDNSEnabled {

@@ -20,6 +20,7 @@ type Principal struct {
         FullName    string
         RoleID      int64
         RoleName    string
+        ShopID      string
         Active      bool
         MustRotate  bool
         Permissions map[string]bool
@@ -67,7 +68,7 @@ func (p *Principal) User() models.User {
         return models.User{
                 ID: p.ID, Username: p.Username, FullName: p.FullName,
                 RoleID: p.RoleID, RoleName: p.RoleName, Permissions: keys, Active: p.Active,
-                MustRotate: p.MustRotate,
+                MustRotate: p.MustRotate, ShopID: p.ShopID,
         }
 }
 
@@ -126,6 +127,18 @@ func PINLockRemaining(db *database.DB, userID int64) int {
 // ---- Gin context helpers ----
 
 const ctxPrincipal = "principal"
+const ctxShopID = "shop"
+
+// WithShopID stores the request's tenant; ShopID reads it ("" if unset).
+func WithShopID(c *gin.Context, shopID string) { c.Set(ctxShopID, shopID) }
+func ShopID(c *gin.Context) string {
+	if v, ok := c.Get(ctxShopID); ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
 
 func WithPrincipal(c *gin.Context, p *Principal) { c.Set(ctxPrincipal, p) }
 

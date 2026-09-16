@@ -27,12 +27,35 @@ type Shop struct {
 }
 
 // Registry is the on-disk index: shops by id + username to shop id.
+// JWTSecret signs every token on this box (shared across shops so the
+// shop claim itself is tamper-proof; per-shop files still isolate data).
 type Registry struct {
 	mu   sync.Mutex
 	path string
 	dir  string
-	ShopList []Shop          `json:"shops"`
+	ShopList []Shop            `json:"shops"`
 	Users    map[string]string `json:"users"`
+	JWTSecret string           `json:"jwtSecret"`
+}
+
+// EnsureJWTSecret sets the shared secret once (fallback seeds it, e.g. from
+// a pre-tenancy database, so upgrades keep existing sessions valid).
+func (r *Registry) EnsureJWTSecret(fallback string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.JWTSecret != "" {
+		return r.JWTSecret
+	}
+	if fallback == "" {
+		var b [32]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			panic("rand: " + err.Error())
+		}
+		fallback = hex.EncodeToString(b[:])
+	}
+	r.JWTSecret = fallback
+	_ = r.save()
+	return r.JWTSecret
 }
 
 // Load opens (or creates) the registry at dir/shops.json.
@@ -75,7 +98,8 @@ func newShopID() (string, error) {
 	return "sh-" + hex.EncodeToString(b[:]), nil
 }
 
-// CreateShop registers a shop with an explicit database file name.
+// CreateShop registers a shop; its database file is shops/<id>.db.
+// Pass dbFile != "" only to adopt a pre-existing file (desktop upgrade).
 func (r *Registry) CreateShop(name, dbFile, createdAt string) (Shop, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -84,6 +108,12 @@ func (r *Registry) CreateShop(name, dbFile, createdAt string) (Shop, error) {
 	}
 	id, err := newShopID()
 	if err != nil {
+		return Shop{}, err
+	}
+	if dbFile == "" {
+		dbFile = filepath.Join(r.dir, "shops", id+".db")
+	}
+	if err := os.MkdirAll(filepath.Dir(dbFile), 0o755); err != nil {
 		return Shop{}, err
 	}
 	s := Shop{ID: id, Name: name, DBFile: dbFile, CreatedAt: createdAt}
@@ -128,6 +158,13 @@ func (r *Registry) ShopForUser(username string) (string, bool) {
 	return id, ok
 }
 
+// DBPath returns the database file path for a new shop (shops/<id>.db).
+func (r *Registry) DBPath(shopID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return filepath.Join(r.dir, "shops", shopID+".db")
+}
+
 // Find returns a shop by id.
 func (r *Registry) Find(shopID string) (Shop, bool) {
 	r.mu.Lock()
@@ -159,6 +196,34 @@ type Pool struct {
 	open   map[string]*database.DB
 	driver string
 	pgDSN  string
+}
+
+// ShopIDs lists registered shop ids (for startup loops).
+func (p *Pool) ShopIDs() []string {
+	p.reg.mu.Lock()
+	defer p.reg.mu.Unlock()
+	out := make([]string, 0, len(p.reg.ShopList))
+	for _, s := range p.reg.ShopList {
+		out = append(out, s.ID)
+	}
+	return out
+}
+
+// FindUserShop locates the shop holding a user id (login-rate op; scans
+// registered shops). Returns "", false when unknown.
+func (p *Pool) FindUserShop(userID int64) (string, bool) {
+	for _, id := range p.ShopIDs() {
+		db, err := p.Open(id)
+		if err != nil {
+			continue
+		}
+		var n int
+		q := db.Rebind(`SELECT COUNT(*) FROM users WHERE id = ? AND is_active = 1`)
+		if err := db.QueryRow(q, userID).Scan(&n); err == nil && n == 1 {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 // NewPool builds a pool over a registry (sqlite files under dir unless pgDSN set).
@@ -195,6 +260,14 @@ func (p *Pool) Open(shopID string) (*database.DB, error) {
 	}
 	p.open[shopID] = db
 	return db, nil
+}
+
+// Inject registers an already-open handle (boot path opens the default
+// database directly; the pool must reuse it, never double-open a file).
+func (p *Pool) Inject(shopID string, db *database.DB) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.open[shopID] = db
 }
 
 // CloseAll closes every pooled handle (tests + shutdown).

@@ -24,6 +24,7 @@ import (
 	"posapp/internal/router"
 	"posapp/internal/services"
 	"posapp/internal/settings"
+	"posapp/internal/tenants"
 	"posapp/internal/ws"
 )
 
@@ -57,9 +58,38 @@ func newTestEngine(t *testing.T) *gin.Engine {
 
         hub := ws.NewHub(st.JWTSecret)
         go hub.Run()
-        pw := printer.NewWorker(db, st)
-        svc := services.New(db, st, hub, pw)
-        h := handlers.New(db, st, svc, hub, pw)
+        // Single-tenant test wiring (mirrors main.go): exactly one settings
+        // store per shop — the pool builds it, and printer/handlers share it.
+        reg, err := tenants.Load(dir)
+        if err != nil {
+                t.Fatalf("tenants: %v", err)
+        }
+        dbPath := filepath.Join(dir, "test.db")
+        shop, err := reg.CreateShop("Test Shop", dbPath, "2026-09-16T00:00:00Z")
+        if err != nil {
+                t.Fatalf("shop: %v", err)
+        }
+        for _, u := range []string{"admin", "cashier", "designer"} {
+                if err := reg.RegisterUser(u, shop.ID); err != nil {
+                        t.Fatalf("register %s: %v", u, err)
+                }
+        }
+        secret := reg.EnsureJWTSecret(st.Get("jwt_secret"))
+        dbPool := tenants.NewPool(reg, "sqlite", "")
+        dbPool.Inject(shop.ID, db)
+        shopPool := services.NewShopPool(dbPool, hub, nil)
+        svc, err := shopPool.Service(shop.ID)
+        if err != nil {
+                t.Fatalf("shop service: %v", err)
+        }
+        pw := printer.NewWorker(db, svc.Settings())
+        shopPool.SetPrinter(pw)
+        h := handlers.New(db, svc.Settings(), svc, hub, pw)
+        h.Tenants = reg
+        h.Shops = shopPool
+        h.DefaultShop = shop.ID
+        h.MasterSecret = []byte(secret)
+        t.Cleanup(func() { shopPool.CloseAll() })
         engine := router.New(h, nil)
         return engine
 }
