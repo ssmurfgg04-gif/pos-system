@@ -8,7 +8,7 @@ import (
 
 // ListSuppliers (suppliers.view) — ?search=name-or-phone.
 func (h *H) ListSuppliers(c *gin.Context) {
-        list, err := h.Svc.ListSuppliers(c.Query("search"))
+        list, err := h.svc(c).ListSuppliers(c.Query("search"))
         if err != nil {
                 h.fail(c, 500, err.Error())
                 return
@@ -30,7 +30,7 @@ func (h *H) CreateSupplier(c *gin.Context) {
                 h.fail(c, 400, err.Error())
                 return
         }
-        sup, err := h.Svc.CreateSupplier(body.Name, body.Phone, body.Email, body.Address, body.Notes, p)
+        sup, err := h.svc(c).CreateSupplier(body.Name, body.Phone, body.Email, body.Address, body.Notes, p)
         if err != nil {
                 h.mapErr(c, err)
                 return
@@ -61,7 +61,7 @@ func (h *H) UpdateSupplier(c *gin.Context) {
         if body.Active != nil {
                 active = *body.Active
         }
-        sup, err := h.Svc.UpdateSupplier(id, body.Name, body.Phone, body.Email, body.Address, body.Notes, active, p)
+        sup, err := h.svc(c).UpdateSupplier(id, body.Name, body.Phone, body.Email, body.Address, body.Notes, active, p)
         if err != nil {
                 h.mapErr(c, err)
                 return
@@ -71,7 +71,7 @@ func (h *H) UpdateSupplier(c *gin.Context) {
 
 // ListPOs (suppliers.view).
 func (h *H) ListPOs(c *gin.Context) {
-        list, err := h.Svc.ListPOs()
+        list, err := h.svc(c).ListPOs()
         if err != nil {
                 h.fail(c, 500, err.Error())
                 return
@@ -85,7 +85,7 @@ func (h *H) GetPO(c *gin.Context) {
         if !ok {
                 return
         }
-        po, err := h.Svc.GetPO(id)
+        po, err := h.svc(c).GetPO(id)
         if err != nil {
                 h.mapErr(c, err)
                 return
@@ -113,7 +113,7 @@ func (h *H) CreatePO(c *gin.Context) {
         for _, it := range body.Items {
                 items = append(items, services.POItemInput{ProductID: it.ProductID, Qty: it.Qty, CostCents: it.CostCents})
         }
-        po, err := h.Svc.CreatePO(body.SupplierID, items, body.Note, p)
+        po, err := h.svc(c).CreatePO(body.SupplierID, items, body.Note, p)
         if err != nil {
                 h.mapErr(c, err)
                 return
@@ -128,7 +128,7 @@ func (h *H) ReceivePO(c *gin.Context) {
         if !ok {
                 return
         }
-        po, err := h.Svc.ReceivePO(id, p)
+        po, err := h.svc(c).ReceivePO(id, p)
         if err != nil {
                 h.mapErr(c, err)
                 return
@@ -147,7 +147,7 @@ func (h *H) CancelPO(c *gin.Context) {
                 Reason string `json:"reason"`
         }
         _ = c.ShouldBindJSON(&body)
-        po, err := h.Svc.CancelPO(id, body.Reason, p)
+        po, err := h.svc(c).CancelPO(id, body.Reason, p)
         if err != nil {
                 h.mapErr(c, err)
                 return
@@ -157,7 +157,7 @@ func (h *H) CancelPO(c *gin.Context) {
 
 // ListTakes (suppliers.view).
 func (h *H) ListTakes(c *gin.Context) {
-        list, err := h.Svc.ListTakes()
+        list, err := h.svc(c).ListTakes()
         if err != nil {
                 h.fail(c, 500, err.Error())
                 return
@@ -171,7 +171,7 @@ func (h *H) GetTake(c *gin.Context) {
         if !ok {
                 return
         }
-        t, err := h.Svc.GetTake(id)
+        t, err := h.svc(c).GetTake(id)
         if err != nil {
                 h.mapErr(c, err)
                 return
@@ -190,7 +190,7 @@ func (h *H) CreateTake(c *gin.Context) {
                 h.fail(c, 400, err.Error())
                 return
         }
-        t, err := h.Svc.CreateTake(body.ProductIDs, body.Note, p)
+        t, err := h.svc(c).CreateTake(body.ProductIDs, body.Note, p)
         if err != nil {
                 h.mapErr(c, err)
                 return
@@ -212,7 +212,7 @@ func (h *H) CountTake(c *gin.Context) {
                 h.fail(c, 400, err.Error())
                 return
         }
-        t, err := h.Svc.CountTake(id, body.Counts, p)
+        t, err := h.svc(c).CountTake(id, body.Counts, p)
         if err != nil {
                 h.mapErr(c, err)
                 return
@@ -227,7 +227,7 @@ func (h *H) ApplyTake(c *gin.Context) {
         if !ok {
                 return
         }
-        t, err := h.Svc.ApplyTake(id, p)
+        t, err := h.svc(c).ApplyTake(id, p)
         if err != nil {
                 h.mapErr(c, err)
                 return
@@ -246,7 +246,7 @@ func (h *H) CancelTake(c *gin.Context) {
                 Reason string `json:"reason"`
         }
         _ = c.ShouldBindJSON(&body)
-        t, err := h.Svc.CancelTake(id, body.Reason, p)
+        t, err := h.svc(c).CancelTake(id, body.Reason, p)
         if err != nil {
                 h.mapErr(c, err)
                 return

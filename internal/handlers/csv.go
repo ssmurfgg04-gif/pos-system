@@ -14,7 +14,7 @@ var csvHeader = []string{"sku", "barcode", "name", "category", "price", "cost", 
 
 // ProductsExport streams the catalog as CSV (products.manage).
 func (h *H) ProductsExport(c *gin.Context) {
-        rows, err := h.DB.Query(h.DB.Rebind(`
+        rows, err := h.db(c).Query(h.db(c).Rebind(`
                 SELECT COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, COALESCE(c.name,''),
                         p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1)
                 FROM products p LEFT JOIN categories c ON c.id = p.category_id
@@ -136,7 +136,7 @@ func (h *H) ProductsImport(c *gin.Context) {
         }
 
         // Resolve categories once (name → id), creating missing ones.
-        tx, err := h.DB.Begin()
+        tx, err := h.db(c).Begin()
         if err != nil {
                 h.fail(c, 500, err.Error())
                 return
@@ -151,9 +151,9 @@ func (h *H) ProductsImport(c *gin.Context) {
                         continue
                 }
                 var id int64
-                err := tx.QueryRow(h.DB.Rebind(`SELECT id FROM categories WHERE LOWER(name) = LOWER(?)`), r.category).Scan(&id)
+                err := tx.QueryRow(h.db(c).Rebind(`SELECT id FROM categories WHERE LOWER(name) = LOWER(?)`), r.category).Scan(&id)
                 if err != nil {
-                        res, err := tx.Exec(h.DB.Rebind(
+                        res, err := tx.Exec(h.db(c).Rebind(
                                 `INSERT INTO categories (name, slug, sort_order) VALUES (?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM categories))`),
                                 r.category, slugify(r.category))
                         if err != nil {
@@ -176,7 +176,7 @@ func (h *H) ProductsImport(c *gin.Context) {
                 if r.sku != "" {
                         var exists int
                         if err := tx.QueryRow(`SELECT COUNT(*) FROM products WHERE sku = ?`, r.sku).Scan(&exists); err == nil && exists > 0 {
-                                if _, err := tx.Exec(h.DB.Rebind(`
+                                if _, err := tx.Exec(h.db(c).Rebind(`
                                         UPDATE products SET barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
                                                 stock_qty = ?, track_stock = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
                                         WHERE sku = ?`), r.barcode, r.name, cid, r.price, r.cost, r.stock, r.track, r.active, r.sku); err != nil {
@@ -191,7 +191,7 @@ func (h *H) ProductsImport(c *gin.Context) {
                 if sku == "" {
                         sku = uniqueSKUTx(tx, r.name)
                 }
-                if _, err := tx.Exec(h.DB.Rebind(`
+                if _, err := tx.Exec(h.db(c).Rebind(`
                         INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`), sku, r.barcode, r.name, cid, r.price, r.cost, r.stock, r.track, r.active); err != nil {
                         h.fail(c, 500, fmt.Sprintf("row %s: %v", r.name, err))
@@ -203,7 +203,7 @@ func (h *H) ProductsImport(c *gin.Context) {
                 h.fail(c, 500, err.Error())
                 return
         }
-        h.Svc.Audit(p.ID, p.Username, "PRODUCTS_IMPORTED", "product", "", fmt.Sprintf("created %d, updated %d", created, updated))
+        h.svc(c).Audit(p.ID, p.Username, "PRODUCTS_IMPORTED", "product", "", fmt.Sprintf("created %d, updated %d", created, updated))
         h.ok(c, gin.H{"created": created, "updated": updated})
 }
 

@@ -20,7 +20,7 @@ type userBody struct {
 
 // ListUsers (users.manage).
 func (h *H) ListUsers(c *gin.Context) {
-        rows, err := h.DB.Query(h.DB.Rebind(`
+        rows, err := h.db(c).Query(h.db(c).Rebind(`
                 SELECT u.id, u.username, COALESCE(u.full_name,''), u.role_id, COALESCE(r.name,''),
                         u.is_active, CASE WHEN u.pin_hash != '' THEN 1 ELSE 0 END, u.created_at
                 FROM users u JOIN roles r ON r.id = u.role_id ORDER BY u.id`))
@@ -56,7 +56,7 @@ func (h *H) CreateUser(c *gin.Context) {
                 return
         }
         var roleExists int
-        if err := h.DB.QueryRow(`SELECT COUNT(*) FROM roles WHERE id = ?`, body.RoleID).Scan(&roleExists); err != nil || roleExists == 0 {
+        if err := h.db(c).QueryRow(`SELECT COUNT(*) FROM roles WHERE id = ?`, body.RoleID).Scan(&roleExists); err != nil || roleExists == 0 {
                 h.fail(c, 400, "role not found")
                 return
         }
@@ -81,7 +81,7 @@ func (h *H) CreateUser(c *gin.Context) {
         if body.Active != nil && !*body.Active {
                 active = 0
         }
-        res, err := h.DB.Exec(h.DB.Rebind(`
+        res, err := h.db(c).Exec(h.db(c).Rebind(`
                 INSERT INTO users (username, full_name, password_hash, pin_hash, role_id, is_active)
                 VALUES (?, ?, ?, ?, ?, ?)`), body.Username, body.FullName, pwHash, pinHash, body.RoleID, active)
         if err != nil {
@@ -89,7 +89,7 @@ func (h *H) CreateUser(c *gin.Context) {
                 return
         }
         id, _ := res.LastInsertId()
-        h.Svc.Audit(p.ID, p.Username, "USER_CREATED", "user", body.Username, "")
+        h.svc(c).Audit(p.ID, p.Username, "USER_CREATED", "user", body.Username, "")
         h.created(c, gin.H{"id": id})
 }
 
@@ -111,7 +111,7 @@ func (h *H) UpdateUser(c *gin.Context) {
         } else {
                 active = 1
         }
-        res, err := h.DB.Exec(h.DB.Rebind(`
+        res, err := h.db(c).Exec(h.db(c).Rebind(`
                 UPDATE users SET full_name = ?, role_id = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?`), body.FullName, body.RoleID, active, id)
         if err != nil {
@@ -122,7 +122,7 @@ func (h *H) UpdateUser(c *gin.Context) {
                 h.fail(c, 404, "user not found")
                 return
         }
-        h.Svc.Audit(p.ID, p.Username, "USER_UPDATED", "user", itoa64(id), body.Username)
+        h.svc(c).Audit(p.ID, p.Username, "USER_UPDATED", "user", itoa64(id), body.Username)
         h.ok(c, gin.H{"updated": true})
 }
 
@@ -151,12 +151,12 @@ func (h *H) SetPassword(c *gin.Context) {
                 h.fail(c, 500, err.Error())
                 return
         }
-        res, err := h.DB.Exec(h.DB.Rebind(`UPDATE users SET password_hash = ?, must_rotate = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, id)
+        res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET password_hash = ?, must_rotate = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, id)
         if err != nil || n(res) != 1 {
                 h.fail(c, 404, "user not found")
                 return
         }
-        h.Svc.Audit(p.ID, p.Username, "USER_PASSWORD_RESET", "user", itoa64(id), "")
+        h.svc(c).Audit(p.ID, p.Username, "USER_PASSWORD_RESET", "user", itoa64(id), "")
         h.ok(c, gin.H{"updated": true})
 }
 
@@ -185,13 +185,13 @@ func (h *H) SetPIN(c *gin.Context) {
                 h.fail(c, 500, err.Error())
                 return
         }
-        res, err := h.DB.Exec(h.DB.Rebind(
+        res, err := h.db(c).Exec(h.db(c).Rebind(
                 `UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '', must_rotate = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, id)
         if err != nil || n(res) != 1 {
                 h.fail(c, 404, "user not found")
                 return
         }
-        h.Svc.Audit(p.ID, p.Username, "USER_PIN_RESET", "user", itoa64(id), "")
+        h.svc(c).Audit(p.ID, p.Username, "USER_PIN_RESET", "user", itoa64(id), "")
         h.ok(c, gin.H{"updated": true})
 }
 
@@ -206,12 +206,12 @@ func (h *H) DeactivateUser(c *gin.Context) {
                 h.fail(c, 409, "you cannot deactivate yourself")
                 return
         }
-        res, err := h.DB.Exec(h.DB.Rebind(`UPDATE users SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), id)
+        res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), id)
         if err != nil || n(res) != 1 {
                 h.fail(c, 404, "user not found")
                 return
         }
-        h.Svc.Audit(p.ID, p.Username, "USER_DEACTIVATED", "user", itoa64(id), "")
+        h.svc(c).Audit(p.ID, p.Username, "USER_DEACTIVATED", "user", itoa64(id), "")
         h.ok(c, gin.H{"deactivated": true})
 }
 
