@@ -1,5 +1,12 @@
 # Off-Site Backup + Owner-Remote Implementation Plan
 
+> SUPERSEDED (transport only, 2026-09-15): the SigV4/S3 client described
+> below was replaced with Supabase Storage REST (plain Bearer auth — no
+> clock-skew failures, friendlier setup, one-project-per-shop blast
+> radius). Everything else in this plan (worker shape, retry policy,
+> restore CLI, playbook, settings keys minus `offsite_region` /
+> `offsite_access_key`) stands as built.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** No one commutes to copy database files — every night the shop encrypts its snapshot and pushes it off-site by itself with retries, and the owner checks the shop from Nairobi over an encrypted tunnel with a read-only login.

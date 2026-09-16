@@ -67,10 +67,12 @@ power cut never corrupts a till.
   manual **Back up now** button lives in Settings → System. Snapshots
   are plain SQLite files — copy them to USB/cloud for off-site safety.
 - **Encrypted off-site backup** — every snapshot can encrypt itself
-  (AES-256-GCM, your passphrase) and push to your own S3-compatible
-  storage (Cloudflare R2 free tier works), retrying on its own until it
-  lands. Nobody commutes to copy files; `ledgerpos restore-backup`
-  pulls the newest copy back down and decrypts it.
+  (AES-256-GCM, your passphrase) and push to your own Supabase project
+  over plain Bearer-auth REST (no signing dance, immune to shop-PC clock
+  drift), retrying on its own until it lands. One project per shop, so a
+  leaked key only ever opens that shop. Nobody commutes to copy files;
+  `ledgerpos restore-backup` pulls the newest copy back down and
+  decrypts it.
 - **Remote owner playbook** — `docs/REMOTE-OWNER.md`: Tailscale tunnel +
   a read-only Owner role, so the owner watches sales, shifts, voids, and
   stock from anywhere without touching the till.

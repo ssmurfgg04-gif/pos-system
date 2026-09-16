@@ -46,8 +46,9 @@ const usage = `usage:
   ledgerpos uninstall       remove the desktop app (shortcuts, registry, files)
   ledgerpos version         print build version
   ledgerpos restore-backup  download + decrypt an off-site snapshot:
-                            --endpoint URL --bucket NAME --key KEY
-                            --passphrase PASS [--out FILE] [--force] [--list]`
+                            --endpoint PROJECT-URL --bucket NAME
+                            --api-key KEY --passphrase PASS
+                            [--key REMOTE-KEY] [--out FILE] [--force] [--list]`
 
 func main() {
         args := os.Args[1:]
@@ -215,11 +216,9 @@ func atoi(s string) int {
 // snapshot. Flags only — scriptable for a dead-box recovery.
 func runRestoreBackup(args []string) int {
         fs := flag.NewFlagSet("restore-backup", flag.ContinueOnError)
-        endpoint := fs.String("endpoint", "", "S3-compatible endpoint URL")
-        bucket := fs.String("bucket", "", "bucket name")
-        region := fs.String("region", "auto", "region (auto works on R2)")
-        access := fs.String("access-key", "", "access key (or env OFFSITE_ACCESS_KEY)")
-        secret := fs.String("secret-key", "", "secret key (or env OFFSITE_SECRET_KEY)")
+        endpoint := fs.String("endpoint", "", "Supabase project URL")
+        bucket := fs.String("bucket", "", "storage bucket name")
+        apikey := fs.String("api-key", "", "service_role key (or env OFFSITE_API_KEY)")
         pass := fs.String("passphrase", "", "backup passphrase (or env OFFSITE_PASSPHRASE)")
         key := fs.String("key", "", "exact remote key (default: newest under --prefix)")
         prefix := fs.String("prefix", "shop", "key prefix for --list / newest lookup")
@@ -230,19 +229,15 @@ func runRestoreBackup(args []string) int {
                 fmt.Fprintln(os.Stderr, err)
                 return 2
         }
-        if *access == "" {
-                *access = os.Getenv("OFFSITE_ACCESS_KEY")
-        }
-        if *secret == "" {
-                *secret = os.Getenv("OFFSITE_SECRET_KEY")
+        if *apikey == "" {
+                *apikey = os.Getenv("OFFSITE_API_KEY")
         }
         if *pass == "" {
                 *pass = os.Getenv("OFFSITE_PASSPHRASE")
         }
-        cfg := offsite.Config{Endpoint: *endpoint, Bucket: *bucket, Region: *region,
-                AccessKey: *access, SecretKey: *secret, Prefix: *prefix}
-        if cfg.Endpoint == "" || cfg.Bucket == "" || cfg.AccessKey == "" || cfg.SecretKey == "" {
-                fmt.Fprintln(os.Stderr, "restore-backup: endpoint, bucket, and keys are required")
+        cfg := offsite.Config{ProjectURL: *endpoint, Bucket: *bucket, Key: *apikey, Prefix: *prefix}
+        if cfg.ProjectURL == "" || cfg.Bucket == "" || cfg.Key == "" {
+                fmt.Fprintln(os.Stderr, "restore-backup: endpoint, bucket, and api key are required")
                 return 2
         }
         ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -284,7 +279,7 @@ func runRestoreBackup(args []string) int {
                 fmt.Fprintf(os.Stderr, "restore-backup: %s exists (use --force)\n", *out)
                 return 1
         }
-        rc, err := offsite.GetObject(ctx, cfg, *key)
+        rc, err := offsite.DownloadObject(ctx, cfg, *key)
         if err != nil {
                 fmt.Fprintln(os.Stderr, "download:", err)
                 return 1

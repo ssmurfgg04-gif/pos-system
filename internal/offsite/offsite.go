@@ -1,7 +1,10 @@
-// Package offsite pushes encrypted database snapshots to any S3-compatible
-// endpoint (Cloudflare R2, Backblaze B2, MinIO, AWS S3). No new module
-// dependencies: AES-GCM + scrypt come from golang.org/x/crypto (already
-// vendored), SigV4 signing and the S3 REST calls are hand-rolled stdlib.
+// Package offsite pushes encrypted database snapshots to Supabase Storage
+// over plain Bearer-auth REST (no SigV4, no clock-skew failures on shop PCs
+// with drifting clocks). No new module dependencies: AES-GCM + scrypt come
+// from golang.org/x/crypto (already vendored), the rest is stdlib.
+//
+// Blast radius is one shop: use one free Supabase project per shop, so a
+// leaked key opens that shop's bucket only.
 package offsite
 
 import (
@@ -9,17 +12,12 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/xml"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -37,14 +35,13 @@ const (
 	scryptKeyLen = 32
 )
 
-// Config is everything needed to address one bucket.
+// Config is everything needed to address one bucket. Key is the project's
+// service_role secret (masked in our settings API, never logged).
 type Config struct {
-	Endpoint  string // e.g. https://<account>.r2.cloudflarestorage.com
-	Bucket    string
-	Region    string // "auto" works on R2; real AWS region elsewhere
-	AccessKey string
-	SecretKey string
-	Prefix    string // key prefix, e.g. shop hostname; no leading/trailing "/"
+	ProjectURL string // e.g. https://xyzcompany.supabase.co
+	Bucket     string
+	Key        string
+	Prefix     string // key prefix, e.g. shop hostname; no leading/trailing "/"
 }
 
 // ObjectKey is one listed remote object.
@@ -54,7 +51,7 @@ type ObjectKey struct {
 }
 
 // SnapshotKey builds a safe key name: prefix/pos-YYYYMMDD-HHMMSS.db.enc
-// (safe chars only, so no path escaping is needed in signing).
+// (safe chars only, so no URL escaping is needed).
 func SnapshotKey(prefix string, t time.Time) string {
 	prefix = strings.Trim(prefix, "/")
 	if prefix == "" {
@@ -63,8 +60,8 @@ func SnapshotKey(prefix string, t time.Time) string {
 	return prefix + "/pos-" + t.Format("20060102-150405") + ".db.enc"
 }
 
-// EncryptFile encrypts srcPath with passphrase; returns the ciphertext path
-// (srcPath + ".enc"). Wrong passphrases fail at decrypt time (GCM tag).
+// EncryptFile encrypts srcPath with passphrase and returns the path of the
+// ciphertext file. Wrong passphrases fail at decrypt time (GCM tag).
 func EncryptFile(srcPath, passphrase string) (string, error) {
 	plain, err := os.ReadFile(srcPath)
 	if err != nil {
@@ -132,186 +129,153 @@ func DecryptFile(encPath, passphrase, dstPath string) error {
 	return os.WriteFile(dstPath, plain, 0o600)
 }
 
-// pctEncode percent-encodes per RFC 3986 (spaces to %20, slashes to %2F).
-func pctEncode(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' ||
-			c == '-' || c == '_' || c == '.' || c == '~' {
-			b.WriteByte(c)
-		} else {
-			fmt.Fprintf(&b, "%%%02X", c)
-		}
-	}
-	return b.String()
+var httpClient = &http.Client{Timeout: 10 * time.Minute}
+
+func storageBase(cfg Config) string {
+	return strings.TrimSuffix(cfg.ProjectURL, "/") + "/storage/v1"
 }
 
-// signV4 attaches SigV4 header auth. query holds already-sorted raw params.
-func signV4(req *http.Request, payloadHash string, cfg Config, query url.Values, t time.Time) {
-	region := cfg.Region
-	if region == "" {
-		region = "auto"
+func authHeaders(cfg Config) (http.Header, error) {
+	if cfg.Key == "" {
+		return nil, fmt.Errorf("supabase API key required")
 	}
-	amzDate := t.UTC().Format("20060102T150405Z")
-	dateStamp := t.UTC().Format("20060102")
-	host := req.URL.Host
-
-	var qparts []string
-	for k, vs := range query {
-		for _, v := range vs {
-			qparts = append(qparts, pctEncode(k)+"="+pctEncode(v))
-		}
-	}
-	sort.Strings(qparts)
-	canonicalQuery := strings.Join(qparts, "&")
-
-	canonicalHeaders := "host:" + host + "\n" +
-		"x-amz-content-sha256:" + payloadHash + "\n" +
-		"x-amz-date:" + amzDate + "\n"
-	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
-	canonicalRequest := req.Method + "\n" + req.URL.EscapedPath() + "\n" +
-		canonicalQuery + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + payloadHash
-
-	scope := dateStamp + "/" + region + "/s3/aws4_request"
-	toSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" +
-		hex.EncodeToString(sha256Of(canonicalRequest))
-
-	kSecret := hmacSHA256([]byte("AWS4"+cfg.SecretKey), dateStamp)
-	kRegion := hmacSHA256(kSecret, region)
-	kService := hmacSHA256(kRegion, "s3")
-	kSigning := hmacSHA256(kService, "aws4_request")
-	signature := hex.EncodeToString(hmacSHA256(kSigning, toSign))
-
-	req.Header.Set("x-amz-content-sha256", payloadHash)
-	req.Header.Set("x-amz-date", amzDate)
-	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+cfg.AccessKey+"/"+scope+
-		", SignedHeaders="+signedHeaders+", Signature="+signature)
-	if req.URL.RawQuery != canonicalQuery {
-		req.URL.RawQuery = canonicalQuery
-	}
+	h := http.Header{}
+	h.Set("apikey", cfg.Key)
+	h.Set("Authorization", "Bearer "+cfg.Key)
+	return h, nil
 }
 
-func sha256Of(s string) []byte {
-	h := sha256.Sum256([]byte(s))
-	return h[:]
-}
-
-func hmacSHA256(key []byte, s string) []byte {
-	m := hmac.New(sha256.New, key)
-	m.Write([]byte(s))
-	return m.Sum(nil)
-}
-
-var httpClient = &http.Client{Timeout: 2 * time.Minute}
-
-func doSigned(ctx context.Context, cfg Config, method, key string, query url.Values, body io.Reader, size int64) (*http.Response, error) {
-	endpoint := strings.TrimSuffix(cfg.Endpoint, "/")
-	u := endpoint + "/" + cfg.Bucket + "/" + strings.TrimPrefix(key, "/")
-	var payloadHash string
-	if body == nil {
-		payloadHash = hex.EncodeToString(sha256Of(""))
-	} else {
-		h := sha256.New()
-		tee, err := io.ReadAll(body)
-		if err != nil {
-			return nil, err
-		}
-		h.Write(tee)
-		payloadHash = hex.EncodeToString(h.Sum(nil))
-		body = bytes.NewReader(tee)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u, body)
+// UploadObject PUTs one key (x-upsert so retries overwrite cleanly).
+func UploadObject(ctx context.Context, cfg Config, key string, body io.Reader, size int64) error {
+	h, err := authHeaders(cfg)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if size >= 0 && body != nil {
+	h.Set("Content-Type", "application/octet-stream")
+	h.Set("x-upsert", "true")
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		storageBase(cfg)+"/object/"+cfg.Bucket+"/"+strings.TrimPrefix(key, "/"), body)
+	if err != nil {
+		return err
+	}
+	req.Header = h
+	if size >= 0 {
 		req.ContentLength = size
 	}
-	now := time.Now()
-	// Encode query onto the URL before signing (signV4 rewrites canonical form).
-	q := req.URL.Query()
-	for k, vs := range query {
-		for _, v := range vs {
-			q.Add(k, v)
-		}
-	}
-	req.URL.RawQuery = q.Encode()
-	signV4(req, payloadHash, cfg, query, now)
-	return httpClient.Do(req)
-}
-
-// PutObject uploads one key.
-func PutObject(ctx context.Context, cfg Config, key string, body io.Reader, size int64) error {
-	resp, err := doSigned(ctx, cfg, "PUT", key, nil, body, size)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("PUT %s: status %d", key, resp.StatusCode)
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		return fmt.Errorf("upload %s: status %d", key, resp.StatusCode)
 	}
 	return nil
 }
 
-// ListObjects lists keys under prefix (newest handling is caller-side).
-func ListObjects(ctx context.Context, cfg Config, prefix string) ([]ObjectKey, error) {
-	q := url.Values{}
-	q.Set("list-type", "2")
-	q.Set("prefix", prefix)
-	q.Set("max-keys", "1000")
-	resp, err := doSigned(ctx, cfg, "GET", "", q, nil, -1)
+// DownloadObject fetches one key from a private bucket (caller closes).
+func DownloadObject(ctx context.Context, cfg Config, key string) (io.ReadCloser, error) {
+	h, err := authHeaders(cfg)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("LIST: status %d", resp.StatusCode)
-	}
-	var out struct {
-		Contents []struct {
-			Key          string `xml:"Key"`
-			LastModified string `xml:"LastModified"`
-		} `xml:"Contents"`
-	}
-	if err := xml.NewDecoder(resp.Body).Decode(&out); err != nil {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		storageBase(cfg)+"/object/authenticated/"+cfg.Bucket+"/"+strings.TrimPrefix(key, "/"), nil)
+	if err != nil {
 		return nil, err
 	}
-	keys := make([]ObjectKey, 0, len(out.Contents))
-	for _, c := range out.Contents {
-		keys = append(keys, ObjectKey{Name: c.Key, LastModified: c.LastModified})
-	}
-	return keys, nil
-}
-
-// DeleteObject removes one key.
-func DeleteObject(ctx context.Context, cfg Config, key string) error {
-	resp, err := doSigned(ctx, cfg, "DELETE", key, nil, nil, -1)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode != 200 && resp.StatusCode != 204 {
-		return fmt.Errorf("DELETE %s: status %d", key, resp.StatusCode)
-	}
-	return nil
-}
-
-// GetObject downloads one key (caller closes).
-func GetObject(ctx context.Context, cfg Config, key string) (io.ReadCloser, error) {
-	resp, err := doSigned(ctx, cfg, "GET", key, nil, nil, -1)
+	req.Header = h
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode != 200 {
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("GET %s: status %d", key, resp.StatusCode)
+		return nil, fmt.Errorf("download %s: status %d", key, resp.StatusCode)
 	}
 	return resp.Body, nil
+}
+
+// ListObjects lists keys under prefix, newest-first by name (our timestamped
+// names sort chronologically). Returned names are used for deletes as-is,
+// falling back to prefix-join when the API returns bare filenames.
+func ListObjects(ctx context.Context, cfg Config, prefix string) ([]ObjectKey, error) {
+	h, err := authHeaders(cfg)
+	if err != nil {
+		return nil, err
+	}
+	h.Set("Content-Type", "application/json")
+	payload, _ := json.Marshal(map[string]any{
+		"prefix": prefix, "limit": 1000, "offset": 0,
+		"sortBy": map[string]string{"column": "name", "order": "desc"},
+	})
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		storageBase(cfg)+"/object/list/"+cfg.Bucket, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header = h
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("list: status %d", resp.StatusCode)
+	}
+	var raw []struct {
+		Name         string `json:"name"`
+		UpdatedAt    string `json:"updated_at"`
+		LastModified string `json:"last_modified"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	out := make([]ObjectKey, 0, len(raw))
+	for _, r := range raw {
+		name := r.Name
+		if !strings.HasPrefix(name, strings.TrimSuffix(prefix, "/")) {
+			name = strings.TrimSuffix(prefix, "/") + "/" + strings.TrimPrefix(name, "/")
+		}
+		when := r.LastModified
+		if when == "" {
+			when = r.UpdatedAt
+		}
+		out = append(out, ObjectKey{Name: name, LastModified: when})
+	}
+	return out, nil
+}
+
+// DeleteObjects removes keys in one call.
+func DeleteObjects(ctx context.Context, cfg Config, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	h, err := authHeaders(cfg)
+	if err != nil {
+		return err
+	}
+	h.Set("Content-Type", "application/json")
+	payload, _ := json.Marshal(keys)
+	req, err := http.NewRequestWithContext(ctx, "DELETE",
+		storageBase(cfg)+"/object/"+cfg.Bucket, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header = h
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("delete: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // LocalBackupDir is where snapshots land before upload.

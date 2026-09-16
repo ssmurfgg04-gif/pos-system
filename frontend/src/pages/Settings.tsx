@@ -423,8 +423,9 @@ export function Settings() {
             <div className="sm:col-span-2 border-t-2 border-line pt-3">
               <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Off-site backup (encrypted, automatic)</p>
               <p className="text-[13px] text-ink-muted mb-3">
-                Every snapshot is encrypted on this machine and pushed to your own S3-compatible storage
-                (Cloudflare R2 free tier works). Uploads retry by themselves — nobody has to be around.
+                Every snapshot is encrypted on this machine and pushed to your own Supabase project
+                (free tier). Uploads retry by themselves — nobody has to be around.
+                Use one project per shop, so a leaked key only ever opens that shop.
                 <strong className="text-danger-text"> Keep the passphrase somewhere safe: without it the copies cannot be opened.</strong>
               </p>
             </div>
@@ -435,24 +436,18 @@ export function Settings() {
               </Select>
             </Field>
             <Field label="Keep last N remote copies">
-              <Input value={values.offsite_keep ?? '30'} onChange={(e) => set('offsite_keep', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
+              <Input value={values.offsite_keep ?? '14'} onChange={(e) => set('offsite_keep', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
             </Field>
-            <Field label="Endpoint">
-              <Input value={values.offsite_endpoint ?? ''} onChange={(e) => set('offsite_endpoint', e.target.value.trim())} placeholder="https://<account>.r2.cloudflarestorage.com" className="font-mono" />
+            <Field label="Project URL">
+              <Input value={values.offsite_endpoint ?? ''} onChange={(e) => set('offsite_endpoint', e.target.value.trim())} placeholder="https://xyzcompany.supabase.co" className="font-mono" />
             </Field>
             <Field label="Bucket">
-              <Input value={values.offsite_bucket ?? ''} onChange={(e) => set('offsite_bucket', e.target.value.trim())} placeholder="ledgerpos-backups" className="font-mono" />
-            </Field>
-            <Field label="Region">
-              <Input value={values.offsite_region ?? 'auto'} onChange={(e) => set('offsite_region', e.target.value.trim())} placeholder="auto" className="font-mono" />
+              <Input value={values.offsite_bucket ?? ''} onChange={(e) => set('offsite_bucket', e.target.value.trim())} placeholder="ledgerpos" className="font-mono" />
             </Field>
             <Field label="Key prefix">
               <Input value={values.offsite_prefix ?? ''} onChange={(e) => set('offsite_prefix', e.target.value.trim())} placeholder="Defaults to this machine's name" className="font-mono" />
             </Field>
-            <Field label="Access key">
-              <Input value={values.offsite_access_key ?? ''} onChange={(e) => set('offsite_access_key', e.target.value.trim())} className="font-mono" />
-            </Field>
-            <Field label="Secret key">
+            <Field label="Service role key">
               <Input value={values.offsite_secret_key ?? ''} onChange={(e) => set('offsite_secret_key', e.target.value)} type="password" className="font-mono" />
             </Field>
             <Field label="Backup passphrase" hint="Encrypts every copy. Shows as __SET__ once saved — write it down now.">

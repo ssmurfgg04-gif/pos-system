@@ -3,6 +3,7 @@ package handlers_test
 import (
         "bytes"
         "context"
+        "encoding/json"
         "io"
         "net/http"
         "net/http/httptest"
@@ -16,8 +17,8 @@ import (
         "posapp/internal/settings"
 )
 
-// Upload flow against a stub S3: encrypted PUT (never plaintext), remote
-// prune beyond keep, audit row written.
+// Upload flow against a stub Supabase: encrypted POST (never plaintext),
+// batch prune beyond keep, audit row written.
 func TestOffsiteUploadFlow(t *testing.T) {
         dir := t.TempDir()
         db, err := database.Open("sqlite", filepath.Join(dir, "up.db"), "")
@@ -38,20 +39,25 @@ func TestOffsiteUploadFlow(t *testing.T) {
 
         var puts int
         var lastBody []byte
-        var deletes []string
-        var queries []string
+        var deleted []string
         srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-                switch r.Method {
-                case "PUT":
+                switch {
+                case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/storage/v1/object/list/"):
+                        w.Write([]byte(`[{"name":"shop/old1.db.enc","updated_at":"2026-09-01T02:00:00Z"},{"name":"shop/old2.db.enc","updated_at":"2026-09-02T02:00:00Z"}]`))
+                case r.Method == "POST":
                         puts++
                         lastBody, _ = io.ReadAll(r.Body)
-                        w.WriteHeader(200)
-                case "GET":
-                        queries = append(queries, r.URL.RawQuery)
-                        w.Write([]byte(`<ListBucketResult><Contents><Key>shop/old1.db.enc</Key><LastModified>2026-09-01T02:00:00Z</LastModified></Contents><Contents><Key>shop/old2.db.enc</Key><LastModified>2026-09-02T02:00:00Z</LastModified></Contents></ListBucketResult>`))
-                case "DELETE":
-                        deletes = append(deletes, r.URL.Path)
-                        w.WriteHeader(200)
+                        if r.Header.Get("Authorization") != "Bearer SK" {
+                                w.WriteHeader(401)
+                                return
+                        }
+                        w.Write([]byte(`{"Key":"shop/k"}`))
+                case r.Method == "DELETE":
+                        var keys []string
+                        body, _ := io.ReadAll(r.Body)
+                        _ = json.Unmarshal(body, &keys)
+                        deleted = append(deleted, keys...)
+                        w.Write([]byte(`[]`))
                 default:
                         w.WriteHeader(400)
                 }
@@ -61,8 +67,6 @@ func TestOffsiteUploadFlow(t *testing.T) {
         st.Set("offsite_enabled", "true")
         st.Set("offsite_endpoint", srv.URL)
         st.Set("offsite_bucket", "b")
-        st.Set("offsite_region", "auto")
-        st.Set("offsite_access_key", "AK")
         st.Set("offsite_secret_key", "SK")
         st.Set("offsite_prefix", "shop")
         st.Set("offsite_keep", "1")
@@ -88,13 +92,13 @@ func TestOffsiteUploadFlow(t *testing.T) {
                 t.Fatalf("bad key %q", key)
         }
         if puts != 1 {
-                t.Fatalf("expected 1 PUT, got %d", puts)
+                t.Fatalf("expected 1 upload POST, got %d", puts)
         }
         if bytes.Equal(lastBody, plain) {
                 t.Fatal("upload body must be encrypted, not plaintext")
         }
-        if len(deletes) != 1 {
-                t.Fatalf("keep=1 with 2 old keys should delete 1, deleted %v", deletes)
+        if len(deleted) != 1 || deleted[0] != "shop/old1.db.enc" {
+                t.Fatalf("keep=1 with 2 old keys should batch-delete old1, deleted %v", deleted)
         }
         if audits != 1 {
                 t.Fatalf("expected 1 BACKUP_UPLOADED audit, got %d", audits)
