@@ -122,6 +122,15 @@ export function Login() {
           >
             Quick PIN switch instead →
           </button>
+          {desk?.signupAllowed && (
+            <button
+              type="button"
+              onClick={() => navigate('/signup')}
+              className="w-full min-h-11 flex items-center justify-center text-center text-sm font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
+            >
+              New here? Open a shop →
+            </button>
+          )}
         </form>
 
         {desk?.desktop && desk?.firstRun && (

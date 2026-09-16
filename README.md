@@ -25,6 +25,12 @@ power cut never corrupts a till.
 - **Suppliers & stock-in** — supplier records, purchase orders that post
   stock with weighted-average costing on receive, and stock takes that
   reconcile counted vs expected with a per-line variance report.
+- **Multiple shops, hard isolation** — one box serves many shops: signup
+  provisions a shop file, login routes to the correct shop, and tokens are
+  shop-scoped (a user can never see another shop's data — verified by
+  isolation tests). Server mode only (`ALLOW_SIGNUP=true`); desktop stays
+  single-shop. Footprint per shop: a seeded shop database is ~0.2 MB
+  (binary 27 MB, installer 10 MB, frontend bundle 0.4 MB).
 - **Customer tabs & credit** — regulars take goods now and pay later.
   Each customer has a credit limit (0 = cash only), a live balance, and
   a loyalty balance (1 pt per 100 KES of settled sales). The till shows

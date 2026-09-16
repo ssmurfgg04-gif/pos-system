@@ -81,6 +81,7 @@ export interface DesktopStatus {
   version?: string
   firstRun?: boolean
   port?: string
+  signupAllowed?: boolean
 }
 
 let desktopStatusCache: DesktopStatus | null = null
@@ -187,6 +188,7 @@ export interface User {
   active: boolean
   pinSet: boolean
   mustRotate: boolean
+  shopId?: string
   createdAt: string
 }
 
