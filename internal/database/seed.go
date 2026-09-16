@@ -48,13 +48,11 @@ var DefaultSettings = map[string]string{
         "update_channel":        "stable", // stable | off (auto-update checks)
         "update_api_base":       "https://api.github.com", // overridable for tests
         "offsite_enabled":       "false", // encrypted push of each snapshot
-        "offsite_endpoint":      "",     // e.g. https://<account>.r2.cloudflarestorage.com
-        "offsite_bucket":        "",
-        "offsite_region":        "auto",
-        "offsite_access_key":    "",
-        "offsite_secret_key":    "", // SECRET — masked in API
+        "offsite_endpoint":      "",     // Supabase project URL, e.g. https://xyzcompany.supabase.co
+        "offsite_bucket":        "",     // private storage bucket (one project per shop)
+        "offsite_secret_key":    "", // SECRET — project service_role key, masked in API
         "offsite_prefix":        "", // defaults to OS hostname
-        "offsite_keep":          "30", // remote copies retained
+        "offsite_keep":          "14", // remote copies retained (free tier is 500MB)
         "offsite_passphrase":    "", // SECRET — encrypts snapshots; owner keeps a copy
 }
 

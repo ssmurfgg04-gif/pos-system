@@ -137,18 +137,13 @@ func ConfigFromSettings(s *settings.Store) (Config, string, bool) {
                 }
         }
         cfg := Config{
-                Endpoint:  s.Get("offsite_endpoint"),
-                Bucket:    s.Get("offsite_bucket"),
-                Region:    s.Get("offsite_region"),
-                AccessKey: s.Get("offsite_access_key"),
-                SecretKey: s.Get("offsite_secret_key"),
-                Prefix:    prefix,
-        }
-        if cfg.Region == "" {
-                cfg.Region = "auto"
+                ProjectURL: s.Get("offsite_endpoint"),
+                Bucket:     s.Get("offsite_bucket"),
+                Key:        s.Get("offsite_secret_key"),
+                Prefix:     prefix,
         }
         pass := s.Get("offsite_passphrase")
-        if cfg.Endpoint == "" || cfg.Bucket == "" || cfg.AccessKey == "" || cfg.SecretKey == "" {
+        if cfg.ProjectURL == "" || cfg.Bucket == "" || cfg.Key == "" {
                 return Config{}, "", false
         }
         if pass == "" {
@@ -194,7 +189,7 @@ func (w *Worker) upload(ctx context.Context, snapshotPath string) (string, error
                 return "", err
         }
         key := SnapshotKey(cfg.Prefix, time.Now())
-        if err := PutObject(ctx, cfg, key, f, st.Size()); err != nil {
+        if err := UploadObject(ctx, cfg, key, f, st.Size()); err != nil {
                 return "", err
         }
         if err := w.pruneRemote(ctx, cfg); err != nil {
@@ -215,17 +210,12 @@ func (w *Worker) pruneRemote(ctx context.Context, cfg Config) error {
                 return err
         }
         sort.Slice(keys, func(i, j int) bool { return keys[i].Name > keys[j].Name })
-        for _, k := range keys[min(len(keys), keep):] {
-                if err := DeleteObject(ctx, cfg, k.Name); err != nil {
-                        return err
-                }
+        if len(keys) <= keep {
+                return nil
         }
-        return nil
-}
-
-func min(a, b int) int {
-        if a < b {
-                return a
+        doomed := make([]string, 0, len(keys)-keep)
+        for _, k := range keys[keep:] {
+                doomed = append(doomed, k.Name)
         }
-        return b
+        return DeleteObjects(ctx, cfg, doomed)
 }

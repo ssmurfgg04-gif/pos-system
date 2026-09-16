@@ -2,7 +2,9 @@
 
 The till stays in the shop. You don't have to. This playbook gives an owner
 in Nairobi full visibility into a shop in Kiambu (or anywhere) with no code
-changes: an encrypted tunnel plus a read-only login.
+changes: an encrypted tunnel plus a read-only login. It also covers the
+one-time off-site backup setup so the books survive even if the shop
+machine doesn't.
 
 ## 1. Put the shop on Tailscale (10 minutes, once)
 
@@ -21,8 +23,9 @@ changes: an encrypted tunnel plus a read-only login.
 Notes:
 - The printer and cash drawer stay local-only (USB/LAN at the shop) — remote
   only *views*; it never prints.
-- Tailscale is end-to-end encrypted (WireGuard). Do NOT expose the shop port
-  directly to the internet — LedgerPOS serves plain HTTP by design for LAN.
+- Tailscale is end-to-end encrypted (WireGuard, peer-to-peer — no cloud
+  relay in the data path). Do NOT expose the shop port directly to the
+  internet — LedgerPOS serves plain HTTP by design for LAN.
 
 ## 2. Create the read-only Owner role (5 minutes, once)
 
@@ -45,18 +48,38 @@ password + PIN. The first login forces rotation like everyone else.
 4. **Orders**: spot-check voids (every void carries a reason + audit row).
 5. **Inventory**: low-stock list before supplier day.
 
-## 4. Backups without commuting
+## 4. Off-site backup without commuting (15 minutes, once)
 
-Settings → System → Off-site backup: enter the S3-compatible bucket once
-(R2 free tier works), set the passphrase, **write the passphrase down and
-keep it off the shop machine** (photo it, WhatsApp it to yourself). From
-then on every nightly snapshot encrypts and uploads itself with retries —
-the status line shows last upload, queued retries, and errors.
+Each shop gets its **own free Supabase project** — that is the whole
+credential-exposure strategy: a leaked key opens that shop's bucket only,
+and you rotate it in the dashboard in 30 seconds.
+
+1. At supabase.com create a project (free tier: 500MB is plenty — a 20MB
+   shop × 14 kept copies ≈ 300MB). Note the project URL.
+2. Storage → **New bucket** named `ledgerpos`, **private** (not public).
+3. Project Settings → API → copy the **`service_role` secret** (not anon).
+4. In the shop: Settings → System → Off-site backup → Enabled. Fill:
+   Project URL, Bucket `ledgerpos`, Service role key, keep 14.
+5. Set the **backup passphrase** (any long phrase). **Write it down and keep
+   it off the shop machine** — photo it, WhatsApp it to yourself. Without
+   it the copies cannot be opened by anyone, including you.
+6. Save, then **Back up now**. The status line should show the upload
+   within a minute. From then on every nightly snapshot encrypts (AES-256)
+   and uploads itself with retries — nobody has to be around.
+
+Why Supabase instead of raw S3: plain Bearer auth (no signing keys dance,
+immune to shop-PC clock drift which breaks SigV4), a dashboard owners can
+understand, and Postgres under the hood if multi-store ever happens.
 
 Disaster drill (do it once, takes 5 minutes):
-1. `ledgerpos restore-backup --list --endpoint … --bucket …` shows copies.
+1. `ledgerpos restore-backup --list --endpoint … --bucket ledgerpos` shows copies.
 2. Restore the newest to a scratch file and open it (it's plain SQLite).
 3. If step 2 works, the shop can burn down and you still have the books.
+
+Restore needs the passphrase: `ledgerpos restore-backup --endpoint URL
+--bucket ledgerpos --api-key KEY --passphrase '…' --out pos-restored.db`.
+Keys can also come from `OFFSITE_API_KEY` / `OFFSITE_PASSPHRASE` env vars
+so they never sit in shell history.
 
 ## 5. When to graduate past this
 
