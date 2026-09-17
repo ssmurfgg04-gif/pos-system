@@ -574,7 +574,7 @@ function ChargeModal({
           </>
         ) : method === 'tab' ? (
           <>
-            <Field label="Tab customer" hint="Server enforces their credit limit at charge time.">
+            <Field label="Tab customer" hint="Their limit is checked automatically.">
               <Input
                 value={tabCustomer ? `${tabCustomer.name} · owes ${formatMoney(tabCustomer.balanceCents)}` : tabQuery}
                 onChange={(e) => { setTabCustomer(null); setTabQuery(e.target.value) }}
@@ -606,6 +606,9 @@ function ChargeModal({
             )}
             {!online && (
               <p className="text-pending-text text-[13px] font-bold">You're offline — tabs need the server for limit checks.</p>
+            )}
+            {method === 'tab' && !online && (
+              <p className="text-[11px] text-ink-subtle">Charge is disabled offline. Reconnect to use tabs.</p>
             )}
           </>
         ) : (
@@ -643,7 +646,7 @@ function ChargeModal({
           variant="primary"
           size="lg"
           className="w-full h-16 text-xl"
-          disabled={busy || (method === 'cash' && !canCash) || (method === 'mpesa' && branding.payment_mode !== 'manual' && !normalizePhoneKe(phone)) || (method === 'tab' && (!online || !tabCustomer || tabCustomer.creditLimitCents <= 0))}
+          disabled={busy || (method === 'cash' && !canCash) || (method === 'mpesa' && branding.payment_mode !== 'manual' && !normalizePhoneKe(phone)) || (method === 'tab' && (!online || !tabCustomer || tabCustomer!.creditLimitCents <= 0))}
           onClick={() => checkout(method, method === 'mpesa' ? (branding.payment_mode as 'auto' | 'stk' | 'manual') : undefined)}
         >
           {busy ? <Spinner className="border-t-brand-ink" /> : method === 'cash' ? `Take ${formatMoney(totals.total)}` : method === 'tab' ? `Charge ${formatMoney(totals.total)} to tab` : 'Charge via M-Pesa →'}

@@ -10,13 +10,14 @@ import { buildSeed, receiptCode } from '../src/demo/seed'
 type Any = Record<string, any>
 
 async function login(username: string, password: string): Promise<string> {
+  const secret = `${password}!X7`
   const res = await demoRequest<{ token: string }>('POST', '/api/v1/auth/login', { username, password })
   localStorage.setItem('pos_token', res.token)
-  // Seeded logins start flagged: rotate through the real self-service path,
-  // then re-login — rotation kills the token used to perform it.
+  // Seeded logins start flagged and hold public defaults — rotate to a
+  // private secret, then re-login (rotation kills the token used to do it).
   const me = await demoRequest<{ id: number }>('GET', '/api/v1/me')
-  await demoRequest('PUT', `/api/v1/users/${me.id}/password`, { password })
-  const fresh = await demoRequest<{ token: string }>('POST', '/api/v1/auth/login', { username, password })
+  await demoRequest('PUT', `/api/v1/users/${me.id}/password`, { password: secret })
+  const fresh = await demoRequest<{ token: string }>('POST', '/api/v1/auth/login', { username, password: secret })
   localStorage.setItem('pos_token', fresh.token)
   return fresh.token
 }
@@ -102,10 +103,14 @@ describe('demo backend RBAC parity', () => {
     localStorage.setItem('pos_token', res.token)
     await expect(demoRequest('GET', '/api/v1/products')).rejects.toMatchObject({ status: 403 })
     const me = await demoRequest<{ id: number }>('GET', '/api/v1/me')
-    await demoRequest('PUT', `/api/v1/users/${me.id}/password`, { password: 'cashier123' })
-    // Rotation kills the token used to perform it — re-login required.
-    await expect(demoRequest('GET', '/api/v1/products')).rejects.toMatchObject({ status: 401 })
-    await login('cashier', 'cashier123')
+    await demoRequest('PUT', `/api/v1/users/${me.id}/password`, { password: 'cashier123!X7' })
+    // Rotation kills the token used to perform it — re-login with new secret.
+    const fresh = await demoRequest<{ token: string }>('POST', '/api/v1/auth/login', { username: 'cashier', password: 'cashier123!X7' })
+    localStorage.setItem('pos_token', fresh.token)
+    // Blocklist now checked on WRITE with a live session.
+    await expect(
+      demoRequest('PUT', `/api/v1/users/${me.id}/password`, { password: 'cashier123' }),
+    ).rejects.toMatchObject({ status: 400 })
     const products = await demoRequest<Any[]>('GET', '/api/v1/products')
     expect(products.length).toBeGreaterThan(10)
   })

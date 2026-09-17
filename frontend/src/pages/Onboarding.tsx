@@ -36,8 +36,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     setBusy(true)
     try {
       await api.put('/api/v1/settings', { values: { onboarding_done: 'true' } })
-      toast.success('Shop ready', 'Karibu — time to sell.')
-      onDone()
+      await useBranding.getState().load()
+      toast.success('Shop ready', 'Karibu — add your products in Inventory, or go sell.')
+      mark(4)
     } catch (e: any) {
       toast.error('Finish failed', e?.message)
     } finally {
@@ -62,6 +63,19 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               />
             ))}
           </ol>
+          {done[4] && (
+            <div className="mb-4 rounded-input border-2 border-paid-text/30 bg-paid-bg p-3 text-[13px] text-paid-text">
+              Shop is live —{' '}
+              <button onClick={() => { useBranding.getState().load().then(() => onDone()) }} className="font-bold underline decoration-paid-text hover:decoration-paid-text/70">
+                go sell
+              </button>{' '}
+              or{' '}
+              <button onClick={() => { onDone(); window.setTimeout(() => history.pushState({}, '', '/inventory'), 50) }} className="font-bold underline decoration-paid-text hover:decoration-paid-text/70">
+                add your products
+              </button>{' '}
+              (CSV import ready).
+            </div>
+          )}
 
           {step === 0 && <StoreStep onSave={saveSettings} onNext={() => { mark(0); setStep(1) }} busy={busy} />}
           {step === 1 && <LogoStep onNext={() => { mark(1); setStep(2) }} onBack={() => setStep(0)} />}
@@ -204,6 +218,7 @@ function PrinterStep({ onSave, onNext, onBack, busy }: { onSave: (v: Record<stri
 }
 
 function StaffStep({ adminId, onNext, onBack, busy, setBusy }: { adminId: number; onNext: () => void; onBack: () => void; busy: boolean; setBusy: (b: boolean) => void }) {
+  const user = useAuth((s) => s.user)
   const [password, setPassword] = useState('')
   const [pin, setPin] = useState('')
   const [cashierName, setCashierName] = useState('')
@@ -212,31 +227,34 @@ function StaffStep({ adminId, onNext, onBack, busy, setBusy }: { adminId: number
   useEffect(() => {
     api.get<Role[]>('/api/v1/roles').then(setRoles).catch(() => setRoles([]))
   }, [])
+  const mustRotate = !!user?.mustRotate
   const cashierRole = roles.find((r) => r.name === 'Cashier')?.id
 
   const save = async () => {
-    if (password.length < 6 || !/^\d{4}$/.test(pin)) {
-      toast.error('Admin needs a 6+ character password and a 4-digit PIN')
+    if (mustRotate && (password.length < 6 || !/^\d{4}$/.test(pin))) {
+      toast.error('Set a 6+ character password and a 4-digit PIN for yourself')
       return
     }
     setBusy(true)
     try {
-      // Take over the seeded admin account (clears rotation by construction).
-      // The password save kills this session by design, so re-login before
-      // setting the PIN.
-      const me = await api.get<{ username: string }>('/api/v1/me')
-      await api.put(`/api/v1/users/${adminId}/password`, { password })
-      const res = await api.post<{ token: string }>('/api/v1/auth/login', {
-        username: me.username,
-        password,
-      })
-      localStorage.setItem('pos_token', res.token)
-      await api.put(`/api/v1/users/${adminId}/pin`, { pin })
-      const fresh = await api.post<{ token: string }>('/api/v1/auth/login', {
-        username: me.username,
-        password,
-      })
-      localStorage.setItem('pos_token', fresh.token)
+      if (mustRotate) {
+        // Take over the seeded admin account (clears rotation by construction).
+        // The password save kills this session by design, so re-login before
+        // setting the PIN.
+        const me = await api.get<{ username: string }>('/api/v1/me')
+        await api.put(`/api/v1/users/${adminId}/password`, { password })
+        const res = await api.post<{ token: string }>('/api/v1/auth/login', {
+          username: me.username,
+          password,
+        })
+        localStorage.setItem('pos_token', res.token)
+        await api.put(`/api/v1/users/${adminId}/pin`, { pin })
+        const fresh = await api.post<{ token: string }>('/api/v1/auth/login', {
+          username: me.username,
+          password,
+        })
+        localStorage.setItem('pos_token', fresh.token)
+      }
       if (cashierName.trim() && cashierRole) {
         await api.post('/api/v1/users', {
           username: cashierName.trim().toLowerCase().replace(/\s+/g, ''),
@@ -257,12 +275,22 @@ function StaffStep({ adminId, onNext, onBack, busy, setBusy }: { adminId: number
 
   return (
     <div className="space-y-3">
-      <p className="text-[13px] text-ink-muted">Your admin login (replaces the seeded defaults):</p>
-      <div className="grid grid-cols-2 gap-2">
-        <Field label="Admin password"><Input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoFocus placeholder="6+ characters" /></Field>
-        <Field label="Admin PIN"><Input value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} inputMode="numeric" placeholder="4 digits" /></Field>
-      </div>
-      <p className="text-[13px] text-ink-muted pt-1">First cashier (optional — they rotate on first login):</p>
+      {mustRotate ? (
+        <>
+          <p className="text-[13px] text-ink-muted">
+            You're signed in as <strong className="text-ink">{user?.username}</strong> — set your own password + PIN:
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Admin password"><Input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoFocus placeholder="6+ characters" /></Field>
+            <Field label="Admin PIN"><Input value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} inputMode="numeric" placeholder="4 digits" /></Field>
+          </div>
+        </>
+      ) : (
+        <p className="text-[13px] text-ink-muted">
+          Signed in as <strong className="text-ink">{user?.username}</strong> — you're all set. Add your first cashier below, or open the shop now.
+        </p>
+      )}
+      <p className="text-[13px] text-ink-muted pt-1">First cashier (optional — they set their own password on first login):</p>
       <div className="grid grid-cols-2 gap-2">
         <Field label="Name"><Input value={cashierName} onChange={(e) => setCashierName(e.target.value)} placeholder="e.g. Brian" /></Field>
         <Field label="PIN"><Input value={cashierPin} onChange={(e) => setCashierPin(e.target.value.replace(/\D/g, '').slice(0, 4))} inputMode="numeric" placeholder="4 digits" /></Field>

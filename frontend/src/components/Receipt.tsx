@@ -26,7 +26,6 @@ export function ReceiptModal({ order, branding, open, onClose }: {
       size="sm"
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>Close</Button>
           <Button variant="primary" onClick={() => {
             document.body.classList.add('printing-receipt')
             window.print()

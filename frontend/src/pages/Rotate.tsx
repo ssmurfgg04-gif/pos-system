@@ -47,7 +47,7 @@ export function Rotate({ onDone }: { onDone: () => void }) {
     <div className="min-h-dvh bg-surface-muted flex items-center justify-center p-4">
       <Card
         title="Set your login details"
-        sub={user ? `${user.fullName || user.username} — defaults don't leave this screen` : 'First login'}
+        sub={user ? `The installer password is public. Set your own to enter your shop.` : 'First login'}
         pad
       >
         <div className="space-y-3 min-w-72">

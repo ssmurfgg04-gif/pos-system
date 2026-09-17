@@ -1,6 +1,7 @@
 package auth
 
 import (
+        "strings"
         "sync"
 
         "posapp/internal/hash"
@@ -23,6 +24,19 @@ func EqualizeLoginTiming(plain string) {
         if dummyHash != "" {
                 VerifyPassword(dummyHash, plain)
         }
+}
+
+// DefaultPasswords is the public installer defaults — rejected as NEW
+// credentials (any case, even "admin123 "). Seeded rows may hold these
+// values; choosing them again is the problem.
+var DefaultPasswords = map[string]bool{
+        "admin123": true, "cashier123": true, "designer123": true,
+        "password": true, "letmein": true, "qwerty": true,
+        "1234": true, "0000": true, "2222": true, "3333": true, "1111": true, "123456": true,
+}
+
+func IsDefaultPassword(pw string) bool {
+        return DefaultPasswords[strings.ToLower(strings.TrimSpace(pw))]
 }
 
 // HashPassword hashes passwords and PINs with bcrypt.

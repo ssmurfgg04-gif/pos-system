@@ -63,6 +63,10 @@ func (h *H) CreateUser(c *gin.Context) {
                 h.fail(c, 400, "password must be 6-128 characters")
                 return
         }
+        if auth.IsDefaultPassword(body.Password) {
+                h.fail(c, 400, "choose a stronger password — that one is public")
+                return
+        }
         var roleExists int
         if err := h.db(c).QueryRow(`SELECT COUNT(*) FROM roles WHERE id = ?`, body.RoleID).Scan(&roleExists); err != nil || roleExists == 0 {
                 h.fail(c, 400, "role not found")
@@ -208,6 +212,10 @@ func (h *H) SetPIN(c *gin.Context) {
         var body pinBody2
         if err := c.ShouldBindJSON(&body); err != nil {
                 h.fail(c, 400, "PIN must be exactly 4 digits")
+                return
+        }
+        if auth.IsDefaultPassword(body.PIN) {
+                h.fail(c, 400, "choose a stronger PIN — that one is well-known")
                 return
         }
         hash, err := auth.HashPassword(body.PIN)
