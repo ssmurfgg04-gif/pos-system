@@ -178,6 +178,30 @@ func TestStaffLifecycle(t *testing.T) {
         }
 }
 
+// Changing credentials kills outstanding sessions: the old token 401s,
+// a fresh login works.
+func TestPasswordChangeKillsOldToken(t *testing.T) {
+        engine, admin, _, _ := newTestServer(t)
+        me := do(t, engine, "GET", "/api/v1/me", admin, nil)
+        adminID := int64(dataMap(t, me)["id"].(float64))
+        w := do(t, engine, "PUT", "/api/v1/users/"+itoa64(adminID)+"/password", admin, map[string]any{
+                "password": "brand-new-password-1",
+        })
+        if w.Code != 200 {
+                t.Fatalf("rotate: %d", w.Code)
+        }
+        w = do(t, engine, "GET", "/api/v1/me", admin, nil)
+        if w.Code != 401 {
+                t.Fatalf("old token should die on password change, got %d", w.Code)
+        }
+        w = do(t, engine, "POST", "/api/v1/auth/login", "", map[string]any{
+                "username": "admin", "password": "brand-new-password-1",
+        })
+        if w.Code != 200 {
+                t.Fatalf("fresh login: %d", w.Code)
+        }
+}
+
 // Signup stays closed unless explicitly enabled.
 func TestSignupDisabledByDefault(t *testing.T) {
         engine, _, _, _ := newTestServer(t)

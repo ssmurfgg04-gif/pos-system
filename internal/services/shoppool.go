@@ -88,6 +88,26 @@ func (p *ShopPool) DB(shopID string) (*database.DB, error) {
         return p.dbPool.Open(shopID)
 }
 
+// FindCheckoutShop locates the shop holding an M-Pesa checkout request
+// (Daraja callbacks carry no shop context; rare op, scans shops).
+func (p *ShopPool) FindCheckoutShop(requestID string) (string, bool) {
+        if requestID == "" {
+                return "", false
+        }
+        for _, id := range p.dbPool.ShopIDs() {
+                db, err := p.dbPool.Open(id)
+                if err != nil {
+                        continue
+                }
+                var n int
+                q := db.Rebind(`SELECT COUNT(*) FROM payments WHERE checkout_request_id = ?`)
+                if err := db.QueryRow(q, requestID).Scan(&n); err == nil && n > 0 {
+                        return id, true
+                }
+        }
+        return "", false
+}
+
 // FindUserShop locates the shop holding a user id (PIN login path).
 func (p *ShopPool) FindUserShop(userID int64) (string, bool) {
         return p.dbPool.FindUserShop(userID)

@@ -158,6 +158,63 @@ func TestMalformedMoneyNumbers(t *testing.T) {
         }
 }
 
+// TestMoneyBoundsOverflow tries integer-overflow theft: absurd quantities
+// and prices must 400, never wrap into negative totals.
+func TestMoneyBoundsOverflow(t *testing.T) {
+        engine, admin, cashier, _ := newTestServer(t)
+        huge := []map[string]any{
+                {"items": []map[string]any{{"productId": 1, "qty": 100001}}, "paymentMethod": "cash", "clientUuid": "o1"},
+                {"items": []map[string]any{{"productId": 1, "qty": 9007199254740993}}, "paymentMethod": "cash", "clientUuid": "o2"},
+        }
+        for i, body := range huge {
+                w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, body)
+                if w.Code != 400 && w.Code != 422 {
+                        t.Fatalf("oversize qty %d should 400/422, got %d %s", i, w.Code, w.Body.String())
+                }
+        }
+        // Absurd catalog prices rejected at write time.
+        for _, body := range []map[string]any{
+                {"sku": "BIG1", "name": "Big", "categoryId": 1, "priceCents": 1000000000001},
+                {"sku": "BIGN", "name": "Big Neg", "categoryId": 1, "priceCents": -5},
+                {"sku": "BIGS", "name": "Big Stock", "categoryId": 1, "priceCents": 100, "stockQty": 1000000001},
+        } {
+                w := do(t, engine, "POST", "/api/v1/products", admin, body)
+                if w.Code != 400 {
+                        t.Fatalf("out-of-range product should 400, got %d %s", w.Code, w.Body.String())
+                }
+        }
+        // Absurd override rejected even with the permission.
+        w := do(t, engine, "POST", "/api/v1/orders/checkout", admin, map[string]any{
+                "items": []map[string]any{{"productId": 1, "qty": 1, "unitPriceCents": 1000000000001}},
+                "paymentMethod": "cash", "clientUuid": "o3",
+        })
+        if w.Code != 400 && w.Code != 422 {
+                t.Fatalf("oversize override should 400/422, got %d", w.Code)
+        }
+        // Absurd stock adjustment rejected.
+        w = do(t, engine, "POST", "/api/v1/products/1/adjust-stock", admin, map[string]any{"delta": 100000001})
+        if w.Code != 400 {
+                t.Fatalf("oversize adjust should 400, got %d", w.Code)
+        }
+        // Sane boundary values still work (caps are ceilings, not walls):
+        // stock a product deep, then buy exactly the max line quantity.
+        w = do(t, engine, "POST", "/api/v1/products", admin, map[string]any{
+                "sku": "BULK1", "name": "Bulk Grain", "categoryId": 1,
+                "priceCents": 100, "costCents": 50, "stockQty": 200000, "trackStock": true,
+        })
+        if w.Code != 201 {
+                t.Fatalf("bulk product: %d %s", w.Code, w.Body.String())
+        }
+        bulkID := int64(dataMap(t, w)["id"].(float64))
+        w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
+                "items": []map[string]any{{"productId": bulkID, "qty": 100000}},
+                "paymentMethod": "cash", "clientUuid": "o4",
+        })
+        if w.Code != 201 {
+                t.Fatalf("max-qty checkout should 201, got %d %s", w.Code, w.Body.String())
+        }
+}
+
 // TestSignupRateLimited hammers signup: eventually 429, never 500.
 func TestSignupRateLimited(t *testing.T) {
         t.Setenv("ALLOW_SIGNUP", "true")

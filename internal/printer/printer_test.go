@@ -131,6 +131,24 @@ func TestTargetParsing(t *testing.T) {
         }
 }
 
+func TestFileTargetLockedToUSB(t *testing.T) {
+        // Arbitrary file targets would let a compromised admin truncate
+        // files (worker opens write-only).
+        for _, bad := range []string{"file:///etc/passwd", "file://C:/Windows/win.ini", "file://./pos.db"} {
+                if Target(bad).Valid() {
+                        t.Errorf("target %q must be rejected", bad)
+                }
+                if _, err := Target(bad).Open(); err == nil {
+                        t.Errorf("open %q must fail", bad)
+                }
+        }
+        for _, good := range []string{"", "tcp://192.168.1.200:9100", "file:///dev/usb/lp0"} {
+                if !Target(good).Valid() {
+                        t.Errorf("target %q must be valid", good)
+                }
+        }
+}
+
 func TestRenderWithLogoEmitsRaster(t *testing.T) {
         // 16x16 solid black square → GS v 0 raster header must appear.
         img := image.NewRGBA(image.Rect(0, 0, 16, 16))

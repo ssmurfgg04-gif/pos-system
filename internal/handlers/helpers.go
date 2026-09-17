@@ -35,8 +35,9 @@ type H struct {
         Shops        *services.ShopPool
         DefaultShop  string
         MasterSecret []byte
-        LoginRL  *auth.RateLimiter
-        PinRL    *auth.RateLimiter
+        LoginRL    *auth.RateLimiter
+        PinRL      *auth.RateLimiter
+        CallbackRL *auth.RateLimiter
 
         // Desktop (single-machine) mode. Set by main after New(); when
         // Desktop.Desktop is true the SPA shows an admin "Quit" affordance.
@@ -63,6 +64,10 @@ func New(db *database.DB, st *settings.Store, svc *services.Service, hub *ws.Hub
                 Updater: update.NewChecker("dev", update.Repo, st),
                 LoginRL: auth.NewRateLimiter(60*time.Second, 10),
                 PinRL:   auth.NewRateLimiter(60*time.Second, 15),
+                // Callbacks are rare (one per STK push); throttling kills
+                // blind checkout_request_id guessing without touching Daraja
+                // retries (minutes apart).
+                CallbackRL: auth.NewRateLimiter(60*time.Second, 20),
         }
 }
 
@@ -169,7 +174,9 @@ func (h *H) mapErr(c *gin.Context, err error) {
                 h.fail(c, 409, err.Error())
         case strings.Contains(msg, "phone"), strings.Contains(msg, "receipt code"),
                 strings.Contains(msg, "invalid payment"), strings.Contains(msg, "quantity"),
-                strings.Contains(msg, "invalid design status"), strings.Contains(msg, "invalid payment mode"):
+                strings.Contains(msg, "invalid design status"), strings.Contains(msg, "invalid payment mode"),
+                strings.Contains(msg, "out of range"), strings.Contains(msg, "exceeds maximum"),
+                strings.Contains(msg, "too many lines"):
                 h.fail(c, 422, err.Error())
         case strings.Contains(msg, "needs a customer"):
                 h.fail(c, 400, err.Error())

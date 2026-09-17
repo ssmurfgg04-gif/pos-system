@@ -143,8 +143,13 @@ func (h *H) ManualConfirm(c *gin.Context) {
 
 // MpesaCallback (public) — Daraja webhook. Amount mismatches are flagged
 // (discrepancy) rather than trusted — fixes the client-trust flaw seen in
-// the mpesa-pos fork.
+// the mpesa-pos fork. Throttled per IP (unguessable IDs + throttle kills
+// blind guessing); routed to the owning shop by checkout request id.
 func (h *H) MpesaCallback(c *gin.Context) {
+	if h.CallbackRL != nil && !h.CallbackRL.Allow("cb:"+c.ClientIP()) {
+		c.JSON(429, gin.H{"ResultCode": 1, "ResultDesc": "rate limited"})
+		return
+	}
 	raw, err := c.GetRawData()
 	if err != nil || len(raw) == 0 {
 		c.JSON(400, gin.H{"ResultCode": 1, "ResultDesc": "invalid payload"})
@@ -155,7 +160,15 @@ func (h *H) MpesaCallback(c *gin.Context) {
 		c.JSON(400, gin.H{"ResultCode": 1, "ResultDesc": "unparseable callback"})
 		return
 	}
-	if _, err := h.svc(c).HandleCallback(cb); err != nil {
+	svc := h.svc(c)
+	if h.Shops != nil {
+		if shopID, ok := h.Shops.FindCheckoutShop(cb.CheckoutRequestID); ok {
+			if s, err := h.Shops.Service(shopID); err == nil {
+				svc = s
+			}
+		}
+	}
+	if _, err := svc.HandleCallback(cb); err != nil {
 		// Answer Daraja politely either way (retries would duplicate);
 		// unknown checkout ids are logged server-side.
 		c.JSON(200, gin.H{"ResultCode": 0, "ResultDesc": "accepted"})

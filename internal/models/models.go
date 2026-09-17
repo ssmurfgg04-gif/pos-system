@@ -3,7 +3,12 @@
 // the wire. JSON keys are camelCase.
 package models
 
-import "time"
+import (
+        "errors"
+        "time"
+)
+
+func errInvalidProduct(msg string) error { return errors.New(msg) }
 
 const (
 	OrderPending  = "PENDING"
@@ -282,6 +287,52 @@ type StockTake struct {
 	ItemCount int             `json:"itemCount"`
 	CreatedAt string          `json:"createdAt"`
 	AppliedAt string          `json:"appliedAt"`
+}
+
+// ---- Money & quantity bounds ----
+//
+// Integer cents keep money exact, but int64 still overflows near 9.2e18:
+// price 1e12 × qty 1e7 would flip a total negative (free money + infinite
+// change). These ceilings sit orders of magnitude above any real duka sale
+// while keeping every multiplication below ~1e17.
+
+const (
+        // MaxOrderQty caps one line's quantity (pre- and post-merge).
+        MaxOrderQty = 100000
+        // MaxPriceCents caps any unit price or cost (10B KES).
+        MaxPriceCents = 1000000000000
+        // MaxOrderLines caps checkout/PO line counts (merge-bypass).
+        MaxOrderLines = 500
+        // MaxStockDelta caps single stock adjustments and take counts.
+        MaxStockDelta = 100000000
+        // MaxStockQty caps stored stock quantities.
+        MaxStockQty = 1000000000
+        // MaxNameLen caps product/customer/supplier names (receipt/UI sanity).
+        MaxNameLen = 200
+        // MaxCodeLen caps SKUs, barcodes, phones.
+        MaxCodeLen = 64
+        // MaxTaxPercent caps VAT configuration.
+        MaxTaxPercent = 100
+)
+
+// CheckProductInput validates catalog fields shared by API + CSV import.
+func CheckProductInput(name, sku, barcode string, priceCents, costCents int64, stock int) error {
+        if len(name) == 0 || len(name) > MaxNameLen {
+                return errInvalidProduct("name must be 1-200 characters")
+        }
+        if len(sku) > MaxCodeLen || len(barcode) > MaxCodeLen {
+                return errInvalidProduct("sku/barcode too long (max 64)")
+        }
+        if priceCents < 0 || priceCents > MaxPriceCents {
+                return errInvalidProduct("price out of range")
+        }
+        if costCents < 0 || costCents > MaxPriceCents {
+                return errInvalidProduct("cost out of range")
+        }
+        if stock < 0 || stock > MaxStockQty {
+                return errInvalidProduct("stock out of range")
+        }
+        return nil
 }
 
 // ---- Shifts ----

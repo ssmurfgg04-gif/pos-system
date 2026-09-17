@@ -107,15 +107,19 @@ func (h *H) CreateProduct(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	stock, track := defaultStock(body)
-	active := 1
-	if body.Active != nil && !*body.Active {
-		active = 0
-	}
-	res, err := h.db(c).Exec(h.db(c).Rebind(`
-		INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-		uniqueSKU(h.db(c), body.SKU), body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active)
+        stock, track := defaultStock(body)
+        active := 1
+        if body.Active != nil && !*body.Active {
+                active = 0
+        }
+        if err := models.CheckProductInput(body.Name, body.SKU, body.Barcode, body.PriceCents, body.CostCents, stock); err != nil {
+                h.fail(c, 400, err.Error())
+                return
+        }
+        res, err := h.db(c).Exec(h.db(c).Rebind(`
+                INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                uniqueSKU(h.db(c), body.SKU), body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active)
 	if err != nil {
 		h.fail(c, 500, err.Error())
 		return
@@ -169,13 +173,17 @@ func (h *H) UpdateProduct(c *gin.Context) {
 	if body.Active != nil && !*body.Active {
 		active = 0
 	}
-	sku := strings.TrimSpace(body.SKU)
-	if sku == "" {
-		var existing string
-		h.db(c).QueryRow(`SELECT COALESCE(sku,'') FROM products WHERE id = ?`, id).Scan(&existing)
-		sku = existing
-	}
-	res, err := h.db(c).Exec(h.db(c).Rebind(`
+        sku := strings.TrimSpace(body.SKU)
+        if sku == "" {
+                var existing string
+                h.db(c).QueryRow(`SELECT COALESCE(sku,'') FROM products WHERE id = ?`, id).Scan(&existing)
+                sku = existing
+        }
+        if err := models.CheckProductInput(body.Name, sku, body.Barcode, body.PriceCents, body.CostCents, stock); err != nil {
+                h.fail(c, 400, err.Error())
+                return
+        }
+        res, err := h.db(c).Exec(h.db(c).Rebind(`
 		UPDATE products SET sku = ?, barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
 			stock_qty = ?, track_stock = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`), sku, body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active, id)
@@ -198,13 +206,17 @@ func (h *H) AdjustStock(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var body struct {
-		Delta int `json:"delta" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		h.fail(c, 400, "delta required")
-		return
-	}
+        var body struct {
+                Delta int `json:"delta" binding:"required"`
+        }
+        if err := c.ShouldBindJSON(&body); err != nil {
+                h.fail(c, 400, "delta required")
+                return
+        }
+        if body.Delta < -models.MaxStockDelta || body.Delta > models.MaxStockDelta {
+                h.fail(c, 400, fmt.Sprintf("delta out of range (max %d)", models.MaxStockDelta))
+                return
+        }
 	res, err := h.db(c).Exec(h.db(c).Rebind(
 		`UPDATE products SET stock_qty = MAX(0, stock_qty + ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`),
 		body.Delta, id)

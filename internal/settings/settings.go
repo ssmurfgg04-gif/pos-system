@@ -122,6 +122,12 @@ func (s *Store) Update(kv map[string]string) ([]string, error) {
                 if isSecretKey(k) && v == MaskToken {
                         continue // masked echo — keep existing secret
                 }
+                if k == "tax_percent" {
+                        f, ferr := strconv.ParseFloat(v, 64)
+                        if ferr != nil || f < 0 || f > 100 {
+                                return changed, fmt.Errorf("tax_percent must be 0-100")
+                        }
+                }
                 if err := s.Set(k, v); err != nil {
                         return changed, fmt.Errorf("set %s: %w", k, err)
                 }

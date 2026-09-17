@@ -39,6 +39,7 @@ func (h *H) Login(c *gin.Context) {
         }
         shopID, ok := h.Tenants.ShopForUser(body.Username)
         if !ok {
+                auth.EqualizeLoginTiming(body.Password)
                 h.fail(c, 401, "invalid credentials")
                 return
         }

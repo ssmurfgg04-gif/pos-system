@@ -28,6 +28,9 @@ echo "$ME" | grep -q '"mustRotate":true' ; ck $? "seeded admin flagged mustRotat
 curl -s -m 2 $URL/api/v1/products -H "Authorization: Bearer $TOKEN" | grep -q 'rotation required' ; ck $? "gated endpoint 403s pre-rotation"
 AID=$(echo "$ME" | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['id'])")
 curl -s -m 2 -X PUT $URL/api/v1/users/$AID/password -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"password":"e2e-admin-1"}' | grep -q '"updated":true' ; ck $? "self rotation clears flag"
+# Rotation kills the token used to perform it — re-login for the rest.
+TOKEN=$(curl -s -m 2 -X POST $URL/api/v1/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"e2e-admin-1"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['token'])")
+[ -n "$TOKEN" ] ; ck $? "re-login after rotation"
 curl -s -m 2 $URL/api/v1/settings -H "Authorization: Bearer $TOKEN" | grep -q '"onboarding_done":"false"' ; ck $? "fresh box reports onboarding pending"
 curl -s -m 2 -X PUT $URL/api/v1/settings -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"values":{"onboarding_done":"true"}}' | grep -q '"onboarding_done":"true"' ; ck $? "onboarding completes via API"
 # Browser flow below uses the rotated password on an onboarded box.
