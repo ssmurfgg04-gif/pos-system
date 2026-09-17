@@ -230,15 +230,35 @@ func (d *DB) seedUsers() error {
         return nil
 }
 
+// isValidUsername mirrors auth.ValidUsername (database cannot import auth —
+// cycle — so the 10-line rule lives here too; keep them in sync).
+func isValidUsername(u string) bool {
+        if len(u) < 3 || len(u) > 32 {
+                return false
+        }
+        for i := 0; i < len(u); i++ {
+                c := u[i]
+                ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+                        c == '.' || c == '_' || c == '-'
+                if !ok {
+                        return false
+                }
+        }
+        return true
+}
+
 // SeedShop provisions a fresh tenant: settings (with the shop's own name),
 // roles, catalog, and exactly ONE admin holding chosen credentials
 // (must_rotate = 0 — they just set them; no default passwords exist here).
 func (d *DB) SeedShop(storeName, adminUser, adminPass string) error {
-        if strings.TrimSpace(storeName) == "" {
-                return fmt.Errorf("shop name required")
+        if strings.TrimSpace(storeName) == "" || len(storeName) > 80 {
+                return fmt.Errorf("shop name required (max 80)")
         }
-        if strings.TrimSpace(adminUser) == "" || len(adminPass) < 6 {
-                return fmt.Errorf("admin username and 6+ character password required")
+        if !isValidUsername(adminUser) {
+                return fmt.Errorf("admin username must be 3-32 letters, digits, dot, underscore, or hyphen")
+        }
+        if len(adminPass) < 6 || len(adminPass) > 128 {
+                return fmt.Errorf("admin password must be 6-128 characters")
         }
         if err := d.seedSettings(); err != nil {
                 return fmt.Errorf("seed settings: %w", err)

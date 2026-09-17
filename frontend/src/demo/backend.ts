@@ -1273,9 +1273,9 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   if (m === 'POST' && p === '/users') {
     requirePerm(perms, 'users.manage')
     const username = String(body?.username || '').trim()
-    if (!username) throw new ApiError(400, 'username required')
+    if (!/^[A-Za-z0-9._-]{3,32}$/.test(username)) throw new ApiError(400, 'username must be 3-32 letters, digits, dot, underscore, or hyphen')
     if (d.users.some((u) => u.username === username)) throw new ApiError(409, 'username taken')
-    if (!body?.password || String(body.password).length < 6) throw new ApiError(400, 'password must be at least 6 characters')
+    if (!body?.password || String(body.password).length < 6 || String(body.password).length > 128) throw new ApiError(400, 'password must be 6-128 characters')
     if (body?.pin && !/^\d{4}$/.test(String(body.pin))) throw new ApiError(400, 'PIN must be exactly 4 digits')
     const u: DemoUser = {
       id: d.seq.user++, username, fullName: String(body?.fullName || ''),
@@ -1298,7 +1298,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       const self = u.id === user.id
       if (!self) requirePerm(perms, 'users.manage')
       if (kind === 'password') {
-        if (!body?.password || String(body.password).length < 6) throw new ApiError(400, 'password must be at least 6 characters')
+        if (!body?.password || String(body.password).length < 6 || String(body.password).length > 128) throw new ApiError(400, 'password must be 6-128 characters')
         u.password = String(body.password)
         u.mustRotate = !self
         audit(user.id, user.username, 'PASSWORD_RESET', 'user', String(u.id), u.username)

@@ -112,6 +112,72 @@ func TestTenantIsolation(t *testing.T) {
         }
 }
 
+// Shop-1 staff story: the admin activates the seeded cashier template,
+// hires more staff under them, and deactivates leavers. Everything stays
+// inside the one shop; rotation is enforced at every handoff.
+func TestStaffLifecycle(t *testing.T) {
+        engine, admin, _, _ := newTestServer(t)
+
+        // Seeded cashier activates with the rotated password, rotates to
+        // their own, then sells.
+        w := do(t, engine, "POST", "/api/v1/auth/login", "", map[string]any{
+                "username": "cashier", "password": rotatedPassword,
+        })
+        if w.Code != 200 {
+                t.Fatalf("cashier login: %d %s", w.Code, w.Body.String())
+        }
+        if dataMap(t, w)["user"].(map[string]any)["mustRotate"] != false {
+                t.Fatal("rotated cashier must be clear")
+        }
+        cashierTok := dataMap(t, w)["token"].(string)
+        w = do(t, engine, "POST", "/api/v1/orders/checkout", cashierTok, map[string]any{
+                "items": []map[string]any{{"productId": 1, "qty": 1}},
+                "paymentMethod": "cash", "clientUuid": "staff-1",
+        })
+        if w.Code != 201 {
+                t.Fatalf("cashier sale: %d %s", w.Code, w.Body.String())
+        }
+
+        // Admin hires a second cashier with a PIN; they enter via PIN,
+        // rotate, and sell.
+        w = do(t, engine, "POST", "/api/v1/users", admin, map[string]any{
+                "username": "cashier2", "fullName": "Cashier Two",
+                "password": "cashier2-temp", "pin": "4444", "roleId": 2,
+        })
+        if w.Code != 201 {
+                t.Fatalf("hire: %d %s", w.Code, w.Body.String())
+        }
+        c2id := int64(dataMap(t, w)["id"].(float64))
+        w = do(t, engine, "POST", "/api/v1/auth/pin", "", map[string]any{"userId": c2id, "pin": "4444"})
+        if w.Code != 200 {
+                t.Fatalf("pin login: %d %s", w.Code, w.Body.String())
+        }
+        if dataMap(t, w)["user"].(map[string]any)["mustRotate"] != true {
+                t.Fatal("fresh hire must rotate on first login")
+        }
+        c2tok := dataMap(t, w)["token"].(string)
+        w = do(t, engine, "PUT", "/api/v1/users/"+itoa64(c2id)+"/password", c2tok, map[string]any{"password": "cashier2-own"})
+        if w.Code != 200 {
+                t.Fatalf("self rotate: %d", w.Code)
+        }
+
+        // Leaver deactivated: both password and PIN paths die.
+        w = do(t, engine, "DELETE", "/api/v1/users/"+itoa64(c2id), admin, nil)
+        if w.Code != 200 {
+                t.Fatalf("deactivate: %d", w.Code)
+        }
+        w = do(t, engine, "POST", "/api/v1/auth/login", "", map[string]any{
+                "username": "cashier2", "password": "cashier2-own",
+        })
+        if w.Code == 200 {
+                t.Fatal("deactivated user must not log in")
+        }
+        w = do(t, engine, "POST", "/api/v1/auth/pin", "", map[string]any{"userId": c2id, "pin": "4444"})
+        if w.Code == 200 {
+                t.Fatal("deactivated user must not PIN in")
+        }
+}
+
 // Signup stays closed unless explicitly enabled.
 func TestSignupDisabledByDefault(t *testing.T) {
         engine, _, _, _ := newTestServer(t)

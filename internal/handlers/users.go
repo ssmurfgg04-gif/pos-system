@@ -51,8 +51,12 @@ func (h *H) CreateUser(c *gin.Context) {
                 h.fail(c, 400, err.Error())
                 return
         }
-        if body.Password == "" {
-                h.fail(c, 400, "password required")
+        if !auth.ValidUsername(body.Username) {
+                h.fail(c, 400, "username must be 3-32 letters, digits, dot, underscore, or hyphen")
+                return
+        }
+        if !auth.ValidPassword(body.Password) {
+                h.fail(c, 400, "password must be 6-128 characters")
                 return
         }
         var roleExists int
@@ -142,7 +146,7 @@ func (h *H) UpdateUser(c *gin.Context) {
 }
 
 type passwordBody struct {
-        Password string `json:"password" binding:"required,min=6"`
+        Password string `json:"password" binding:"required,min=6,max=128"`
 }
 
 // SetPassword (self-service, or users.manage for others). Resetting someone

@@ -42,7 +42,13 @@ func (h *H) ProductsExport(c *gin.Context) {
         c.String(http.StatusOK, b.String())
 }
 
+// csv quotes a field when needed and neutralizes spreadsheet formula
+// injection: cells starting with = + - @ get a leading single quote so
+// Excel/LibreOffice open them as text, never as formulas.
 func csv(s string) string {
+        if s != "" && strings.ContainsRune("=+-@", rune(s[0])) {
+                s = "'" + s
+        }
         if strings.ContainsAny(s, ",\"\n") {
                 return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
         }

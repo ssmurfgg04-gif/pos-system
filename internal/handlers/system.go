@@ -57,8 +57,12 @@ func (h *H) MonthlyReportCSV(c *gin.Context) {
         c.String(200, b.String())
 }
 
-// csvField quotes a CSV field when needed (same rules as csv.go).
+// csvField quotes a CSV field when needed (same rules as csv.go,
+// including formula-injection neutralization).
 func csvField(s string) string {
+        if s != "" && strings.ContainsRune("=+-@", rune(s[0])) {
+                s = "'" + s
+        }
         if strings.ContainsAny(s, ",\"\n") {
                 return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
         }
