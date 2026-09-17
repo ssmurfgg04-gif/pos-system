@@ -7,6 +7,8 @@ import (
         "strings"
 
         "github.com/gin-gonic/gin"
+
+        "posapp/internal/models"
 )
 
 // csvHeader is the canonical import/export column order.
@@ -134,6 +136,10 @@ func (h *H) ProductsImport(c *gin.Context) {
                 }
                 stock := 0
                 fmt.Sscanf(get("stock"), "%d", &stock)
+                if err := models.CheckProductInput(name, get("sku"), get("barcode"), price, cost, stock); err != nil {
+                        h.fail(c, 400, fmt.Sprintf("row %d: %s", i+2, err.Error()))
+                        return
+                }
                 rows = append(rows, row{
                         sku: get("sku"), barcode: get("barcode"), name: name, category: get("category"),
                         price: price, cost: cost, stock: stock,

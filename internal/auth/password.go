@@ -1,8 +1,29 @@
 package auth
 
 import (
+        "sync"
+
         "posapp/internal/hash"
 )
+
+var (
+        dummyOnce sync.Once
+        dummyHash string
+)
+
+// EqualizeLoginTiming burns one bcrypt verification on unknown-user logins
+// so valid and invalid usernames take the same time (no enumeration oracle).
+func EqualizeLoginTiming(plain string) {
+        dummyOnce.Do(func() {
+                h, err := hash.Password("ledgerpos-timing-dummy-value")
+                if err == nil {
+                        dummyHash = h
+                }
+        })
+        if dummyHash != "" {
+                VerifyPassword(dummyHash, plain)
+        }
+}
 
 // HashPassword hashes passwords and PINs with bcrypt.
 func HashPassword(plain string) (string, error) { return hash.Password(plain) }

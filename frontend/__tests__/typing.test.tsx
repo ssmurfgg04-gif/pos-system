@@ -135,6 +135,7 @@ describe('typing repro', () => {
     typeText(pwBox, 'admin123')
     typeText(pinBox, '1234')
     await clickButton('Save & continue')
+    // Rotate re-logs-in after each credential save, landing live.
     for (let i = 0; i < 50; i++) {
       await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
       if (useAuth.getState().user && !useAuth.getState().user!.mustRotate) break

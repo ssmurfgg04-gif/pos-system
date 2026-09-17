@@ -222,8 +222,21 @@ function StaffStep({ adminId, onNext, onBack, busy, setBusy }: { adminId: number
     setBusy(true)
     try {
       // Take over the seeded admin account (clears rotation by construction).
+      // The password save kills this session by design, so re-login before
+      // setting the PIN.
+      const me = await api.get<{ username: string }>('/api/v1/me')
       await api.put(`/api/v1/users/${adminId}/password`, { password })
+      const res = await api.post<{ token: string }>('/api/v1/auth/login', {
+        username: me.username,
+        password,
+      })
+      localStorage.setItem('pos_token', res.token)
       await api.put(`/api/v1/users/${adminId}/pin`, { pin })
+      const fresh = await api.post<{ token: string }>('/api/v1/auth/login', {
+        username: me.username,
+        password,
+      })
+      localStorage.setItem('pos_token', fresh.token)
       if (cashierName.trim() && cashierRole) {
         await api.post('/api/v1/users', {
           username: cashierName.trim().toLowerCase().replace(/\s+/g, ''),

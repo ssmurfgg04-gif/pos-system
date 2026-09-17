@@ -508,9 +508,21 @@ CREATE TABLE IF NOT EXISTS stock_take_items (
 	product_id INTEGER NOT NULL REFERENCES products(id),
 	name TEXT NOT NULL DEFAULT '',
 	sku TEXT NOT NULL DEFAULT '',
-	expected_qty INTEGER NOT NULL DEFAULT 0,
-	counted_qty INTEGER NOT NULL DEFAULT 0
+		expected_qty INTEGER NOT NULL DEFAULT 0,
+		counted_qty INTEGER NOT NULL DEFAULT 0
 );
+`,
+	},
+	{
+		// v6: token invalidation on credential change — sessions issued
+		// before the last password/PIN change stop working. Empty means
+		// pre-feature (existing sessions survive the upgrade once).
+		Version: 6,
+		SQLite: `
+ALTER TABLE users ADD COLUMN password_changed_at TEXT NOT NULL DEFAULT '';
+`,
+		Pg: `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

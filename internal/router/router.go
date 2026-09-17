@@ -29,7 +29,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
                         c.AbortWithStatusJSON(401, gin.H{"error": "Authorization header required"})
                         return
                 }
-                userID, shopID, err := auth.ParseToken(h.MasterSecret, token)
+                userID, shopID, issuedAt, err := auth.ParseToken(h.MasterSecret, token)
                 if err != nil {
                         c.AbortWithStatusJSON(401, gin.H{"error": "invalid or expired token"})
                         return
@@ -45,6 +45,14 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
                 p, err := auth.LoadPrincipal(svc.DB(), userID)
                 if err != nil {
                         c.AbortWithStatusJSON(403, gin.H{"error": "account unavailable"})
+                        return
+                }
+                // Sessions die with the credentials they were issued for.
+                // Millisecond-exact via the iat_ms claim (plain iat is only
+                // second-precision, which cannot order same-second events).
+                changedAt := auth.ParseChangedAt(p.PasswordChangedAt)
+                if p.PasswordChangedAt != "" && issuedAt.Before(changedAt) {
+                        c.AbortWithStatusJSON(401, gin.H{"error": "session expired — sign in again"})
                         return
                 }
                 p.ShopID = shopID

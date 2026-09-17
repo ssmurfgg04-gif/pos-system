@@ -89,9 +89,14 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
         }
 
         // Validate lines with server-side price re-read (never trust client
-        // prices). Duplicate product ids merge quantities.
+        // prices). Duplicate product ids merge quantities. Hard ceilings
+        // keep price*qty below int64 range (overflow would flip totals
+        // negative) — far above any real sale.
         if len(req.Items) == 0 {
                 return nil, errors.New("empty cart")
+        }
+        if len(req.Items) > models.MaxOrderLines {
+                return nil, fmt.Errorf("too many lines (max %d)", models.MaxOrderLines)
         }
         acc := map[int64]checkoutLine{}
         var orderIdx []int64
@@ -99,8 +104,14 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                 if it.Qty <= 0 {
                         return nil, errors.New("quantity must be positive")
                 }
+                if it.Qty > models.MaxOrderQty {
+                        return nil, fmt.Errorf("quantity exceeds maximum (%d)", models.MaxOrderQty)
+                }
                 if prev, ok := acc[it.ProductID]; ok {
                         prev.qty += it.Qty
+                        if prev.qty > models.MaxOrderQty {
+                                return nil, fmt.Errorf("quantity exceeds maximum (%d)", models.MaxOrderQty)
+                        }
                         acc[it.ProductID] = prev
                         continue
                 }
@@ -122,10 +133,13 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                         if !p.Can("payments.override_price") {
                                 return nil, fmt.Errorf("price override requires payments.override_price permission")
                         }
-                        if it.UnitPriceCents < 0 {
-                                return nil, errors.New("price override cannot be negative")
+                        if it.UnitPriceCents < 0 || it.UnitPriceCents > models.MaxPriceCents {
+                                return nil, errors.New("price override out of range")
                         }
                         l.unitPriceCents = it.UnitPriceCents
+                }
+                if l.unitPriceCents > models.MaxPriceCents {
+                        return nil, fmt.Errorf("product %d price out of range", it.ProductID)
                 }
                 l.qty = it.Qty
                 acc[it.ProductID] = l
@@ -138,10 +152,20 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 
         // Totals with configurable, VAT-inclusive-by-default math (integer cents).
         pct := s.settings.GetFloat("tax_percent", 16)
+        if pct < 0 || pct > models.MaxTaxPercent {
+                return nil, fmt.Errorf("tax_percent misconfigured (0-%d)", models.MaxTaxPercent)
+        }
         included := s.settings.GetBool("tax_included", true)
         var subtotal int64
         for _, l := range lines {
-                subtotal += l.unitPriceCents * int64(l.qty)
+                line := l.unitPriceCents * int64(l.qty)
+                if l.qty > 0 && line/int64(l.qty) != l.unitPriceCents {
+                        return nil, errors.New("line total overflow")
+                }
+                subtotal += line
+                if subtotal < 0 {
+                        return nil, errors.New("order total overflow")
+                }
         }
         var tax, total int64
         if included {

@@ -2,12 +2,16 @@ package handlers
 
 import (
         "database/sql"
+        "time"
 
         "github.com/gin-gonic/gin"
 
         "posapp/internal/auth"
         "posapp/internal/models"
 )
+
+// rotationStamp matches services.nowStamp (fixed-width, comparable).
+func rotationStamp() string { return time.Now().UTC().Format("2006-01-02T15:04:05.000Z") }
 
 type userBody struct {
         Username string `json:"username" binding:"required"`
@@ -176,7 +180,7 @@ func (h *H) SetPassword(c *gin.Context) {
         if id != p.ID {
                 rotate = 1
         }
-        res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET password_hash = ?, must_rotate = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, rotate, id)
+        res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET password_hash = ?, must_rotate = ?, password_changed_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, rotate, rotationStamp(), id)
         if err != nil || n(res) != 1 {
                 h.fail(c, 404, "user not found")
                 return
@@ -216,7 +220,7 @@ func (h *H) SetPIN(c *gin.Context) {
                 rotate = 1
         }
         res, err := h.db(c).Exec(h.db(c).Rebind(
-                `UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '', must_rotate = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, rotate, id)
+                `UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '', must_rotate = ?, password_changed_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, rotate, rotationStamp(), id)
         if err != nil || n(res) != 1 {
                 h.fail(c, 404, "user not found")
                 return

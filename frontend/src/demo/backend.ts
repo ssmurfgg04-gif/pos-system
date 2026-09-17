@@ -60,6 +60,10 @@ function migrateDemo(d: DemoDB) {
       (u as any).mustRotate = true
       dirty = true
     }
+    if ((u as any).passwordChangedAt === undefined) {
+      (u as any).passwordChangedAt = 0
+      dirty = true
+    }
   }
   // Cashiers created before tabs existed need customers.view to use them.
   const cashier = d.roles.find((r) => r.name === 'Cashier')
@@ -113,12 +117,19 @@ export function isDemoSeeded() {
 
 // ---- auth helpers ----
 
+const tokenIssued = new Map<string, number>()
+
 function userFromToken(): { user: DemoUser; perms: string[] } {
   const t = token()
   if (!t || !t.startsWith('demo.')) throw new ApiError(401, 'invalid or expired token')
   const id = Number(t.split('.')[1])
   const u = load().users.find((x) => x.id === id)
   if (!u || !u.active) throw new ApiError(403, 'account unavailable')
+  // Sessions die with the credentials they were issued for (server parity).
+  const issued = tokenIssued.get(t) ?? 0
+  if (u.passwordChangedAt && issued < u.passwordChangedAt) {
+    throw new ApiError(401, 'session expired — sign in again')
+  }
   const role = db!.roles.find((r) => r.id === u.roleId)
   return { user: u, perms: role ? role.permissions : [] }
 }
@@ -128,7 +139,9 @@ function requirePerm(perms: string[], key: string) {
 }
 
 function issueToken(u: DemoUser) {
-  return `demo.${u.id}.${Math.random().toString(36).slice(2)}`
+  const t = `demo.${u.id}.${Math.random().toString(36).slice(2)}`
+  tokenIssued.set(t, Date.now())
+  return t
 }
 
 function userDTO(u: DemoUser) {
@@ -1280,7 +1293,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const u: DemoUser = {
       id: d.seq.user++, username, fullName: String(body?.fullName || ''),
       password: String(body.password), pin: body?.pin ? String(body.pin) : '',
-      roleId: Number(body?.roleId) || 2, active: true, mustRotate: true, createdAt: nowIso(),
+      roleId: Number(body?.roleId) || 2, active: true, mustRotate: true, passwordChangedAt: 0, createdAt: nowIso(),
     }
     d.users.push(u)
     audit(user.id, user.username, 'USER_CREATED', 'user', String(u.id), username)
@@ -1301,11 +1314,13 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
         if (!body?.password || String(body.password).length < 6 || String(body.password).length > 128) throw new ApiError(400, 'password must be 6-128 characters')
         u.password = String(body.password)
         u.mustRotate = !self
+        u.passwordChangedAt = Date.now()
         audit(user.id, user.username, 'PASSWORD_RESET', 'user', String(u.id), u.username)
       } else {
         if (!/^\d{4}$/.test(String(body?.pin || ''))) throw new ApiError(400, 'PIN must be exactly 4 digits')
         u.pin = String(body.pin)
         u.mustRotate = !self
+        u.passwordChangedAt = Date.now()
         audit(user.id, user.username, 'PIN_UPDATED', 'user', String(u.id), u.username)
       }
       persist()

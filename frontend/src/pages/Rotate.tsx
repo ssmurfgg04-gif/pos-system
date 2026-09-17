@@ -20,9 +20,21 @@ export function Rotate({ onDone }: { onDone: () => void }) {
     if (!user || !validPw || !validPin) return
     setBusy(true)
     try {
+      // Each credential save kills the session used to perform it (by
+      // design), so re-login after each step and land with a live token.
       await api.put(`/api/v1/users/${user.id}/password`, { password })
+      const res = await api.post<{ token: string }>('/api/v1/auth/login', {
+        username: user.username,
+        password,
+      })
+      localStorage.setItem('pos_token', res.token)
       await api.put(`/api/v1/users/${user.id}/pin`, { pin })
-      toast.success('Credentials updated', 'This device stays logged in.')
+      const fresh = await api.post<{ token: string }>('/api/v1/auth/login', {
+        username: user.username,
+        password,
+      })
+      localStorage.setItem('pos_token', fresh.token)
+      toast.success('Credentials updated')
       onDone()
     } catch (e: any) {
       toast.error('Save failed', e?.message)

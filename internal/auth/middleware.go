@@ -15,14 +15,15 @@ import (
 // Principal is the authenticated caller, reloaded from the DB on every
 // request so role/permission edits apply immediately (no stale JWT perms).
 type Principal struct {
-        ID          int64
-        Username    string
-        FullName    string
-        RoleID      int64
-        RoleName    string
-        ShopID      string
-        Active      bool
-        MustRotate  bool
+        ID                 int64
+        Username           string
+        FullName           string
+        RoleID             int64
+        RoleName           string
+        ShopID             string
+        Active             bool
+        MustRotate         bool
+        PasswordChangedAt  string
         Permissions map[string]bool
 }
 
@@ -35,10 +36,10 @@ func LoadPrincipal(db *database.DB, userID int64) (*Principal, error) {
         var mustRotate int
         err := db.QueryRow(db.Rebind(`
                 SELECT u.id, u.username, COALESCE(u.full_name,''), u.role_id, COALESCE(r.name,''), u.is_active,
-                        COALESCE(u.must_rotate,0)
+                        COALESCE(u.must_rotate,0), COALESCE(u.password_changed_at,'')
                 FROM users u JOIN roles r ON r.id = u.role_id
                 WHERE u.id = ?`), userID).
-                Scan(&p.ID, &p.Username, &p.FullName, &p.RoleID, &p.RoleName, &p.Active, &mustRotate)
+                Scan(&p.ID, &p.Username, &p.FullName, &p.RoleID, &p.RoleName, &p.Active, &mustRotate, &p.PasswordChangedAt)
         if err != nil {
                 return nil, err
         }

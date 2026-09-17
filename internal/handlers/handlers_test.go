@@ -106,6 +106,11 @@ func newTestServer(t *testing.T) (*gin.Engine, string, string, string) {
         rotateFresh(t, engine, admin)
         rotateFresh(t, engine, cashier)
         rotateFresh(t, engine, designer)
+        // Rotation kills the tokens used to perform it (by design), so hand
+        // out fresh ones: every test below runs in the steady state.
+        admin = login(t, engine, "admin", rotatedPassword)
+        cashier = login(t, engine, "cashier", rotatedPassword)
+        designer = login(t, engine, "designer", rotatedPassword)
         return engine, admin, cashier, designer
 }
 
@@ -1095,6 +1100,12 @@ func TestForcedRotation(t *testing.T) {
         if w.Code != 200 {
                 t.Fatalf("rotate password: %d %s", w.Code, w.Body.String())
         }
+        // Rotation kills even the token that performed it: re-login.
+        w = do(t, engine, "GET", "/api/v1/products", admin, nil)
+        if w.Code != 401 {
+                t.Fatalf("rotating token should die, got %d", w.Code)
+        }
+        admin = login(t, engine, "admin", "new-secret-1")
         w = do(t, engine, "GET", "/api/v1/products", admin, nil)
         if w.Code != 200 {
                 t.Fatalf("post-rotation products should 200, got %d", w.Code)

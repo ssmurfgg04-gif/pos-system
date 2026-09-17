@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -30,6 +31,9 @@ func (t Target) Open() (io.WriteCloser, error) {
 		}
 		return conn, nil
 	case strings.HasPrefix(s, "file://"):
+		if !t.Valid() || s == "" {
+			return nil, fmt.Errorf("unsupported printer target %q", s)
+		}
 		path := strings.TrimPrefix(s, "file://")
 		f, err := os.OpenFile(path, os.O_WRONLY, 0)
 		if err != nil {
@@ -42,10 +46,22 @@ func (t Target) Open() (io.WriteCloser, error) {
 }
 
 // Valid reports whether the target parses to a supported scheme.
+// file:// is locked to USB printer devices: an unrestricted file target
+// would let a compromised admin account truncate arbitrary files (the
+// worker opens targets write-only).
 func (t Target) Valid() bool {
-	s := strings.TrimSpace(string(t))
-	if s == "" {
-		return true // disabled is valid
-	}
-	return strings.HasPrefix(s, "tcp://") || strings.HasPrefix(s, "file://")
+        s := strings.TrimSpace(string(t))
+        if s == "" {
+                return true // disabled is valid
+        }
+        if strings.HasPrefix(s, "tcp://") {
+                return true
+        }
+        if strings.HasPrefix(s, "file:///dev/usb/lp") {
+                return true
+        }
+        if runtime.GOOS == "windows" && strings.HasPrefix(s, "file://COM") {
+                return true // COM1:-style receipt printers
+        }
+        return false
 }

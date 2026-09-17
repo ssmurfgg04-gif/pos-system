@@ -122,6 +122,9 @@ func (s *Service) CreatePO(supplierID int64, items []POItemInput, note string, p
         if len(items) == 0 {
                 return nil, fmt.Errorf("purchase order needs at least one line")
         }
+        if len(items) > models.MaxOrderLines {
+                return nil, fmt.Errorf("too many lines (max %d)", models.MaxOrderLines)
+        }
         tx, err := s.db.Begin()
         if err != nil {
                 return nil, err
@@ -145,8 +148,11 @@ func (s *Service) CreatePO(supplierID int64, items []POItemInput, note string, p
                 if it.Qty <= 0 {
                         return nil, fmt.Errorf("quantity must be positive")
                 }
-                if it.CostCents < 0 {
-                        return nil, fmt.Errorf("cost cannot be negative")
+                if it.Qty > models.MaxOrderQty {
+                        return nil, fmt.Errorf("quantity exceeds maximum (%d)", models.MaxOrderQty)
+                }
+                if it.CostCents < 0 || it.CostCents > models.MaxPriceCents {
+                        return nil, fmt.Errorf("cost out of range")
                 }
                 var name, sku string
                 var active int
@@ -160,7 +166,13 @@ func (s *Service) CreatePO(supplierID int64, items []POItemInput, note string, p
                         return nil, fmt.Errorf("product %d is inactive", it.ProductID)
                 }
                 line := int64(it.Qty) * it.CostCents
+                if line/int64(it.Qty) != it.CostCents {
+                        return nil, fmt.Errorf("line total overflow")
+                }
                 subtotal += line
+                if subtotal < 0 {
+                        return nil, fmt.Errorf("order total overflow")
+                }
                 if _, err := tx.Exec(s.db.Rebind(`
                         INSERT INTO purchase_order_items (po_id, product_id, name, sku, qty, cost_cents, line_total_cents)
                         VALUES (?, ?, ?, ?, ?, ?, ?)`),
@@ -507,8 +519,8 @@ func (s *Service) CountTake(takeID int64, counts map[int64]int, p *auth.Principa
                 return nil, fmt.Errorf("%w: only open takes take counts", ErrInvalidState)
         }
         for pid, qty := range counts {
-                if qty < 0 {
-                        return nil, fmt.Errorf("count cannot be negative")
+                if qty < 0 || qty > models.MaxStockQty {
+                        return nil, fmt.Errorf("count out of range (0-%d)", models.MaxStockQty)
                 }
                 res, err := tx.Exec(s.db.Rebind(`
                         UPDATE stock_take_items SET counted_qty = ? WHERE take_id = ? AND product_id = ?`),
