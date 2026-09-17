@@ -339,6 +339,49 @@ describe('demo off-site settings parity', () => {
   })
 })
 
+describe('demo adversarial inputs', () => {
+  const payloads = [
+    `' OR '1'='1`,
+    `'; DROP TABLE users; --`,
+    `" OR ""="`,
+    `<script>alert(1)</script>`,
+    `=HYPERLINK("https://evil.example","click")`,
+  ]
+
+  it('search boxes swallow injection strings without errors or leaks', async () => {
+    await login('admin', 'admin123')
+    for (const p of payloads) {
+      const q = encodeURIComponent(p)
+      for (const path of [`/api/v1/products?search=${q}`, `/api/v1/customers?search=${q}`, `/api/v1/suppliers?search=${q}`, `/api/v1/orders?search=${q}`]) {
+        const res = await demoRequest<Any[]>('GET', path)
+        expect(Array.isArray(res)).toBe(true)
+      }
+    }
+  })
+
+  it('username rules reject scripts, shorts, and oversize passwords', async () => {
+    await login('admin', 'admin123')
+    await expect(
+      demoRequest('POST', '/api/v1/users', { username: '<script>alert(1)</script>', password: 'longenough123', roleId: 2 }),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      demoRequest('POST', '/api/v1/users', { username: 'ab', password: 'longenough123', roleId: 2 }),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      demoRequest('POST', '/api/v1/users', { username: 'fine_name-1.2', password: 'x'.repeat(200), roleId: 2 }),
+    ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('script payloads store verbatim and never execute', async () => {
+    await login('admin', 'admin123')
+    const payload = `<script>alert(1)</script><img src=x onerror=alert(2)>`
+    const c = await demoRequest<Any>('POST', '/api/v1/customers', { name: payload, creditLimitCents: 1000 })
+    expect(c.name).toBe(payload)
+    const list = await demoRequest<Any[]>('GET', '/api/v1/customers?search=script')
+    expect(list.some((x: Any) => x.name === payload)).toBe(true)
+  })
+})
+
 describe('demo suppliers & stock-in parity', () => {
   it('PO receive posts stock with weighted-average cost', async () => {
     await login('admin', 'admin123')

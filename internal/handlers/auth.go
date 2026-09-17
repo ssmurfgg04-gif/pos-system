@@ -87,11 +87,23 @@ func (h *H) Signup(c *gin.Context) {
         }
         var body struct {
                 Username string `json:"username" binding:"required"`
-                Password string `json:"password" binding:"required,min=6"`
+                Password string `json:"password" binding:"required"`
                 ShopName string `json:"shopName" binding:"required"`
         }
         if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, "username, 6+ character password, and shop name required")
+                h.fail(c, 400, "username, password, and shop name required")
+                return
+        }
+        if !auth.ValidUsername(body.Username) {
+                h.fail(c, 400, "username must be 3-32 letters, digits, dot, underscore, or hyphen")
+                return
+        }
+        if !auth.ValidPassword(body.Password) {
+                h.fail(c, 400, "password must be 6-128 characters")
+                return
+        }
+        if len(body.ShopName) > 80 {
+                h.fail(c, 400, "shop name too long (max 80)")
                 return
         }
         if !h.LoginRL.Allow("signup:" + c.ClientIP()) {
