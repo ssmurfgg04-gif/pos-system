@@ -68,10 +68,23 @@ async function walkOnboarding() {
   await waitForText('Receipt footer')
   await clickButton('Save & continue') // receipt (defaults kept)
   await clickButton('Save & continue') // printer (blank target kept)
-  await waitForText('Your admin login')
-  fillPlaceholder('6+ characters', 'admin123')
-  fillPlaceholder('4 digits', '1234')
-  await clickButton('Open shop') // staff → done
+  await waitForText('First cashier')
+  // Admin fields only appear when still needing rotation; otherwise already signed in.
+  const adminPw = document.querySelector('input[placeholder="6+ characters"]') as HTMLInputElement | null
+  if (adminPw) {
+    fillPlaceholder('6+ characters', 'wanjiku123')
+    // First '4 digits' is admin PIN when present, otherwise cashier PIN — fill whichever exists.
+    const pins = [...document.querySelectorAll('input[placeholder="4 digits"]')] as HTMLInputElement[]
+    if (pins[0]) typeText(pins[0], '5678')
+    if (pins[1]) typeText(pins[1], '4321')
+  } else {
+    // Already rotated — just add a cashier PIN
+    const pin = document.querySelector('input[placeholder="4 digits"]') as HTMLInputElement | null
+    if (pin) typeText(pin, '4321')
+  }
+  await clickButton('Open shop') // staff → banner
+  await waitForText('Shop is live')
+  await clickButton('go sell')
 }
 
 describe('typing repro', () => {
@@ -132,8 +145,8 @@ describe('typing repro', () => {
     const pwBox = document.querySelector('input[placeholder="••••••"]') as HTMLInputElement
     const pinBox = document.querySelector('input[placeholder="••••"]') as HTMLInputElement
     expect(pwBox).toBeTruthy()
-    typeText(pwBox, 'admin123')
-    typeText(pinBox, '1234')
+    typeText(pwBox, 'wanjiku123')
+    typeText(pinBox, '5678')
     await clickButton('Save & continue')
     // Rotate re-logs-in after each credential save, landing live.
     for (let i = 0; i < 50; i++) {

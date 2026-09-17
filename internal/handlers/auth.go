@@ -103,6 +103,12 @@ func (h *H) Signup(c *gin.Context) {
                 h.fail(c, 400, "password must be 6-128 characters")
                 return
         }
+        // The default-password blocklist protects NEW passwords only: signup
+        // is always fresh, so it shares the same gate as password changes.
+        if auth.IsDefaultPassword(body.Password) {
+                h.fail(c, 400, "choose a stronger password — that one is public")
+                return
+        }
         if len(body.ShopName) > 80 {
                 h.fail(c, 400, "shop name too long (max 80)")
                 return

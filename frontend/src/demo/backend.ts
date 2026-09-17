@@ -1,3 +1,11 @@
+const DEFAULT_PASSWORDS = new Set([
+  'admin123', 'cashier123', 'designer123', 'password', 'letmein', 'qwerty',
+  '1234', '0000', '2222', '3333', '1111', '123456',
+])
+function isDefaultPassword(pw: string) {
+  return DEFAULT_PASSWORDS.has(String(pw || '').trim().toLowerCase())
+}
+
 // Demo backend — an in-browser API that mirrors the Go server's routes,
 // envelopes, permissions, and money math so the static Netlify build is a
 // fully working demo (nothing is a dead stub). State persists in
@@ -509,6 +517,10 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     return { token: issueToken(u), user: userDTO(u) } as T
   }
   if (m === 'POST' && p === '/auth/signup') {
+    const username = String(body?.username || '').trim()
+    if (!/^[A-Za-z0-9._-]{3,32}$/.test(username)) throw new ApiError(400, 'username must be 3-32 letters, digits, dot, underscore, or hyphen')
+    if (isDefaultPassword(String(body?.password))) throw new ApiError(400, 'choose a stronger password — that one is public')
+    if (!body?.shopName || String(body.shopName).trim().length > 80) throw new ApiError(400, 'shop name required')
     // Single-shop demo: no tenant provisioning here.
     throw new ApiError(501, 'signup is not available in the demo')
   }
@@ -1289,6 +1301,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (!/^[A-Za-z0-9._-]{3,32}$/.test(username)) throw new ApiError(400, 'username must be 3-32 letters, digits, dot, underscore, or hyphen')
     if (d.users.some((u) => u.username === username)) throw new ApiError(409, 'username taken')
     if (!body?.password || String(body.password).length < 6 || String(body.password).length > 128) throw new ApiError(400, 'password must be 6-128 characters')
+    if (isDefaultPassword(String(body.password))) throw new ApiError(400, 'choose a stronger password — that one is public')
     if (body?.pin && !/^\d{4}$/.test(String(body.pin))) throw new ApiError(400, 'PIN must be exactly 4 digits')
     const u: DemoUser = {
       id: d.seq.user++, username, fullName: String(body?.fullName || ''),
@@ -1312,12 +1325,14 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       if (!self) requirePerm(perms, 'users.manage')
       if (kind === 'password') {
         if (!body?.password || String(body.password).length < 6 || String(body.password).length > 128) throw new ApiError(400, 'password must be 6-128 characters')
+        if (isDefaultPassword(String(body.password))) throw new ApiError(400, 'choose a stronger password — that one is public')
         u.password = String(body.password)
         u.mustRotate = !self
         u.passwordChangedAt = Date.now()
         audit(user.id, user.username, 'PASSWORD_RESET', 'user', String(u.id), u.username)
       } else {
         if (!/^\d{4}$/.test(String(body?.pin || ''))) throw new ApiError(400, 'PIN must be exactly 4 digits')
+        if (isDefaultPassword(String(body.pin))) throw new ApiError(400, 'choose a stronger PIN — that one is well-known')
         u.pin = String(body.pin)
         u.mustRotate = !self
         u.passwordChangedAt = Date.now()
