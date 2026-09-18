@@ -200,10 +200,14 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                         status = models.OrderPaid
                         paidAt = now
                 }
+                taxIncludedInt := 0
+                if included {
+                        taxIncludedInt = 1
+                }
                 res, err := tx.Exec(s.db.Rebind(`
-                        INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-                        number, status, subtotal, tax, total, p.ID, req.CustomerName, req.Note, req.ClientUUID, now, paidAt, req.CustomerID)
+                        INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent, tax_included, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                        number, status, subtotal, tax, total, pct, taxIncludedInt, p.ID, req.CustomerName, req.Note, req.ClientUUID, now, paidAt, req.CustomerID)
                 if err != nil {
                         tx.Rollback()
                         if isUniqueViolation(err) {

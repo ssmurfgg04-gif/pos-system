@@ -109,13 +109,20 @@ function StoreStep({ onSave, onNext, busy }: { onSave: (v: Record<string, string
   const [name, setName] = useState('')
   const [address, setAddress] = useState('')
   const [phone, setPhone] = useState('')
+  useEffect(() => {
+    api.get<Record<string, string>>('/api/v1/settings').then((s) => {
+      if (!name && s.store_name) setName(s.store_name)
+      if (!address && s.store_address) setAddress(s.store_address)
+      if (!phone && s.store_phone) setPhone(s.store_phone)
+    }).catch(() => undefined)
+  }, [])
   return (
     <div className="space-y-3">
-      <Field label="Store name" hint="Printed on receipts and shown in the topbar.">
+      <Field label="Store name" hint="Jina la duka — Printed on receipts and shown in the topbar.">
         <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Zawadi Prints" />
       </Field>
-      <Field label="Address"><Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, town" /></Field>
-      <Field label="Phone"><Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" /></Field>
+      <Field label="Address / Anwani"><Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, town — Mtaa, mji" /></Field>
+      <Field label="Phone / Simu"><Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" /></Field>
       <Nav nextLabel={busy ? 'Saving…' : 'Save & continue'} disabled={busy || !name.trim()} onNext={async () => {
         if (await onSave({ store_name: name.trim(), store_address: address.trim(), store_phone: phone.trim() })) onNext()
       }} />

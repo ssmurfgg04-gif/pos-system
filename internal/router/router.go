@@ -96,6 +96,8 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         // ---- Authenticated ----
         authd := api.Group("", authRequired)
         authd.GET("/me", h.Me)
+        authd.GET("/shops", h.MyShops)
+        authd.POST("/auth/switch", h.SwitchShop)
         authd.GET("/ws", gin.WrapH(h.Hub))
 
         // Products & categories (POS reads; manage gated).

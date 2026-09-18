@@ -157,6 +157,18 @@ func (s *Service) GetMonthlySummary(month string) (*MonthlySummary, error) {
                 TaxPercent:  s.settings.GetFloat("tax_percent", 16),
                 TaxIncluded: s.settings.GetBool("tax_included", true),
         }
+        // Historic VAT: average of stored per-order rates (not current setting) — so changing 16→14 mid-year doesn't rewrite May.
+        var avgTax *float64
+        if err := s.db.QueryRow(s.db.Rebind(`SELECT AVG(tax_percent) FROM orders WHERE status='PAID' AND created_at BETWEEN ? AND ?`), from, to).Scan(&avgTax); err == nil && avgTax != nil {
+                out.TaxPercent = *avgTax
+        }
+        // If month has mixed inclusive/exclusive, keep the majority.
+        var includedCount, totalCount int
+        _ = s.db.QueryRow(s.db.Rebind(`SELECT COUNT(*) FROM orders WHERE status='PAID' AND COALESCE(tax_included,1)=1 AND created_at BETWEEN ? AND ?`), from, to).Scan(&includedCount)
+        _ = s.db.QueryRow(s.db.Rebind(`SELECT COUNT(*) FROM orders WHERE status='PAID' AND created_at BETWEEN ? AND ?`), from, to).Scan(&totalCount)
+        if totalCount > 0 {
+                out.TaxIncluded = includedCount*2 >= totalCount
+        }
 
         err := s.db.QueryRow(s.db.Rebind(`
                 SELECT COALESCE(SUM(total_cents),0), COALESCE(SUM(tax_cents),0), COUNT(*),

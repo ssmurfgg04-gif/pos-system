@@ -162,6 +162,8 @@ type Order struct {
 	SubtotalCents int64       `json:"subtotalCents"`
 	TaxCents      int64       `json:"taxCents"`
 	TotalCents    int64       `json:"totalCents"`
+	TaxPercent    float64     `json:"taxPercent"`
+	TaxIncluded   bool        `json:"taxIncluded"`
 	CashierID     int64       `json:"cashierId"`
 	CashierName   string      `json:"cashierName"`
 	CustomerName  string      `json:"customerName"`

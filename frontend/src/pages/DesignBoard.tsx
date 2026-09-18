@@ -111,6 +111,19 @@ function JobModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => vo
   const [form, setForm] = useState({ title: '', productName: '', customerName: '', notes: '', status: 'queue' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [custQuery, setCustQuery] = useState('')
+  const [custOptions, setCustOptions] = useState<{ id: number; name: string; phone?: string }[]>([])
+  useEffect(() => {
+    const q = custQuery.trim()
+    if (!q) { setCustOptions([]); return }
+    const t = window.setTimeout(async () => {
+      try {
+        const res = await api.get<{ id: number; name: string; phone?: string }[]>(`/api/v1/customers?search=${encodeURIComponent(q)}`)
+        setCustOptions(res.slice(0, 6))
+      } catch { /* offline */ }
+    }, 250)
+    return () => window.clearTimeout(t)
+  }, [custQuery])
 
   const save = async () => {
     setBusy(true)
@@ -142,8 +155,21 @@ function JobModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => vo
         <Field label="Product">
           <Input value={form.productName} onChange={(e) => setForm({ ...form, productName: e.target.value })} placeholder="e.g. Premium Heavyweight Tee" />
         </Field>
-        <Field label="Customer">
-          <Input value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} />
+        <Field label="Customer" hint="Pick from Customers tab for linked ledger — or type a new name.">
+          <Input
+            value={form.customerName}
+            onChange={(e) => { setForm({ ...form, customerName: e.target.value }); setCustQuery(e.target.value) }}
+            placeholder="Type to search existing customers…"
+          />
+          {custQuery && custOptions.length > 0 && (
+            <div className="border-2 border-line rounded-input overflow-hidden mt-1">
+              {custOptions.map((c) => (
+                <button key={c.id} type="button" onClick={() => { setForm({ ...form, customerName: c.name }); setCustQuery(''); setCustOptions([]) }} className="w-full text-left px-3 py-2 hover:bg-surface-muted text-[13px]">
+                  {c.name} <span className="text-ink-subtle">{c.phone || ''}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </Field>
         <Field label="Notes">
           <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Colors, placement, deadline…" />

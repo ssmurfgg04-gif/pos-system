@@ -83,6 +83,9 @@ func (p *ShopPool) Uploader(shopID string) (*offsite.Worker, error) {
         return p.ups[shopID], nil
 }
 
+// ShopIDs lists registered shop ids.
+func (p *ShopPool) ShopIDs() []string { return p.dbPool.ShopIDs() }
+
 // DB returns the shop's database handle (for handlers that query directly).
 func (p *ShopPool) DB(shopID string) (*database.DB, error) {
         return p.dbPool.Open(shopID)

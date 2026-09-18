@@ -244,6 +244,8 @@ export interface Order {
   subtotalCents: number
   taxCents: number
   totalCents: number
+  taxPercent: number
+  taxIncluded: boolean
   cashierId: number
   cashierName: string
   customerName: string

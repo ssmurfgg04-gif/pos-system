@@ -29,6 +29,7 @@ func (s *Service) ListOrders(f OrderFilter) ([]models.Order, error) {
         q := strings.Builder{}
         q.WriteString(`
                 SELECT o.id, o.number, o.status, o.subtotal_cents, o.tax_cents, o.total_cents,
+                        COALESCE(o.tax_percent,16), COALESCE(o.tax_included,1),
                         o.cashier_id, COALESCE(u.full_name, u.username, ''), COALESCE(o.customer_name,''),
                         COALESCE(o.customer_id,0),
                         COALESCE(o.note,''), COALESCE(o.client_uuid,''), COALESCE(o.discrepancy,0),
@@ -69,13 +70,16 @@ func (s *Service) ListOrders(f OrderFilter) ([]models.Order, error) {
         var orders []models.Order
         for rows.Next() {
                 var o models.Order
+                var taxIncluded int
                 if err := rows.Scan(&o.ID, &o.Number, &o.Status, &o.SubtotalCents, &o.TaxCents, &o.TotalCents,
+                        &o.TaxPercent, &taxIncluded,
                         &o.CashierID, &o.CashierName, &o.CustomerName, &o.CustomerID,
                         &o.Note, &o.ClientUUID, &o.Discrepancy,
                         &o.CreatedAt, &o.PaidAt, &o.VoidedAt, &o.VoidReason); err != nil {
                         rows.Close()
                         return nil, err
                 }
+                o.TaxIncluded = taxIncluded == 1
                 orders = append(orders, o)
         }
         rows.Close()
@@ -166,8 +170,10 @@ func toAny(ss []string) []any {
 // GetOrder loads one fully-enriched order (sequential queries only).
 func (s *Service) GetOrder(orderID int64) (*models.Order, error) {
         var o models.Order
+        var taxIncluded int
         err := s.db.QueryRow(s.db.Rebind(`
                 SELECT o.id, o.number, o.status, o.subtotal_cents, o.tax_cents, o.total_cents,
+                        COALESCE(o.tax_percent,16), COALESCE(o.tax_included,1),
                         o.cashier_id, COALESCE(u.full_name, u.username, ''), COALESCE(o.customer_name,''),
                         COALESCE(o.customer_id,0),
                         COALESCE(o.note,''), COALESCE(o.client_uuid,''), COALESCE(o.discrepancy,0),
@@ -175,12 +181,14 @@ func (s *Service) GetOrder(orderID int64) (*models.Order, error) {
                 FROM orders o LEFT JOIN users u ON u.id = o.cashier_id
                 WHERE o.id = ?`), orderID).
                 Scan(&o.ID, &o.Number, &o.Status, &o.SubtotalCents, &o.TaxCents, &o.TotalCents,
+                        &o.TaxPercent, &taxIncluded,
                         &o.CashierID, &o.CashierName, &o.CustomerName, &o.CustomerID,
                         &o.Note, &o.ClientUUID, &o.Discrepancy,
                         &o.CreatedAt, &o.PaidAt, &o.VoidedAt, &o.VoidReason)
         if err != nil {
                 return nil, ErrNotFound
         }
+        o.TaxIncluded = taxIncluded == 1
         items, err := s.itemsForOrders([]string{fmt.Sprint(orderID)})
         if err == nil {
                 o.Items = items[orderID]

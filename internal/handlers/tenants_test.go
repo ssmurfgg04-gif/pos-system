@@ -33,12 +33,16 @@ func TestSignupLifecycle(t *testing.T) {
         if shopA == "" || tokA == "" {
                 t.Fatal("signup must return token and shop")
         }
-        // Duplicate username (even for another shop) is rejected.
+        // Same username in a different shop is allowed (owner with two shops).
         w := do(t, engine, "POST", "/api/v1/auth/signup", "", map[string]any{
                 "username": "Alice", "password": "other12345", "shopName": "Copy Shop",
         })
-        if w.Code != 409 {
-                t.Fatalf("duplicate signup should 409, got %d %s", w.Code, w.Body.String())
+        if w.Code != 201 {
+                t.Fatalf("same username in new shop should succeed, got %d %s", w.Code, w.Body.String())
+        }
+        copyShop := dataMap(t, w)["shop"].(map[string]any)["id"].(string)
+        if copyShop == shopA {
+                t.Fatal("second shop must have different id")
         }
         // Weak input rejected.
         w = do(t, engine, "POST", "/api/v1/auth/signup", "", map[string]any{
