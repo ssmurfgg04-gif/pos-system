@@ -26,16 +26,51 @@ type Shop struct {
 	CreatedAt string `json:"createdAt"`
 }
 
-// Registry is the on-disk index: shops by id + username to shop id.
-// JWTSecret signs every token on this box (shared across shops so the
-// shop claim itself is tamper-proof; per-shop files still isolate data).
+// Registry is the on-disk index: shops by id + usernames to shop ids.
+// A username may live in multiple shops (owner with two shops) — the value
+// is a list. Old single-string files are migrated on load.
 type Registry struct {
 	mu   sync.Mutex
 	path string
 	dir  string
-	ShopList []Shop            `json:"shops"`
-	Users    map[string]string `json:"users"`
-	JWTSecret string           `json:"jwtSecret"`
+	ShopList []Shop              `json:"shops"`
+	Users    map[string][]string `json:"users"`
+	JWTSecret string             `json:"jwtSecret"`
+}
+
+// UnmarshalJSON handles both old {"users":{"alice":"sh-..."}} and new
+// {"users":{"alice":["sh-..."]}} files.
+func (r *Registry) UnmarshalJSON(data []byte) error {
+	type raw struct {
+		ShopList []Shop          `json:"shops"`
+		Users    json.RawMessage `json:"users"`
+		JWTSecret string         `json:"jwtSecret"`
+	}
+	var tmp raw
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
+	r.ShopList = tmp.ShopList
+	r.JWTSecret = tmp.JWTSecret
+	r.Users = map[string][]string{}
+	if len(tmp.Users) == 0 || string(tmp.Users) == "null" {
+		return nil
+	}
+	// Try new form first.
+	var m2 map[string][]string
+	if err := json.Unmarshal(tmp.Users, &m2); err == nil {
+		r.Users = m2
+		return nil
+	}
+	// Old form: map[string]string
+	var m1 map[string]string
+	if err := json.Unmarshal(tmp.Users, &m1); err != nil {
+		return err
+	}
+	for k, v := range m1 {
+		r.Users[k] = []string{v}
+	}
+	return nil
 }
 
 // EnsureJWTSecret sets the shared secret once (fallback seeds it, e.g. from
@@ -60,7 +95,7 @@ func (r *Registry) EnsureJWTSecret(fallback string) string {
 
 // Load opens (or creates) the registry at dir/shops.json.
 func Load(dir string) (*Registry, error) {
-	r := &Registry{path: filepath.Join(dir, "shops.json"), dir: dir, Users: map[string]string{}}
+	r := &Registry{path: filepath.Join(dir, "shops.json"), dir: dir, Users: map[string][]string{}}
 	raw, err := os.ReadFile(r.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -72,7 +107,7 @@ func Load(dir string) (*Registry, error) {
 		return nil, fmt.Errorf("corrupt registry: %w", err)
 	}
 	if r.Users == nil {
-		r.Users = map[string]string{}
+		r.Users = map[string][]string{}
 	}
 	return r, nil
 }
@@ -124,17 +159,14 @@ func (r *Registry) CreateShop(name, dbFile, createdAt string) (Shop, error) {
 	return s, nil
 }
 
-// RegisterUser binds a username to a shop (usernames unique per box).
-// Lookup is case-insensitive; the canonical stored form is lowercased.
+// RegisterUser binds a username to a shop. A username may live in multiple
+// shops (owner with two shops) — same username in same shop is still unique.
 func (r *Registry) RegisterUser(username, shopID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := lower(username)
 	if key == "" {
 		return fmt.Errorf("username required")
-	}
-	if _, taken := r.Users[key]; taken {
-		return fmt.Errorf("username taken")
 	}
 	found := false
 	for _, s := range r.ShopList {
@@ -146,16 +178,35 @@ func (r *Registry) RegisterUser(username, shopID string) error {
 	if !found {
 		return fmt.Errorf("unknown shop")
 	}
-	r.Users[key] = shopID
+	for _, sid := range r.Users[key] {
+		if sid == shopID {
+			return fmt.Errorf("username taken in this shop")
+		}
+	}
+	r.Users[key] = append(r.Users[key], shopID)
 	return r.save()
 }
 
-// ShopForUser resolves a username to its shop id ("", false if unknown).
+// ShopForUser resolves a username to its (first) shop id ("", false if unknown).
+// For multi-shop users, use ShopsForUser.
 func (r *Registry) ShopForUser(username string) (string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	id, ok := r.Users[lower(username)]
-	return id, ok
+	ids, ok := r.Users[lower(username)]
+	if !ok || len(ids) == 0 {
+		return "", false
+	}
+	return ids[0], true
+}
+
+// ShopsForUser returns all shop ids a username belongs to.
+func (r *Registry) ShopsForUser(username string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ids, _ := r.Users[lower(username)]
+	out := make([]string, len(ids))
+	copy(out, ids)
+	return out
 }
 
 // DBPath returns the database file path for a new shop (shops/<id>.db).

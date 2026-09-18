@@ -43,6 +43,27 @@ func (h *H) UpdateSettings(c *gin.Context) {
                         return
                 }
         }
+        // Guardrail: one Supabase project per shop. Reusing the same
+        // endpoint+bucket across shops would make a leaked key open multiple
+        // shops (defeats per-shop blast radius). Scan other shops' settings.
+        if h.Shops != nil {
+                if ep, ok := body.Values["offsite_endpoint"]; ok && ep != "" && ep != settings.MaskToken {
+                        if bucket, ok2 := body.Values["offsite_bucket"]; ok2 && bucket != "" {
+                                curShop := h.shopID(c)
+                                for _, sid := range h.Shops.ShopIDs() {
+                                        if sid == curShop {
+                                                continue
+                                        }
+                                        if st, err := h.Shops.Settings(sid); err == nil {
+                                                if st.Get("offsite_endpoint") == ep && st.Get("offsite_bucket") == bucket {
+                                                        h.fail(c, 400, "that Supabase project is already used by another shop — create a separate project per shop")
+                                                        return
+                                                }
+                                        }
+                                }
+                        }
+                }
+        }
         changed, err := h.settings(c).Update(body.Values)
         if err != nil {
                 h.fail(c, 500, err.Error())

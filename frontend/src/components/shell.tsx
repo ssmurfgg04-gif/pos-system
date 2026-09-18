@@ -36,6 +36,15 @@ export function AppShell({ current, children }: { current: string; children: Rea
   const [desk, setDesk] = useState<DesktopStatus | null>(null)
   const [stopping, setStopping] = useState(false)
   const [updateNote, setUpdateNote] = useState<{ latest: string } | null>(null)
+  const [shops, setShops] = useState<{ id: string; name: string }[] | null>(null)
+  useEffect(() => {
+    if (!user) return
+    let live = true
+    api.get<{ id: string; name: string }[]>('/api/v1/shops').then((list) => {
+      if (live && list.length > 1) setShops(list)
+    }).catch(() => undefined)
+    return () => { live = false }
+  }, [user?.id])
   useEffect(() => {
     if (!user?.permissions.includes('settings.manage')) return
     let live = true
@@ -113,6 +122,28 @@ export function AppShell({ current, children }: { current: string; children: Rea
             <p className="text-on-shell-muted text-[11px] leading-tight">{branding.app_name}</p>
           </div>
         </div>
+        {shops && shops.length > 1 && (
+          <select
+            value={user?.shopId || ''}
+            onChange={async (e) => {
+              const sid = e.target.value
+              if (!sid || sid === user?.shopId) return
+              try {
+                const res = await api.post<{ token: string }>('/api/v1/auth/switch', { shopId: sid })
+                localStorage.setItem('pos_token', res.token)
+                location.reload()
+              } catch (err: any) {
+                toast.error('Switch failed', err?.message)
+              }
+            }}
+            className="hidden sm:block min-h-8 px-2 rounded-input bg-shell-edge text-on-shell text-[12px] font-semibold border border-on-shell-muted/40"
+            title="Switch shop"
+          >
+            {shops.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        )}
 
         <nav className="flex-1 flex items-center gap-1 overflow-x-auto" aria-label="Main">
           {items.map((n) => {

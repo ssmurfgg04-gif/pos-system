@@ -25,14 +25,21 @@ func TestRegistryRouting(t *testing.T) {
 	if err := r.RegisterUser("Alice", a.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.RegisterUser("alice", b.ID); err == nil {
-		t.Fatal("duplicate username (case-insensitive) must fail")
+	// Same username in different shop is allowed (owner with two shops)
+	if err := r.RegisterUser("alice", b.ID); err != nil {
+		t.Fatalf("same username in different shop should succeed, got %v", err)
+	}
+	if err := r.RegisterUser("Alice", a.ID); err == nil {
+		t.Fatal("duplicate username in same shop must fail")
 	}
 	if err := r.RegisterUser("Bob", b.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got, ok := r.ShopForUser("ALICE"); !ok || got != a.ID {
-		t.Fatalf("alice should route to A, got %q %v", got, ok)
+		t.Fatalf("alice should route to A (first), got %q %v", got, ok)
+	}
+	if shops := r.ShopsForUser("alice"); len(shops) != 2 {
+		t.Fatalf("alice should belong to 2 shops, got %v", shops)
 	}
 	if _, ok := r.ShopForUser("ghost"); ok {
 		t.Fatal("unknown user must not route")

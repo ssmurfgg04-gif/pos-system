@@ -37,41 +37,60 @@ func (h *H) Login(c *gin.Context) {
                 h.fail(c, 500, "tenancy not configured")
                 return
         }
-        shopID, ok := h.Tenants.ShopForUser(body.Username)
-        if !ok {
+        shopIDs := h.Tenants.ShopsForUser(body.Username)
+        if len(shopIDs) == 0 {
                 auth.EqualizeLoginTiming(body.Password)
                 h.fail(c, 401, "invalid credentials")
                 return
         }
-        svc, err := h.Shops.Service(shopID)
-        if err != nil {
+        var matchedShop string
+        var matchedID int64
+        var matchedHash string
+        var matchedPrincipal *auth.Principal
+        for _, sid := range shopIDs {
+                svc, err := h.Shops.Service(sid)
+                if err != nil {
+                        continue
+                }
+                db := svc.DB()
+                var id int64
+                var pwHash string
+                err = db.QueryRow(db.Rebind(
+                        `SELECT id, COALESCE(password_hash,'') FROM users WHERE LOWER(username) = LOWER(?)`), body.Username).
+                        Scan(&id, &pwHash)
+                if err != nil {
+                        continue
+                }
+                if !auth.VerifyPassword(pwHash, body.Password) {
+                        continue
+                }
+                p, err := auth.LoadPrincipal(db, id)
+                if err != nil {
+                        continue
+                }
+                matchedShop = sid
+                matchedID = id
+                matchedHash = pwHash
+                matchedPrincipal = p
+                matchedPrincipal.ShopID = sid
+                break
+        }
+        if matchedPrincipal == nil {
                 h.fail(c, 401, "invalid credentials")
                 return
         }
-        db := svc.DB()
-        var id int64
-        var pwHash string
-        err = db.QueryRow(db.Rebind(
-                `SELECT id, COALESCE(password_hash,'') FROM users WHERE LOWER(username) = LOWER(?)`), body.Username).
-                Scan(&id, &pwHash)
-        if err != nil || !auth.VerifyPassword(pwHash, body.Password) {
-                h.fail(c, 401, "invalid credentials")
-                return
-        }
-        p, err := auth.LoadPrincipal(db, id)
-        if err != nil {
-                h.fail(c, 403, "account inactive")
-                return
-        }
-        p.ShopID = shopID
+        // Use matched shop's service for audit and token
+        svc, _ := h.Shops.Service(matchedShop)
+        _ = matchedID
+        _ = matchedHash
         h.LoginRL.Forget(key)
-        token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
+        token, err := auth.IssueToken(h.MasterSecret, matchedPrincipal.ID, matchedPrincipal.Username, matchedShop)
         if err != nil {
                 h.fail(c, 500, "token error")
                 return
         }
-        svc.Audit(p.ID, p.Username, "LOGIN", "user", p.Username, "password")
-        h.ok(c, gin.H{"token": token, "user": p.User()})
+        svc.Audit(matchedPrincipal.ID, matchedPrincipal.Username, "LOGIN", "user", matchedPrincipal.Username, "password")
+        h.ok(c, gin.H{"token": token, "user": matchedPrincipal.User()})
 }
 
 // Signup is public iff ALLOW_SIGNUP=true: provisions a shop (migrate +
@@ -117,10 +136,6 @@ func (h *H) Signup(c *gin.Context) {
                 h.fail(c, 429, "too many attempts — wait a minute")
                 return
         }
-        if _, taken := h.Tenants.ShopForUser(body.Username); taken {
-                h.fail(c, 409, "username taken")
-                return
-        }
         shop, err := h.Tenants.CreateShop(strings.TrimSpace(body.ShopName), "",
                 time.Now().UTC().Format("2006-01-02T15:04:05.000Z"))
         if err != nil {
@@ -158,7 +173,6 @@ func (h *H) Signup(c *gin.Context) {
                 h.fail(c, 500, "token error")
                 return
         }
-        h.LoginRL.Forget("signup:" + c.ClientIP())
         svc, _ := h.Shops.Service(shop.ID)
         svc.Audit(p.ID, p.Username, "SHOP_CREATED", "shop", shop.ID, shop.Name)
         // New shops get background loops immediately (backups/sweeper/uploads),
@@ -282,6 +296,69 @@ func (h *H) Branding(c *gin.Context) {
                 return
         }
         h.ok(c, st.Branding())
+}
+
+// MyShops returns all shops the current user belongs to (for shop switcher).
+func (h *H) MyShops(c *gin.Context) {
+        p := h.principal(c)
+        if h.Tenants == nil {
+                h.fail(c, 500, "tenancy not configured")
+                return
+        }
+        ids := h.Tenants.ShopsForUser(p.Username)
+        out := []map[string]string{}
+        for _, sid := range ids {
+                if shop, ok := h.Tenants.Find(sid); ok {
+                        out = append(out, map[string]string{"id": shop.ID, "name": shop.Name})
+                }
+        }
+        h.ok(c, out)
+}
+
+// SwitchShop issues a new token for the same user in a different shop they belong to.
+func (h *H) SwitchShop(c *gin.Context) {
+        p := h.principal(c)
+        var body struct {
+                ShopID string `json:"shopId" binding:"required"`
+        }
+        if err := c.ShouldBindJSON(&body); err != nil {
+                h.fail(c, 400, "shopId required")
+                return
+        }
+        allowed := false
+        for _, sid := range h.Tenants.ShopsForUser(p.Username) {
+                if sid == body.ShopID {
+                        allowed = true
+                        break
+                }
+        }
+        if !allowed {
+                h.fail(c, 403, "not a member of that shop")
+                return
+        }
+        svc, err := h.Shops.Service(body.ShopID)
+        if err != nil {
+                h.fail(c, 404, "unknown shop")
+                return
+        }
+        db := svc.DB()
+        var id int64
+        if err := db.QueryRow(db.Rebind(`SELECT id FROM users WHERE LOWER(username)=LOWER(?) AND is_active=1`), p.Username).Scan(&id); err != nil {
+                h.fail(c, 404, "user not found in target shop")
+                return
+        }
+        np, err := auth.LoadPrincipal(db, id)
+        if err != nil {
+                h.fail(c, 403, "account unavailable in target shop")
+                return
+        }
+        np.ShopID = body.ShopID
+        token, err := auth.IssueToken(h.MasterSecret, np.ID, np.Username, body.ShopID)
+        if err != nil {
+                h.fail(c, 500, "token error")
+                return
+        }
+        h.ok(c, gin.H{"token": token, "user": np.User()})
 }
 
 var _ = http.StatusOK

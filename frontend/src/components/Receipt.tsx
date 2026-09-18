@@ -67,7 +67,7 @@ export function ReceiptModal({ order, branding, open, onClose }: {
 
         <div className="space-y-0.5">
           <Row label="Subtotal" value={centsToAmount(order.subtotalCents)} />
-          <Row label={`VAT (${branding.tax_percent}%)`} value={centsToAmount(order.taxCents)} />
+          <Row label={`VAT (${order.taxPercent || branding.tax_percent}%)`} value={centsToAmount(order.taxCents)} />
           <div className="flex justify-between font-bold text-[14px] border-t-2 border-line mt-1 pt-1">
             <span>TOTAL</span>
             <span className="tabular">{branding.currency_code} {centsToAmount(order.totalCents)}</span>
@@ -77,7 +77,8 @@ export function ReceiptModal({ order, branding, open, onClose }: {
         <div className="border-t-2 border-dashed border-line my-2.5" />
 
         <div className="space-y-0.5">
-          <Row label={pay?.method === 'cash' ? 'Paid (cash)' : 'Paid (M-Pesa)'} value={pay ? centsToAmount(pay.amountCents) : '—'} />
+          <Row label={pay?.method === 'cash' ? 'Paid (cash)' : pay?.method === 'account' ? 'Tab' : 'Paid (M-Pesa)'} value={pay ? centsToAmount(pay.amountCents) : '—'} />
+          {pay?.method === 'account' && <p className="text-center text-[11px] font-semibold text-ink-muted">On tab — balance on Customers → Ledger</p>}
           {pay?.mpesaReceipt && <Row label="M-Pesa receipt" value={pay.mpesaReceipt} />}
           {pay?.phone && <Row label="Phone" value={pay.phone} />}
           {order.customerName && <Row label="Customer" value={order.customerName} />}

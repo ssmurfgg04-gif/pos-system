@@ -10,6 +10,18 @@
 
 **Spec:** Owner requirement 2026-09-16: signup opens a new shop; login lands in the correct shop only; cross-shop data invisible. Sub-20MB discipline: shop files stay tiny (VACUUM-compacted; measured 0.2MB seeded); no action needed beyond measuring in Task 6.
 
+**Refined 2026-09-16 — Web Research Best Practices Applied:**
+
+- **Multi-tenancy model:** Research confirms DB-per-tenant (our SQLite-file-per-shop) is the *strongest* isolation (file-level, not just RLS WHERE clauses) and is explicitly recommended for compliance-driven cases (Securestartkit, Makerkit). Shared-schema `tenant_id` + RLS is cheaper at 10K+ tenants but requires `(select auth.uid())` wrapping, composite indexes `tenant_id`-first, and `WITH CHECK` on every write — our file-per-shop avoids all of that while keeping each shop <20MB. If we ever migrate to Supabase Postgres for cloud sync, we will add `tenant_id` + `as restrictive` RLS + `security definer` helpers per Makerkit's production checklist.
+
+- **VAT historization:** StackOverflow/DBA consensus is unanimous: *store calculated tax at posting, never recalculate*. Tax rates change; reports must read stored `tax_cents`/`tax_percent` per order line, not current settings. Our Task 4 already stores `tax_cents` per order — we now also store `tax_percent` per order for correct "VAT at X%" labels in historic reports (see Task 4 refinements).
+
+- **Shop switcher UX:** ABP/React guides show `TenantContext` + `queryKey: ['tenant-users', tenantId]` + `enabled: !!tenantId` + dropdown with "Create New". Our frontend will use the same pattern: `useTenant()` context, `tenantId` in every query key, and a shop avatar dropdown (shadcn) — not a full page reload.
+
+- **CSV injection:** OWASP: prefix cells starting with `=+-@` with `'` and quote fields containing `,”\n`. Already implemented in `csv()`/`csvField()`; research confirms this is the correct 2024 mitigation.
+
+- **Supabase Storage RLS (future):** When off-site moves to Supabase Storage, encode `tenantId` into object path and enforce via `storage.foldername(name)[1]` in RLS (per Supabase docs) — not yet needed for DB-per-shop files.
+
 ## Global Constraints
 
 - Repo Go files are mixed tabs/spaces PER FILE — match each file's own style, never run gofmt -w.

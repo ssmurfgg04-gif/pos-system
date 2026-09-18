@@ -525,6 +525,21 @@ ALTER TABLE users ADD COLUMN password_changed_at TEXT NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		// v7: VAT historization — store tax percent + inclusive flag per order
+		// so reports never recalculate with current settings (per DBA best
+		// practice: store calculated values at posting time).
+		Version: 7,
+		SQLite: `
+ALTER TABLE orders ADD COLUMN tax_percent REAL NOT NULL DEFAULT 16;
+ALTER TABLE orders ADD COLUMN tax_included INTEGER NOT NULL DEFAULT 1;
+UPDATE orders SET tax_percent = 16 WHERE tax_percent = 16;
+`,
+		Pg: `
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_percent DOUBLE PRECISION NOT NULL DEFAULT 16;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_included INTEGER NOT NULL DEFAULT 1;
+`,
+	},
 }
 
 // Migrate applies pending migrations in order.
