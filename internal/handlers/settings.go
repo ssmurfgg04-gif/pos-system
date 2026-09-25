@@ -70,6 +70,10 @@ func (h *H) UpdateSettings(c *gin.Context) {
                 return
         }
         h.svc(c).Audit(p.ID, p.Username, "SETTINGS_UPDATED", "settings", "", joinKeys(changed))
+        // OTA config: whitelisted commercial settings (branding, tax,
+        // loyalty, paystack public config, ...) propagate to the rest of
+        // the team through the sync log — no reinstall on other tills.
+        h.svc(c).EmitConfig(changed)
         h.Hub.BroadcastJSON(services.EventSettingsUpdate, h.settings(c).Branding())
         h.ok(c, h.settings(c).Snapshot())
 }

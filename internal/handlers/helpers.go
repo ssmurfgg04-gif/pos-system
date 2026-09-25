@@ -164,6 +164,8 @@ func (h *H) mapErr(c *gin.Context, err error) {
         switch {
         case errors.Is(err, services.ErrNotFound), errors.Is(err, sql.ErrNoRows):
                 h.fail(c, 404, err.Error())
+        case errors.Is(err, services.ErrNotConfigured):
+                h.fail(c, 422, err.Error())
         case errors.Is(err, services.ErrInsufficientStock),
                 errors.Is(err, services.ErrInvalidState),
                 errors.Is(err, services.ErrOrderAlreadyPaid),

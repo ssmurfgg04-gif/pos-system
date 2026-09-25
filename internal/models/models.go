@@ -11,180 +11,208 @@ import (
 func errInvalidProduct(msg string) error { return errors.New(msg) }
 
 const (
-	OrderPending  = "PENDING"
-	OrderPaid     = "PAID"
-	OrderVoided   = "VOIDED"
+        OrderPending  = "PENDING"
+        OrderPaid     = "PAID"
+        OrderVoided   = "VOIDED"
 
-	PaymentPending    = "PENDING"
-	PaymentCompleted  = "COMPLETED"
-	PaymentFailed     = "FAILED"
-	PaymentVoided     = "VOIDED"
+        PaymentPending    = "PENDING"
+        PaymentCompleted  = "COMPLETED"
+        PaymentFailed     = "FAILED"
+        PaymentVoided     = "VOIDED"
 
-	MethodCash    = "cash"
-	MethodMpesa   = "mpesa"
-	MethodAccount = "account" // charge to a customer tab (customer credit)
+        MethodCash    = "cash"
+        MethodMpesa   = "mpesa"
+        MethodAccount = "account"  // charge to a customer tab (customer credit)
+        MethodCredit  = "credit"   // pay from prepaid store credit balance
+        MethodPaystack = "paystack" // card / mobile money via Paystack checkout
 
-	ModeAuto   = "auto"   // STK push first, manual fallback available
-	ModeSTK    = "stk"    // force STK push
-	ModeManual = "manual" // force manual receipt entry
+        // Store-credit ledger kinds (customer_ledger.kind). Store credit is
+        // money the shop OWES the customer (prepaid) — the mirror of the
+        // tab balance. Top-up adds, redemption subtracts.
+        LedgerCreditTopup  = "credit_topup"
+        LedgerCreditRedeem = "credit_redeem"
 
-	MpesaEnvMock       = "mock"
-	MpesaEnvSandbox    = "sandbox"
-	MpesaEnvProduction = "production"
+        ModeAuto   = "auto"   // STK push first, manual fallback available
+        ModeSTK    = "stk"    // force STK push
+        ModeManual = "manual" // force manual receipt entry
 
-	PrintQueued   = "queued"
-	PrintPrinting = "printing"
-	PrintPrinted  = "printed"
-	PrintFailed   = "failed"
+        MpesaEnvMock       = "mock"
+        MpesaEnvSandbox    = "sandbox"
+        MpesaEnvProduction = "production"
 
-	DesignQueue      = "queue"
-	DesignInProgress = "in_progress"
-	DesignReady      = "ready"
-	DesignDelivered  = "delivered"
+        PrintQueued   = "queued"
+        PrintPrinting = "printing"
+        PrintPrinted  = "printed"
+        PrintFailed   = "failed"
+
+        DesignQueue      = "queue"
+        DesignInProgress = "in_progress"
+        DesignReady      = "ready"
+        DesignDelivered  = "delivered"
 )
 
 // ---- Auth & RBAC ----
 
 type User struct {
-	ID          int64    `json:"id"`
-	Username    string   `json:"username"`
-	FullName    string   `json:"fullName"`
-	RoleID      int64    `json:"roleId"`
-	RoleName    string   `json:"roleName"`
-	Permissions []string `json:"permissions"`
-	Active      bool     `json:"active"`
-	MustRotate  bool     `json:"mustRotate"`
-	ShopID      string   `json:"shopId,omitempty"`
-	PINSet      bool     `json:"pinSet"`
-	CreatedAt   string   `json:"createdAt"`
+        ID          int64    `json:"id"`
+        Username    string   `json:"username"`
+        FullName    string   `json:"fullName"`
+        RoleID      int64    `json:"roleId"`
+        RoleName    string   `json:"roleName"`
+        Permissions []string `json:"permissions"`
+        Active      bool     `json:"active"`
+        MustRotate  bool     `json:"mustRotate"`
+        ShopID      string   `json:"shopId,omitempty"`
+        PINSet      bool     `json:"pinSet"`
+        CreatedAt   string   `json:"createdAt"`
 }
 
 type LoginRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
+        Username string `json:"username" binding:"required"`
+        Password string `json:"password" binding:"required"`
 }
 
 type PinLoginRequest struct {
-	PIN string `json:"pin" binding:"required,len=4"`
+        PIN string `json:"pin" binding:"required,len=4"`
 }
 
 type PinUser struct {
-	ID       int64  `json:"id"`
-	FullName string `json:"fullName"`
-	RoleName string `json:"roleName"`
+        ID       int64  `json:"id"`
+        FullName string `json:"fullName"`
+        RoleName string `json:"roleName"`
 }
 
 type TokenResponse struct {
-	Token string `json:"token"`
-	User  User   `json:"user"`
+        Token string `json:"token"`
+        User  User   `json:"user"`
 }
 
 type Role struct {
-	ID          int64    `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Permissions []string `json:"permissions"`
-	System      bool     `json:"system"`
+        ID          int64    `json:"id"`
+        Name        string   `json:"name"`
+        Description string   `json:"description"`
+        Permissions []string `json:"permissions"`
+        System      bool     `json:"system"`
+        HomePage    string   `json:"homePage"`            // landing route after login ("" = permission cascade)
+        Dashboard   *DashboardConfig `json:"dashboard,omitempty"` // per-role dashboard tailoring
+}
+
+// DashboardConfig lets an admin tailor what each role sees: which nav
+// entries are hidden (on top of permissions) and which daily-report stat
+// widgets are suppressed. Stored as JSON in roles.dashboard_config.
+type DashboardConfig struct {
+        HiddenNav    []string `json:"hiddenNav,omitempty"`    // route prefixes, e.g. ["/suppliers"]
+        HiddenStats  []string `json:"hiddenStats,omitempty"`  // daily-report stat keys
+        WidgetsOrder []string `json:"widgetsOrder,omitempty"` // reserved for future ordering
 }
 
 // ---- Catalog ----
 
 type Category struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
-	Slug string `json:"slug"`
+        ID   int64  `json:"id"`
+        Name string `json:"name"`
+        Slug string `json:"slug"`
 }
 
 type Product struct {
-	ID           int64  `json:"id"`
-	SKU          string `json:"sku"`
-	Barcode      string `json:"barcode"`
-	Name         string `json:"name"`
-	CategoryID   int64  `json:"categoryId"`
-	CategoryName string `json:"categoryName"`
-	PriceCents   int64  `json:"priceCents"`
-	CostCents    int64  `json:"costCents"`
-	StockQty     int    `json:"stockQty"`
-	TrackStock   bool   `json:"trackStock"`
-	Active       bool   `json:"active"`
-	UpdatedAt    string `json:"updatedAt"`
+        ID           int64  `json:"id"`
+        SKU          string `json:"sku"`
+        Barcode      string `json:"barcode"`
+        Name         string `json:"name"`
+        CategoryID   int64  `json:"categoryId"`
+        CategoryName string `json:"categoryName"`
+        ImageURL     string `json:"imageUrl"`
+        PriceCents   int64  `json:"priceCents"`
+        CostCents    int64  `json:"costCents"`
+        StockQty     int    `json:"stockQty"`
+        TrackStock   bool   `json:"trackStock"`
+        Active       bool   `json:"active"`
+        UpdatedAt    string `json:"updatedAt"`
 }
 
 // ---- Orders ----
 
 type CheckoutItem struct {
-	ProductID     int64 `json:"productId" binding:"required"`
-	Qty           int   `json:"qty" binding:"required,min=1"`
-	UnitPriceCents int64 `json:"unitPriceCents"` // optional override (permission-gated)
+        ProductID     int64 `json:"productId" binding:"required"`
+        Qty           int   `json:"qty" binding:"required,min=1"`
+        UnitPriceCents int64 `json:"unitPriceCents"` // optional override (permission-gated)
 }
 
 type CheckoutRequest struct {
-	Items             []CheckoutItem `json:"items" binding:"required,min=1"`
-	PaymentMethod     string         `json:"paymentMethod" binding:"required,oneof=cash mpesa account"`
-	PaymentMode       string         `json:"paymentMode"`   // auto|stk|manual (mpesa only)
-	CustomerPhone     string         `json:"customerPhone"`
-	CustomerName      string         `json:"customerName"`
-	CustomerID        int64          `json:"customerId"` // required for account tabs
-	Note              string         `json:"note"`
-	ClientUUID        string         `json:"clientUuid"` // offline idempotency key
+        Items             []CheckoutItem `json:"items" binding:"required,min=1"`
+        PaymentMethod     string         `json:"paymentMethod" binding:"required,oneof=cash mpesa account credit paystack"`
+        PaymentMode       string         `json:"paymentMode"`   // auto|stk|manual (mpesa only)
+        CustomerPhone     string         `json:"customerPhone"`
+        CustomerName      string         `json:"customerName"`
+        CustomerEmail     string         `json:"customerEmail"` // paystack receipt + receipt email
+        CustomerID        int64          `json:"customerId"` // required for account tabs + credit
+        Note              string         `json:"note"`
+        ClientUUID        string         `json:"clientUuid"` // offline idempotency key
+        DiscountCents     int64          `json:"discountCents"` // order-level discount (permission-gated)
+        DiscountLabel     string         `json:"discountLabel"` // e.g. "staff 10%", "negotiated"
+        RedeemPoints      int64          `json:"redeemPoints"`  // loyalty points spent as payment (permission-gated)
 }
 
 type OrderItem struct {
-	ID             int64  `json:"id"`
-	ProductID      int64  `json:"productId"`
-	Name           string `json:"name"`
-	SKU            string `json:"sku"`
-	Qty            int    `json:"qty"`
-	UnitPriceCents int64  `json:"unitPriceCents"`
-	LineTotalCents int64  `json:"lineTotalCents"`
+        ID             int64  `json:"id"`
+        ProductID      int64  `json:"productId"`
+        Name           string `json:"name"`
+        SKU            string `json:"sku"`
+        Qty            int    `json:"qty"`
+        UnitPriceCents int64  `json:"unitPriceCents"`
+        LineTotalCents int64  `json:"lineTotalCents"`
 }
 
 type Payment struct {
-	ID                int64  `json:"id"`
-	OrderID           int64  `json:"orderId"`
-	Method            string `json:"method"`
-	Mode              string `json:"mode"`
-	AmountCents       int64  `json:"amountCents"`
-	Status            string `json:"status"`
-	Phone             string `json:"phone"`
-	MpesaReceipt      string `json:"mpesaReceipt"`
-	CheckoutRequestID string `json:"checkoutRequestId"`
-	ResultDesc        string `json:"resultDesc"`
-	Discrepancy       bool   `json:"discrepancy"`
-	CreatedAt         string `json:"createdAt"`
-	CompletedAt       string `json:"completedAt"`
+        ID                int64  `json:"id"`
+        OrderID           int64  `json:"orderId"`
+        Method            string `json:"method"`
+        Mode              string `json:"mode"`
+        AmountCents       int64  `json:"amountCents"`
+        Status            string `json:"status"`
+        Phone             string `json:"phone"`
+        Email             string `json:"email"` // paystack: address the charge was opened for
+        MpesaReceipt      string `json:"mpesaReceipt"` // mpesa code, or the paystack reference once completed
+        CheckoutRequestID string `json:"checkoutRequestId"` // daraja checkout id, or paystack reference
+        ResultDesc        string `json:"resultDesc"`
+        Discrepancy       bool   `json:"discrepancy"`
+        CreatedAt         string `json:"createdAt"`
+        CompletedAt       string `json:"completedAt"`
 }
 
 type Order struct {
-	ID            int64       `json:"id"`
-	Number        string      `json:"number"`
-	Status        string      `json:"status"`
-	SubtotalCents int64       `json:"subtotalCents"`
-	TaxCents      int64       `json:"taxCents"`
-	TotalCents    int64       `json:"totalCents"`
-	TaxPercent    float64     `json:"taxPercent"`
-	TaxIncluded   bool        `json:"taxIncluded"`
-	CashierID     int64       `json:"cashierId"`
-	CashierName   string      `json:"cashierName"`
-	CustomerName  string      `json:"customerName"`
-	CustomerID    int64       `json:"customerId"`
-	Note          string      `json:"note"`
-	ClientUUID    string      `json:"clientUuid"`
-	Discrepancy   bool        `json:"discrepancy"`
-	CreatedAt     string      `json:"createdAt"`
-	PaidAt        string      `json:"paidAt"`
-	VoidedAt      string      `json:"voidedAt"`
-	VoidReason    string      `json:"voidReason"`
-	Items         []OrderItem `json:"items"`
-	Payments      []Payment   `json:"payments"`
+        ID            int64       `json:"id"`
+        Number        string      `json:"number"`
+        Status        string      `json:"status"`
+        SubtotalCents int64       `json:"subtotalCents"`
+        DiscountCents int64       `json:"discountCents"`
+        DiscountLabel string      `json:"discountLabel"`
+        PointsRedeemed int64      `json:"pointsRedeemed"`
+        TaxCents      int64       `json:"taxCents"`
+        TotalCents    int64       `json:"totalCents"`
+        TaxPercent    float64     `json:"taxPercent"`
+        TaxIncluded   bool        `json:"taxIncluded"`
+        CashierID     int64       `json:"cashierId"`
+        CashierName   string      `json:"cashierName"`
+        CustomerName  string      `json:"customerName"`
+        CustomerID    int64       `json:"customerId"`
+        Note          string      `json:"note"`
+        ClientUUID    string      `json:"clientUuid"`
+        Discrepancy   bool        `json:"discrepancy"`
+        CreatedAt     string      `json:"createdAt"`
+        PaidAt        string      `json:"paidAt"`
+        VoidedAt      string      `json:"voidedAt"`
+        VoidReason    string      `json:"voidReason"`
+        Items         []OrderItem `json:"items"`
+        Payments      []Payment   `json:"payments"`
 }
 
 // PaidAtOrCreated is the display timestamp for receipts and lists.
 func (o *Order) PaidAtOrCreated() string {
-	if o.PaidAt != "" {
-		return o.PaidAt
-	}
-	return o.CreatedAt
+        if o.PaidAt != "" {
+                return o.PaidAt
+        }
+        return o.CreatedAt
 }
 
 // ---- Customers (tabs & credit) ----
@@ -193,102 +221,103 @@ func (o *Order) PaidAtOrCreated() string {
 // it, adjustment is a manual correction (signed amount), loyalty only moves
 // points.
 const (
-	LedgerCharge  = "charge"
-	LedgerPayment = "payment"
-	LedgerAdjust  = "adjustment"
-	LedgerLoyalty = "loyalty"
+        LedgerCharge  = "charge"
+        LedgerPayment = "payment"
+        LedgerAdjust  = "adjustment"
+        LedgerLoyalty = "loyalty"
 )
 
 type Customer struct {
-	ID               int64  `json:"id"`
-	Name             string `json:"name"`
-	Phone            string `json:"phone"`
-	CreditLimitCents int64  `json:"creditLimitCents"` // 0 = no tab allowed
-	LoyaltyPoints    int64  `json:"loyaltyPoints"`
-	BalanceCents     int64  `json:"balanceCents"` // >0 means the customer owes the shop
-	Active           bool   `json:"active"`
-	CreatedAt        string `json:"createdAt"`
-	UpdatedAt        string `json:"updatedAt"`
+        ID               int64  `json:"id"`
+        Name             string `json:"name"`
+        Phone            string `json:"phone"`
+        CreditLimitCents int64  `json:"creditLimitCents"`  // 0 = no tab allowed
+        LoyaltyPoints    int64  `json:"loyaltyPoints"`
+        BalanceCents     int64  `json:"balanceCents"`      // >0 means the customer owes the shop
+        StoreCreditCents int64  `json:"storeCreditCents"`  // >0 means the shop owes the customer (prepaid)
+        Active           bool   `json:"active"`
+        CreatedAt        string `json:"createdAt"`
+        UpdatedAt        string `json:"updatedAt"`
 }
 
 type LedgerEntry struct {
-	ID          int64  `json:"id"`
-	CustomerID  int64  `json:"customerId"`
-	OrderID     int64  `json:"orderId"`
-	Kind        string `json:"kind"`
-	AmountCents int64  `json:"amountCents"` // signed: +charge, -payment
-	PointsDelta int64  `json:"pointsDelta"`
-	Note        string `json:"note"`
-	CreatedBy   int64  `json:"createdBy"`
-	CreatedAt   string `json:"createdAt"`
+        ID          int64  `json:"id"`
+        CustomerID  int64  `json:"customerId"`
+        OrderID     int64  `json:"orderId"`
+        Kind        string `json:"kind"`
+        AmountCents int64  `json:"amountCents"` // signed: +charge, -payment
+        PointsDelta int64  `json:"pointsDelta"`
+        Note        string `json:"note"`
+        CreatedBy   int64  `json:"createdBy"`
+        CreatedAt   string `json:"createdAt"`
 }
 
 // ---- Suppliers & stock-in ----
 
 const (
-	POPending   = "PENDING"
-	POReceived  = "RECEIVED"
-	POCancelled = "CANCELLED"
-	TakeOpen      = "OPEN"
-	TakeApplied   = "APPLIED"
-	TakeCancelled = "CANCELLED"
+        POPending   = "PENDING"
+        POReceived  = "RECEIVED"
+        POCancelled = "CANCELLED"
+        TakeOpen      = "OPEN"
+        TakeApplied   = "APPLIED"
+        TakeCancelled = "CANCELLED"
 )
 
 type Supplier struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Phone     string `json:"phone"`
-	Email     string `json:"email"`
-	Address   string `json:"address"`
-	Notes     string `json:"notes"`
-	Active    bool   `json:"active"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+        ID        int64  `json:"id"`
+        Name      string `json:"name"`
+        Phone     string `json:"phone"`
+        Email     string `json:"email"`
+        Address   string `json:"address"`
+        Notes     string `json:"notes"`
+        Active    bool   `json:"active"`
+        CreatedAt string `json:"createdAt"`
+        UpdatedAt string `json:"updatedAt"`
 }
 
 type POItem struct {
-	ID             int64  `json:"id"`
-	POID           int64  `json:"poId"`
-	ProductID      int64  `json:"productId"`
-	Name           string `json:"name"`
-	SKU            string `json:"sku"`
-	Qty            int    `json:"qty"`
-	CostCents      int64  `json:"costCents"`
-	LineTotalCents int64  `json:"lineTotalCents"`
+        ID             int64  `json:"id"`
+        POID           int64  `json:"poId"`
+        ProductID      int64  `json:"productId"`
+        Name           string `json:"name"`
+        SKU            string `json:"sku"`
+        Qty            int    `json:"qty"`
+        CostCents      int64  `json:"costCents"`
+        LineTotalCents int64  `json:"lineTotalCents"`
 }
 
 type PurchaseOrder struct {
-	ID            int64    `json:"id"`
-	Number        string   `json:"number"`
-	SupplierID    int64    `json:"supplierId"`
-	SupplierName  string   `json:"supplierName"`
-	Status        string   `json:"status"`
-	SubtotalCents int64    `json:"subtotalCents"`
-	Note          string   `json:"note"`
-	Items         []POItem `json:"items"`
-	CreatedAt     string   `json:"createdAt"`
-	ReceivedAt    string   `json:"receivedAt"`
+        ID            int64    `json:"id"`
+        Number        string   `json:"number"`
+        SupplierID    int64    `json:"supplierId"`
+        SupplierName  string   `json:"supplierName"`
+        Status        string   `json:"status"`
+        SubtotalCents int64    `json:"subtotalCents"`
+        Note          string   `json:"note"`
+        Items         []POItem `json:"items"`
+        CreatedAt     string   `json:"createdAt"`
+        ReceivedAt    string   `json:"receivedAt"`
 }
 
 type StockTakeItem struct {
-	ID          int64  `json:"id"`
-	TakeID      int64  `json:"takeId"`
-	ProductID   int64  `json:"productId"`
-	Name        string `json:"name"`
-	SKU         string `json:"sku"`
-	ExpectedQty int    `json:"expectedQty"`
-	CountedQty  int    `json:"countedQty"`
+        ID          int64  `json:"id"`
+        TakeID      int64  `json:"takeId"`
+        ProductID   int64  `json:"productId"`
+        Name        string `json:"name"`
+        SKU         string `json:"sku"`
+        ExpectedQty int    `json:"expectedQty"`
+        CountedQty  int    `json:"countedQty"`
 }
 
 type StockTake struct {
-	ID        int64           `json:"id"`
-	Number    string          `json:"number"`
-	Status    string          `json:"status"`
-	Note      string          `json:"note"`
-	Items     []StockTakeItem `json:"items"`
-	ItemCount int             `json:"itemCount"`
-	CreatedAt string          `json:"createdAt"`
-	AppliedAt string          `json:"appliedAt"`
+        ID        int64           `json:"id"`
+        Number    string          `json:"number"`
+        Status    string          `json:"status"`
+        Note      string          `json:"note"`
+        Items     []StockTakeItem `json:"items"`
+        ItemCount int             `json:"itemCount"`
+        CreatedAt string          `json:"createdAt"`
+        AppliedAt string          `json:"appliedAt"`
 }
 
 // ---- Money & quantity bounds ----
@@ -340,85 +369,213 @@ func CheckProductInput(name, sku, barcode string, priceCents, costCents int64, s
 // ---- Shifts ----
 
 type Shift struct {
-	ID                int64  `json:"id"`
-	UserID            int64  `json:"userId"`
-	UserName          string `json:"userName"`
-	OpeningFloatCents int64  `json:"openingFloatCents"`
-	ExpectedCents     int64  `json:"expectedCents"`
-	CountedCents      int64  `json:"countedCents"`
-	VarianceCents     int64  `json:"varianceCents"`
-	OpenedAt          string `json:"openedAt"`
-	ClosedAt          string `json:"closedAt"`
+        ID                int64  `json:"id"`
+        UserID            int64  `json:"userId"`
+        UserName          string `json:"userName"`
+        OpeningFloatCents int64  `json:"openingFloatCents"`
+        ExpectedCents     int64  `json:"expectedCents"`
+        CountedCents      int64  `json:"countedCents"`
+        VarianceCents     int64  `json:"varianceCents"`
+        OpenedAt          string `json:"openedAt"`
+        ClosedAt          string `json:"closedAt"`
 }
 
 // ---- Design board ----
 
 type DesignJob struct {
-	ID           int64  `json:"id"`
-	Title        string `json:"title"`
-	ProductName  string `json:"productName"`
-	CustomerName string `json:"customerName"`
-	Notes        string `json:"notes"`
-	Status       string `json:"status"`
-	AssigneeID   int64  `json:"assigneeId"`
-	AssigneeName string `json:"assigneeName"`
-	CreatedBy    string `json:"createdBy"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt"`
+        ID           int64  `json:"id"`
+        Title        string `json:"title"`
+        ProductName  string `json:"productName"`
+        CustomerName string `json:"customerName"`
+        Notes        string `json:"notes"`
+        Status       string `json:"status"`
+        AssigneeID   int64  `json:"assigneeId"`
+        AssigneeName string `json:"assigneeName"`
+        CreatedBy    string `json:"createdBy"`
+        CreatedAt    string `json:"createdAt"`
+        UpdatedAt    string `json:"updatedAt"`
+}
+
+// ---- Held (parked) sales ----
+
+// HeldSale is a cart parked mid-sale: items frozen as JSON, optionally
+// tied to a customer. Resuming rehydrates the cart; nothing is charged
+// until a normal checkout completes.
+type HeldSale struct {
+        ID            int64          `json:"id"`
+        RefName       string         `json:"refName"`
+        Items         []CheckoutItem `json:"items"`
+        CustomerID    int64          `json:"customerId"`
+        CustomerName  string         `json:"customerName"`
+        Note          string         `json:"note"`
+        DeviceID      string         `json:"deviceId"`
+        CreatedBy     int64          `json:"createdBy"`
+        CreatedByName string         `json:"createdByName"`
+        CreatedAt     string         `json:"createdAt"`
+}
+
+// ---- Void reasons ----
+
+type VoidReason struct {
+        ID        int64  `json:"id"`
+        Label     string `json:"label"`
+        Active    bool   `json:"active"`
+        SortOrder int    `json:"sortOrder"`
+}
+
+// ---- Design job attachments ----
+
+// DesignFile is metadata for one attachment stored in design_files.data
+// (BLOB, 5 MB cap). Data never serializes to JSON — it is served only by
+// the download route.
+type DesignFile struct {
+        ID             int64  `json:"id"`
+        JobID          int64  `json:"jobId"`
+        Filename       string `json:"filename"`
+        Mime           string `json:"mime"`
+        Size           int64  `json:"size"`
+        UploadedBy     int64  `json:"uploadedBy"`
+        UploadedByName string `json:"uploadedByName"`
+        CreatedAt      string `json:"createdAt"`
+}
+
+// ---- Team overview (People) ----
+
+type TeamMember struct {
+        User
+        SalesToday      int64  `json:"salesToday"`
+        SalesTodayCents int64  `json:"salesTodayCents"`
+        LastOrderAt     string `json:"lastOrderAt"`
+}
+
+// ---- Team sync (cloud linking) ----
+
+type TeamSyncStatus struct {
+        Enabled    bool         `json:"enabled"`
+        TeamCode   string       `json:"teamCode"`
+        DeviceID   string       `json:"deviceId"`
+        DeviceName string       `json:"deviceName"`
+        LastPush   string       `json:"lastPush"`
+        LastPull   string       `json:"lastPull"`
+        Pending    int64        `json:"pending"`
+        LastError  string       `json:"lastError"`
+        Devices    []TeamDevice `json:"devices"`
+}
+
+type TeamDevice struct {
+        DeviceID   string `json:"deviceId"`
+        DeviceName string `json:"deviceName"`
+        AppVersion string `json:"appVersion"`
+        LastSeen   string `json:"lastSeen"`
+        ThisDevice bool   `json:"thisDevice"`
+}
+
+type TeamSyncConfigRequest struct {
+        ProjectURL string `json:"projectUrl"`
+        ServiceKey string `json:"serviceKey"` // masked __SET__ value keeps existing
+        TeamCode   string `json:"teamCode"`
+        Enabled    *bool  `json:"enabled"`
 }
 
 // ---- Misc ----
 
 type AuditEntry struct {
-	ID        int64  `json:"id"`
-	UserID    int64  `json:"userId"`
-	Username  string `json:"username"`
-	Action    string `json:"action"`
-	Entity    string `json:"entity"`
-	EntityID  string `json:"entityId"`
-	Details   string `json:"details"`
-	CreatedAt string `json:"createdAt"`
+        ID        int64  `json:"id"`
+        UserID    int64  `json:"userId"`
+        Username  string `json:"username"`
+        Action    string `json:"action"`
+        Entity    string `json:"entity"`
+        EntityID  string `json:"entityId"`
+        Details   string `json:"details"`
+        CreatedAt string `json:"createdAt"`
 }
 
 type PrintJob struct {
-	ID         int64  `json:"id"`
-	OrderID    int64  `json:"orderId"`
-	OrderNumber string `json:"orderNumber"`
-	Status     string `json:"status"`
-	Target     string `json:"target"`
-	Attempts   int    `json:"attempts"`
-	LastError  string `json:"lastError"`
-	CreatedAt  string `json:"createdAt"`
-	PrintedAt  string `json:"printedAt"`
+        ID         int64  `json:"id"`
+        OrderID    int64  `json:"orderId"`
+        OrderNumber string `json:"orderNumber"`
+        Status     string `json:"status"`
+        Target     string `json:"target"`
+        Attempts   int    `json:"attempts"`
+        LastError  string `json:"lastError"`
+        CreatedAt  string `json:"createdAt"`
+        PrintedAt  string `json:"printedAt"`
 }
 
 type SyncRequest struct {
-	Transactions []CheckoutRequest `json:"transactions" binding:"required"`
+        Transactions []CheckoutRequest `json:"transactions" binding:"required"`
 }
 
 type SyncResult struct {
-	ClientUUID string `json:"clientUuid"`
-	OrderID    int64  `json:"orderId"`
-	OrderNumber string `json:"orderNumber"`
-	Status     string `json:"status"`
-	Error      string `json:"error,omitempty"`
+        ClientUUID string `json:"clientUuid"`
+        OrderID    int64  `json:"orderId"`
+        OrderNumber string `json:"orderNumber"`
+        Status     string `json:"status"`
+        Error      string `json:"error,omitempty"`
 }
 
 type ManualEntryRequest struct {
-	ReceiptCode string `json:"receiptCode" binding:"required"`
+        ReceiptCode string `json:"receiptCode" binding:"required"`
 }
 
 type STKRetryRequest struct {
-	Phone string `json:"phone" binding:"required"`
+        Phone string `json:"phone" binding:"required"`
 }
 
 type VoidRequest struct {
-	Reason string `json:"reason" binding:"required"`
+        Reason string `json:"reason" binding:"required"`
+}
+
+// ---- Paystack card / mobile-money checkout ----
+
+// PaystackInitRequest starts (or re-opens) a Paystack checkout for a
+// pending order. Email is optional: a deterministic placeholder is used
+// when the till does not collect one.
+type PaystackInitRequest struct {
+        Email string `json:"email"`
+}
+
+// PaystackInitResult carries what the frontend needs to open the popup:
+// the PUBLIC key goes to PaystackPop.setup({key, access_code}); the
+// authorization URL is the redirect fallback. The secret key never leaves
+// the server.
+type PaystackInitResult struct {
+        Reference        string `json:"reference"`
+        AccessCode       string `json:"accessCode"`
+        AuthorizationURL string `json:"authorizationUrl"`
+        PublicKey        string `json:"publicKey"`
+        Currency         string `json:"currency"`
+        AmountCents      int64  `json:"amountCents"`
+}
+
+// PaystackVerifyRequest completes a payment from the popup callback —
+// the reference is re-verified server-side before anything is marked paid.
+type PaystackVerifyRequest struct {
+        Reference string `json:"reference" binding:"required"`
+}
+
+// PaymentConfig is the till-facing payment capability snapshot (public
+// identifiers only — no secret keys).
+type PaymentConfig struct {
+        Paystack struct {
+                Enabled   bool   `json:"enabled"`
+                PublicKey string `json:"publicKey"`
+                Currency  string `json:"currency"`
+                Callback  string `json:"callbackUrl"`
+                Configured bool `json:"configured"` // secret key present server-side
+        } `json:"paystack"`
+        Mpesa struct {
+                Env    string `json:"env"`
+                Till   string `json:"till"`
+                Paybill string `json:"paybill"`
+        } `json:"mpesa"`
+        CreditEnabled  bool `json:"creditEnabled"`
+        LoyaltyEnabled bool `json:"loyaltyEnabled"`
 }
 
 func FmtTime(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	return t.UTC().Format(time.RFC3339)
+        if t.IsZero() {
+                return ""
+        }
+        return t.UTC().Format(time.RFC3339)
 }

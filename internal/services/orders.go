@@ -22,6 +22,9 @@ var (
         ErrOrderAlreadyPaid  = errors.New("order already paid")
         ErrOverpayment       = errors.New("payment exceeds balance")
         ErrCreditLimit       = errors.New("tab would exceed customer credit limit")
+        ErrNoStoreCredit     = errors.New("not enough store credit")
+        ErrLoyaltyPoints     = errors.New("not enough loyalty points")
+        ErrNotConfigured     = errors.New("payment provider not configured")
 )
 
 // nowStamp is the fixed-width millisecond timestamp used for all
@@ -68,15 +71,19 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                 default:
                         return nil, fmt.Errorf("invalid payment mode %q", mode)
                 }
-        } else if method != models.MethodCash && method != models.MethodAccount {
+        } else if method != models.MethodCash && method != models.MethodAccount && method != models.MethodCredit && method != models.MethodPaystack {
                 return nil, fmt.Errorf("invalid payment method %q", method)
         }
+        if method == models.MethodCredit && !s.settings.GetBool("credit_enabled", true) {
+                return nil, fmt.Errorf("store credit is disabled")
+        }
         // Tab checkout needs a live customer up front (limit enforced at
-        // insert time inside the transaction).
+        // insert time inside the transaction). Credit checkout needs a
+        // live customer with enough prepaid store credit.
         var tabCustomer *models.Customer
-        if method == models.MethodAccount {
+        if method == models.MethodAccount || method == models.MethodCredit {
                 if req.CustomerID == 0 {
-                        return nil, fmt.Errorf("tab checkout needs a customer")
+                        return nil, fmt.Errorf("%s checkout needs a customer", method)
                 }
                 var err error
                 tabCustomer, err = s.GetCustomer(req.CustomerID)
@@ -85,6 +92,31 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                 }
                 if !tabCustomer.Active {
                         return nil, fmt.Errorf("customer is inactive")
+                }
+        }
+        // Loyalty redemption spends points as payment: always tied to a
+        // customer, permission-gated, capped by settings.
+        var redeemCents int64
+        var redeemSpent int64
+        if req.RedeemPoints > 0 {
+                if !p.Can("loyalty.redeem") {
+                        return nil, fmt.Errorf("redeeming points requires loyalty.redeem permission")
+                }
+                if !s.settings.GetBool("loyalty_enabled", true) {
+                        return nil, fmt.Errorf("loyalty program is disabled")
+                }
+                if req.CustomerID == 0 {
+                        return nil, fmt.Errorf("redeeming points needs a customer")
+                }
+                if tabCustomer == nil {
+                        var err error
+                        tabCustomer, err = s.GetCustomer(req.CustomerID)
+                        if err != nil {
+                                return nil, err
+                        }
+                        if !tabCustomer.Active {
+                                return nil, fmt.Errorf("customer is inactive")
+                        }
                 }
         }
 
@@ -167,17 +199,66 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                         return nil, errors.New("order total overflow")
                 }
         }
+
+        // Order-level discount: permission-gated, validated against the
+        // subtotal, carried on the order for receipts and reports.
+        discount := req.DiscountCents
+        if discount < 0 || discount >= subtotal {
+                return nil, fmt.Errorf("discount out of range (0 to %d)", subtotal-1)
+        }
+        if discount > 0 && !p.Can("payments.apply_discount") {
+                return nil, fmt.Errorf("applying a discount requires payments.apply_discount permission")
+        }
+        discountedSub := subtotal - discount
+
         var tax, total int64
         if included {
-                total = subtotal
-                tax = int64(math.Round(float64(subtotal) * pct / (100 + pct)))
+                total = discountedSub
+                tax = int64(math.Round(float64(discountedSub) * pct / (100 + pct)))
         } else {
-                tax = int64(math.Round(float64(subtotal) * pct / 100))
-                total = subtotal + tax
+                tax = int64(math.Round(float64(discountedSub) * pct / 100))
+                total = discountedSub + tax
         }
 
+        // Loyalty redemption: points × point value, capped at a configured
+        // share of the order total. The spent points are deducted now and
+        // refunded automatically if the order is later voided.
+        if req.RedeemPoints > 0 {
+                pc := s.settings.GetInt("loyalty_point_cents", 100)
+                maxPct := s.settings.GetInt("loyalty_max_percent", 50)
+                if pc < 0 {
+                        pc = 100
+                }
+                if maxPct < 0 || maxPct > 100 {
+                        maxPct = 50
+                }
+                capCents := total * int64(maxPct) / 100
+                wantCents := req.RedeemPoints * int64(pc)
+                redeemCents = wantCents
+                if redeemCents > capCents {
+                        redeemCents = capCents - (capCents % int64(pc)) // whole points only
+                }
+                if redeemCents < 0 {
+                        redeemCents = 0
+                }
+                redeemSpent = 0
+                if pc > 0 {
+                        redeemSpent = redeemCents / int64(pc)
+                }
+                if redeemSpent == 0 {
+                        return nil, fmt.Errorf("points value too small to apply on this order")
+                }
+                if tabCustomer.LoyaltyPoints < redeemSpent {
+                        return nil, fmt.Errorf("%w: has %d, wants %d", ErrLoyaltyPoints, tabCustomer.LoyaltyPoints, redeemSpent)
+                }
+        }
+        // Payable is what changes hands (discount + points already applied).
+        payable := total - redeemCents
+
         immediateCash := method == models.MethodCash
+        immediateCredit := method == models.MethodCredit
         isManual := method == models.MethodMpesa && mode == models.ModeManual
+        isPaystack := method == models.MethodPaystack
 
         var orderID int64
         var orderNumber string
@@ -196,7 +277,7 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                 now := nowStamp()
                 status := models.OrderPending
                 paidAt := ""
-                if immediateCash {
+                if immediateCash || immediateCredit {
                         status = models.OrderPaid
                         paidAt = now
                 }
@@ -205,9 +286,9 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                         taxIncludedInt = 1
                 }
                 res, err := tx.Exec(s.db.Rebind(`
-                        INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent, tax_included, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-                        number, status, subtotal, tax, total, pct, taxIncludedInt, p.ID, req.CustomerName, req.Note, req.ClientUUID, now, paidAt, req.CustomerID)
+                        INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent, tax_included, discount_cents, discount_label, points_redeemed, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                        number, status, subtotal, tax, payable, pct, taxIncludedInt, discount, truncStr(req.DiscountLabel, 120), redeemSpent, p.ID, req.CustomerName, req.Note, req.ClientUUID, now, paidAt, req.CustomerID)
                 if err != nil {
                         tx.Rollback()
                         if isUniqueViolation(err) {
@@ -240,7 +321,7 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                         }
                 }
 
-                if immediateCash {
+                if immediateCash || immediateCredit {
                         // Fail fast on stock BEFORE taking money.
                         for _, l := range lines {
                                 if l.trackStock {
@@ -255,10 +336,50 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                                         }
                                 }
                         }
+                        payMethod := "cash"
+                        if immediateCredit {
+                                payMethod = "credit"
+                        }
                         if _, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, created_at, completed_at)
-                                VALUES (?, 'cash', '', ?, 'COMPLETED', ?, ?)`), id, total, now, now); err != nil {
+                                VALUES (?, ?, '', ?, 'COMPLETED', ?, ?)`), id, payMethod, payable, now, now); err != nil {
                                 tx.Rollback()
                                 return nil, err
+                        }
+                        if immediateCredit {
+                                // Prepaid store credit: deduct the payable from
+                                // the customer's credit balance inside the same
+                                // tx (guarded re-read — balance can move).
+                                var credit int64
+                                if err := tx.QueryRow(`SELECT store_credit_cents FROM customers WHERE id = ?`, tabCustomer.ID).Scan(&credit); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                                if credit < payable {
+                                        tx.Rollback()
+                                        return nil, fmt.Errorf("%w: %s has %d, order needs %d", ErrNoStoreCredit, tabCustomer.Name, credit, payable)
+                                }
+                                if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerCreditRedeem,
+                                        -payable, 0, "store credit "+number, p.ID); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                        }
+                        // Loyalty redemption deducts points for every immediate method.
+                        if redeemSpent > 0 {
+                                var pts int64
+                                if err := tx.QueryRow(`SELECT loyalty_points FROM customers WHERE id = ?`, tabCustomer.ID).Scan(&pts); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                                if pts < redeemSpent {
+                                        tx.Rollback()
+                                        return nil, fmt.Errorf("%w: %s has %d, wants %d", ErrLoyaltyPoints, tabCustomer.Name, pts, redeemSpent)
+                                }
+                                if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerLoyalty,
+                                        0, -redeemSpent, "points redeemed "+number, p.ID); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
                         }
                         // Guarded stock deduction (WHERE guard = no double-deduct ever).
                         for _, l := range lines {
@@ -281,13 +402,14 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                 } else if method == models.MethodAccount {
                         // Tab: like M-Pesa, the order stays PENDING and stock
                         // deducts once at settle via completePayment — never
-                        // here, or settling would double-deduct. Limit
-                        // enforced here inside the tx (0 = cash only, no tab).
+                        // here, or settling would double-deduct. Limit is
+                        // enforced here inside the tx (0 = cash only, no tab)
+                        // against the payable (after discount + points).
                         if tabCustomer.CreditLimitCents <= 0 {
                                 tx.Rollback()
                                 return nil, fmt.Errorf("customer has no credit — cash only")
                         }
-                        if tabCustomer.BalanceCents+total > tabCustomer.CreditLimitCents {
+                        if tabCustomer.BalanceCents+payable > tabCustomer.CreditLimitCents {
                                 tx.Rollback()
                                 return nil, fmt.Errorf("%w (%s)", ErrCreditLimit, tabCustomer.Name)
                         }
@@ -308,22 +430,69 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                                 }
                         }
                         if _, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, created_at)
-                                VALUES (?, 'account', '', ?, 'PENDING', ?)`), id, total, now); err != nil {
+                                VALUES (?, 'account', '', ?, 'PENDING', ?)`), id, payable, now); err != nil {
                                 tx.Rollback()
                                 return nil, err
                         }
                         if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerCharge,
-                                total, 0, "tab charge "+number, p.ID); err != nil {
+                                payable, 0, "tab charge "+number, p.ID); err != nil {
                                 tx.Rollback()
                                 return nil, err
                         }
+                        // Points redeemed on a tab deduct now; a void refunds them.
+                        if redeemSpent > 0 {
+                                var pts int64
+                                if err := tx.QueryRow(`SELECT loyalty_points FROM customers WHERE id = ?`, tabCustomer.ID).Scan(&pts); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                                if pts < redeemSpent {
+                                        tx.Rollback()
+                                        return nil, fmt.Errorf("%w: %s has %d, wants %d", ErrLoyaltyPoints, tabCustomer.Name, pts, redeemSpent)
+                                }
+                                if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerLoyalty,
+                                        0, -redeemSpent, "points redeemed "+number, p.ID); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                        }
+                } else if isPaystack {
+                        // Paystack card / mobile-money: order PENDING, payment
+                        // PENDING for the payable (points + discount already
+                        // knocked off). Stock deducts once at completion via
+                        // completePayment. The frontend opens checkout right
+                        // after with POST /orders/:id/paystack/init.
+                        if _, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, email, created_at)
+                                VALUES (?, 'paystack', 'popup', ?, 'PENDING', ?, ?)`), id, payable, truncStr(strings.TrimSpace(req.CustomerEmail), 200), now); err != nil {
+                                tx.Rollback()
+                                return nil, err
+                        }
+                        // Points redeemed on a paystack order deduct now; a
+                        // void refunds them.
+                        if redeemSpent > 0 {
+                                var pts int64
+                                if err := tx.QueryRow(`SELECT loyalty_points FROM customers WHERE id = ?`, tabCustomer.ID).Scan(&pts); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                                if pts < redeemSpent {
+                                        tx.Rollback()
+                                        return nil, fmt.Errorf("%w: %s has %d, wants %d", ErrLoyaltyPoints, tabCustomer.Name, pts, redeemSpent)
+                                }
+                                if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerLoyalty,
+                                        0, -redeemSpent, "points redeemed "+number, p.ID); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                        }
                 } else {
-                        // M-Pesa: payment PENDING. STK requests whole shillings; manual
-                        // entries use the exact total.
-                        amount := total
+                        // M-Pesa: payment PENDING for the payable (points +
+                        // discount already knocked off). STK requests whole
+                        // shillings; manual entries use the exact payable.
+                        amount := payable
                         phone := ""
                         if !isManual {
-                                amount = roundToShilling(total)
+                                amount = roundToShilling(payable)
                                 ph, err := mpesa.NormalizePhone(req.CustomerPhone)
                                 if err != nil {
                                         tx.Rollback()
@@ -335,6 +504,24 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                                 VALUES (?, 'mpesa', ?, ?, 'PENDING', ?, ?)`), id, mode, amount, phone, now); err != nil {
                                 tx.Rollback()
                                 return nil, err
+                        }
+                        // Points redeemed on an M-Pesa order deduct now; a void
+                        // refunds them (the discount part just evaporates).
+                        if redeemSpent > 0 {
+                                var pts int64
+                                if err := tx.QueryRow(`SELECT loyalty_points FROM customers WHERE id = ?`, tabCustomer.ID).Scan(&pts); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                                if pts < redeemSpent {
+                                        tx.Rollback()
+                                        return nil, fmt.Errorf("%w: %s has %d, wants %d", ErrLoyaltyPoints, tabCustomer.Name, pts, redeemSpent)
+                                }
+                                if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerLoyalty,
+                                        0, -redeemSpent, "points redeemed "+number, p.ID); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
                         }
                 }
 
@@ -352,20 +539,35 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
         if method == models.MethodAccount {
                 // Tab charged, not paid: audit only. No receipt print and no
                 // paid broadcast — those happen on settle when money lands.
-                s.Audit(p.ID, p.Username, "TAB_CHARGED", "order", orderNumber, fmt.Sprintf("total %d", total))
-        } else if immediateCash {
-                s.Audit(p.ID, p.Username, "CHECKOUT_CASH", "order", orderNumber, fmt.Sprintf("total %d", total))
+                s.Audit(p.ID, p.Username, "TAB_CHARGED", "order", orderNumber, fmt.Sprintf("total %d", payable))
+        } else if immediateCredit {
+                s.Audit(p.ID, p.Username, "CHECKOUT_CREDIT", "order", orderNumber, fmt.Sprintf("total %d, store credit", payable))
                 if order, err := s.GetOrder(orderID); err == nil {
                         s.printer.Enqueue(order)
                         s.broadcast(EventOrderPaid, order)
                 }
+        } else if immediateCash {
+                s.Audit(p.ID, p.Username, "CHECKOUT_CASH", "order", orderNumber, fmt.Sprintf("total %d", payable))
+                if order, err := s.GetOrder(orderID); err == nil {
+                        s.printer.Enqueue(order)
+                        s.broadcast(EventOrderPaid, order)
+                }
+        } else if isPaystack {
+                s.Audit(p.ID, p.Username, "CHECKOUT_PAYSTACK", "order", orderNumber, fmt.Sprintf("awaiting checkout, total %d", payable))
         } else if !isManual {
                 if _, err := s.InitiateSTK(ctx, orderID, p); err != nil {
                         // Order stays PENDING — cashier sees failure, can retry or void.
                         return s.GetOrder(orderID)
                 }
         } else {
-                s.Audit(p.ID, p.Username, "CHECKOUT_MPESA_MANUAL", "order", orderNumber, fmt.Sprintf("awaiting receipt code, total %d", total))
+                s.Audit(p.ID, p.Username, "CHECKOUT_MPESA_MANUAL", "order", orderNumber, fmt.Sprintf("awaiting receipt code, total %d", payable))
+        }
+        // Team sync: broadcast the order + its stock movements (best-effort).
+        s.EmitOrder(orderID)
+        for _, l := range lines {
+                if l.trackStock {
+                        s.EmitStockDelta(l.sku, -l.qty)
+                }
         }
         return s.GetOrder(orderID)
 }
@@ -574,6 +776,27 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
                                 tx.Exec(`UPDATE orders SET discrepancy = 1 WHERE id = ?`, orderID)
                         }
                 }
+                // Loyalty earns on EVERY paid order tied to a customer —
+                // cash, M-Pesa, credit, and tab settles alike (once, guarded
+                // by the same transition that deducts stock).
+                var custID int64
+                var orderTotal int64
+                if err := tx.QueryRow(`SELECT COALESCE(customer_id,0), total_cents FROM orders WHERE id = ?`, orderID).
+                        Scan(&custID, &orderTotal); err != nil {
+                        return nil, err
+                }
+                if custID != 0 && s.settings.GetBool("loyalty_enabled", true) {
+                        per := s.settings.GetInt("loyalty_earn_per_cents", 10000)
+                        if per > 0 {
+                                earn := orderTotal / int64(per)
+                                if earn > 0 {
+                                        if err := recordLedgerTx(tx, s.db.Rebind, custID, orderID, models.LedgerLoyalty,
+                                                0, earn, "loyalty earned "+fmt.Sprint(orderID), 0); err != nil {
+                                                return nil, err
+                                        }
+                                }
+                        }
+                }
         }
 
         if receipt != "" {
@@ -606,6 +829,7 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
         }
         s.broadcast(EventOrderPaid, order)
         s.Audit(0, payMethod, "PAYMENT_COMPLETED", "order", order.Number, fmt.Sprintf("payment %d, receipt %s, amount %d", paymentID, receipt, payAmount))
+        s.EmitOrder(orderID)
         return order, nil
 }
 
@@ -726,11 +950,39 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
                                 return nil, err
                         }
                 }
+                // Refund loyalty points redeemed at checkout — a cancelled
+                // sale gives the points back.
+                var ptsRedeemed int64
+                if err := tx.QueryRow(`SELECT COALESCE(points_redeemed,0) FROM orders WHERE id = ?`, orderID).
+                        Scan(&ptsRedeemed); err != nil {
+                        return nil, err
+                }
+                if ptsRedeemed > 0 {
+                        if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer, orderID, models.LedgerLoyalty,
+                                0, ptsRedeemed, "points refund (void)", p.ID); err != nil {
+                                return nil, err
+                        }
+                }
+                // Refund store credit spent on this order (credit payments
+                // return to the prepaid balance).
+                var creditUsed int64
+                if err := tx.QueryRow(`SELECT COALESCE(SUM(amount_cents),0) FROM payments
+                        WHERE order_id = ? AND method = 'credit' AND status IN ('PENDING','COMPLETED')`, orderID).
+                        Scan(&creditUsed); err != nil {
+                        return nil, err
+                }
+                if creditUsed > 0 {
+                        if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer, orderID, models.LedgerCreditTopup,
+                                creditUsed, 0, "store credit refund (void)", p.ID); err != nil {
+                                return nil, err
+                        }
+                }
         }
         if err := tx.Commit(); err != nil {
                 return nil, err
         }
         s.Audit(p.ID, p.Username, "ORDER_VOIDED", "order", fmt.Sprint(orderID), reason)
+        s.EmitVoid(orderID, reason)
         order, err := s.GetOrder(orderID)
         if err != nil {
                 return nil, err

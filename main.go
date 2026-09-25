@@ -178,6 +178,9 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
         h.DefaultShop = defaultShop
         h.MasterSecret = []byte(masterSecret)
         h.Updater = update.NewChecker(version, update.Repo, defSvc.Settings())
+        // Version stamps team-sync heartbeats (device roster shows releases).
+        defSvc.SetVersion(version)
+        shopPool.SetVersion(version)
         if ow, err := shopPool.Uploader(defaultShop); err == nil {
                 h.Offsite = ow
         }

@@ -55,6 +55,30 @@ var DefaultSettings = map[string]string{
         "offsite_prefix":        "", // defaults to OS hostname
         "offsite_keep":          "14", // remote copies retained (free tier is 500MB)
         "offsite_passphrase":    "", // SECRET — encrypts snapshots; owner keeps a copy
+        // Loyalty program: earn 1 point per loyalty_earn_per_cents of paid
+        // sales; a point is worth loyalty_point_cents when redeemed as
+        // payment; redemption can cover at most loyalty_max_percent of an
+        // order (the rest is cash/M-Pesa/tab/credit).
+        "loyalty_enabled":       "true",
+        "loyalty_earn_per_cents": "10000", // 1 pt / 100 KES
+        "loyalty_point_cents":   "100",    // 1 pt = KES 1 off
+        "loyalty_max_percent":   "50",     // points cover ≤50% of an order
+        "credit_enabled":        "true",   // prepaid store credit feature toggle
+        // Team sync: links standalone tills through the shop's Supabase
+        // project (same one offsite backups use). Secrets masked in API.
+        "sync_enabled":          "false",
+        "sync_endpoint":         "", // Supabase project URL
+        "sync_service_key":      "", // SECRET — service_role key
+        "sync_team_code":        "", // short code shared by the team's devices
+        // Paystack card / mobile-money checkout. The SECRET key lives only
+        // on this machine (settings DB or PAYSTACK_SECRET_KEY env) — it is
+        // masked in API responses and never team-synced. The PUBLIC key is
+        // safe to expose and is what the checkout popup uses.
+        "paystack_enabled":       "false",
+        "paystack_public_key":    "", // pk_live_... / pk_test_... — safe for the frontend
+        "paystack_secret_key":    "", // SECRET — sk_live_... backend only
+        "paystack_currency":      "KES",
+        "paystack_callback_url":  "https://awesomeposs.netlify.app/",
 }
 
 type seedProduct struct {
@@ -142,6 +166,17 @@ func (d *DB) seedSettings() error {
 // backfillRolePerms unions the seeded permission set into same-named
 // system roles (v3 migration — runs once, so later admin edits are safe).
 func backfillRolePerms(d *DB, tx *sql.Tx) error {
+        extra := map[string][]string{}
+        for name, perms := range models.SeededRolePermissions {
+                extra[name] = perms
+        }
+        return unionRolePerms(d, tx, extra)
+}
+
+// unionRolePerms merges extra permission sets into the saved permissions of
+// system roles (matched by name). Never removes anything an admin added —
+// union only, applied once per migration that calls it.
+func unionRolePerms(d *DB, tx *sql.Tx, extra map[string][]string) error {
         rows, err := tx.Query(`SELECT id, name, permissions FROM roles WHERE is_system = 1`)
         if err != nil {
                 return err
@@ -162,7 +197,7 @@ func backfillRolePerms(d *DB, tx *sql.Tx) error {
         }
         rows.Close()
         for _, r := range list {
-                want, ok := models.SeededRolePermissions[r.name]
+                want, ok := extra[r.name]
                 if !ok {
                         continue
                 }

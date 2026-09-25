@@ -16,6 +16,7 @@ import (
         "posapp/internal/database"
         "posapp/internal/mpesa"
         "posapp/internal/offsite"
+        "posapp/internal/paystack"
         "posapp/internal/printer"
         "posapp/internal/settings"
         "posapp/internal/ws"
@@ -31,6 +32,11 @@ type Service struct {
 
         darajaKey string
         daraja    *mpesa.Daraja
+
+        paystackKey string
+        paystack    *paystack.Client
+
+        appVersion string
 
         orderSeqMu sync.Mutex
 }
@@ -87,6 +93,8 @@ const (
         EventDesignUpdate = "DESIGN_JOB_UPDATED"
         EventShiftUpdate  = "SHIFT_UPDATED"
         EventSettingsUpdate = "SETTINGS_UPDATED"
+        EventHeldUpdate     = "HELD_SALES_UPDATED"
+        EventSyncUpdate     = "TEAM_SYNC_UPDATED"
 )
 
 // ---- M-Pesa provider factory ----
@@ -124,4 +132,16 @@ func (s *Service) applyMockConfig() {
         delay := time.Duration(s.settings.GetInt("mpesa_mock_delay_ms", 4000)) * time.Millisecond
         rc := s.settings.GetInt("mpesa_mock_result_code", 0)
         s.mock.Configure(delay, rc)
+}
+
+// SetVersion stamps the build version (used in team-sync heartbeats so
+// the roster shows which till runs which release). Main calls this once.
+func (s *Service) SetVersion(v string) { s.appVersion = v }
+
+// AppVersion returns the stamped build version ("dev" when unset).
+func (s *Service) AppVersion() string {
+        if s.appVersion == "" {
+                return "dev"
+        }
+        return s.appVersion
 }

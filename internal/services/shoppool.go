@@ -22,6 +22,7 @@ type ShopPool struct {
         svcs    map[string]*Service
         ups     map[string]*offsite.Worker
         started map[string]bool
+        version string
 }
 
 // NewShopPool builds the pool (shops open lazily on first request).
@@ -153,8 +154,32 @@ func (p *ShopPool) EnsureStarted(ctx context.Context, shopID string) {
                 return
         }
         p.started[shopID] = true
+        version := p.version
         p.mu.Unlock()
+        if version != "" {
+                svc.SetVersion(version)
+        }
         svc.StartBackupScheduler()
         go ow.Run(ctx)
         go NewSweeper(svc).Run(ctx)
+        // Team sync: links this till to the rest of the team through the
+        // Supabase event log. The loop no-ops while sync is disabled.
+        go svc.TeamSyncLoop(ctx, svc.AppVersion())
+}
+
+// SetVersion stamps the build version; started services pick it up on
+// their next loop boot (and existing ones immediately).
+func (p *ShopPool) SetVersion(v string) {
+	p.mu.Lock()
+	p.version = v
+	ids := make([]string, 0, len(p.svcs))
+	svcs := make([]*Service, 0, len(p.svcs))
+	for id, s := range p.svcs {
+		ids = append(ids, id)
+		svcs = append(svcs, s)
+	}
+	p.mu.Unlock()
+	for _, s := range svcs {
+		s.SetVersion(v)
+	}
 }
