@@ -8,7 +8,7 @@ import { api, downloadFile, DailySummary, MonthlySummary } from '../lib/api'
 import { Button, Card, EmptyState, Input, Spinner, StatusPill, Tabs } from '../components/ui'
 import { centsToAmount, formatMoney } from '../lib/money'
 import { toast } from '../stores/toasts'
-import { BarChart3, Banknote, Smartphone, Download, FileSpreadsheet } from 'lucide-react'
+import { BarChart3, Banknote, Smartphone, CreditCard, Wallet, Download, FileSpreadsheet } from 'lucide-react'
 
 const today = () => new Date().toISOString().slice(0, 10)
 const thisMonth = () => new Date().toISOString().slice(0, 7)
@@ -73,20 +73,38 @@ function Daily() {
           {/* Payment split */}
           <div className="mt-4">
             <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Payment split</p>
-            <div className="flex h-9 border-2 border-line-strong rounded-input overflow-hidden font-bold text-[13px]">
-              {data.cashCents > 0 && (
-                <div className="bg-surface-muted flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.cashCents, data.cashCents + data.mpesaCents) }}>
-                  <Banknote size={13} strokeWidth={2.5} aria-hidden />
-                  {centsToAmount(data.cashCents)}
-                </div>
-              )}
-              {data.mpesaCents > 0 && (
-                <div className="bg-paid-bg text-paid-text flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.mpesaCents, data.cashCents + data.mpesaCents) }}>
-                  <Smartphone size={13} strokeWidth={2.5} aria-hidden />
-                  {centsToAmount(data.mpesaCents)}
-                </div>
-              )}
-            </div>
+            {data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents === 0 ? (
+              <p className="text-sm text-ink-muted bg-surface-muted border-2 border-line rounded-input px-3 py-2">
+                No completed payments yet today — the split appears with the first paid order.
+              </p>
+            ) : (
+              <div className="flex h-9 border-2 border-line-strong rounded-input overflow-hidden font-bold text-[13px]">
+                {data.cashCents > 0 && (
+                  <div className="bg-surface-muted flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.cashCents, data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents) }}>
+                    <Banknote size={13} strokeWidth={2.5} aria-hidden />
+                    {centsToAmount(data.cashCents)}
+                  </div>
+                )}
+                {data.mpesaCents > 0 && (
+                  <div className="bg-paid-bg text-paid-text flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.mpesaCents, data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents) }}>
+                    <Smartphone size={13} strokeWidth={2.5} aria-hidden />
+                    {centsToAmount(data.mpesaCents)}
+                  </div>
+                )}
+                {data.paystackCents > 0 && (
+                  <div className="bg-brand/15 text-ink flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.paystackCents, data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents) }}>
+                    <CreditCard size={13} strokeWidth={2.5} aria-hidden />
+                    {centsToAmount(data.paystackCents)}
+                  </div>
+                )}
+                {data.creditCents > 0 && (
+                  <div className="bg-pending-bg text-pending-text flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.creditCents, data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents) }}>
+                    <Wallet size={13} strokeWidth={2.5} aria-hidden />
+                    {centsToAmount(data.creditCents)}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* 7-day bar chart (pure CSS) */}

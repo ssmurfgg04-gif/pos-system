@@ -9,17 +9,19 @@ import (
 
 // DailySummary is the reports payload for one day.
 type DailySummary struct {
-        Date         string             `json:"date"`
-        SalesCents   int64              `json:"salesCents"`
-        OrdersPaid   int                `json:"ordersPaid"`
-        OrdersOpen   int                `json:"ordersOpen"`
-        OrdersVoided int                `json:"ordersVoided"`
-        AvgOrderCents int64             `json:"avgOrderCents"`
-        CashCents    int64              `json:"cashCents"`
-        MpesaCents   int64              `json:"mpesaCents"`
-        Discrepancies int               `json:"discrepancies"`
-        TopProducts  []TopProduct       `json:"topProducts"`
-        Series       []DayPoint         `json:"series"` // 7-day window ending on date
+        Date          string       `json:"date"`
+        SalesCents    int64        `json:"salesCents"`
+        OrdersPaid    int          `json:"ordersPaid"`
+        OrdersOpen    int          `json:"ordersOpen"`
+        OrdersVoided  int          `json:"ordersVoided"`
+        AvgOrderCents int64        `json:"avgOrderCents"`
+        CashCents     int64        `json:"cashCents"`
+        MpesaCents    int64        `json:"mpesaCents"`
+        PaystackCents int64        `json:"paystackCents"` // card / mobile money via Paystack
+        CreditCents   int64        `json:"creditCents"`   // prepaid store credit spent
+        Discrepancies int          `json:"discrepancies"`
+        TopProducts   []TopProduct `json:"topProducts"`
+        Series        []DayPoint   `json:"series"` // 7-day window ending on date
 }
 
 type TopProduct struct {
@@ -67,9 +69,11 @@ func (s *Service) GetDailySummary(date string) (*DailySummary, error) {
         _ = s.db.QueryRow(s.db.Rebind(`
                 SELECT
                         COALESCE(SUM(CASE WHEN method = 'cash' THEN amount_cents ELSE 0 END),0),
-                        COALESCE(SUM(CASE WHEN method = 'mpesa' THEN amount_cents ELSE 0 END),0)
+                        COALESCE(SUM(CASE WHEN method = 'mpesa' THEN amount_cents ELSE 0 END),0),
+                        COALESCE(SUM(CASE WHEN method = 'paystack' THEN amount_cents ELSE 0 END),0),
+                        COALESCE(SUM(CASE WHEN method = 'credit' THEN amount_cents ELSE 0 END),0)
                 FROM payments WHERE status = 'COMPLETED' AND completed_at BETWEEN ? AND ?`), from, to).
-                Scan(&out.CashCents, &out.MpesaCents)
+                Scan(&out.CashCents, &out.MpesaCents, &out.PaystackCents, &out.CreditCents)
 
         // Top products of the day.
         rows, err := s.db.Query(s.db.Rebind(`
@@ -124,6 +128,8 @@ type MonthlySummary struct {
         AvgOrderCents  int64        `json:"avgOrderCents"`
         CashCents      int64        `json:"cashCents"`
         MpesaCents     int64        `json:"mpesaCents"`
+        PaystackCents  int64        `json:"paystackCents"` // card / mobile money via Paystack
+        CreditCents    int64        `json:"creditCents"`   // prepaid store credit spent
         Discrepancies  int          `json:"discrepancies"`
         TaxPercent     float64      `json:"taxPercent"`
         TaxIncluded    bool         `json:"taxIncluded"`
@@ -186,9 +192,11 @@ func (s *Service) GetMonthlySummary(month string) (*MonthlySummary, error) {
         _ = s.db.QueryRow(s.db.Rebind(`
                 SELECT
                         COALESCE(SUM(CASE WHEN method = 'cash' THEN amount_cents ELSE 0 END),0),
-                        COALESCE(SUM(CASE WHEN method = 'mpesa' THEN amount_cents ELSE 0 END),0)
+                        COALESCE(SUM(CASE WHEN method = 'mpesa' THEN amount_cents ELSE 0 END),0),
+                        COALESCE(SUM(CASE WHEN method = 'paystack' THEN amount_cents ELSE 0 END),0),
+                        COALESCE(SUM(CASE WHEN method = 'credit' THEN amount_cents ELSE 0 END),0)
                 FROM payments WHERE status = 'COMPLETED' AND completed_at BETWEEN ? AND ?`), from, to).
-                Scan(&out.CashCents, &out.MpesaCents)
+                Scan(&out.CashCents, &out.MpesaCents, &out.PaystackCents, &out.CreditCents)
 
         // Per-day series for the month (fills zero days).
         start, _ := time.Parse("2006-01", month)

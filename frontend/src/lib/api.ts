@@ -352,6 +352,8 @@ export interface DailySummary {
   avgOrderCents: number
   cashCents: number
   mpesaCents: number
+  paystackCents: number
+  creditCents: number
   discrepancies: number
   topProducts: { productId: number; name: string; qty: number; salesCents: number }[]
   series: { date: string; salesCents: number; orders: number }[]
@@ -367,6 +369,8 @@ export interface MonthlySummary {
   avgOrderCents: number
   cashCents: number
   mpesaCents: number
+  paystackCents: number
+  creditCents: number
   discrepancies: number
   taxPercent: number
   taxIncluded: boolean
