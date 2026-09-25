@@ -127,6 +127,7 @@ type Product struct {
         StockQty     int    `json:"stockQty"`
         TrackStock   bool   `json:"trackStock"`
         Active       bool   `json:"active"`
+        IsGiftCard   bool   `json:"isGiftCard"` // mints redeemable codes on paid sale
         UpdatedAt    string `json:"updatedAt"`
 }
 
@@ -151,6 +152,16 @@ type CheckoutRequest struct {
         DiscountCents     int64          `json:"discountCents"` // order-level discount (permission-gated)
         DiscountLabel     string         `json:"discountLabel"` // e.g. "staff 10%", "negotiated"
         RedeemPoints      int64          `json:"redeemPoints"`  // loyalty points spent as payment (permission-gated)
+        SplitPayments     []SplitLeg     `json:"splitPayments"` // optional mixed tender (part cash, part M-Pesa…)
+}
+
+// SplitLeg is one tender in a mixed payment. Loyalty redemption is NOT a
+// leg (it already reduced the payable); account tabs cannot be split.
+type SplitLeg struct {
+        Method      string `json:"method" binding:"required,oneof=cash mpesa paystack credit"`
+        AmountCents int64  `json:"amountCents"`
+        Phone       string `json:"phone"`  // mpesa leg (auto/stk)
+        Email       string `json:"email"`  // paystack leg
 }
 
 type OrderItem struct {
@@ -451,15 +462,19 @@ type TeamMember struct {
 // ---- Team sync (cloud linking) ----
 
 type TeamSyncStatus struct {
-        Enabled    bool         `json:"enabled"`
-        TeamCode   string       `json:"teamCode"`
-        DeviceID   string       `json:"deviceId"`
-        DeviceName string       `json:"deviceName"`
-        LastPush   string       `json:"lastPush"`
-        LastPull   string       `json:"lastPull"`
-        Pending    int64        `json:"pending"`
-        LastError  string       `json:"lastError"`
-        Devices    []TeamDevice `json:"devices"`
+        Enabled     bool         `json:"enabled"`
+        TeamCode    string       `json:"teamCode"`
+        DeviceID    string       `json:"deviceId"`
+        DeviceName  string       `json:"deviceName"`
+        LastPush    string       `json:"lastPush"`
+        LastPull    string       `json:"lastPull"`
+        Pending     int64        `json:"pending"`
+        LastError   string       `json:"lastError"`
+        Devices     []TeamDevice `json:"devices"`
+        Source      string       `json:"source"`      // "cloud" (auto) | "manual" | ""
+        Registered  bool         `json:"registered"`  // this till is known to the cloud
+        Approved    bool         `json:"approved"`    // cloud accepts this till's events
+        AutoApprove bool         `json:"autoApprove"` // new devices self-approve
 }
 
 type TeamDevice struct {
@@ -468,6 +483,7 @@ type TeamDevice struct {
         AppVersion string `json:"appVersion"`
         LastSeen   string `json:"lastSeen"`
         ThisDevice bool   `json:"thisDevice"`
+        Approved   bool   `json:"approved"`
 }
 
 type TeamSyncConfigRequest struct {
@@ -578,4 +594,70 @@ func FmtTime(t time.Time) string {
                 return ""
         }
         return t.UTC().Format(time.RFC3339)
+}
+
+// ---- Stocktake (count sessions with variance report) ----
+
+// StockCount is a counting session: open it (snapshot expected stock),
+// record counted quantities per product, then close it — optionally
+// applying the variance as the new system stock (audited + team-synced).
+type StockCount struct {
+        ID                 int64  `json:"id"`
+        Number             string `json:"number"`
+        Status             string `json:"status"` // OPEN | DONE | CANCELLED
+        Note               string `json:"note"`
+        CountedBy          int64  `json:"countedBy"`
+        CountedByName      string `json:"countedByName"`
+        OpenedAt           string `json:"openedAt"`
+        ClosedAt           string `json:"closedAt"`
+        LinesTotal         int64  `json:"linesTotal"`
+        LinesCounted       int64  `json:"linesCounted"`
+        VarianceUnits      int64  `json:"varianceUnits"`
+        VarianceValueCents int64  `json:"varianceValueCents"`
+}
+
+// StockCountLine is one product inside a counting session. CountedQty nil
+// means "not counted yet"; SystemQty is the live stock at close time.
+type StockCountLine struct {
+        ID            int64  `json:"id"`
+        CountID       int64  `json:"countId"`
+        ProductID     int64  `json:"productId"`
+        SKU           string `json:"sku"`
+        Name          string `json:"name"`
+        ExpectedQty   int    `json:"expectedQty"`
+        CountedQty    *int   `json:"countedQty"`
+        SystemQty     int    `json:"systemQty"`
+        UnitCostCents int64  `json:"unitCostCents"`
+        Applied       bool   `json:"applied"`
+}
+
+type SaveCountLineRequest struct {
+        ProductID  int64 `json:"productId" binding:"required"`
+        CountedQty *int  `json:"countedQty"` // nil clears the count
+}
+
+type CompleteCountRequest struct {
+        Apply bool `json:"apply"` // true: make counted the new system stock
+}
+
+// ---- Gift cards ----
+
+// GiftCard is a prepaid code minted when a gift-card product is paid for.
+// Redeeming converts the remaining value into the customer's prepaid store
+// credit in one step (spending then works partially, from the balance).
+type GiftCard struct {
+        ID                int64  `json:"id"`
+        Code              string `json:"code"`
+        OrderID           int64  `json:"orderId"`
+        InitialCents      int64  `json:"initialCents"`
+        RemainingCents    int64  `json:"remainingCents"`
+        Status            string `json:"status"` // ACTIVE | EMPTY
+        IssuedAt          string `json:"issuedAt"`
+        RedeemedAt        string `json:"redeemedAt"`
+        RedeemedByCustomer int64 `json:"redeemedByCustomerId"`
+}
+
+type RedeemGiftCardRequest struct {
+        Code       string `json:"code" binding:"required"`
+        CustomerID int64  `json:"customerId" binding:"required"`
 }

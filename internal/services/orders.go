@@ -260,6 +260,69 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
         isManual := method == models.MethodMpesa && mode == models.ModeManual
         isPaystack := method == models.MethodPaystack
 
+        // ---- Split / mixed tender (optional multi-leg payment) ----
+        // Loyalty redemption is not a leg (it already reduced the payable);
+        // account tabs cannot be split; at most one async leg (mpesa or
+        // paystack) stays PENDING — cash/credit legs complete at the till.
+        var legs []models.SplitLeg
+        isSplit := len(req.SplitPayments) > 0
+        splitAllInstant := false
+        splitAsyncMethod := ""
+        if isSplit {
+                if method == models.MethodAccount {
+                        return nil, fmt.Errorf("split tender cannot include account tabs")
+                }
+                sum := int64(0)
+                asyncCount := 0
+                for _, lg := range req.SplitPayments {
+                        if lg.AmountCents <= 0 {
+                                return nil, fmt.Errorf("split legs need positive amounts")
+                        }
+                        sum += lg.AmountCents
+                        switch lg.Method {
+                        case models.MethodCash, models.MethodCredit:
+                        case models.MethodMpesa, models.MethodPaystack:
+                                asyncCount++
+                                if splitAsyncMethod == "" {
+                                        splitAsyncMethod = lg.Method
+                                }
+                        default:
+                                return nil, fmt.Errorf("invalid split method %q", lg.Method)
+                        }
+                }
+                if sum != payable {
+                        return nil, fmt.Errorf("split total (%d) does not match the amount due (%d)", sum, payable)
+                }
+                if asyncCount > 1 {
+                        return nil, fmt.Errorf("only one asynchronous leg (M-Pesa or card) per split")
+                }
+                legs = req.SplitPayments
+                splitAllInstant = asyncCount == 0
+                if splitAsyncMethod == models.MethodMpesa && req.PaymentMode == models.ModeManual {
+                        isManual = true // async leg settled by receipt entry
+                }
+                // A credit leg pays from prepaid store credit — load the
+                // customer now (single-method checkout does this earlier).
+                for _, lg := range legs {
+                        if lg.Method == models.MethodCredit {
+                                if req.CustomerID == 0 {
+                                        return nil, fmt.Errorf("credit split needs a customer")
+                                }
+                                if tabCustomer == nil {
+                                        var err error
+                                        tabCustomer, err = s.GetCustomer(req.CustomerID)
+                                        if err != nil {
+                                                return nil, err
+                                        }
+                                        if !tabCustomer.Active {
+                                                return nil, fmt.Errorf("customer is inactive")
+                                        }
+                                }
+                                break
+                        }
+                }
+        }
+
         var orderID int64
         var orderNumber string
 
@@ -275,9 +338,14 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                         return nil, err
                 }
                 now := nowStamp()
+                // All-instant = single cash/credit OR a split with no async
+                // leg. A split's paymentMethod is only the primary display
+                // method — the legs decide, so ignore the flags when splitting.
+                allInstant := (!isSplit && (immediateCash || immediateCredit)) ||
+                        (isSplit && splitAllInstant)
                 status := models.OrderPending
                 paidAt := ""
-                if immediateCash || immediateCredit {
+                if allInstant {
                         status = models.OrderPaid
                         paidAt = now
                 }
@@ -321,7 +389,130 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                         }
                 }
 
-                if immediateCash || immediateCredit {
+                if isSplit {
+                        // Mixed tender: one payment row per leg. Instant legs
+                        // (cash, credit) complete inside this tx — that money
+                        // is already in the drawer / off the credit balance.
+                        // An async leg stays PENDING; stock deducts exactly
+                        // once — now if everything is instant, otherwise when
+                        // the async leg completes via completePayment.
+                        for _, lg := range legs {
+                                switch lg.Method {
+                                case models.MethodCash:
+                                        if _, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, created_at, completed_at)
+                                                VALUES (?, 'cash', '', ?, 'COMPLETED', ?, ?)`), id, lg.AmountCents, now, now); err != nil {
+                                                tx.Rollback()
+                                                return nil, err
+                                        }
+                                case models.MethodCredit:
+                                        if tabCustomer == nil {
+                                                tx.Rollback()
+                                                return nil, fmt.Errorf("credit leg needs a customer")
+                                        }
+                                        var credit int64
+                                        if err := tx.QueryRow(`SELECT store_credit_cents FROM customers WHERE id = ?`, tabCustomer.ID).Scan(&credit); err != nil {
+                                                tx.Rollback()
+                                                return nil, err
+                                        }
+                                        if credit < lg.AmountCents {
+                                                tx.Rollback()
+                                                return nil, fmt.Errorf("%w: %s has %d, leg needs %d", ErrNoStoreCredit, tabCustomer.Name, credit, lg.AmountCents)
+                                        }
+                                        if _, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, created_at, completed_at)
+                                                VALUES (?, 'credit', '', ?, 'COMPLETED', ?, ?)`), id, lg.AmountCents, now, now); err != nil {
+                                                tx.Rollback()
+                                                return nil, err
+                                        }
+                                        if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerCreditRedeem,
+                                                -lg.AmountCents, 0, "store credit (split) "+number, p.ID); err != nil {
+                                                tx.Rollback()
+                                                return nil, err
+                                        }
+                                case models.MethodMpesa:
+                                        amount := lg.AmountCents
+                                        phone := ""
+                                        legMode := mode
+                                        if legMode == "" {
+                                                legMode = models.ModeAuto
+                                        }
+                                        if legMode != models.ModeManual {
+                                                amount = roundToShilling(lg.AmountCents)
+                                                ph, err := mpesa.NormalizePhone(lg.Phone)
+                                                if err != nil {
+                                                        tx.Rollback()
+                                                        return nil, fmt.Errorf("split M-Pesa leg: %w", err)
+                                                }
+                                                phone = ph
+                                        }
+                                        if _, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, phone, created_at)
+                                                VALUES (?, 'mpesa', ?, ?, 'PENDING', ?, ?)`), id, legMode, amount, phone, now); err != nil {
+                                                tx.Rollback()
+                                                return nil, err
+                                        }
+                                case models.MethodPaystack:
+                                        if _, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, email, created_at)
+                                                VALUES (?, 'paystack', 'popup', ?, 'PENDING', ?, ?)`), id, lg.AmountCents, truncStr(strings.TrimSpace(lg.Email), 200), now); err != nil {
+                                                tx.Rollback()
+                                                return nil, err
+                                        }
+                                }
+                        }
+                        // Points redeemed on a split deduct now; a void refunds them.
+                        if redeemSpent > 0 {
+                                var pts int64
+                                if err := tx.QueryRow(`SELECT loyalty_points FROM customers WHERE id = ?`, tabCustomer.ID).Scan(&pts); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                                if pts < redeemSpent {
+                                        tx.Rollback()
+                                        return nil, fmt.Errorf("%w: %s has %d, wants %d", ErrLoyaltyPoints, tabCustomer.Name, pts, redeemSpent)
+                                }
+                                if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerLoyalty,
+                                        0, -redeemSpent, "points redeemed "+number, p.ID); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                        }
+                        if splitAllInstant {
+                                // Fail fast on stock BEFORE taking the money.
+                                for _, l := range lines {
+                                        if l.trackStock {
+                                                var stock int
+                                                if err := tx.QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, l.productID).Scan(&stock); err != nil {
+                                                        tx.Rollback()
+                                                        return nil, err
+                                                }
+                                                if stock < l.qty {
+                                                        tx.Rollback()
+                                                        return nil, fmt.Errorf("%w: %s (have %d, need %d)", ErrInsufficientStock, l.name, stock, l.qty)
+                                                }
+                                        }
+                                }
+                                for _, l := range lines {
+                                        if l.trackStock {
+                                                gres, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty - ? WHERE id = ? AND stock_qty >= ?`), l.qty, l.productID, l.qty)
+                                                if err != nil {
+                                                        tx.Rollback()
+                                                        return nil, err
+                                                }
+                                                if n, _ := gres.RowsAffected(); n != 1 {
+                                                        tx.Rollback()
+                                                        return nil, fmt.Errorf("%w: %s", ErrInsufficientStock, l.name)
+                                                }
+                                        }
+                                }
+                                if _, err := tx.Exec(`UPDATE orders SET status = 'PAID' WHERE id = ? AND status = 'PENDING'`, id); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                                // Gift-card products mint one redeemable code per unit.
+                                if err := issueGiftCardsTx(tx, s.db.Rebind, id); err != nil {
+                                        tx.Rollback()
+                                        return nil, err
+                                }
+                        }
+                } else if immediateCash || immediateCredit {
                         // Fail fast on stock BEFORE taking money.
                         for _, l := range lines {
                                 if l.trackStock {
@@ -396,6 +587,11 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                                 }
                         }
                         if _, err := tx.Exec(`UPDATE orders SET status = 'PAID' WHERE id = ? AND status = 'PENDING'`, id); err != nil {
+                                tx.Rollback()
+                                return nil, err
+                        }
+                        // Gift-card products mint one redeemable code per unit.
+                        if err := issueGiftCardsTx(tx, s.db.Rebind, id); err != nil {
                                 tx.Rollback()
                                 return nil, err
                         }
@@ -540,6 +736,27 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                 // Tab charged, not paid: audit only. No receipt print and no
                 // paid broadcast — those happen on settle when money lands.
                 s.Audit(p.ID, p.Username, "TAB_CHARGED", "order", orderNumber, fmt.Sprintf("total %d", payable))
+        } else if isSplit && splitAsyncMethod != "" {
+                // Mixed tender with one async leg: instant legs are already
+                // banked; the async leg drives completion (stock + print +
+                // broadcast happen via completePayment, exactly once).
+                if splitAsyncMethod == models.MethodPaystack {
+                        s.Audit(p.ID, p.Username, "CHECKOUT_SPLIT", "order", orderNumber,
+                                fmt.Sprintf("total %d, awaiting card/mobile leg", payable))
+                } else if !isManual {
+                        if _, err := s.InitiateSTK(ctx, orderID, p); err != nil {
+                                return s.GetOrder(orderID)
+                        }
+                } else {
+                        s.Audit(p.ID, p.Username, "CHECKOUT_SPLIT", "order", orderNumber,
+                                fmt.Sprintf("total %d, awaiting M-Pesa receipt", payable))
+                }
+        } else if isSplit {
+                s.Audit(p.ID, p.Username, "CHECKOUT_SPLIT", "order", orderNumber, fmt.Sprintf("total %d, mixed tender", payable))
+                if order, err := s.GetOrder(orderID); err == nil {
+                        s.printer.Enqueue(order)
+                        s.broadcast(EventOrderPaid, order)
+                }
         } else if immediateCredit {
                 s.Audit(p.ID, p.Username, "CHECKOUT_CREDIT", "order", orderNumber, fmt.Sprintf("total %d, store credit", payable))
                 if order, err := s.GetOrder(orderID); err == nil {
@@ -811,6 +1028,11 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
         }
         if discrepancy == 1 {
                 tx.Exec(`UPDATE orders SET discrepancy = 1 WHERE id = ?`, orderID)
+        }
+        // Gift-card products mint one redeemable code per unit (async pay
+        // paths: tab settle, M-Pesa, Paystack, split with an async leg).
+        if err := issueGiftCardsTx(tx, s.db.Rebind, orderID); err != nil {
+                return nil, err
         }
         if err := tx.Commit(); err != nil {
                 return nil, err

@@ -47,6 +47,14 @@ export function formatMoneyCompact(cents: number): string {
   return formatMoney(cents)
 }
 
+/**
+ * Split tender: how much of the total is not covered by any leg yet.
+ * 0 = exact (go), negative = overpaid (red), positive = underpaid (amber).
+ */
+export function splitRemaining(totalCents: number, legs: { amountCents: number }[]): number {
+  return totalCents - legs.reduce((sum, l) => sum + Math.max(0, Math.round(l.amountCents) || 0), 0)
+}
+
 /** VAT-inclusive breakdown (Kenya default): total known, extract tax. */
 export function taxFromInclusive(subtotalCents: number, taxPercent: number): number {
   return Math.round((subtotalCents * taxPercent) / (100 + taxPercent))

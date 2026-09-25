@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   parseToCents, centsToAmount, formatMoney, formatMoneyCompact,
   taxFromInclusive, taxFromExclusive, cartTotals, normalizePhoneKe, configureMoney,
+  splitRemaining,
 } from '../src/lib/money'
 
 configureMoney('KES')
@@ -86,4 +87,23 @@ describe('phone normalization (Kenya)', () => {
       expect(normalizePhoneKe(input)).toBeNull()
     },
   )
+})
+
+describe('splitRemaining (mixed tender)', () => {
+  it('is zero when the legs cover the total exactly', () => {
+    expect(splitRemaining(55000, [{ amountCents: 30000 }, { amountCents: 25000 }])).toBe(0)
+    expect(splitRemaining(100000, [{ amountCents: 100000 }])).toBe(0)
+    expect(splitRemaining(0, [])).toBe(0)
+  })
+  it('is positive (amber) when under-allocated', () => {
+    expect(splitRemaining(55000, [{ amountCents: 30000 }])).toBe(25000)
+    expect(splitRemaining(55000, [{ amountCents: 30000 }, { amountCents: 0 }])).toBe(25000)
+  })
+  it('is negative (red) when the legs overshoot', () => {
+    expect(splitRemaining(55000, [{ amountCents: 30000 }, { amountCents: 30000 }])).toBe(-5000)
+  })
+  it('ignores junk leg amounts instead of propagating NaN', () => {
+    expect(splitRemaining(55000, [{ amountCents: NaN } as any, { amountCents: 55000 }])).toBe(0)
+    expect(splitRemaining(55000, [{ amountCents: -400 }, { amountCents: 55000 }])).toBe(0)
+  })
 })

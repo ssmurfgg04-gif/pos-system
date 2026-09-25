@@ -207,6 +207,10 @@ export interface Product {
   costCents: number
   stockQty: number
   trackStock: boolean
+  /** Mints a redeemable gift-card code per unit on every paid sale (the
+   *  backend forces trackStock off for these). Optional: older backends
+   *  predate the flag. */
+  isGiftCard?: boolean
   active: boolean
   updatedAt: string
 }
@@ -283,6 +287,15 @@ export interface Branding {
   mpesa_env: string
 }
 
+/** One tender in a split/mixed payment. Account tabs cannot be split and
+ *  at most one asynchronous leg (mpesa/paystack) is allowed per checkout. */
+export interface SplitLeg {
+  method: 'cash' | 'mpesa' | 'paystack' | 'credit'
+  amountCents: number
+  phone?: string  // mpesa leg (STK push target)
+  email?: string  // paystack leg (receipt)
+}
+
 export interface CheckoutRequest {
   items: { productId: number; qty: number; unitPriceCents?: number }[]
   paymentMethod: 'cash' | 'mpesa' | 'account' | 'credit' | 'paystack'
@@ -296,6 +309,9 @@ export interface CheckoutRequest {
   discountCents?: number
   discountLabel?: string
   redeemPoints?: number
+  /** Mixed tender: legs must sum exactly to the amount due (after
+   *  discount/redemption). paymentMethod stays the display method. */
+  splitPayments?: SplitLeg[]
 }
 
 export interface OffsiteStatus {
@@ -475,6 +491,50 @@ export interface StockTake {
   appliedAt: string
 }
 
+// ---- Stocktake (count sessions) & gift cards ----
+
+export interface StockCountLine {
+  id: number
+  countId: number
+  productId: number
+  sku: string
+  name: string
+  expectedQty: number
+  /** null = not counted yet. */
+  countedQty: number | null
+  systemQty: number
+  unitCostCents: number
+  applied: boolean
+}
+
+export interface StockCount {
+  id: number
+  number: string
+  status: 'OPEN' | 'DONE' | 'CANCELLED'
+  note: string
+  countedBy: number
+  countedByName: string
+  openedAt: string
+  closedAt: string
+  linesTotal: number
+  linesCounted: number
+  /** counted − system, summed over counted lines (negative = shrinkage). */
+  varianceUnits: number
+  varianceValueCents: number
+}
+
+export interface GiftCard {
+  id: number
+  code: string
+  orderId: number
+  initialCents: number
+  remainingCents: number
+  status: 'ACTIVE' | 'EMPTY'
+  issuedAt: string
+  redeemedAt: string
+  redeemedByCustomerId: number
+}
+
 export interface LedgerEntry {
   id: number
   customerId: number
@@ -549,6 +609,8 @@ export interface TeamDevice {
   appVersion: string
   lastSeen: string
   thisDevice: boolean
+  /** Cloud device roster accepts this till's events. */
+  approved: boolean
 }
 
 export interface TeamSyncStatus {
@@ -561,6 +623,11 @@ export interface TeamSyncStatus {
   pending: number
   lastError: string
   devices: TeamDevice[]
+  /** 'cloud' = automatic cloud identity, 'manual' = hand-entered keys. */
+  source: 'cloud' | 'manual' | ''
+  registered: boolean
+  approved: boolean
+  autoApprove: boolean
 }
 
 export interface PaymentConfig {

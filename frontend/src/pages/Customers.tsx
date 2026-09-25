@@ -11,7 +11,7 @@ import { useAuth } from '../stores/auth'
 import { formatMoney } from '../lib/money'
 import { Button, Card, EmptyState, Field, Input, Modal, Spinner, StatusPill, Table, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
-import { BookUser } from 'lucide-react'
+import { BookUser, Ticket } from 'lucide-react'
 
 // Older backends may not send the prepaid balance yet — optional locally so
 // the shared Customer type stays untouched.
@@ -39,6 +39,7 @@ export function Customers() {
   const [ledger, setLedger] = useState<LedgerEntry[] | null>(null)
   const [payFor, setPayFor] = useState<CustomerRow | null>(null)
   const [creditFor, setCreditFor] = useState<CustomerRow | null>(null)
+  const [redeemFor, setRedeemFor] = useState<CustomerRow | null>(null)
 
   const load = async (q = search) => {
     try {
@@ -103,6 +104,7 @@ export function Customers() {
                   <span className="inline-flex items-center gap-1">
                     <Button size="sm" variant="ghost" onClick={() => openLedger(c)}>Ledger</Button>
                     {canCredit && <Button size="sm" variant="ghost" onClick={() => setCreditFor(c)}>Top up credit</Button>}
+                    {canCredit && <Button size="sm" variant="ghost" onClick={() => setRedeemFor(c)}>Redeem gift card</Button>}
                     {c.balanceCents > 0 && <Button size="sm" variant="ghost" onClick={() => setPayFor(c)}>Pay</Button>}
                     {manage && <Button size="sm" variant="ghost" onClick={() => setEditing(c)}>Edit</Button>}
                   </span>
@@ -162,6 +164,25 @@ export function Customers() {
         size="sm"
       >
         {creditFor && <CreditTopUpForm customer={creditFor} onDone={() => { setCreditFor(null); load() }} />}
+      </Modal>
+
+      <Modal
+        open={redeemFor !== null}
+        onClose={() => setRedeemFor(null)}
+        title="Redeem gift card"
+        size="sm"
+      >
+        {redeemFor && (
+          <GiftCardRedeemForm
+            initial={redeemFor}
+            onDone={() => {
+              setRedeemFor(null)
+              load()
+              // A minted card lands as store credit — keep the open ledger honest.
+              if (ledgerFor) openLedger(ledgerFor)
+            }}
+          />
+        )}
       </Modal>
     </div>
   )
@@ -305,6 +326,120 @@ function CreditTopUpForm({ customer, onDone }: { customer: CustomerRow; onDone: 
       </Field>
       <Button variant="primary" size="lg" className="w-full" onClick={topUp} disabled={busy}>
         {busy ? <Spinner /> : 'Top up credit'}
+      </Button>
+    </div>
+  )
+}
+
+// Gift-card redemption (credit.manage, like the top-up): converts a minted
+// code into the customer's prepaid store credit. The server matches codes
+// case-insensitively and returns the updated customer — the credited amount
+// is the store-credit delta.
+function GiftCardRedeemForm({ initial, onDone }: { initial: CustomerRow; onDone: () => void }) {
+  const [code, setCode] = useState('')
+  const [customer, setCustomer] = useState<CustomerRow | null>(initial)
+  const [query, setQuery] = useState(initial.name)
+  const [options, setOptions] = useState<CustomerRow[]>([])
+  const [busy, setBusy] = useState(false)
+
+  // Customer picker search (same debounce pattern as checkout).
+  useEffect(() => {
+    const q = query.trim()
+    if (!q || customer) return
+    const t = window.setTimeout(async () => {
+      try {
+        setOptions(await api.get<CustomerRow[]>(`/api/v1/customers?search=${encodeURIComponent(q)}`))
+      } catch {
+        /* offline — the picker needs the server */
+      }
+    }, 250)
+    return () => window.clearTimeout(t)
+  }, [query, customer])
+
+  const redeem = async () => {
+    const trimmed = code.trim()
+    if (!customer) {
+      toast.error('Pick a customer')
+      return
+    }
+    if (!trimmed) {
+      toast.error('Enter the gift card code')
+      return
+    }
+    setBusy(true)
+    try {
+      const r = await api.post<{ customer: CustomerRow }>('/api/v1/gift-cards/redeem', {
+        code: trimmed,
+        customerId: customer.id,
+      })
+      const updated = r?.customer
+      const credited = updated && updated.storeCreditCents !== undefined
+        ? updated.storeCreditCents - (customer.storeCreditCents ?? 0)
+        : 0
+      toast.success(
+        'Gift card redeemed',
+        credited > 0
+          ? `${trimmed.toUpperCase()} — ${formatMoney(credited)} credited to ${updated?.name ?? customer.name}`
+          : `${customer.name} — store credit now ${formatMoney(updated?.storeCreditCents ?? 0)}`,
+      )
+      onDone()
+    } catch (e: any) {
+      toast.error('Redeem failed', e?.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[13px] text-ink-muted">
+        The card's remaining value becomes store credit for the customer — one ledger entry, spendable at checkout.
+      </p>
+      <Field label="Gift card code" hint="Printed on the card, e.g. GC-KQ7P-2MX9. Case doesn't matter.">
+        <Input
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase())}
+          placeholder="GC-XXXX-XXXX"
+          className="font-mono uppercase tracking-wider font-bold"
+          autoFocus
+          onKeyDown={(e) => e.key === 'Enter' && redeem()}
+        />
+      </Field>
+      <Field label="Customer">
+        <Input
+          value={customer ? `${customer.name}${customer.phone ? ` · ${customer.phone}` : ''}` : query}
+          onChange={(e) => { setCustomer(null); setQuery(e.target.value) }}
+          placeholder="Type a name or phone…"
+        />
+      </Field>
+      {!customer && options.length > 0 && (
+        <div className="border-2 border-line rounded-input overflow-hidden">
+          {options.slice(0, 6).map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => { setCustomer(c); setOptions([]) }}
+              className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-surface-muted active:bg-surface-muted"
+            >
+              <span>
+                <span className="block text-[13px] font-bold text-ink">{c.name}</span>
+                <span className="block text-[11px] text-ink-subtle">{c.phone || 'no phone'}</span>
+              </span>
+              <span className="text-[12px] font-bold text-ink-muted">
+                {c.storeCreditCents !== undefined ? `${formatMoney(c.storeCreditCents)} credit` : ''}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {!customer && !options.length && (
+        <p className="text-[11px] text-ink-subtle flex items-center gap-1.5">
+          <Ticket size={13} strokeWidth={2.25} aria-hidden />
+          Search above and pick who receives the credit.
+        </p>
+      )}
+      <Button variant="primary" size="lg" className="w-full" onClick={redeem} disabled={busy || !customer || !code.trim()}>
+        {busy ? <Spinner /> : 'Redeem to store credit'}
       </Button>
     </div>
   )

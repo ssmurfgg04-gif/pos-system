@@ -249,6 +249,17 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         ts.PUT("/team-sync", h.TeamSyncConfigure)
         ts.POST("/team-sync/create", h.TeamSyncCreate)
         ts.POST("/team-sync/now", h.TeamSyncNow)
+        ts.POST("/team-sync/use-cloud", h.TeamSyncUseCloud)
+
+        // Stocktake + gift cards (count sessions, code redemption).
+        ct := authd.Group("", perm("suppliers.manage"))
+        ct.GET("/stock-counts", h.ListStockCounts)
+        ct.POST("/stock-counts", h.StartStockCount)
+        ct.GET("/stock-counts/:id", h.GetStockCount)
+        ct.PUT("/stock-counts/:id/lines", h.SaveCountLine)
+        ct.POST("/stock-counts/:id/complete", h.CompleteStockCount)
+        authd.POST("/gift-cards/redeem", perm("credit.manage"), h.RedeemGiftCard)
+        authd.GET("/gift-cards", perm("credit.manage"), h.ListGiftCards)
 
         // ---- Embedded SPA ----
         // NOTE: gin only runs group middleware for matched routes, so the

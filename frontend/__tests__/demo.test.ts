@@ -518,3 +518,174 @@ describe('demo settings + reports parity', () => {
     expect(csvText.split('\n').length).toBeGreaterThan(10)
   })
 })
+
+describe('demo stock counts, gift cards & split tender (v10 parity)', () => {
+  it('stock count: open, save lines, close report-only vs apply', async () => {
+    await login('admin', 'admin123')
+    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!
+    const c = await demoRequest<Any>('POST', '/api/v1/stock-counts', { note: 'cycle count' })
+    expect(c.status).toBe('OPEN')
+    expect(c.number).toMatch(/^CNT\d{12}$/)
+    expect(c.linesTotal).toBeGreaterThan(5)
+    const detail = await demoRequest<Any>('GET', `/api/v1/stock-counts/${c.id}`)
+    expect(detail.lines.length).toBe(c.linesTotal)
+    expect(detail.lines.every((l: Any) => l.countedQty === null)).toBe(true)
+
+    // Shrink product 1 by 2 on the sheet (report-only first).
+    await demoRequest('PUT', `/api/v1/stock-counts/${c.id}/lines`, { productId: 1, countedQty: before.stockQty - 2 })
+    const detail2 = await demoRequest<Any>('GET', `/api/v1/stock-counts/${c.id}`)
+    expect(detail2.count.linesCounted).toBe(1)
+    const closed = await demoRequest<Any>('POST', `/api/v1/stock-counts/${c.id}/complete`, { apply: false })
+    expect(closed.status).toBe('DONE')
+    expect(closed.varianceUnits).toBe(-2)
+    expect(closed.varianceValueCents).toBe(-2 * before.costCents)
+    // Report-only: system stock untouched.
+    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty).toBe(before.stockQty)
+    // Closed sessions reject edits.
+    await expect(
+      demoRequest('PUT', `/api/v1/stock-counts/${c.id}/lines`, { productId: 2, countedQty: 1 }),
+    ).rejects.toMatchObject({ status: 422 })
+
+    // Second count applies the counted stock.
+    const c2 = await demoRequest<Any>('POST', '/api/v1/stock-counts', { note: '' })
+    await demoRequest('PUT', `/api/v1/stock-counts/${c2.id}/lines`, { productId: 1, countedQty: before.stockQty - 1 })
+    const applied = await demoRequest<Any>('POST', `/api/v1/stock-counts/${c2.id}/complete`, { apply: true })
+    expect(applied.status).toBe('DONE')
+    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty).toBe(before.stockQty - 1)
+    // Listing returns {counts} without lines.
+    const list = await demoRequest<Any>('GET', '/api/v1/stock-counts?limit=50')
+    expect(list.counts.length).toBe(2)
+    expect(list.counts[0].lines).toBeUndefined()
+  })
+
+  it('gift cards: mint on paid sale, redeem into store credit, permission-gated', async () => {
+    await login('admin', 'admin123')
+    const created = await demoRequest<Any>('POST', '/api/v1/products', {
+      name: 'Gift Card 1000', sku: 'GC-T1', categoryId: 5, priceCents: 100000, costCents: 0, trackStock: true, isGiftCard: true,
+    })
+    expect(created.isGiftCard).toBe(true)
+    expect(created.trackStock).toBe(false) // server forces stock tracking off
+
+    const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: created.id, qty: 2 }],
+      paymentMethod: 'cash',
+    })
+    expect(o.status).toBe('PAID')
+    const cards = (await demoRequest<Any>('GET', `/api/v1/gift-cards?orderId=${o.id}`)).cards
+    expect(cards).toHaveLength(2)
+    expect(cards[0].status).toBe('ACTIVE')
+    expect(cards[0].initialCents).toBe(100000)
+    expect(cards[0].code).toMatch(/^GC-/)
+
+    const faith = (await demoRequest<Any[]>('GET', '/api/v1/customers?search=Faith'))[0]
+    const before = faith.storeCreditCents ?? 0
+    const r = await demoRequest<Any>('POST', '/api/v1/gift-cards/redeem', { code: cards[0].code.toLowerCase(), customerId: faith.id })
+    expect(r.customer.storeCreditCents).toBe(before + 100000)
+    // Case-insensitive redeem burned exactly one card.
+    const after = (await demoRequest<Any>('GET', `/api/v1/gift-cards?orderId=${o.id}`)).cards
+    expect(after.filter((g: Any) => g.status === 'ACTIVE')).toHaveLength(1)
+    await expect(
+      demoRequest('POST', '/api/v1/gift-cards/redeem', { code: cards[0].code, customerId: faith.id }),
+    ).rejects.toMatchObject({ status: 422 })
+    const ledger = await demoRequest<Any[]>('GET', `/api/v1/customers/${faith.id}/ledger`)
+    expect(ledger.some((e: Any) => e.kind === 'credit_topup' && String(e.note).includes(cards[0].code))).toBe(true)
+
+    // The demo Designer role holds no credit.manage (cashiers do).
+    await login('designer', 'designer123')
+    await expect(demoRequest('GET', '/api/v1/gift-cards')).rejects.toMatchObject({ status: 403 })
+    await expect(
+      demoRequest('POST', '/api/v1/gift-cards/redeem', { code: cards[1].code, customerId: faith.id }),
+    ).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('split tender: legs recorded as payments; validation mirrors the server', async () => {
+    await login('cashier', 'cashier123')
+    // All-instant split (two cash legs): PAID, both legs COMPLETED, stock once.
+    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty
+    const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 1, qty: 1 }],
+      paymentMethod: 'cash',
+      splitPayments: [
+        { method: 'cash', amountCents: 30000 },
+        { method: 'cash', amountCents: 25000 },
+      ],
+    })
+    expect(o.status).toBe('PAID')
+    expect(o.payments).toHaveLength(2)
+    expect(o.payments.map((p: Any) => [p.method, p.amountCents])).toEqual([['cash', 30000], ['cash', 25000]])
+    expect(o.payments.every((p: Any) => p.status === 'COMPLETED')).toBe(true)
+    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty).toBe(before - 1)
+
+    // Mismatched sum rejected.
+    await expect(
+      demoRequest('POST', '/api/v1/orders/checkout', {
+        items: [{ productId: 1, qty: 1 }],
+        paymentMethod: 'cash',
+        splitPayments: [{ method: 'cash', amountCents: 40000 }],
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+    // Two async legs rejected.
+    await expect(
+      demoRequest('POST', '/api/v1/orders/checkout', {
+        items: [{ productId: 1, qty: 1 }],
+        paymentMethod: 'cash',
+        splitPayments: [
+          { method: 'mpesa', amountCents: 30000 },
+          { method: 'paystack', amountCents: 25000 },
+        ],
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+    // Credit leg without a customer rejected.
+    await expect(
+      demoRequest('POST', '/api/v1/orders/checkout', {
+        items: [{ productId: 1, qty: 1 }],
+        paymentMethod: 'cash',
+        splitPayments: [
+          { method: 'credit', amountCents: 30000 },
+          { method: 'cash', amountCents: 25000 },
+        ],
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+
+    // Cash + M-Pesa split: instant leg COMPLETED, async leg PENDING, then a
+    // manual receipt completes the order (money reconciles across legs).
+    const faith = (await demoRequest<Any[]>('GET', '/api/v1/customers?search=Faith'))[0]
+    // Fund the wallet first (cashier holds credit.manage) so the credit leg can bite.
+    await demoRequest('POST', `/api/v1/customers/${faith.id}/credit-topup`, { amountCents: 25000 })
+    const walletBefore = (await demoRequest<Any[]>('GET', '/api/v1/customers?search=Faith'))[0].storeCreditCents ?? 0
+    const o2 = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 1, qty: 1 }],
+      paymentMethod: 'cash',
+      paymentMode: 'manual',
+      customerId: faith.id,
+      splitPayments: [
+        { method: 'credit', amountCents: 25000 },
+        { method: 'mpesa', amountCents: 30000 },
+      ],
+    })
+    expect(o2.status).toBe('PENDING')
+    expect(o2.payments[0]).toMatchObject({ method: 'credit', amountCents: 25000, status: 'COMPLETED' })
+    expect(o2.payments[1]).toMatchObject({ method: 'mpesa', amountCents: 30000, status: 'PENDING' })
+    // The credit leg was debited from the wallet at charge time.
+    const walletAfter = (await demoRequest<Any[]>('GET', '/api/v1/customers?search=Faith'))[0].storeCreditCents
+    expect(walletAfter).toBe(walletBefore - 25000)
+    const done = await demoRequest<Any>('POST', `/api/v1/orders/${o2.id}/manual`, { receiptCode: 'PLQ82MZWX4' })
+    expect(done.status).toBe('PAID')
+    expect(done.payments[1].status).toBe('COMPLETED')
+    expect(done.payments[1].mpesaReceipt).toBe('PLQ82MZWX4')
+  })
+
+  it('team-sync status reports the automatic cloud identity', async () => {
+    await login('admin', 'admin123')
+    const st = await demoRequest<Any>('GET', '/api/v1/team-sync')
+    expect(st.source).toBe('cloud')
+    expect(st.registered).toBe(true)
+    expect(st.approved).toBe(true)
+    expect(st.devices.length).toBeGreaterThan(0)
+    expect(st.devices.every((d: Any) => d.approved === true)).toBe(true)
+    await expect(demoRequest('POST', '/api/v1/team-sync/use-cloud')).resolves.toMatchObject({ saved: true })
+    // settings.manage gate: cashiers cannot even read the status.
+    await login('cashier', 'cashier123')
+    await expect(demoRequest('GET', '/api/v1/team-sync')).rejects.toMatchObject({ status: 403 })
+  })
+})

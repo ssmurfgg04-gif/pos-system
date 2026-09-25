@@ -8,10 +8,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, downloadFile, isDemoSync, productImageUrl, Category, Product } from '../lib/api'
 import { demoProductImageUrl } from '../demo/backend'
 import { useAuth } from '../stores/auth'
+import { useBranding } from '../stores/branding'
 import { Button, Card, EmptyState, Field, Input, Modal, MoneyInput, Select, Spinner, Table, Tabs } from '../components/ui'
+import { StockCountPanel } from '../components/StockCount'
+import { printBarcodeLabels } from '../lib/labels'
 import { centsToAmount } from '../lib/money'
 import { toast } from '../stores/toasts'
-import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2 } from 'lucide-react'
+import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2, Printer } from 'lucide-react'
 
 /** <img> src for a product photo. On a static/demo host the /image route
  * doesn't exist, so the demo backend's in-memory data URL is used instead. */
@@ -44,7 +47,10 @@ function ProductThumb({ p }: { p: Product }) {
 
 export function Inventory() {
   const canManage = useAuth((s) => !!s.user?.permissions.includes('products.manage'))
-  const [tab, setTab] = useState<'products' | 'categories'>('products')
+  // Stock counts ride the same permission the Go route group uses
+  // (suppliers.manage — the Suppliers page's stock-management gate).
+  const canStocktake = useAuth((s) => !!s.user?.permissions.includes('suppliers.manage'))
+  const [tab, setTab] = useState<'products' | 'categories' | 'stockcount'>('products')
   const [products, setProducts] = useState<Product[] | null>(null)
   const [categories, setCategories] = useState<Category[]>([])
   const [search, setSearch] = useState('')
@@ -55,6 +61,7 @@ export function Inventory() {
   const [addingCat, setAddingCat] = useState(false)
   const [editCatId, setEditCatId] = useState<number | null>(null)
   const [editCatName, setEditCatName] = useState('')
+  const [labelPicks, setLabelPicks] = useState<number[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = async () => {
@@ -91,6 +98,22 @@ export function Inventory() {
     } catch (e: any) {
       toast.error('Import failed', e?.message)
     }
+  }
+
+  // ---- Barcode label printing (products.manage) ----
+  const doPrintLabels = () => {
+    const picks = (products ?? []).filter((p) => labelPicks.includes(p.id))
+    if (picks.length === 0) return
+    const n = printBarcodeLabels(picks, useBranding.getState().branding.store_name || '')
+    if (n === 0) {
+      toast.error('Popup blocked', 'Allow popups for this page to print labels.')
+    } else {
+      toast.success('Labels ready', `${n} label${n === 1 ? '' : 's'} — 50×30 mm, use the print dialog`)
+    }
+  }
+
+  const togglePick = (id: number, on: boolean) => {
+    setLabelPicks((picks) => (on ? [...new Set([...picks, id])] : picks.filter((x) => x !== id)))
   }
 
   // ---- Category manager (products.manage) ----
@@ -145,6 +168,16 @@ export function Inventory() {
         actions={
           canManage && (
             <>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={doPrintLabels}
+                disabled={labelPicks.length === 0}
+                title="Print price labels with Code128 barcodes"
+              >
+                <Printer size={14} strokeWidth={2.5} aria-hidden />
+                Print labels{labelPicks.length ? ` (${labelPicks.length})` : ''}
+              </Button>
               <label className="hidden sm:inline-flex">
                 <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()}>
                   <Upload size={14} strokeWidth={2.5} aria-hidden />
@@ -187,6 +220,7 @@ export function Inventory() {
             tabs={[
               { key: 'products' as const, label: 'Products' },
               { key: 'categories' as const, label: 'Categories' },
+              ...(canStocktake ? [{ key: 'stockcount' as const, label: 'Stock count' }] : []),
             ]}
             value={tab}
             onChange={setTab}
@@ -205,17 +239,40 @@ export function Inventory() {
               </Select>
             </>
           )}
+          {tab === 'stockcount' && (
+            <p className="text-[12px] text-ink-subtle">Count sessions, variance and apply-to-stock — nothing leaves the building uncounted.</p>
+          )}
         </div>
 
-        {tab === 'products' ? (
+        {tab === 'stockcount' ? (
+          <StockCountPanel onChanged={load} />
+        ) : tab === 'products' ? (
           !products ? (
             <div className="py-12 flex justify-center"><Spinner /></div>
           ) : filtered.length === 0 ? (
             <EmptyState icon={<Package size={24} strokeWidth={2.25} />} title="No products" body={canManage ? 'Create your first product.' : 'Nothing matches the filter.'} />
           ) : (
-            <Table head={['Product', 'Category', 'Price', 'Stock', ...(canManage ? [''] : [])]}>
+            <Table head={[...(canManage ? [<input
+              key="selall"
+              type="checkbox"
+              aria-label="Select all products for label printing"
+              className="w-4 h-4 accent-[#10B981]"
+              checked={filtered.length > 0 && filtered.every((p) => labelPicks.includes(p.id))}
+              onChange={(e) => setLabelPicks(e.target.checked ? filtered.map((p) => p.id) : [])}
+            />] : []), 'Product', 'Category', 'Price', 'Stock', ...(canManage ? [''] : [])]}>
               {filtered.map((p) => (
                 <tr key={p.id} className={p.active ? '' : 'opacity-50'}>
+                  {canManage && (
+                    <td className="px-3 py-2.5 w-8">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${p.name} for label printing`}
+                        className="w-4 h-4 accent-[#10B981]"
+                        checked={labelPicks.includes(p.id)}
+                        onChange={(e) => togglePick(p.id, e.target.checked)}
+                      />
+                    </td>
+                  )}
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-2.5">
                       <ProductThumb p={p} />
@@ -403,6 +460,7 @@ function ProductModal({
     costCents: product?.costCents ?? 0,
     stockQty: product?.stockQty ?? 0,
     trackStock: product?.trackStock ?? true,
+    isGiftCard: product?.isGiftCard ?? false,
     active: product?.active ?? true,
   })
   const [busy, setBusy] = useState(false)
@@ -419,11 +477,14 @@ function ProductModal({
     setError('')
     try {
       let savedId = product?.id ?? 0
+      // Gift cards sell value, not shelf stock — trackStock is forced off
+      // here and the backend forces it too.
+      const payload = { ...form, trackStock: form.isGiftCard ? false : form.trackStock }
       if (product) {
-        await api.put(`/api/v1/products/${product.id}`, form)
+        await api.put(`/api/v1/products/${product.id}`, payload)
         toast.success('Product updated', form.name)
       } else {
-        const created = await api.post<Product>('/api/v1/products', form)
+        const created = await api.post<Product>('/api/v1/products', payload)
         savedId = created?.id ?? 0
         toast.success('Product created', form.name)
       }
@@ -608,13 +669,34 @@ function ProductModal({
           <MoneyInput value={form.costCents} onCents={(c) => setForm({ ...form, costCents: c })} />
         </Field>
         <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink">
-          <input type="checkbox" checked={form.trackStock} onChange={(e) => setForm({ ...form, trackStock: e.target.checked })} className="w-5 h-5 accent-[#10B981]" />
+          <input
+            type="checkbox"
+            checked={form.trackStock}
+            disabled={form.isGiftCard}
+            onChange={(e) => setForm({ ...form, trackStock: e.target.checked })}
+            className="w-5 h-5 accent-[#10B981]"
+          />
           Track stock
+        </label>
+        <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink">
+          <input
+            type="checkbox"
+            checked={form.isGiftCard}
+            onChange={(e) => setForm({ ...form, isGiftCard: e.target.checked, ...(e.target.checked ? { trackStock: false } : {}) })}
+            className="w-5 h-5 accent-[#10B981]"
+          />
+          Gift card
         </label>
         <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink">
           <input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} className="w-5 h-5 accent-[#10B981]" />
           Active (sellable)
         </label>
+        {form.isGiftCard && (
+          <p className="sm:col-span-2 text-[11px] text-ink-subtle -mt-2">
+            Sells value, mints a redeemable code, never tracks stock. One code per unit is issued when the sale is paid;
+            codes are redeemed into a customer's store credit from their profile.
+          </p>
+        )}
         {error && <p role="alert" className="sm:col-span-2 text-danger-text text-sm font-semibold">{error}</p>}
       </div>
     </Modal>

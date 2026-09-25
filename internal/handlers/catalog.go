@@ -23,21 +23,23 @@ type productBody struct {
         StockQty    *int   `json:"stockQty"`
         TrackStock  *bool  `json:"trackStock"`
         Active      *bool  `json:"active"`
+        IsGiftCard  *bool  `json:"isGiftCard"`
 }
 
 func (h *H) scanProducts(rows *sql.Rows) []models.Product {
         out := []models.Product{}
         for rows.Next() {
                 var pr models.Product
-                var track, active int
+                var track, active, gift int
                 var catName string
                 if err := rows.Scan(&pr.ID, &pr.SKU, &pr.Barcode, &pr.Name, &pr.CategoryID, &catName,
-                        &pr.PriceCents, &pr.CostCents, &pr.StockQty, &track, &active, &pr.UpdatedAt); err != nil {
+                        &pr.PriceCents, &pr.CostCents, &pr.StockQty, &track, &active, &pr.UpdatedAt, &gift); err != nil {
                         break
                 }
                 pr.CategoryName = catName
                 pr.TrackStock = track == 1
                 pr.Active = active == 1
+                pr.IsGiftCard = gift == 1
                 out = append(out, pr)
         }
         return out
@@ -45,7 +47,7 @@ func (h *H) scanProducts(rows *sql.Rows) []models.Product {
 
 const productSelect = `
         SELECT p.id, COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, p.category_id, COALESCE(c.name,''),
-                p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at
+                p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at, COALESCE(p.is_gift_card,0)
         FROM products p LEFT JOIN categories c ON c.id = p.category_id`
 
 // ListProducts (authed — POS needs it). Filters: category, search, active.
@@ -112,14 +114,19 @@ func (h *H) CreateProduct(c *gin.Context) {
         if body.Active != nil && !*body.Active {
                 active = 0
         }
+        gift := 0
+        if body.IsGiftCard != nil && *body.IsGiftCard {
+                gift = 1
+                track = 0 // gift cards are value, not shelf stock
+        }
         if err := models.CheckProductInput(body.Name, body.SKU, body.Barcode, body.PriceCents, body.CostCents, stock); err != nil {
                 h.fail(c, 400, err.Error())
                 return
         }
         res, err := h.db(c).Exec(h.db(c).Rebind(`
-                INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-                uniqueSKU(h.db(c), body.SKU), body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active)
+                INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                uniqueSKU(h.db(c), body.SKU), body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active, gift)
         if err != nil {
                 h.fail(c, 500, err.Error())
                 return
@@ -174,6 +181,11 @@ func (h *H) UpdateProduct(c *gin.Context) {
         if body.Active != nil && !*body.Active {
                 active = 0
         }
+        gift := 0
+        if body.IsGiftCard != nil && *body.IsGiftCard {
+                gift = 1
+                track = 0
+        }
         sku := strings.TrimSpace(body.SKU)
         if sku == "" {
                 var existing string
@@ -186,8 +198,8 @@ func (h *H) UpdateProduct(c *gin.Context) {
         }
         res, err := h.db(c).Exec(h.db(c).Rebind(`
                 UPDATE products SET sku = ?, barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
-                        stock_qty = ?, track_stock = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?`), sku, body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active, id)
+                        stock_qty = ?, track_stock = ?, is_active = ?, is_gift_card = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?`), sku, body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active, gift, id)
         if err != nil {
                 h.fail(c, 500, err.Error())
                 return

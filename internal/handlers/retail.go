@@ -515,3 +515,15 @@ func (h *H) TeamSyncNow(c *gin.Context) {
         }
         h.ok(c, gin.H{"pushed": pushed, "applied": applied})
 }
+
+// TeamSyncUseCloud (settings.manage) — revert this till to automatic cloud
+// identity after a manual configuration (the join-code-free default).
+func (h *H) TeamSyncUseCloud(c *gin.Context) {
+        p := h.principal(c)
+        if err := h.svc(c).TeamSyncUseCloud(); err != nil {
+                h.fail(c, 502, err.Error())
+                return
+        }
+        h.svc(c).Audit(p.ID, p.Username, "TEAM_SYNC_CLOUD", "settings", "", "switched to automatic cloud identity")
+        h.ok(c, gin.H{"saved": true})
+}
