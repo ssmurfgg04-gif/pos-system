@@ -206,12 +206,11 @@ export function PaystackModal({
             <AlertTriangle size={20} strokeWidth={2.5} className="text-pending-text shrink-0 mt-0.5" aria-hidden />
             <div>
               <p className="font-bold text-pending-text text-sm">Payment not completed</p>
-              <p className="text-[13px] text-ink-muted mt-0.5">
+              <p role="alert" className="text-[13px] text-ink-muted mt-0.5">
                 {error || 'The popup was closed before payment. The order stays pending — you can reopen checkout, pay via the checkout page, or void it.'}
               </p>
             </div>
           </div>
-          {error && <p role="alert" className="text-danger-text text-sm font-semibold">{error}</p>}
           <Button variant="primary" size="lg" className="w-full" onClick={() => start(current)}>
             <RotateCcw size={16} strokeWidth={2.5} aria-hidden />
             Open checkout again
