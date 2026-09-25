@@ -211,6 +211,12 @@ export interface Product {
   updatedAt: string
 }
 
+/** Photo URL for a product ('' when none) — public, cache-busted route. */
+export function productImageUrl(p: Pick<Product, 'id' | 'updatedAt'>): string {
+  if (!p.updatedAt) return `/api/v1/products/${p.id}/image`
+  return `/api/v1/products/${p.id}/image?v=${encodeURIComponent(p.updatedAt)}`
+}
+
 export interface OrderItem {
   id: number
   productId: number
@@ -224,11 +230,12 @@ export interface OrderItem {
 export interface Payment {
   id: number
   orderId: number
-  method: 'cash' | 'mpesa' | 'account'
+  method: 'cash' | 'mpesa' | 'account' | 'credit' | 'paystack'
   mode: string
   amountCents: number
   status: string
   phone: string
+  email?: string
   mpesaReceipt: string
   checkoutRequestId?: string
   resultDesc: string
@@ -278,13 +285,17 @@ export interface Branding {
 
 export interface CheckoutRequest {
   items: { productId: number; qty: number; unitPriceCents?: number }[]
-  paymentMethod: 'cash' | 'mpesa' | 'account'
+  paymentMethod: 'cash' | 'mpesa' | 'account' | 'credit' | 'paystack'
   paymentMode?: 'auto' | 'stk' | 'manual'
   customerPhone?: string
+  customerEmail?: string
   customerName?: string
   customerId?: number
   note?: string
   clientUuid?: string
+  discountCents?: number
+  discountLabel?: string
+  redeemPoints?: number
 }
 
 export interface OffsiteStatus {
@@ -464,10 +475,146 @@ export interface LedgerEntry {
   id: number
   customerId: number
   orderId: number
-  kind: 'charge' | 'payment' | 'adjustment' | 'loyalty'
+  kind: 'charge' | 'payment' | 'adjustment' | 'loyalty' | 'credit_topup' | 'credit_redeem'
   amountCents: number
   pointsDelta: number
   note: string
   createdBy: number
   createdAt: string
+}
+
+// ---- Retail expansion ----
+
+export interface HeldSale {
+  id: number
+  refName: string
+  items: { productId: number; qty: number; unitPriceCents?: number }[]
+  customerId: number
+  customerName: string
+  note: string
+  deviceId: string
+  createdBy: number
+  createdByName: string
+  createdAt: string
+}
+
+export interface VoidReason {
+  id: number
+  label: string
+  active: boolean
+  sortOrder: number
+}
+
+export interface DesignFile {
+  id: number
+  jobId: number
+  filename: string
+  mime: string
+  size: number
+  uploadedBy: number
+  uploadedByName: string
+  createdAt: string
+}
+
+export interface TeamMember extends User {
+  salesToday: number
+  salesTodayCents: number
+  lastOrderAt: string
+}
+
+export interface DashboardConfig {
+  hideNav?: string[]
+  widgets?: { key: string; visible: boolean }[]
+}
+
+export interface Role {
+  id: number
+  name: string
+  description: string
+  permissions: string[]
+  system: boolean
+  userCount?: number
+  home_page?: string
+  dashboard_config?: DashboardConfig
+}
+
+export interface TeamDevice {
+  deviceId: string
+  deviceName: string
+  appVersion: string
+  lastSeen: string
+  thisDevice: boolean
+}
+
+export interface TeamSyncStatus {
+  enabled: boolean
+  teamCode: string
+  deviceId: string
+  deviceName: string
+  lastPush: string
+  lastPull: string
+  pending: number
+  lastError: string
+  devices: TeamDevice[]
+}
+
+export interface PaymentConfig {
+  paystack: {
+    enabled: boolean
+    publicKey: string
+    currency: string
+    callbackUrl: string
+    configured: boolean
+  }
+  mpesa: { env: string; till: string; paybill: string }
+  creditEnabled: boolean
+  loyaltyEnabled: boolean
+}
+
+export interface PaystackInitResult {
+  reference: string
+  accessCode: string
+  authorizationUrl: string
+  publicKey: string
+  currency: string
+  amountCents: number
+}
+
+// ---- Paystack popup (inline.js) ----
+// Loaded once from index.html; types the subset we use.
+interface PaystackHandler { openIframe(): void }
+interface PaystackSetup {
+  key: string
+  access_code?: string
+  email: string
+  amount?: number
+  currency?: string
+  ref?: string
+  metadata?: Record<string, unknown>
+  callback?(r: { reference: string }): void
+  onClose?(): void
+}
+declare global {
+  interface Window { PaystackPop?: { setup(s: PaystackSetup): PaystackHandler } }
+}
+
+/**
+ * Open the Paystack popup with a server-minted access_code. Resolves with
+ * the reference on success (verify happens server-side afterwards) and
+ * rejects when the customer closes the popup.
+ */
+export function openPaystackPopup(init: PaystackInitResult, email: string,
+  callbacks: { onSuccess(ref: string): void; onCancelled(): void }): void {
+  if (!window.PaystackPop) {
+    callbacks.onCancelled()
+    throw new Error('Paystack popup library not loaded')
+  }
+  const handler = window.PaystackPop.setup({
+    key: init.publicKey,
+    access_code: init.accessCode,
+    email,
+    callback: (r) => callbacks.onSuccess(r.reference),
+    onClose: () => callbacks.onCancelled(),
+  })
+  handler.openIframe()
 }
