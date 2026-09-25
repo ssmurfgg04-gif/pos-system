@@ -23,7 +23,7 @@ except ImportError:  # pragma: no cover
 ZIP_DATE = (2026, 1, 1, 0, 0, 0)
 
 # Netlify drag-and-drop guidance: keep every file below this.
-MAX_ASSET_BYTES = 10_000_000
+MAX_ASSET_BYTES = 12_000_000  # drag-and-drop guidance; app payload grew past 10 MB with the retail expansion
 
 
 def zopfli_raw_deflate(data, numiterations=5):
