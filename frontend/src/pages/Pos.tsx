@@ -8,21 +8,33 @@
 // scanners fire straight into the cart with no input focused at all
 // (scanners "type" very fast and press Enter — we buffer rapid keystrokes
 // and only accept the burst pattern, so human typing never triggers it).
+//
+// Tenders: cash, M-Pesa, customer tab, store credit (when credit_enabled)
+// and Paystack card/mobile-money (when enabled+configured). Order-level
+// discounts (payments.apply_discount) and loyalty redemption
+// (loyalty.redeem) ride on any tender. Carts can be parked (pos.hold) and
+// resumed from the Parked drawer; PENDING Paystack orders can be voided
+// with a reason from the shop's catalog.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, Category, CheckoutRequest, Customer, Order, Product } from '../lib/api'
+import { api, Category, CheckoutRequest, Customer, HeldSale, Order, PaymentConfig, Product } from '../lib/api'
 import { useCart } from '../stores/cart'
 import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { formatMoneyCompact, formatMoney, normalizePhoneKe } from '../lib/money'
 import { Button, EmptyState, Input, Modal, Field, MoneyInput, Spinner, Tabs } from '../components/ui'
 import { MpesaModal } from '../components/MpesaModal'
+import { PaystackModal } from '../components/PaystackModal'
+import { HeldSalesDrawer } from '../components/HeldSalesDrawer'
 import { ReceiptModal } from '../components/Receipt'
 import { toast } from '../stores/toasts'
 import { enqueue, newClientUuid } from '../offline/queue'
 import { useNet } from '../offline/heartbeat'
+import { onWsEvent } from '../ws/client'
+import type { WsEvent } from '../ws/client'
 import {
   ShoppingCart, Search, Banknote, Smartphone, X, Minus, Plus, ScanBarcode, AlertTriangle, BookUser,
+  CreditCard, Wallet, Pause, Archive, Star,
 } from 'lucide-react'
 
 export function Pos() {
@@ -38,7 +50,22 @@ export function Pos() {
   const [mpesaOrder, setMpesaOrder] = useState<Order | null>(null)
   const [mpesaOpen, setMpesaOpen] = useState(false)
   const [receiptFor, setReceiptFor] = useState<Order | null>(null)
+  const [paystackOrder, setPaystackOrder] = useState<Order | null>(null)
+  const [paystackEmail, setPaystackEmail] = useState('')
+  const [paystackOpen, setPaystackOpen] = useState(false)
+  const [parkOpen, setParkOpen] = useState(false)
+  const [heldOpen, setHeldOpen] = useState(false)
+  const [heldCount, setHeldCount] = useState(0)
+  const [payConfig, setPayConfig] = useState<PaymentConfig | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+
+  const canHold = !!user?.permissions.includes('pos.hold')
+  const canDiscount = !!user?.permissions.includes('payments.apply_discount')
+  const canRedeem = !!user?.permissions.includes('loyalty.redeem')
+  // Tender capability switches — the backend config is authoritative.
+  const paystackReady = !!(payConfig && !Array.isArray(payConfig) && payConfig.paystack?.enabled && payConfig.paystack?.configured)
+  const creditEnabled = !!(payConfig && payConfig.creditEnabled)
+  const loyaltyEnabled = !!(payConfig && payConfig.loyaltyEnabled)
 
   const load = async () => {
     try {
@@ -66,6 +93,26 @@ export function Pos() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // Tender capabilities (Paystack switch, credit & loyalty programs).
+  useEffect(() => {
+    api.get<PaymentConfig>('/api/v1/payments/config')
+      .then((c) => setPayConfig(c && !Array.isArray(c) ? c : null))
+      .catch(() => setPayConfig(null))
+  }, [])
+
+  // Parked-sale count — refreshes on WS pushes and local park/resume.
+  useEffect(() => {
+    if (!canHold) return
+    const refreshHeld = () => {
+      api.get<HeldSale[]>('/api/v1/held-sales')
+        .then((l) => setHeldCount(Array.isArray(l) ? l.length : 0))
+        .catch(() => {}) // offline — the banner already explains
+    }
+    refreshHeld()
+    // Static demo builds have no socket; count refreshes on local actions.
+    return onWsEvent('HELD_SALES_UPDATED' as WsEvent, refreshHeld)
+  }, [canHold])
 
   // Global HID barcode scanner listener — no input focus required.
   useEffect(() => {
@@ -140,6 +187,27 @@ export function Pos() {
     }
     cart.add(p)
     if (navigator.vibrate) navigator.vibrate(10)
+  }
+
+  // Rehydrate a parked cart: match held productIds against the loaded
+  // catalog (deleted products are skipped with a warning), restore the
+  // customer + note. The drawer deletes the hold only after this succeeds.
+  const resumeHeld = async (sale: HeldSale) => {
+    if (!products) throw new Error('Products are still loading — try again in a second')
+    let missing = 0
+    for (const it of sale.items) {
+      const p = products.find((x) => x.id === it.productId)
+      if (!p) {
+        missing++
+        continue
+      }
+      cart.add(p, it.qty)
+    }
+    if (sale.customerName) cart.setCustomerName(sale.customerName)
+    if (sale.note) cart.setNote(sale.note)
+    if (missing > 0) {
+      toast.error('Some items skipped', `${missing} product(s) no longer exist in the catalog — check the cart`)
+    }
   }
 
   return (
@@ -236,7 +304,13 @@ export function Pos() {
 
         {/* Cart (sticky on desktop) */}
         <aside className="hidden lg:flex min-h-0 flex-col bg-surface border-2 border-line-strong rounded-card shadow-brutal">
-          <CartBody onCharge={() => setChargeOpen(true)} />
+          <CartBody
+            onCharge={() => setChargeOpen(true)}
+            canHold={canHold}
+            heldCount={heldCount}
+            onOpenHeld={() => setHeldOpen(true)}
+            onPark={() => setParkOpen(true)}
+          />
         </aside>
       </div>
 
@@ -247,6 +321,18 @@ export function Pos() {
         title={`Cart — ${formatMoney(totals.total)}`}
         footer={
           <>
+            {canHold && (
+              <Button variant="ghost" onClick={() => { setCartSheetOpen(false); setHeldOpen(true) }}>
+                <Archive size={15} strokeWidth={2.5} aria-hidden />
+                Parked{heldCount ? ` (${heldCount})` : ''}
+              </Button>
+            )}
+            {canHold && cart.lines.length > 0 && (
+              <Button variant="secondary" onClick={() => { setCartSheetOpen(false); setParkOpen(true) }}>
+                <Pause size={15} strokeWidth={2.5} aria-hidden />
+                Park
+              </Button>
+            )}
             <Button variant="ghost" onClick={() => { cart.clear(); setCartSheetOpen(false) }} disabled={cart.lines.length === 0}>
               Clear all
             </Button>
@@ -256,7 +342,14 @@ export function Pos() {
           </>
         }
       >
-        <CartBody onCharge={() => { setCartSheetOpen(false); setChargeOpen(true) }} sheet />
+        <CartBody
+          onCharge={() => { setCartSheetOpen(false); setChargeOpen(true) }}
+          sheet
+          canHold={canHold}
+          heldCount={heldCount}
+          onOpenHeld={() => { setCartSheetOpen(false); setHeldOpen(true) }}
+          onPark={() => { setCartSheetOpen(false); setParkOpen(true) }}
+        />
       </Modal>
 
       {/* Charge modal (shared by mobile button + desktop charge) */}
@@ -264,6 +357,7 @@ export function Pos() {
         open={chargeOpen}
         onClose={() => setChargeOpen(false)}
         onMpesa={(o) => { setChargeOpen(false); setMpesaOrder(o); setMpesaOpen(true) }}
+        onPaystack={(o, email) => { setChargeOpen(false); setPaystackOrder(o); setPaystackEmail(email); setPaystackOpen(true) }}
         onDone={(o) => {
           setChargeOpen(false)
           cart.clear()
@@ -275,6 +369,11 @@ export function Pos() {
         }}
         online={online}
         cashierName={user?.fullName || user?.username || ''}
+        paystackReady={paystackReady}
+        creditEnabled={creditEnabled}
+        loyaltyEnabled={loyaltyEnabled}
+        canDiscount={canDiscount}
+        canRedeem={canRedeem}
       />
 
       <MpesaModal
@@ -282,6 +381,45 @@ export function Pos() {
         order={mpesaOrder}
         onClose={() => { setMpesaOpen(false); setMpesaOrder(null); cart.clear(); load() }}
         onPaid={(o) => { load(); setMpesaOrder(o) }}
+      />
+
+      <PaystackModal
+        open={paystackOpen}
+        order={paystackOrder}
+        email={paystackEmail}
+        onClose={() => { setPaystackOpen(false); setPaystackOrder(null); cart.clear(); load() }}
+        onPaid={() => load()}
+        onVoided={(o) => {
+          setPaystackOpen(false)
+          setPaystackOrder(null)
+          cart.clear()
+          load()
+          toast.success(`Order ${o.number} voided`, o.voidReason || undefined)
+        }}
+      />
+
+      <HeldSalesDrawer
+        open={heldOpen}
+        onClose={() => setHeldOpen(false)}
+        onResume={resumeHeld}
+        onChanged={() => {
+          api.get<HeldSale[]>('/api/v1/held-sales')
+            .then((l) => setHeldCount(Array.isArray(l) ? l.length : 0))
+            .catch(() => {})
+        }}
+      />
+
+      <ParkModal
+        open={parkOpen}
+        onClose={() => setParkOpen(false)}
+        onParked={(name) => {
+          setParkOpen(false)
+          cart.clear()
+          api.get<HeldSale[]>('/api/v1/held-sales')
+            .then((l) => setHeldCount(Array.isArray(l) ? l.length : 0))
+            .catch(() => {})
+          toast.success('Sale parked', name)
+        }}
       />
 
       <ReceiptModal
@@ -294,7 +432,21 @@ export function Pos() {
   )
 }
 
-function CartBody({ onCharge, sheet }: { onCharge: () => void; sheet?: boolean }) {
+function CartBody({
+  onCharge,
+  onPark,
+  onOpenHeld,
+  canHold,
+  heldCount,
+  sheet,
+}: {
+  onCharge: () => void
+  onPark?: () => void
+  onOpenHeld?: () => void
+  canHold?: boolean
+  heldCount?: number
+  sheet?: boolean
+}) {
   const cart = useCart()
   const branding = useBranding((s) => s.branding)
   const totals = cart.totals()
@@ -307,7 +459,15 @@ function CartBody({ onCharge, sheet }: { onCharge: () => void; sheet?: boolean }
       {!sheet && (
         <header className="px-4 pt-4 pb-2 border-b-2 border-line flex items-center justify-between">
           <h2 className="font-bold text-ink">Cart</h2>
-          <span className="text-ink-muted text-sm tabular font-semibold">{totals.count} item{totals.count === 1 ? '' : 's'}</span>
+          <div className="flex items-center gap-1.5">
+            {canHold && onOpenHeld && (
+              <Button size="sm" variant="ghost" onClick={onOpenHeld} title="Parked sales">
+                <Archive size={14} strokeWidth={2.5} aria-hidden />
+                Parked{heldCount ? ` (${heldCount})` : ''}
+              </Button>
+            )}
+            <span className="text-ink-muted text-sm tabular font-semibold">{totals.count} item{totals.count === 1 ? '' : 's'}</span>
+          </div>
         </header>
       )}
 
@@ -388,6 +548,12 @@ function CartBody({ onCharge, sheet }: { onCharge: () => void; sheet?: boolean }
             <span className="font-bold text-ink">Total</span>
             <span className="font-black text-[40px] leading-none text-ink tabular">{formatMoney(totals.total)}</span>
           </div>
+          {canHold && onPark && cart.lines.length > 0 && (
+            <Button variant="secondary" className="w-full" onClick={onPark}>
+              <Pause size={16} strokeWidth={2.5} aria-hidden />
+              Park for later
+            </Button>
+          )}
           <Button
             variant="primary"
             size="lg"
@@ -412,34 +578,56 @@ function Row({ label, value }: { label: string; value: string }) {
   )
 }
 
-// ---- Charge modal: method pick, cash quick-tender, M-Pesa ----
+// ---- Charge modal: method pick, cash quick-tender, M-Pesa, store credit,
+// ---- Paystack card/mobile-money, order discount, loyalty redemption ----
+
+/** Prepaid store credit rides on Customer via the retail expansion. */
+function creditOf(c: Customer): number {
+  return Number((c as unknown as { storeCreditCents?: number }).storeCreditCents ?? 0)
+}
 
 function ChargeModal({
   open,
   onClose,
   onMpesa,
+  onPaystack,
   onDone,
   online,
   cashierName,
+  paystackReady,
+  creditEnabled,
+  loyaltyEnabled,
+  canDiscount,
+  canRedeem,
 }: {
   open: boolean
   onClose: () => void
   onMpesa: (o: Order) => void
+  onPaystack: (o: Order, email: string) => void
   onDone: (o: Order | null) => void
   online: boolean
   cashierName: string
+  paystackReady: boolean
+  creditEnabled: boolean
+  loyaltyEnabled: boolean
+  canDiscount: boolean
+  canRedeem: boolean
 }) {
   const cart = useCart()
   const branding = useBranding((s) => s.branding)
-  const [method, setMethod] = useState<'cash' | 'mpesa' | 'tab'>('cash')
+  const [method, setMethod] = useState<'cash' | 'mpesa' | 'tab' | 'credit' | 'paystack'>('cash')
   const [customerName, setCustomerName] = useState('')
   const [phone, setPhone] = useState('')
+  const [email, setEmail] = useState('')
   const [received, setReceived] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [tabQuery, setTabQuery] = useState('')
   const [tabOptions, setTabOptions] = useState<Customer[]>([])
   const [tabCustomer, setTabCustomer] = useState<Customer | null>(null)
+  const [discountCents, setDiscountCents] = useState(0)
+  const [discountLabel, setDiscountLabel] = useState('')
+  const [redeem, setRedeem] = useState(0)
   const totals = cart.totals()
 
   // Fresh slate every time the modal opens (no stale tender amounts).
@@ -449,17 +637,21 @@ function ChargeModal({
       setReceived(null)
       setError('')
       setPhone('')
+      setEmail('')
       setCustomerName(cart.customerName)
       setTabQuery('')
       setTabOptions([])
       setTabCustomer(null)
+      setDiscountCents(0)
+      setDiscountLabel('')
+      setRedeem(0)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  // Tab customer search (server enforces the credit limit at charge time).
+  // Tab / store-credit customer search (server enforces limits at charge time).
   useEffect(() => {
-    if (method !== 'tab' || !open) return
+    if ((method !== 'tab' && method !== 'credit') || !open) return
     const q = tabQuery.trim()
     if (!q) {
       setTabOptions([])
@@ -475,10 +667,25 @@ function ChargeModal({
     return () => window.clearTimeout(t)
   }, [method, open, tabQuery])
 
-  const change = received !== null ? received - totals.total : null
+  // Order-level adjustments — an APPROXIMATION of the server's math (the
+  // backend recomputes tax on the discounted subtotal and caps redemption
+  // authoritatively; it trims whole points when the cap bites).
+  const discountOk = !canDiscount || discountCents < totals.subtotal
+  const discountedSub = Math.max(0, totals.subtotal - (canDiscount ? Math.min(discountCents, totals.subtotal) : 0))
+  const estTotal = branding.tax_included
+    ? discountedSub
+    : discountedSub + Math.round((discountedSub * branding.tax_percent) / 100)
+  const estRedeemCents = redeem > 0 ? Math.min(redeem * 100, Math.floor(estTotal / 2)) : 0
+  const due = Math.max(0, estTotal - estRedeemCents)
+  const tenderDue = (canDiscount && discountCents > 0) || estRedeemCents > 0 ? due : totals.total
+
+  const change = received !== null ? received - tenderDue : null
   const canCash = received === null || change !== null && change >= 0
 
-  const checkout = async (paymentMethod: 'cash' | 'mpesa' | 'tab', paymentMode?: 'auto' | 'stk' | 'manual') => {
+  const checkout = async (
+    paymentMethod: 'cash' | 'mpesa' | 'tab' | 'credit' | 'paystack',
+    paymentMode?: 'auto' | 'stk' | 'manual',
+  ) => {
     setBusy(true)
     setError('')
     const clientUuid = newClientUuid()
@@ -488,19 +695,25 @@ function ChargeModal({
       paymentMode,
       customerName: customerName.trim() || undefined,
       customerPhone: phone.trim() || undefined,
-      customerId: paymentMethod === 'tab' ? tabCustomer?.id : undefined,
+      customerEmail: email.trim() || undefined,
+      customerId: tabCustomer ? tabCustomer.id : undefined,
       clientUuid,
+      discountCents: canDiscount && discountCents > 0 ? discountCents : undefined,
+      discountLabel: canDiscount && discountCents > 0 && discountLabel.trim() ? discountLabel.trim() : undefined,
+      redeemPoints: redeem > 0 && tabCustomer ? redeem : undefined,
     }
     try {
       const o = await api.post<Order>('/api/v1/orders/checkout', body)
       if (paymentMethod === 'mpesa' && o.status === 'PENDING') {
         onMpesa(o)
+      } else if (paymentMethod === 'paystack' && o.status === 'PENDING') {
+        onPaystack(o, email.trim())
       } else {
         onDone(o)
       }
     } catch (err: any) {
-      // Network failure → queue offline (cash only; M-Pesa needs a live
-      // connection to know push state).
+      // Network failure → queue offline (cash only; M-Pesa/Paystack need a
+      // live connection to know payment state).
       if (!navigator.onLine || /network|fetch/i.test(String(err))) {
         if (paymentMethod === 'cash') {
           try {
@@ -521,7 +734,7 @@ function ChargeModal({
 
   if (!open) return null
 
-  const quick = [totals.total, 100000, 200000, 500000, 1000000]
+  const quick = [tenderDue, 100000, 200000, 500000, 1000000]
 
   return (
     <Modal open={open} onClose={onClose} title="Charge" size="sm">
@@ -536,6 +749,8 @@ function ChargeModal({
             { key: 'cash' as const, label: 'Cash', icon: <Banknote size={15} strokeWidth={2.25} aria-hidden /> },
             { key: 'mpesa' as const, label: `M-Pesa${branding.mpesa_env === 'mock' ? ' (demo)' : ''}`, icon: <Smartphone size={15} strokeWidth={2.25} aria-hidden /> },
             { key: 'tab' as const, label: 'Tab', icon: <BookUser size={15} strokeWidth={2.25} aria-hidden /> },
+            ...(creditEnabled ? [{ key: 'credit' as const, label: 'Credit', icon: <Wallet size={15} strokeWidth={2.25} aria-hidden /> }] : []),
+            ...(paystackReady ? [{ key: 'paystack' as const, label: 'Card / M-M', icon: <CreditCard size={15} strokeWidth={2.25} aria-hidden /> }] : []),
           ]}
           value={method}
           onChange={setMethod}
@@ -572,11 +787,20 @@ function ChargeModal({
               </div>
             )}
           </>
-        ) : method === 'tab' ? (
+        ) : method === 'tab' || method === 'credit' ? (
           <>
-            <Field label="Tab customer" hint="Their limit is checked automatically.">
+            <Field
+              label={method === 'credit' ? 'Customer (store credit)' : 'Tab customer'}
+              hint={method === 'credit' ? 'Pays from their prepaid store credit.' : 'Their limit is checked automatically.'}
+            >
               <Input
-                value={tabCustomer ? `${tabCustomer.name} · owes ${formatMoney(tabCustomer.balanceCents)}` : tabQuery}
+                value={
+                  tabCustomer
+                    ? method === 'credit'
+                      ? `${tabCustomer.name} · credit ${formatMoney(creditOf(tabCustomer))}`
+                      : `${tabCustomer.name} · owes ${formatMoney(tabCustomer.balanceCents)}`
+                    : tabQuery
+                }
                 onChange={(e) => { setTabCustomer(null); setTabQuery(e.target.value) }}
                 placeholder="Type a name or phone…"
               />
@@ -594,22 +818,53 @@ function ChargeModal({
                       <span className="block text-[13px] font-bold text-ink">{c.name}</span>
                       <span className="block text-[11px] text-ink-subtle">{c.phone || 'no phone'}</span>
                     </span>
-                    <span className={`text-[12px] font-bold ${c.creditLimitCents <= 0 ? 'text-ink-subtle' : c.balanceCents >= c.creditLimitCents ? 'text-danger-text' : 'text-ink-muted'}`}>
-                      {c.creditLimitCents <= 0 ? 'cash only' : `owes ${formatMoney(c.balanceCents)} / ${formatMoney(c.creditLimitCents)}`}
+                    <span className={`text-[12px] font-bold ${
+                      method === 'credit'
+                        ? creditOf(c) > 0 ? 'text-paid-text' : 'text-ink-subtle'
+                        : c.creditLimitCents <= 0 ? 'text-ink-subtle' : c.balanceCents >= c.creditLimitCents ? 'text-danger-text' : 'text-ink-muted'
+                    }`}>
+                      {method === 'credit'
+                        ? creditOf(c) > 0 ? `${formatMoneyCompact(creditOf(c))} credit` : 'no credit'
+                        : c.creditLimitCents <= 0 ? 'cash only' : `owes ${formatMoney(c.balanceCents)} / ${formatMoney(c.creditLimitCents)}`}
                     </span>
                   </button>
                 ))}
               </div>
             )}
-            {tabCustomer && tabCustomer.creditLimitCents <= 0 && (
+            {method === 'credit' && tabCustomer && creditOf(tabCustomer) <= 0 && (
+              <p className="text-danger-text text-[13px] font-semibold">This customer has no store credit — top up from their profile first.</p>
+            )}
+            {method === 'tab' && tabCustomer && tabCustomer.creditLimitCents <= 0 && (
               <p className="text-danger-text text-[13px] font-semibold">This customer is cash-only — pick someone with credit.</p>
             )}
             {!online && (
-              <p className="text-pending-text text-[13px] font-bold">You're offline — tabs need the server for limit checks.</p>
+              <p className="text-pending-text text-[13px] font-bold">You're offline — {method === 'credit' ? 'store credit' : 'tabs'} need the server for checks.</p>
             )}
-            {method === 'tab' && !online && (
-              <p className="text-[11px] text-ink-subtle">Charge is disabled offline. Reconnect to use tabs.</p>
+            {!online && (
+              <p className="text-[11px] text-ink-subtle">Charge is disabled offline. Reconnect to use {method === 'credit' ? 'store credit' : 'tabs'}.</p>
             )}
+          </>
+        ) : method === 'paystack' ? (
+          <>
+            <Field label="Customer email (optional)" hint="Goes on the Paystack receipt.">
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                inputMode="email"
+                placeholder="customer@email.com"
+              />
+            </Field>
+            <div className="bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted space-y-1">
+              <p>A secure Paystack popup opens — the customer pays by card or mobile money.</p>
+              <p>If the popup closes early, the order stays pending and checkout can be reopened later.</p>
+              {!online && (
+                <p className="text-pending-text font-bold flex items-center gap-1.5">
+                  <AlertTriangle size={14} strokeWidth={2.5} aria-hidden />
+                  You're offline — Paystack needs a connection. Cash sales keep working.
+                </p>
+              )}
+            </div>
           </>
         ) : (
           <>
@@ -640,18 +895,188 @@ function ChargeModal({
           </>
         )}
 
+        {/* Order-level discount — permission-gated, all tenders. */}
+        {canDiscount && (
+          <div className="grid grid-cols-2 gap-2 border-t-2 border-line pt-3">
+            <Field label="Discount label" hint="Shown on the order.">
+              <Input value={discountLabel} onChange={(e) => setDiscountLabel(e.target.value)} placeholder="e.g. Staff 10%" />
+            </Field>
+            <Field label="Discount amount">
+              <MoneyInput value={discountCents} onCents={setDiscountCents} placeholder="0.00" />
+            </Field>
+            {discountCents > 0 && (
+              <p className="col-span-2 text-[12px] text-ink-muted -mt-1">
+                New total ≈ <strong className="text-ink tabular">{formatMoney(due)}</strong>
+                {!discountOk && <span className="text-danger-text font-semibold"> — discount must be less than the subtotal.</span>}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Loyalty redemption — needs an attached customer, the program on,
+            and loyalty.redeem. The backend caps redemption authoritatively. */}
+        {tabCustomer && loyaltyEnabled && canRedeem && (
+          <div className="border-2 border-line rounded-input p-3 bg-surface-muted space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[13px] font-bold text-ink flex items-center gap-1.5">
+                <Star size={14} strokeWidth={2.5} aria-hidden />
+                {tabCustomer.name} — {tabCustomer.loyaltyPoints} point{tabCustomer.loyaltyPoints === 1 ? '' : 's'}
+              </span>
+              <span className="text-[11px] text-ink-subtle">1 pt ≈ {formatMoneyCompact(100)}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setRedeem((r) => Math.max(0, r - 1))}
+                aria-label="Redeem one point less"
+                className="w-11 h-11 bg-surface border-2 border-line-strong rounded-input font-black text-ink active:translate-y-[1px] flex items-center justify-center"
+              >
+                <Minus size={15} strokeWidth={2.75} aria-hidden />
+              </button>
+              <Input
+                value={redeem === 0 ? '' : String(redeem)}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value.replace(/\D/g, ''), 10)
+                  setRedeem(isNaN(n) ? 0 : Math.min(n, tabCustomer.loyaltyPoints))
+                }}
+                inputMode="numeric"
+                placeholder="0"
+                className="text-center font-bold"
+                aria-label="Points to redeem"
+              />
+              <button
+                type="button"
+                onClick={() => setRedeem((r) => Math.min(tabCustomer!.loyaltyPoints, r + 1))}
+                aria-label="Redeem one more point"
+                className="w-11 h-11 bg-surface border-2 border-line-strong rounded-input font-black text-ink active:translate-y-[1px] flex items-center justify-center"
+              >
+                <Plus size={15} strokeWidth={2.75} aria-hidden />
+              </button>
+              {tabCustomer.loyaltyPoints > 0 && (
+                <Button size="sm" variant="ghost" onClick={() => setRedeem(tabCustomer!.loyaltyPoints)} className="shrink-0">
+                  All
+                </Button>
+              )}
+            </div>
+            {redeem > 0 && (
+              <p className="text-[12px] text-ink-muted">
+                ≈ {formatMoney(estRedeemCents)} off this order. The backend caps redemption at a max share of the total — extra points are trimmed automatically.
+              </p>
+            )}
+          </div>
+        )}
+
         {error && <p role="alert" className="text-danger-text text-sm font-semibold">{error}</p>}
 
         <Button
           variant="primary"
           size="lg"
           className="w-full h-16 text-xl"
-          disabled={busy || (method === 'cash' && !canCash) || (method === 'mpesa' && branding.payment_mode !== 'manual' && !normalizePhoneKe(phone)) || (method === 'tab' && (!online || !tabCustomer || tabCustomer!.creditLimitCents <= 0))}
+          disabled={
+            busy ||
+            (method === 'cash' && !canCash) ||
+            (canDiscount && !discountOk) ||
+            (method === 'mpesa' && branding.payment_mode !== 'manual' && !normalizePhoneKe(phone)) ||
+            ((method === 'tab' || method === 'credit') && (!online || !tabCustomer || (method === 'tab' ? tabCustomer!.creditLimitCents <= 0 : creditOf(tabCustomer!) <= 0))) ||
+            (method === 'paystack' && !online)
+          }
           onClick={() => checkout(method, method === 'mpesa' ? (branding.payment_mode as 'auto' | 'stk' | 'manual') : undefined)}
         >
-          {busy ? <Spinner className="border-t-brand-ink" /> : method === 'cash' ? `Take ${formatMoney(totals.total)}` : method === 'tab' ? `Charge ${formatMoney(totals.total)} to tab` : 'Charge via M-Pesa →'}
+          {busy
+            ? <Spinner className="border-t-brand-ink" />
+            : method === 'cash'
+              ? `Take ${formatMoney(tenderDue)}`
+              : method === 'tab'
+                ? `Charge ${formatMoney(tenderDue)} to tab`
+                : method === 'credit'
+                  ? `Take ${formatMoney(tenderDue)} from credit`
+                  : method === 'paystack'
+                    ? `Pay ${formatMoney(tenderDue)} via Paystack →`
+                    : 'Charge via M-Pesa →'}
         </Button>
         <p className="text-center text-[11px] text-ink-subtle">Served by {cashierName}</p>
+      </div>
+    </Modal>
+  )
+}
+
+// ---- ParkModal — freeze the current cart under a reference name so the
+// ---- till can serve the next customer. Nothing is priced or charged;
+// ---- the hold is resumed (or discarded) from the Parked drawer.
+
+function ParkModal({
+  open,
+  onClose,
+  onParked,
+}: {
+  open: boolean
+  onClose: () => void
+  onParked: (refName: string) => void
+}) {
+  const cart = useCart()
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const totals = cart.totals()
+
+  const defaultRef = () =>
+    cart.customerName.trim() || `Sale ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+
+  useEffect(() => {
+    if (open) {
+      setName(defaultRef())
+      setError('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  const park = async () => {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    const refName = name.trim() || defaultRef()
+    const body = {
+      refName,
+      cart: {
+        items: cart.lines.map((l) => ({ productId: l.productId, qty: l.qty, unitPriceCents: l.unitPriceCents })),
+        paymentMethod: 'cash' as const,
+        customerName: cart.customerName.trim() || undefined,
+        note: cart.note.trim() || undefined,
+      },
+    }
+    try {
+      await api.post('/api/v1/held-sales', body)
+      onParked(refName)
+    } catch (e: any) {
+      setError(e?.message || 'Could not park the sale')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Park this sale" size="sm" footer={
+      <>
+        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+        <Button variant="primary" onClick={park} disabled={busy || cart.lines.length === 0}>
+          {busy ? <Spinner className="border-t-brand-ink" /> : 'Park sale'}
+        </Button>
+      </>
+    }>
+      <div className="space-y-3">
+        <p className="text-sm text-ink-muted">
+          {totals.count} item{totals.count === 1 ? '' : 's'} · {formatMoney(totals.total)} — nothing is charged until the sale is resumed and completed.
+        </p>
+        <Field label="Reference name" hint="Find it again in the Parked drawer.">
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Grace — hoodies"
+            autoFocus
+            onKeyDown={(e) => e.key === 'Enter' && park()}
+          />
+        </Field>
+        {error && <p role="alert" className="text-danger-text text-sm font-semibold">{error}</p>}
       </div>
     </Modal>
   )

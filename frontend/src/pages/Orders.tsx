@@ -1,5 +1,7 @@
 // Orders — searchable history with a detail drawer, void with reason,
 // manual receipt completion for pending M-Pesa orders, receipt print link.
+// Voided orders surface their reason; discounts, redeemed points and
+// Paystack payments (card / M-Money via Paystack) render in the detail.
 
 import { useEffect, useMemo, useState } from 'react'
 import { api, Order } from '../lib/api'
@@ -9,7 +11,15 @@ import { ReceiptModal } from '../components/Receipt'
 import { useBranding } from '../stores/branding'
 import { centsToAmount, formatMoney } from '../lib/money'
 import { toast } from '../stores/toasts'
-import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer, BookUser } from 'lucide-react'
+import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer, BookUser, CreditCard, Wallet } from 'lucide-react'
+
+// Newer orders carry checkout extras the shared Order type doesn't declare
+// yet — optional locally so the shared type stays untouched.
+type OrderDetail = Order & {
+  discountCents?: number
+  discountLabel?: string
+  pointsRedeemed?: number
+}
 
 export function PaymentLabel({ method }: { method?: string }) {
   return method === 'cash' ? (
@@ -18,6 +28,10 @@ export function PaymentLabel({ method }: { method?: string }) {
     <span className="inline-flex items-center gap-1.5"><Smartphone size={14} strokeWidth={2.25} aria-hidden />M-Pesa</span>
   ) : method === 'account' ? (
     <span className="inline-flex items-center gap-1.5"><BookUser size={14} strokeWidth={2.25} aria-hidden />Tab</span>
+  ) : method === 'paystack' ? (
+    <span className="inline-flex items-center gap-1.5"><CreditCard size={14} strokeWidth={2.25} aria-hidden />Card / M-Money</span>
+  ) : method === 'credit' ? (
+    <span className="inline-flex items-center gap-1.5"><Wallet size={14} strokeWidth={2.25} aria-hidden />Store credit</span>
   ) : (
     <span>—</span>
   )
@@ -107,14 +121,20 @@ export function Orders() {
                       status={o.status === 'PAID' ? 'paid' : o.status === 'PENDING' ? 'pending' : 'void'}
                       label={o.discrepancy ? (o.status === 'PAID' ? 'Paid — check amount' : 'Pending — check amount') : undefined}
                     />
+                    {o.status === 'VOIDED' && o.voidReason && (
+                      <p className="mt-1 text-[11px] font-bold text-void-text max-w-44 truncate" title={o.voidReason}>
+                        Void reason: {o.voidReason}
+                      </p>
+                    )}
                   </td>
                   <td className="px-3 py-2.5 tabular text-ink-muted">{o.items.reduce((n, i) => n + i.qty, 0)}</td>
                   <td className="px-3 py-2.5 font-bold tabular text-ink">{centsToAmount(o.totalCents)}</td>
                   <td className="px-3 py-2.5 text-[13px] text-ink-muted">
-                    {pay?.method === 'cash' || pay?.method === 'mpesa' || pay?.method === 'account' ? (
+                    {pay ? (
                       <span>
                         <PaymentLabel method={pay.method} />
                         {pay.method === 'mpesa' && pay.mpesaReceipt ? <> · <span className="font-mono text-[12px] font-semibold text-ink" title="M-Pesa receipt code">{pay.mpesaReceipt}</span></> : null}
+                        {pay.method === 'paystack' && pay.mpesaReceipt ? <> · <span className="font-mono text-[12px] font-semibold text-ink" title="Paystack reference">{pay.mpesaReceipt}</span></> : null}
                       </span>
                     ) : '—'}
                   </td>
@@ -182,13 +202,13 @@ function OrderDrawer({
   onManual?: () => void
   onSettle?: () => void
 }) {
-  const [live, setLive] = useState(order)
+  const [live, setLive] = useState<OrderDetail>(order)
   const [receiptOpen, setReceiptOpen] = useState(false)
   const branding = useBranding((s) => s.branding)
   useEffect(() => {
     const t = setInterval(async () => {
       try {
-        setLive(await api.get<Order>(`/api/v1/orders/${order.id}`))
+        setLive(await api.get<OrderDetail>(`/api/v1/orders/${order.id}`))
       } catch { /* ignore */ }
     }, 3000)
     return () => clearInterval(t)
@@ -240,6 +260,18 @@ function OrderDrawer({
 
       <div className="mt-3 space-y-1 text-sm">
         <div className="flex justify-between"><span className="text-ink-muted">Subtotal</span><span className="tabular font-semibold">{centsToAmount(live.subtotalCents)}</span></div>
+        {!!live.discountCents && live.discountCents > 0 && (
+          <div className="flex justify-between">
+            <span className="text-ink-muted">Discount{live.discountLabel ? ` — ${live.discountLabel}` : ''}</span>
+            <span className="tabular font-semibold text-pending-text">−{centsToAmount(live.discountCents)}</span>
+          </div>
+        )}
+        {!!live.pointsRedeemed && live.pointsRedeemed > 0 && (
+          <div className="flex justify-between">
+            <span className="text-ink-muted">Points redeemed</span>
+            <span className="tabular font-semibold text-pending-text">{live.pointsRedeemed} pts</span>
+          </div>
+        )}
         <div className="flex justify-between"><span className="text-ink-muted">Tax</span><span className="tabular font-semibold">{centsToAmount(live.taxCents)}</span></div>
         <div className="flex justify-between border-t-2 border-line pt-1">
           <span className="font-bold">Total</span>
@@ -247,26 +279,42 @@ function OrderDrawer({
         </div>
       </div>
 
-      {live.payments.map((p) => (
-        <div key={p.id} className="mt-3 border-2 border-line rounded-input p-3 text-[13px]">
-          <div className="flex justify-between">
-            <span className="font-bold"><PaymentLabel method={p.method} /> <span className="text-ink-subtle font-normal">({p.mode || '—'})</span></span>
-            <StatusPill status={p.status === 'COMPLETED' ? 'paid' : p.status === 'PENDING' ? 'pending' : p.status === 'VOIDED' ? 'void' : 'danger'} label={p.status} />
+      {live.payments.map((p) => {
+        const failed = p.status !== 'COMPLETED' && p.status !== 'PENDING' && p.status !== 'VOIDED'
+        return (
+          <div key={p.id} className="mt-3 border-2 border-line rounded-input p-3 text-[13px]">
+            <div className="flex justify-between">
+              <span className="font-bold"><PaymentLabel method={p.method} /> <span className="text-ink-subtle font-normal">({p.mode || '—'})</span></span>
+              <StatusPill status={p.status === 'COMPLETED' ? 'paid' : p.status === 'PENDING' ? 'pending' : p.status === 'VOIDED' ? 'void' : 'danger'} label={p.status} />
+            </div>
+            <div className="mt-1 grid grid-cols-2 gap-x-3 text-ink-muted">
+              <span>Amount: <span className="tabular text-ink font-semibold">{centsToAmount(p.amountCents)}</span></span>
+              {p.phone && <span>Phone: <span className="tabular text-ink">{p.phone}</span></span>}
+              {p.email && <span className="truncate" title={p.email}>Email: <span className="text-ink">{p.email}</span></span>}
+              {p.mpesaReceipt && (
+                <span>
+                  {p.method === 'paystack' ? 'Ref: ' : 'Receipt: '}
+                  <span className="tabular text-ink font-bold">{p.mpesaReceipt}</span>
+                </span>
+              )}
+              {p.discrepancy && <span className="text-danger-text font-bold col-span-2 inline-flex items-center gap-1.5"><AlertTriangle size={13} strokeWidth={2.5} aria-hidden />Paid amount mismatch</span>}
+              {p.resultDesc && (
+                <span className={`col-span-2 truncate ${failed ? 'text-danger-text font-bold' : 'text-ink-subtle'}`}>
+                  {failed ? `Result: ${p.resultDesc}` : p.resultDesc}
+                </span>
+              )}
+            </div>
           </div>
-          <div className="mt-1 grid grid-cols-2 gap-x-3 text-ink-muted">
-            <span>Amount: <span className="tabular text-ink font-semibold">{centsToAmount(p.amountCents)}</span></span>
-            {p.phone && <span>Phone: <span className="tabular text-ink">{p.phone}</span></span>}
-            {p.mpesaReceipt && <span>Receipt: <span className="tabular text-ink font-bold">{p.mpesaReceipt}</span></span>}
-            {p.discrepancy && <span className="text-danger-text font-bold col-span-2 inline-flex items-center gap-1.5"><AlertTriangle size={13} strokeWidth={2.5} aria-hidden />Paid amount mismatch</span>}
-            {p.resultDesc && <span className="col-span-2 text-ink-subtle truncate">{p.resultDesc}</span>}
-          </div>
-        </div>
-      ))}
+        )
+      })}
 
       {live.voidReason && (
-        <p className="mt-3 text-[13px] text-void-text bg-void-bg border-2 border-line rounded-input p-2">
-          Voided: {live.voidReason}
-        </p>
+        <div className="mt-3 flex items-start gap-2 text-[13px] font-bold text-void-text bg-void-bg border-2 border-void-text/30 rounded-input p-3">
+          <AlertTriangle size={15} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
+          <span>
+            Voided{live.voidedAt ? ` ${new Date(live.voidedAt).toLocaleString()}` : ''} — reason: {live.voidReason}
+          </span>
+        </div>
       )}
 
       {receiptOpen && (

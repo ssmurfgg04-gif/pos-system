@@ -1,13 +1,46 @@
 // Inventory — products & categories CRUD, stock adjust, CSV import/export.
 // products.manage gates mutations; the page itself needs products.view.
+// Also hosts the category manager (add / inline rename / delete with the
+// 409 "still has products" guard) and product photo upload (≤2 MB raster
+// images via the public /products/:id/image route, thumbnails in the list).
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, downloadFile, Category, Product } from '../lib/api'
+import { api, downloadFile, isDemoSync, productImageUrl, Category, Product } from '../lib/api'
+import { demoProductImageUrl } from '../demo/backend'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Modal, MoneyInput, Select, Spinner, Table, Tabs } from '../components/ui'
 import { centsToAmount } from '../lib/money'
 import { toast } from '../stores/toasts'
-import { Package, Upload, Download, Plus, PackagePlus } from 'lucide-react'
+import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2 } from 'lucide-react'
+
+/** <img> src for a product photo. On a static/demo host the /image route
+ * doesn't exist, so the demo backend's in-memory data URL is used instead. */
+function productPhotoSrc(p: Product): string {
+  if (isDemoSync()) return demoProductImageUrl(p.id)
+  return productImageUrl(p)
+}
+
+/** Small lazy thumbnail with an icon placeholder when no photo exists. */
+function ProductThumb({ p }: { p: Product }) {
+  const [failed, setFailed] = useState(false)
+  const src = productPhotoSrc(p)
+  if (!src || failed) {
+    return (
+      <span className="w-10 h-10 shrink-0 rounded-input border-2 border-line bg-surface-muted flex items-center justify-center text-ink-subtle" aria-hidden>
+        <ImageIcon size={16} strokeWidth={2.25} />
+      </span>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="w-10 h-10 shrink-0 rounded-input border-2 border-line object-cover bg-surface-muted"
+    />
+  )
+}
 
 export function Inventory() {
   const canManage = useAuth((s) => !!s.user?.permissions.includes('products.manage'))
@@ -18,6 +51,10 @@ export function Inventory() {
   const [catFilter, setCatFilter] = useState('all')
   const [editing, setEditing] = useState<Product | 'new' | null>(null)
   const [stockFor, setStockFor] = useState<Product | null>(null)
+  const [newCat, setNewCat] = useState('')
+  const [addingCat, setAddingCat] = useState(false)
+  const [editCatId, setEditCatId] = useState<number | null>(null)
+  const [editCatName, setEditCatName] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = async () => {
@@ -53,6 +90,50 @@ export function Inventory() {
       load()
     } catch (e: any) {
       toast.error('Import failed', e?.message)
+    }
+  }
+
+  // ---- Category manager (products.manage) ----
+  const addCategory = async () => {
+    const name = newCat.trim()
+    if (!name || addingCat) return
+    setAddingCat(true)
+    try {
+      await api.post('/api/v1/categories', { name })
+      toast.success('Category added', name)
+      setNewCat('')
+      load()
+    } catch (e: any) {
+      toast.error('Could not add category', e?.message)
+    } finally {
+      setAddingCat(false)
+    }
+  }
+
+  const renameCategory = async (id: number) => {
+    const name = editCatName.trim()
+    if (!name) return
+    try {
+      await api.put(`/api/v1/categories/${id}`, { name })
+      toast.success('Category renamed', name)
+      setEditCatId(null)
+      load()
+    } catch (e: any) {
+      toast.error('Rename failed', e?.message)
+    }
+  }
+
+  const deleteCategory = async (c: Category) => {
+    try {
+      await api.del(`/api/v1/categories/${c.id}`)
+      toast.success('Category deleted', c.name)
+      load()
+    } catch (e: any) {
+      if (e?.status === 409) {
+        toast.error('Category still has products', 'Move or reassign its products first.')
+      } else {
+        toast.error('Delete failed', e?.message)
+      }
     }
   }
 
@@ -136,8 +217,13 @@ export function Inventory() {
               {filtered.map((p) => (
                 <tr key={p.id} className={p.active ? '' : 'opacity-50'}>
                   <td className="px-3 py-2.5">
-                    <p className="font-bold text-ink text-[13px] leading-tight">{p.name}</p>
-                    <p className="text-[11px] text-ink-subtle">{p.sku}{p.barcode ? ` · ${p.barcode}` : ''}</p>
+                    <div className="flex items-center gap-2.5">
+                      <ProductThumb p={p} />
+                      <div className="min-w-0">
+                        <p className="font-bold text-ink text-[13px] leading-tight">{p.name}</p>
+                        <p className="text-[11px] text-ink-subtle">{p.sku}{p.barcode ? ` · ${p.barcode}` : ''}</p>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-3 py-2.5 text-ink-muted text-[13px]">{p.categoryName}</td>
                   <td className="px-3 py-2.5 font-semibold tabular text-ink">{centsToAmount(p.priceCents)}</td>
@@ -168,16 +254,64 @@ export function Inventory() {
             </Table>
           )
         ) : (
-          <Table head={['Category', 'Slug', 'Products', ...(canManage ? [''] : [])]}>
-            {categories.map((c) => (
-              <tr key={c.id}>
-                <td className="px-3 py-2.5 font-bold text-ink text-[13px]">{c.name}</td>
-                <td className="px-3 py-2.5 text-ink-muted text-[13px] font-mono">{c.slug}</td>
-                <td className="px-3 py-2.5 tabular text-ink">{c.productCount ?? 0}</td>
-                {canManage && <td className="px-3 py-2.5"><CategoryEditor category={c} onSaved={load} /></td>}
-              </tr>
-            ))}
-          </Table>
+          <>
+            {canManage && (
+              <div className="px-4 py-3 border-b-2 border-line flex flex-wrap gap-2">
+                <Input
+                  value={newCat}
+                  onChange={(e) => setNewCat(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addCategory()}
+                  placeholder="New category name"
+                  className="flex-1 min-w-44"
+                />
+                <Button variant="primary" size="sm" onClick={addCategory} disabled={addingCat || !newCat.trim()}>
+                  {addingCat ? <Spinner className="w-4 h-4 border-t-brand-ink" /> : <Plus size={14} strokeWidth={2.5} aria-hidden />}
+                  Add category
+                </Button>
+              </div>
+            )}
+            <Table head={['Category', 'Slug', 'Products', ...(canManage ? [''] : [])]}>
+              {categories.map((c) => (
+                <tr key={c.id}>
+                  <td className="px-3 py-2.5 font-bold text-ink text-[13px]">
+                    {editCatId === c.id ? (
+                      <span className="flex items-center gap-1.5">
+                        <Input
+                          value={editCatName}
+                          onChange={(e) => setEditCatName(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && renameCategory(c.id)}
+                          className="max-w-52"
+                          autoFocus
+                        />
+                        <Button size="sm" variant="primary" onClick={() => renameCategory(c.id)} disabled={!editCatName.trim()}>
+                          Save
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditCatId(null)}>
+                          Cancel
+                        </Button>
+                      </span>
+                    ) : c.name}
+                  </td>
+                  <td className="px-3 py-2.5 text-ink-muted text-[13px] font-mono">{c.slug}</td>
+                  <td className="px-3 py-2.5 tabular text-ink">{c.productCount ?? 0}</td>
+                  {canManage && (
+                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => { setEditCatId(c.id); setEditCatName(c.name) }} disabled={editCatId === c.id}>
+                          <Pencil size={14} strokeWidth={2.5} aria-hidden />
+                          Rename
+                        </Button>
+                        <Button size="sm" variant="ghost" className="text-danger-text hover:bg-danger-bg" onClick={() => deleteCategory(c)}>
+                          <Trash2 size={14} strokeWidth={2.5} aria-hidden />
+                          Delete
+                        </Button>
+                      </span>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </Table>
+          </>
         )}
       </Card>
 
@@ -273,17 +407,36 @@ function ProductModal({
   })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Product photos: existing products upload straight away; new products
+  // keep the file until create succeeds, then upload to the fresh id.
+  const [pendingPhoto, setPendingPhoto] = useState<File | null>(null)
+  const [photoBusy, setPhotoBusy] = useState(false)
+  const [previewSrc, setPreviewSrc] = useState(product ? productPhotoSrc(product) : '')
+  const [hasPhoto, setHasPhoto] = useState<boolean | null>(product ? null : false)
 
   const save = async () => {
     setBusy(true)
     setError('')
     try {
+      let savedId = product?.id ?? 0
       if (product) {
         await api.put(`/api/v1/products/${product.id}`, form)
         toast.success('Product updated', form.name)
       } else {
-        await api.post('/api/v1/products', form)
+        const created = await api.post<Product>('/api/v1/products', form)
+        savedId = created?.id ?? 0
         toast.success('Product created', form.name)
+      }
+      if (pendingPhoto && savedId) {
+        try {
+          const fd = new FormData()
+          fd.append('file', pendingPhoto)
+          await api.form(`/api/v1/products/${savedId}/image`, fd)
+          toast.success('Photo uploaded', form.name)
+        } catch (e: any) {
+          // The product itself is saved — surface the photo failure softly.
+          toast.error('Photo upload failed', e?.message)
+        }
       }
       onSaved()
       onClose()
@@ -291,6 +444,51 @@ function ProductModal({
       setError(e?.message || 'Save failed')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const pickPhoto = async (f: File | undefined) => {
+    if (!f) return
+    if (f.size > 2 * 1024 * 1024) {
+      toast.error('Image too large', 'Maximum 2 MB (png, jpeg, webp, gif)')
+      return
+    }
+    if (!product) {
+      setPendingPhoto(f)
+      return
+    }
+    setPhotoBusy(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', f)
+      const res = await api.form<{ imageUrl: string }>(`/api/v1/products/${product.id}/image`, fd)
+      setPreviewSrc(res.imageUrl) // demo returns the data URL; real a cache-busted path
+      setHasPhoto(true)
+      toast.success('Photo updated', product.name)
+      onSaved()
+    } catch (e: any) {
+      toast.error('Photo upload failed', e?.message)
+    } finally {
+      setPhotoBusy(false)
+    }
+  }
+
+  const removePhoto = async () => {
+    if (!product) {
+      setPendingPhoto(null)
+      return
+    }
+    setPhotoBusy(true)
+    try {
+      await api.del(`/api/v1/products/${product.id}/image`)
+      setPreviewSrc('')
+      setHasPhoto(false)
+      toast.success('Photo removed', product.name)
+      onSaved()
+    } catch (e: any) {
+      toast.error('Could not remove photo', e?.message)
+    } finally {
+      setPhotoBusy(false)
     }
   }
 
@@ -304,6 +502,81 @@ function ProductModal({
       </>
     }>
       <div className="grid sm:grid-cols-2 gap-3">
+        <div className="sm:col-span-2">
+          <Field
+            label="Photo"
+            hint="PNG, JPEG, WebP or GIF — max 2 MB. Shows on the till and inventory."
+          >
+            <div className="flex gap-3 items-start">
+              <div className="w-28 h-28 shrink-0 rounded-input border-2 border-line-strong bg-surface-muted flex items-center justify-center overflow-hidden" aria-hidden>
+                {previewSrc && hasPhoto !== false ? (
+                  <img
+                    src={previewSrc}
+                    alt={`Photo of ${form.name || 'product'}`}
+                    className="w-full h-full object-contain"
+                    onError={() => setHasPhoto(false)}
+                    onLoad={() => setHasPhoto(true)}
+                  />
+                ) : (
+                  <ImageIcon size={28} strokeWidth={2} className="text-ink-subtle" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0 space-y-2">
+                {product ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label>
+                      <Button size="sm" variant="secondary" disabled={photoBusy}>
+                        <Upload size={14} strokeWidth={2.5} aria-hidden />
+                        {hasPhoto ? 'Replace photo' : 'Upload photo'}
+                      </Button>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        className="hidden"
+                        onChange={(e) => { pickPhoto(e.target.files?.[0]); e.currentTarget.value = '' }}
+                      />
+                    </label>
+                    {hasPhoto && (
+                      <Button size="sm" variant="ghost" className="text-danger-text hover:bg-danger-bg" onClick={removePhoto} disabled={photoBusy}>
+                        <Trash2 size={14} strokeWidth={2.5} aria-hidden />
+                        Remove
+                      </Button>
+                    )}
+                    {photoBusy && <Spinner />}
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label>
+                      <Button size="sm" variant="secondary">
+                        <Upload size={14} strokeWidth={2.5} aria-hidden />
+                        Choose photo
+                      </Button>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0]
+                          if (f && f.size > 2 * 1024 * 1024) {
+                            toast.error('Image too large', 'Maximum 2 MB (png, jpeg, webp, gif)')
+                            e.currentTarget.value = ''
+                            return
+                          }
+                          setPendingPhoto(f ?? null)
+                          e.currentTarget.value = ''
+                        }}
+                      />
+                    </label>
+                    {pendingPhoto && <span className="text-[12px] text-ink-muted truncate max-w-44">{pendingPhoto.name}</span>}
+                  </div>
+                )}
+                <p className="text-[11px] text-ink-subtle">
+                  {product ? 'Photos are public (like the brand logo) and served cache-busted.' : 'The photo uploads right after the product is created.'}
+                </p>
+              </div>
+            </div>
+          </Field>
+        </div>
         <div className="sm:col-span-2">
           <Field label="Name">
             <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus required />
@@ -344,52 +617,6 @@ function ProductModal({
         </label>
         {error && <p role="alert" className="sm:col-span-2 text-danger-text text-sm font-semibold">{error}</p>}
       </div>
-    </Modal>
-  )
-}
-
-function CategoryEditor({ category, onSaved }: { category: Category; onSaved: () => void }) {
-  const [open, setOpen] = useState(false)
-  const [name, setName] = useState(category.name)
-  const [error, setError] = useState('')
-
-  const save = async () => {
-    try {
-      await api.put(`/api/v1/categories/${category.id}`, { name })
-      toast.success('Category renamed', name)
-      setOpen(false)
-      onSaved()
-    } catch (e: any) {
-      setError(e?.message)
-    }
-  }
-
-  const remove = async () => {
-    try {
-      await api.del(`/api/v1/categories/${category.id}`)
-      toast.success('Category deleted')
-      onSaved()
-    } catch (e: any) {
-      setError(e?.message)
-    }
-  }
-
-  return (
-    <Modal open={open} onClose={() => setOpen(false)} title="Category" size="sm" footer={
-      <>
-        <Button variant="danger" size="sm" onClick={remove}>Delete</Button>
-        <Button variant="primary" size="sm" onClick={save} disabled={!name.trim()}>Rename</Button>
-      </>
-    }>
-      {open && (
-        <>
-          <Field label="Name">
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
-          </Field>
-          {error && <p role="alert" className="text-danger-text text-sm font-semibold mt-2">{error}</p>}
-        </>
-      )}
-      <div className="hidden">{category.slug}</div>
     </Modal>
   )
 }
