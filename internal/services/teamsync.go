@@ -487,7 +487,46 @@ func (s *Service) deviceName() string {
         return name
 }
 
+// fetchDevicesRPC pulls the team roster through the identity-checked RPC.
+func (c *syncClient) fetchDevicesRPC(s *Service) ([]models.TeamDevice, error) {
+        var out struct {
+                OK      bool   `json:"ok"`
+                Error   string `json:"error"`
+                Devices []struct {
+                        DeviceID   string `json:"device_id"`
+                        DeviceName string `json:"device_name"`
+                        AppVersion string `json:"app_version"`
+                        LastSeen   string `json:"last_seen"`
+                        Approved   bool   `json:"approved"`
+                        ThisDevice bool   `json:"this_device"`
+                } `json:"devices"`
+        }
+        if err := rpcCall(c.base, "sync_roster", map[string]any{
+                "p_device_id": c.device, "p_secret_hash": c.secretHash,
+        }, &out); err != nil {
+                return nil, err
+        }
+        if !out.OK {
+                return nil, fmt.Errorf("roster: %s", out.Error)
+        }
+        roster := make([]models.TeamDevice, 0, len(out.Devices))
+        for _, d := range out.Devices {
+                roster = append(roster, models.TeamDevice{
+                        DeviceID:   d.DeviceID,
+                        DeviceName: d.DeviceName,
+                        AppVersion: d.AppVersion,
+                        LastSeen:   d.LastSeen,
+                        Approved:   d.Approved,
+                        ThisDevice: d.ThisDevice || d.DeviceID == c.device,
+                })
+        }
+        return roster, nil
+}
+
 func (c *syncClient) fetchDevices(s *Service) ([]models.TeamDevice, error) {
+        if c.mode == "rpc" {
+                return c.fetchDevicesRPC(s)
+        }
         q := url.Values{}
         q.Set("team_code", "eq." + c.team)
         q.Set("order", "last_seen.desc")

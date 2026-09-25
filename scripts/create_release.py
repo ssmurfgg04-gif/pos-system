@@ -32,6 +32,8 @@ LEGACY = {"ledgerpos-linux-x64.tar.gz"}
 
 NOTES = """LedgerPOS {v} — the point of sale that installs itself.
 
+**New in 1.1.0:** every till now links itself to the team automatically (no codes, no keys — it finds its team in the cloud database), split & mixed tender (part cash, part M-Pesa/card), stocktake with variance report, gift cards (sell value, customer redeems the code to store credit), barcode label printing, one-paste cloud connection. See docs/REMOTE-SETUP.md.
+
 Download the file for your machine, double-click it, start selling. The whole shop — stock, till, M-Pesa, KRA reports — runs on that machine. No servers to configure, nothing to type into a terminal, works when the internet doesn't.
 
 | File | For |
