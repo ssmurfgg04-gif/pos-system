@@ -523,7 +523,8 @@ export interface TeamMember extends User {
 }
 
 export interface DashboardConfig {
-  hideNav?: string[]
+  /** Route prefixes hidden from this role's nav (Go wire format: hiddenNav). */
+  hiddenNav?: string[]
   widgets?: { key: string; visible: boolean }[]
 }
 

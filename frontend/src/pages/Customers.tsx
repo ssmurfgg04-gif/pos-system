@@ -1,25 +1,44 @@
-// Customers — tabs & credit. A customer with a credit limit can take goods
-// now and pay later; the ledger is the audit trail (charges, payments,
-// adjustments, loyalty). Cashiers see balances and take payments;
-// managing customers needs customers.manage.
+// Customers — tabs, credit limits & store credit. A customer with a credit
+// limit can take goods now and pay later; store credit is prepaid money the
+// shop owes them (topped up here, redeemed at checkout). The ledger is the
+// audit trail (charges, payments, adjustments, loyalty, credit top-ups and
+// redemptions). Cashiers see balances and take payments; managing customers
+// needs customers.manage, topping up credit needs credit.manage.
 
 import { useEffect, useState } from 'react'
 import { api, Customer, LedgerEntry } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { formatMoney } from '../lib/money'
-import { Button, Card, EmptyState, Field, Input, Modal, Spinner, StatusPill, Table } from '../components/ui'
+import { Button, Card, EmptyState, Field, Input, Modal, Spinner, StatusPill, Table, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
 import { BookUser } from 'lucide-react'
+
+// Older backends may not send the prepaid balance yet — optional locally so
+// the shared Customer type stays untouched.
+type CustomerRow = Customer & { storeCreditCents?: number }
+
+// Ledger kind labels; credit entries get their own colours (green = money
+// the shop owes the customer went UP, amber = redeemed at checkout).
+const KIND_META: Record<LedgerEntry['kind'], { label: string; cls?: string }> = {
+  charge: { label: 'Charge' },
+  payment: { label: 'Payment' },
+  adjustment: { label: 'Adjustment' },
+  loyalty: { label: 'Loyalty' },
+  credit_topup: { label: 'Credit top-up', cls: 'bg-paid-bg text-paid-text' },
+  credit_redeem: { label: 'Credit redeemed', cls: 'bg-pending-bg text-pending-text' },
+}
 
 export function Customers() {
   const { can } = useAuth()
   const manage = can('customers.manage')
-  const [customers, setCustomers] = useState<Customer[] | null>(null)
+  const canCredit = can('credit.manage')
+  const [customers, setCustomers] = useState<CustomerRow[] | null>(null)
   const [search, setSearch] = useState('')
-  const [editing, setEditing] = useState<Customer | 'new' | null>(null)
-  const [ledgerFor, setLedgerFor] = useState<Customer | null>(null)
+  const [editing, setEditing] = useState<CustomerRow | 'new' | null>(null)
+  const [ledgerFor, setLedgerFor] = useState<CustomerRow | null>(null)
   const [ledger, setLedger] = useState<LedgerEntry[] | null>(null)
-  const [payFor, setPayFor] = useState<Customer | null>(null)
+  const [payFor, setPayFor] = useState<CustomerRow | null>(null)
+  const [creditFor, setCreditFor] = useState<CustomerRow | null>(null)
 
   const load = async (q = search) => {
     try {
@@ -60,7 +79,7 @@ export function Customers() {
         ) : customers.length === 0 ? (
           <EmptyState icon={<BookUser size={24} strokeWidth={2.25} />} title="No customers" />
         ) : (
-          <Table head={['Customer', 'Balance', 'Limit', 'Loyalty', 'Status', '']}>
+          <Table head={['Customer', 'Balance', 'Store credit', 'Limit', 'Loyalty', 'Status', '']}>
             {customers.map((c) => (
               <tr key={c.id} className={c.active ? '' : 'opacity-50'}>
                 <td className="px-3 py-2.5">
@@ -69,6 +88,9 @@ export function Customers() {
                 </td>
                 <td className={`px-3 py-2.5 text-[13px] font-bold ${c.balanceCents > 0 ? 'text-danger-text' : 'text-ink-muted'}`}>
                   {formatMoney(c.balanceCents)}
+                </td>
+                <td className={`px-3 py-2.5 text-[13px] font-bold ${(c.storeCreditCents ?? 0) > 0 ? 'text-paid-text' : 'text-ink-subtle'}`}>
+                  {c.storeCreditCents !== undefined ? formatMoney(c.storeCreditCents) : '—'}
                 </td>
                 <td className="px-3 py-2.5 text-[13px] text-ink-muted">
                   {c.creditLimitCents > 0 ? formatMoney(c.creditLimitCents) : 'cash only'}
@@ -80,6 +102,7 @@ export function Customers() {
                 <td className="px-3 py-2.5 text-right whitespace-nowrap">
                   <span className="inline-flex items-center gap-1">
                     <Button size="sm" variant="ghost" onClick={() => openLedger(c)}>Ledger</Button>
+                    {canCredit && <Button size="sm" variant="ghost" onClick={() => setCreditFor(c)}>Top up credit</Button>}
                     {c.balanceCents > 0 && <Button size="sm" variant="ghost" onClick={() => setPayFor(c)}>Pay</Button>}
                     {manage && <Button size="sm" variant="ghost" onClick={() => setEditing(c)}>Edit</Button>}
                   </span>
@@ -101,23 +124,44 @@ export function Customers() {
           <EmptyState icon={<BookUser size={24} strokeWidth={2.25} />} title="No entries yet" />
         ) : (
           <Table head={['When', 'Kind', 'Amount', 'Points', 'Note']}>
-            {ledger.map((e) => (
-              <tr key={e.id}>
-                <td className="px-3 py-2 text-[12px] text-ink-subtle">{e.createdAt}</td>
-                <td className="px-3 py-2 text-[12px] font-bold text-ink capitalize">{e.kind}</td>
-                <td className={`px-3 py-2 text-[12px] font-bold ${e.amountCents > 0 ? 'text-danger-text' : 'text-paid-text'}`}>
-                  {e.amountCents > 0 ? '+' : ''}{formatMoney(e.amountCents)}
-                </td>
-                <td className="px-3 py-2 text-[12px] text-ink-muted">{e.pointsDelta > 0 ? `+${e.pointsDelta}` : '—'}</td>
-                <td className="px-3 py-2 text-[12px] text-ink-muted max-w-48 truncate">{e.note}</td>
-              </tr>
-            ))}
+            {ledger.map((e) => {
+              const kind = KIND_META[e.kind] ?? { label: e.kind }
+              const isCredit = e.kind === 'credit_topup' || e.kind === 'credit_redeem'
+              return (
+                <tr key={e.id}>
+                  <td className="px-3 py-2 text-[12px] text-ink-subtle">{e.createdAt}</td>
+                  <td className="px-3 py-2">
+                    {kind.cls ? (
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-pill text-[11px] font-bold ${kind.cls}`}>
+                        {kind.label}
+                      </span>
+                    ) : (
+                      <span className="text-[12px] font-bold text-ink">{kind.label}</span>
+                    )}
+                  </td>
+                  <td className={`px-3 py-2 text-[12px] font-bold ${isCredit ? kind.cls : e.amountCents > 0 ? 'text-danger-text' : 'text-paid-text'}`}>
+                    {e.amountCents > 0 ? '+' : ''}{formatMoney(e.amountCents)}
+                  </td>
+                  <td className="px-3 py-2 text-[12px] text-ink-muted">{e.pointsDelta > 0 ? `+${e.pointsDelta}` : '—'}</td>
+                  <td className="px-3 py-2 text-[12px] text-ink-muted max-w-48 truncate">{e.note}</td>
+                </tr>
+              )
+            })}
           </Table>
         )}
       </Modal>
 
       <Modal open={payFor !== null} onClose={() => setPayFor(null)} title={payFor ? `Take payment — ${payFor.name}` : 'Take payment'}>
         {payFor && <PaymentForm customer={payFor} onDone={() => { setPayFor(null); load() }} />}
+      </Modal>
+
+      <Modal
+        open={creditFor !== null}
+        onClose={() => setCreditFor(null)}
+        title={creditFor ? `Top up credit — ${creditFor.name}` : 'Top up credit'}
+        size="sm"
+      >
+        {creditFor && <CreditTopUpForm customer={creditFor} onDone={() => { setCreditFor(null); load() }} />}
       </Modal>
     </div>
   )
@@ -214,6 +258,53 @@ function PaymentForm({ customer, onDone }: { customer: Customer; onDone: () => v
       </Field>
       <Button variant="primary" size="lg" className="w-full" onClick={pay} disabled={busy}>
         {busy ? <Spinner /> : 'Record payment'}
+      </Button>
+    </div>
+  )
+}
+
+// Prepaid store credit: money the customer has paid up front that the shop
+// owes them. Needs credit.manage. The server records a credit_topup ledger
+// entry and returns the updated customer.
+function CreditTopUpForm({ customer, onDone }: { customer: CustomerRow; onDone: () => void }) {
+  const [amount, setAmount] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const topUp = async () => {
+    const cents = Math.round(Number(amount || '0') * 100)
+    if (!(cents > 0)) {
+      toast.error('Enter an amount')
+      return
+    }
+    setBusy(true)
+    try {
+      await api.post<Customer>(`/api/v1/customers/${customer.id}/credit-topup`, { amountCents: cents, note: note.trim() })
+      toast.success('Credit topped up', `${customer.name} — ${formatMoney(cents)}`)
+      onDone()
+    } catch (e: any) {
+      toast.error('Top-up failed', e?.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[13px] text-ink-muted">
+        Store credit is prepaid money the shop owes the customer — they spend it at checkout.
+        {customer.storeCreditCents !== undefined && (
+          <> Current balance: <strong className="text-paid-text">{formatMoney(customer.storeCreditCents)}</strong>.</>
+        )}
+      </p>
+      <Field label="Amount received (KES)">
+        <Input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" autoFocus placeholder="0.00" />
+      </Field>
+      <Field label="Note (optional)" hint="Printed in the ledger, e.g. cash received, refund issued as credit.">
+        <Textarea value={note} onChange={(e) => setNote(e.target.value)} />
+      </Field>
+      <Button variant="primary" size="lg" className="w-full" onClick={topUp} disabled={busy}>
+        {busy ? <Spinner /> : 'Top up credit'}
       </Button>
     </div>
   )

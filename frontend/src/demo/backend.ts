@@ -21,6 +21,50 @@ const LATENCY = [90, 260] as const
 
 let db: DemoDB | null = null
 
+// ---- Retail expansion (v8/v9 server parity) ----
+
+interface DemoHeldSale {
+  id: number
+  refName: string
+  items: { productId: number; qty: number; unitPriceCents?: number }[]
+  customerId: number
+  customerName: string
+  note: string
+  deviceId: string
+  createdBy: number
+  createdByName: string
+  createdAt: string
+}
+
+interface DemoVoidReason {
+  id: number
+  label: string
+  active: boolean
+  sortOrder: number
+}
+
+/** The demo DB gains retail collections; older stored seeds migrate lazily. */
+type DemoDBX = DemoDB & {
+  voidReasons?: DemoVoidReason[]
+  heldSales?: DemoHeldSale[]
+  productImages?: Record<string, string>
+}
+
+const DEFAULT_VOID_REASONS = [
+  'Wrong item', 'Customer changed mind', 'Duplicate order',
+  'Price dispute', 'Out of stock', 'Training / test',
+]
+
+// v9 added permission keys; the seeded catalog (and demo.test's 20-perm
+// assertion on buildSeed) stays untouched — they union in at runtime.
+const RETAIL_PERMS = [
+  { key: 'pos.hold', group: 'Selling', label: 'Park and resume sales' },
+  { key: 'payments.apply_discount', group: 'Payments', label: 'Apply order discounts' },
+  { key: 'loyalty.redeem', group: 'Payments', label: 'Redeem loyalty points as payment' },
+  { key: 'credit.manage', group: 'Payments', label: 'Top up and take store credit payments' },
+]
+const FULL_PERMS = [...PERMISSION_CATALOG, ...RETAIL_PERMS.filter((r) => !PERMISSION_CATALOG.some((p) => p.key === r.key))]
+
 function load(): DemoDB {
   if (db) return db
   try {
@@ -37,6 +81,7 @@ function load(): DemoDB {
     /* corrupted — reseed */
   }
   db = buildSeed()
+  migrateDemo(db)
   persist()
   return db
 }
@@ -98,6 +143,63 @@ function migrateDemo(d: DemoDB) {
     d.seq.take = d.stockTakes.length + 1
     d.seq.takeItem = 1
     dirty = true
+  }
+  // ---- Retail expansion: reason catalog, parked sales, product photos,
+  // store-credit wallets, program settings defaults (idempotent).
+  const x = d as DemoDBX
+  if (!Array.isArray(x.voidReasons) || x.voidReasons.length === 0) {
+    x.voidReasons = DEFAULT_VOID_REASONS.map((label, i) => ({ id: i + 1, label, active: true, sortOrder: i + 1 }))
+    dirty = true
+  }
+  if ((d.seq as any).voidReason === undefined) {
+    ;(d.seq as any).voidReason = x.voidReasons!.length + 1
+    dirty = true
+  }
+  if (!Array.isArray(x.heldSales)) {
+    x.heldSales = []
+    dirty = true
+  }
+  if ((d.seq as any).held === undefined) {
+    ;(d.seq as any).held = 1
+    dirty = true
+  }
+  if (!x.productImages || typeof x.productImages !== 'object') {
+    x.productImages = {}
+    dirty = true
+  }
+  for (const c of d.customers) {
+    if (typeof (c as any).storeCreditCents !== 'number') {
+      ;(c as any).storeCreditCents = 0
+      dirty = true
+    }
+  }
+  const settingsDefaults: Record<string, string> = {
+    credit_enabled: 'true',
+    loyalty_enabled: 'true',
+    loyalty_point_cents: '100',
+    loyalty_max_percent: '50',
+    loyalty_earn_per_cents: '10000',
+  }
+  for (const [k, v] of Object.entries(settingsDefaults)) {
+    if (d.settings[k] === undefined) {
+      d.settings[k] = v
+      dirty = true
+    }
+  }
+  // v9 server parity: union the new retail permissions into existing roles
+  // (Admin gains everything new; Cashier gains the till-side additions).
+  for (const role of d.roles) {
+    const extra = role.name === 'Admin'
+      ? RETAIL_PERMS.map((r) => r.key)
+      : role.name === 'Cashier'
+        ? ['payments.apply_discount', 'loyalty.redeem', 'credit.manage']
+        : []
+    for (const k of extra) {
+      if (!role.permissions.includes(k)) {
+        role.permissions.push(k)
+        dirty = true
+      }
+    }
   }
   if (d.v < 3) {
     d.v = 3
@@ -194,6 +296,9 @@ function orderDTO(o: DemoOrder) {
   return {
     id: o.id, number: o.number, status: o.status,
     subtotalCents: o.subtotalCents, taxCents: o.taxCents, totalCents: o.totalCents,
+    discountCents: (o as any).discountCents || 0,
+    discountLabel: (o as any).discountLabel || '',
+    pointsRedeemed: (o as any).pointsRedeemed || 0,
     cashierId: o.cashierId, cashierName: u ? u.fullName || u.username : '',
     customerName: o.customerName, customerId: o.customerId || 0, note: o.note, clientUuid: o.clientUuid,
     discrepancy: o.discrepancy, createdAt: o.createdAt, paidAt: o.paidAt,
@@ -223,11 +328,6 @@ function postLedger(customerId: number, orderId: number, kind: DemoLedgerEntry['
   return e
 }
 
-/** Loyalty: 1 point per 100 KES of paid sales (server parity). */
-function loyaltyFor(totalCents: number) {
-  return Math.floor(totalCents / 10000)
-}
-
 function settingsSnapshot() {
   const out: Record<string, any> = {}
   const allowed = ALLOWED_KEYS
@@ -249,6 +349,7 @@ const ALLOWED_KEYS = new Set([
   'offsite_enabled', 'offsite_endpoint', 'offsite_bucket', 'offsite_region',
   'offsite_access_key', 'offsite_secret_key', 'offsite_prefix', 'offsite_keep',
   'offsite_passphrase', 'onboarding_done', 'update_channel', 'update_api_base',
+  'credit_enabled', 'loyalty_enabled', 'loyalty_point_cents', 'loyalty_max_percent', 'loyalty_earn_per_cents',
 ])
 
 function isSecretKey(k: string) {
@@ -316,7 +417,16 @@ function adjustStock(productId: number, delta: number) {
   if (p && p.trackStock) p.stockQty = Math.max(0, p.stockQty + delta)
 }
 
-function completeOrder(orderId: number, opts: { receipt?: string; method: 'cash' | 'mpesa'; mode: string; amountCents?: number }) {
+/** Store-credit ledger rows (kinds the seed type doesn't know about). */
+function postCreditLedger(d: DemoDB, customerId: number, orderId: number, kind: 'credit_topup' | 'credit_redeem', amountCents: number, note: string, by: number) {
+  d.ledger.push({
+    id: d.seq.ledger++, customerId, orderId,
+    kind: kind as unknown as DemoLedgerEntry['kind'],
+    amountCents, pointsDelta: 0, note, createdBy: by, createdAt: nowIso(),
+  })
+}
+
+function completeOrder(orderId: number, opts: { receipt?: string; method: 'cash' | 'mpesa' | 'credit'; mode: string; amountCents?: number }) {
   const d = load()
   const o = d.orders.find((x) => x.id === orderId)
   if (!o || o.status !== 'PENDING') return
@@ -333,6 +443,41 @@ function completeOrder(orderId: number, opts: { receipt?: string; method: 'cash'
   }
   // Guarded stock decrement (never double-deduct: only PENDING→PAID passes).
   for (const it of o.items) adjustStock(it.productId, -it.qty)
+  // Loyalty earns on EVERY paid order tied to a customer (server parity).
+  if (o.customerId && (d.settings.loyalty_enabled ?? 'true') !== 'false') {
+    const per = Math.round(Number(d.settings.loyalty_earn_per_cents))
+    const earn = Math.floor(o.totalCents / (per > 0 ? per : 10000))
+    if (earn > 0) {
+      postLedger(o.customerId, o.id, 'loyalty', 0, earn, `loyalty earned ${o.number}`, o.cashierId)
+    }
+  }
+}
+
+// ---- product photo helpers (demo stores data URLs in-memory) ----
+
+function sniffedImage(b: Uint8Array): boolean {
+  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return true // png
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true // jpeg
+  const head6 = String.fromCharCode(...b.slice(0, 6))
+  if (b.length >= 6 && (head6 === 'GIF87a' || head6 === 'GIF89a')) return true // gif
+  if (b.length >= 12 && String.fromCharCode(...b.slice(8, 12)) === 'WEBP') return true // webp
+  return false
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return btoa(bin)
+}
+
+/** In-memory photo for a product (data URL or ''). Demo <img> srcs can't
+ * hit the real /image route on a static host, so the UI reads this. */
+export function demoProductImageUrl(productId: number): string {
+  const x = load() as DemoDBX
+  return x.productImages?.[String(productId)] || ''
 }
 
 /** Simulate the M-Pesa STK lifecycle (mock provider semantics). */
@@ -527,6 +672,14 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   if (m === 'GET' && p === '/branding') return brandingDTO() as T
   if (m === 'POST' && p === '/payments/mpesa/callback') return { ResultCode: 0 } as T
 
+  // Public product photo (like the real route — <img> tags can't auth).
+  const pubImg = p.match(/^\/products\/(\d+)\/image$/)
+  if (m === 'GET' && pubImg) {
+    const dataUrl = (d as DemoDBX).productImages?.[pubImg[1]] || ''
+    if (!dataUrl) throw new ApiError(404, 'no image')
+    return dataUrl as T
+  }
+
   // ---------- everything else needs auth ----------
   const { user, perms } = userFromToken()
 
@@ -538,6 +691,24 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   }
 
   if (m === 'GET' && p === '/me') return userDTO(user) as T
+
+  // Tender capabilities snapshot (public identifiers only — server parity).
+  if (m === 'GET' && p === '/payments/config') {
+    return {
+      paystack: {
+        enabled: false, publicKey: '',
+        currency: String(d.settings.currency_code || 'KES').toUpperCase(),
+        callbackUrl: '', configured: false,
+      },
+      mpesa: {
+        env: d.settings.mpesa_env || 'mock',
+        till: d.settings.till_number || '',
+        paybill: d.settings.paybill_number || '',
+      },
+      creditEnabled: (d.settings.credit_enabled ?? 'true') !== 'false',
+      loyaltyEnabled: (d.settings.loyalty_enabled ?? 'true') !== 'false',
+    } as T
+  }
 
   // products & categories
   if (m === 'GET' && p === '/products') return d.products.map(productDTO) as T
@@ -605,6 +776,45 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     audit(user.id, user.username, 'STOCK_ADJUSTED', 'product', String(prod.id), `${delta > 0 ? '+' : ''}${delta} ${body?.reason || ''}`.trim())
     persist()
     return productDTO(prod) as T
+  }
+  // Product photo upload (multipart 'file', ≤2 MB, raster images only —
+  // stored as a data URL, served public from the GET image route).
+  const imgMatch = p.match(/^\/products\/(\d+)\/image$/)
+  if (m === 'POST' && imgMatch) {
+    requirePerm(perms, 'products.manage')
+    const prod = d.products.find((x) => x.id === Number(imgMatch[1]))
+    if (!prod) throw new ApiError(404, 'product not found')
+    const file = body instanceof FormData ? (body.get('file') as File | null) : null
+    if (!file) throw new ApiError(400, "multipart file field required ('file')")
+    if (file.size > 2 << 20) throw new ApiError(413, 'image too large (max 2 MB)')
+    const mime = (file as File & { type?: string }).type || ''
+    if (!mime.startsWith('image/') || mime.includes('svg')) {
+      throw new ApiError(422, 'only png, jpeg, webp or gif images are allowed')
+    }
+    const buf = new Uint8Array(await file.arrayBuffer())
+    if (!sniffedImage(buf)) throw new ApiError(422, 'file content is not a recognised image')
+    const dataUrl = `data:${mime};base64,${bytesToBase64(buf)}`
+    const x = d as DemoDBX
+    x.productImages = { ...(x.productImages || {}), [String(prod.id)]: dataUrl }
+    prod.updatedAt = nowIso()
+    audit(user.id, user.username, 'PRODUCT_IMAGE_SET', 'product', String(prod.id), `${buf.length} bytes`)
+    persist()
+    return { imageUrl: dataUrl } as T
+  }
+  if (m === 'DELETE' && imgMatch) {
+    requirePerm(perms, 'products.manage')
+    const prod = d.products.find((x) => x.id === Number(imgMatch[1]))
+    if (!prod) throw new ApiError(404, 'product not found')
+    const x = d as DemoDBX
+    if (x.productImages) {
+      const next = { ...x.productImages }
+      delete next[String(prod.id)]
+      x.productImages = next
+    }
+    prod.updatedAt = nowIso()
+    audit(user.id, user.username, 'PRODUCT_IMAGE_CLEARED', 'product', String(prod.id), '')
+    persist()
+    return { deleted: true } as T
   }
   if (m === 'POST' && p === '/products/import') {
     requirePerm(perms, 'products.manage')
@@ -738,21 +948,71 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const taxIncluded = (d.settings.tax_included ?? 'true') === 'true'
     const t = cartTotals(lines.map((l) => ({ qty: l.qty, unitPriceCents: l.unitPriceCents })), taxPercent, taxIncluded)
     const rawMethod = body?.paymentMethod
-    const method = rawMethod === 'mpesa' ? 'mpesa' : rawMethod === 'account' ? 'account' : 'cash'
-    const mode = method === 'mpesa' ? (body?.paymentMode || d.settings.payment_mode || 'auto') : method === 'account' ? '' : 'cash'
-    // Tab checkout needs a live customer up front (server parity: active,
-    // has credit, and the charge fits inside the limit).
+    const method =
+      rawMethod === 'mpesa' ? 'mpesa'
+      : rawMethod === 'account' ? 'account'
+      : rawMethod === 'credit' ? 'credit'
+      : rawMethod === 'paystack' ? 'paystack'
+      : 'cash'
+    const mode = method === 'mpesa'
+      ? (body?.paymentMode || d.settings.payment_mode || 'auto')
+      : method === 'cash' ? 'cash' : ''
+    // Tab checkout, store-credit checkout and loyalty redemption all need a
+    // live customer up front (server parity: active, and the charge fits
+    // inside the limit/wallet — points inside the balance).
+    const wantPoints = Math.round(Number(body?.redeemPoints) || 0)
     let tabCustomer: DemoCustomer | undefined
-    if (method === 'account') {
+    if (method === 'account' || method === 'credit' || wantPoints > 0) {
       const cid = Number(body?.customerId) || 0
-      if (!cid) throw new ApiError(400, 'tab checkout needs a customer')
+      if (!cid) throw new ApiError(400, `${wantPoints > 0 ? 'redeeming points' : method === 'credit' ? 'store credit' : 'tab'} checkout needs a customer`)
       tabCustomer = d.customers.find((x) => x.id === cid)
       if (!tabCustomer) throw new ApiError(404, 'customer not found')
       if (!tabCustomer.active) throw new ApiError(409, 'customer is inactive')
     }
+    // Order-level discount (server parity: permission-gated, must stay
+    // below the subtotal; tax is recomputed on the discounted subtotal).
+    const discount = Math.round(Number(body?.discountCents) || 0)
+    if (discount < 0 || discount >= t.subtotal) {
+      throw new ApiError(400, `discount out of range (0 to ${t.subtotal - 1})`)
+    }
+    if (discount > 0 && !perms.includes('payments.apply_discount')) {
+      throw new ApiError(403, 'applying a discount requires payments.apply_discount permission')
+    }
+    const discountedSub = t.subtotal - discount
+    const taxCents = taxIncluded
+      ? Math.round((discountedSub * taxPercent) / (100 + taxPercent))
+      : Math.round((discountedSub * taxPercent) / 100)
+    const totalCents = taxIncluded ? discountedSub : discountedSub + taxCents
+    // Loyalty redemption: points × point value, capped at a configured
+    // share of the order total (whole points only). Spent points are
+    // deducted now and refunded automatically if the order is voided.
+    let pointCents = Math.round(Number(d.settings.loyalty_point_cents))
+    if (isNaN(pointCents) || pointCents < 0) pointCents = 100
+    let maxPct = Math.round(Number(d.settings.loyalty_max_percent))
+    if (isNaN(maxPct) || maxPct < 0 || maxPct > 100) maxPct = 50
+    let redeemCents = 0
+    let redeemSpent = 0
+    if (wantPoints > 0) {
+      if (!perms.includes('loyalty.redeem')) throw new ApiError(403, 'redeeming points requires loyalty.redeem permission')
+      if ((d.settings.loyalty_enabled ?? 'true') === 'false') throw new ApiError(400, 'loyalty program is disabled')
+      if (!tabCustomer) throw new ApiError(400, 'redeeming points needs a customer')
+      const capCents = (totalCents * maxPct) / 100
+      redeemCents = wantPoints * pointCents
+      if (redeemCents > capCents) {
+        redeemCents = pointCents > 0 ? Math.floor(capCents / pointCents) * pointCents : 0
+      }
+      if (redeemCents < 0) redeemCents = 0
+      if (pointCents > 0) redeemSpent = Math.floor(redeemCents / pointCents)
+      if (redeemSpent === 0) throw new ApiError(400, 'points value too small to apply on this order')
+      if (tabCustomer.loyaltyPoints < redeemSpent) {
+        throw new ApiError(409, `not enough loyalty points: has ${tabCustomer.loyaltyPoints}, wants ${redeemSpent}`)
+      }
+    }
+    // Payable is what changes hands (discount + points already applied).
+    const payable = Math.max(0, totalCents - redeemCents)
     const o: DemoOrder = {
       id: d.seq.order++, number: nextOrderNumber(d), status: 'PENDING',
-      subtotalCents: t.subtotal, taxCents: t.tax, totalCents: t.total,
+      subtotalCents: t.subtotal, taxCents: taxCents, totalCents: payable,
       cashierId: user.id, customerName: tabCustomer ? tabCustomer.name : String(body?.customerName || ''),
       customerId: tabCustomer ? tabCustomer.id : 0, note: String(body?.note || ''),
       clientUuid: String(body?.clientUuid || ''), discrepancy: false,
@@ -763,37 +1023,79 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       })),
       payments: [],
     }
+    if (discount > 0) {
+      ;(o as any).discountCents = discount
+      if (body?.discountLabel) (o as any).discountLabel = String(body.discountLabel).slice(0, 120)
+    }
+    ;(o as any).pointsRedeemed = redeemSpent
     const pay = {
-      id: d.seq.pay++, orderId: o.id, method: method as 'cash' | 'mpesa' | 'account', mode: mode as string, amountCents: t.total,
+      id: d.seq.pay++, orderId: o.id, method: method as 'cash' | 'mpesa' | 'account', mode: mode as string, amountCents: payable,
       status: 'PENDING' as const, phone: '', mpesaReceipt: '', checkoutRequestId: '',
       resultDesc: '', discrepancy: false, createdAt: nowIso(), completedAt: '',
     }
     if (method === 'account') {
       const c = tabCustomer!
       if (c.creditLimitCents <= 0) throw new ApiError(409, 'customer has no credit — cash only')
-      if (c.balanceCents + t.total > c.creditLimitCents) {
+      if (c.balanceCents + payable > c.creditLimitCents) {
         throw new ApiError(409, `tab would exceed customer credit limit (${c.name})`)
       }
       // Stock was fail-fast checked per line above; the guarded deduction
       // happens once at settle time (server parity — never here).
       o.payments.push(pay)
       d.orders.push(o)
-      postLedger(c.id, o.id, 'charge', t.total, 0, `tab charge ${o.number}`, user.id)
-      audit(user.id, user.username, 'TAB_CHARGED', 'order', o.number, `total ${t.total}`)
+      postLedger(c.id, o.id, 'charge', payable, 0, `tab charge ${o.number}`, user.id)
+      if (redeemSpent > 0) {
+        postLedger(c.id, o.id, 'loyalty', 0, -redeemSpent, 'points redeemed at checkout', user.id)
+      }
+      audit(user.id, user.username, 'TAB_CHARGED', 'order', o.number, `total ${payable}`)
+      persist()
+      return orderDTO(o) as T
+    } else if (method === 'credit') {
+      const c = tabCustomer!
+      const wallet = Math.round(Number((c as any).storeCreditCents) || 0)
+      if (wallet < payable) {
+        throw new ApiError(409, `not enough store credit: has ${wallet}, needs ${payable}`)
+      }
+      ;(c as any).storeCreditCents = wallet - payable
+      o.payments.push(pay)
+      d.orders.push(o)
+      postCreditLedger(d, c.id, o.id, 'credit_redeem', -payable, `store credit payment ${o.number}`, user.id)
+      if (redeemSpent > 0) {
+        postLedger(c.id, o.id, 'loyalty', 0, -redeemSpent, 'points redeemed at checkout', user.id)
+      }
+      audit(user.id, user.username, 'ORDER_CREATED', 'order', String(o.id), `${o.number} credit`)
+      completeOrder(o.id, { method: 'credit', mode: '' })
       persist()
       return orderDTO(o) as T
     } else if (method === 'cash') {
       o.payments.push(pay)
       d.orders.push(o)
+      if (redeemSpent > 0 && tabCustomer) {
+        postLedger(tabCustomer.id, o.id, 'loyalty', 0, -redeemSpent, 'points redeemed at checkout', user.id)
+      }
       completeOrder(o.id, { method: 'cash', mode: 'cash' })
+    } else if (method === 'paystack') {
+      // Server parity: the order is created PENDING and checkout is opened
+      // by a separate init call — which the demo answers with 501 below.
+      o.payments.push(pay)
+      d.orders.push(o)
+      if (redeemSpent > 0 && tabCustomer) {
+        postLedger(tabCustomer.id, o.id, 'loyalty', 0, -redeemSpent, 'points redeemed at checkout', user.id)
+      }
     } else if (mode === 'manual') {
       o.payments.push(pay)
       d.orders.push(o) // stays PENDING until the cashier enters the receipt code
+      if (redeemSpent > 0 && tabCustomer) {
+        postLedger(tabCustomer.id, o.id, 'loyalty', 0, -redeemSpent, 'points redeemed at checkout', user.id)
+      }
     } else {
       pay.phone = String(body?.customerPhone || '')
       pay.checkoutRequestId = 'ws_CO_' + Math.random().toString(36).slice(2, 12)
       o.payments.push(pay)
       d.orders.push(o)
+      if (redeemSpent > 0 && tabCustomer) {
+        postLedger(tabCustomer.id, o.id, 'loyalty', 0, -redeemSpent, 'points redeemed at checkout', user.id)
+      }
       simulateStk(o.id)
     }
     audit(user.id, user.username, 'ORDER_CREATED', 'order', String(o.id), `${o.number} ${method}`)
@@ -813,6 +1115,29 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     // debt on the balance (server parity — applies to PENDING and PAID).
     if (o.customerId && o.payments.some((pay) => pay.method === 'account')) {
       postLedger(o.customerId, o.id, 'adjustment', -o.totalCents, 0, 'void reversal', user.id)
+    }
+    // Refund loyalty points redeemed at checkout — a cancelled sale gives
+    // the points back (server parity).
+    const spent = Math.round(Number((o as any).pointsRedeemed) || 0)
+    if (spent > 0 && o.customerId) {
+      const c = d.customers.find((x) => x.id === o.customerId)
+      if (c) {
+        c.loyaltyPoints += spent
+        d.ledger.push({
+          id: d.seq.ledger++, customerId: c.id, orderId: o.id, kind: 'loyalty',
+          amountCents: 0, pointsDelta: spent, note: 'void refund — points returned',
+          createdBy: user.id, createdAt: nowIso(),
+        })
+      }
+    }
+    // A completed store-credit payment goes back to the wallet.
+    const creditPay = o.payments.find((pay) => (pay.method as string) === 'credit' && pay.status === 'COMPLETED')
+    if (creditPay && o.customerId) {
+      const c = d.customers.find((x) => x.id === o.customerId)
+      if (c) {
+        ;(c as any).storeCreditCents = Math.round(Number((c as any).storeCreditCents) || 0) + creditPay.amountCents
+        postCreditLedger(d, c.id, o.id, 'credit_redeem', creditPay.amountCents, 'void refund — store credit returned', user.id)
+      }
     }
     o.status = 'VOIDED'
     o.voidedAt = nowIso()
@@ -882,15 +1207,116 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       tabPay.mode = 'cash'
       completeOrder(o.id, { method: 'cash', mode: 'cash' })
     }
-    // Ledger payment + loyalty, posted after the guarded transition.
+    // Ledger payment posted after the guarded transition; loyalty now
+    // earns inside completeOrder (every paid order, server parity).
     postLedger(o.customerId, o.id, 'payment', -o.totalCents, 0, `tab settled ${o.number}`, user.id)
-    const points = loyaltyFor(o.totalCents)
-    if (points > 0) {
-      postLedger(o.customerId, o.id, 'loyalty', 0, points, `loyalty earned ${o.number}`, user.id)
-    }
     audit(user.id, user.username, 'TAB_SETTLED', 'order', o.number, method)
     persist()
     return orderDTO(o) as T
+  }
+
+  // ---- Paystack checkout (demo: init/verify always refuse — no gateway,
+  // no secret key. The PENDING order can be reopened from Orders or voided.)
+  const psInitMatch = p.match(/^\/orders\/(\d+)\/paystack\/init$/)
+  if (m === 'POST' && psInitMatch) {
+    requirePerm(perms, 'pos.sell')
+    if (!d.orders.some((x) => x.id === Number(psInitMatch[1]))) throw new ApiError(404, 'order not found')
+    throw new ApiError(501, 'payments unavailable in demo mode')
+  }
+  const psVerifyMatch = p.match(/^\/orders\/(\d+)\/paystack\/verify$/)
+  if (m === 'POST' && psVerifyMatch) {
+    requirePerm(perms, 'pos.sell')
+    if (!d.orders.some((x) => x.id === Number(psVerifyMatch[1]))) throw new ApiError(404, 'order not found')
+    throw new ApiError(501, 'payments unavailable in demo mode')
+  }
+
+  // ---- parked (held) sales ----
+  if (m === 'GET' && p === '/held-sales') {
+    requirePerm(perms, 'pos.hold')
+    const x = d as DemoDBX
+    return [...(x.heldSales || [])].sort((a, b) => b.id - a.id) as T
+  }
+  if (m === 'POST' && p === '/held-sales') {
+    requirePerm(perms, 'pos.hold')
+    const x = d as DemoDBX
+    const rawItems = Array.isArray(body?.cart?.items) ? body.cart.items : []
+    const items = rawItems
+      .map((it: any) => ({
+        productId: Math.round(Number(it?.productId) || 0),
+        qty: Math.max(1, Math.round(Number(it?.qty) || 1)),
+        unitPriceCents: it?.unitPriceCents === undefined ? undefined : Math.max(0, Math.round(Number(it.unitPriceCents)) || 0),
+      }))
+      .filter((it: any) => it.productId > 0)
+    if (items.length === 0) throw new ApiError(400, 'nothing to hold — the cart is empty')
+    const customerId = Math.round(Number(body?.cart?.customerId) || 0)
+    let customerName = String(body?.cart?.customerName || '')
+    if (customerId) {
+      const c = d.customers.find((y) => y.id === customerId)
+      if (c) customerName = c.name
+    }
+    const sale: DemoHeldSale = {
+      id: (d.seq as any).held++,
+      refName: String(body?.refName || '').trim().slice(0, 120) || 'Sale',
+      items,
+      customerId,
+      customerName,
+      note: String(body?.cart?.note || '').slice(0, 500),
+      deviceId: 'demo-device',
+      createdBy: user.id,
+      createdByName: user.fullName || user.username,
+      createdAt: nowIso(),
+    }
+    x.heldSales = [...(x.heldSales || []), sale]
+    audit(user.id, user.username, 'SALE_HELD', 'held_sale', String(sale.id), sale.refName)
+    persist()
+    return sale as T
+  }
+  const heldMatch = p.match(/^\/held-sales\/(\d+)$/)
+  if (m === 'DELETE' && heldMatch) {
+    requirePerm(perms, 'pos.hold')
+    const x = d as DemoDBX
+    const before = (x.heldSales || []).length
+    x.heldSales = (x.heldSales || []).filter((s) => s.id !== Number(heldMatch[1]))
+    if (x.heldSales.length === before) throw new ApiError(404, 'held sale not found')
+    persist()
+    return { deleted: true } as T
+  }
+
+  // ---- void-reason catalog (GET is any-authed; edits need settings.manage)
+  if (m === 'GET' && p === '/void-reasons') {
+    const x = d as DemoDBX
+    const all = q.get('all') === 'true'
+    return (x.voidReasons || [])
+      .filter((r) => all || r.active)
+      .sort((a, b) => a.sortOrder - b.sortOrder) as T
+  }
+  if (m === 'POST' && p === '/void-reasons') {
+    requirePerm(perms, 'settings.manage')
+    const x = d as DemoDBX
+    const label = String(body?.label || '').trim()
+    if (!label) throw new ApiError(400, 'label required')
+    if ((x.voidReasons || []).some((r) => r.label.toLowerCase() === label.toLowerCase())) throw new ApiError(409, 'reason exists')
+    const r: DemoVoidReason = {
+      id: (d.seq as any).voidReason++, label,
+      active: body?.active !== false,
+      sortOrder: (x.voidReasons || []).length + 1,
+    }
+    x.voidReasons = [...(x.voidReasons || []), r]
+    audit(user.id, user.username, 'VOID_REASON_CREATED', 'void_reason', String(r.id), r.label)
+    persist()
+    return r as T
+  }
+  const vrMatch = p.match(/^\/void-reasons\/(\d+)$/)
+  if (m === 'PUT' && vrMatch) {
+    requirePerm(perms, 'settings.manage')
+    const x = d as DemoDBX
+    const r = (x.voidReasons || []).find((v) => v.id === Number(vrMatch[1]))
+    if (!r) throw new ApiError(404, 'reason not found')
+    if (body?.label !== undefined && String(body.label).trim()) r.label = String(body.label).trim()
+    if (body?.active !== undefined) r.active = !!body.active
+    audit(user.id, user.username, 'VOID_REASON_UPDATED', 'void_reason', String(r.id), r.label)
+    persist()
+    return { updated: true } as T
   }
   if (m === 'POST' && p === '/sync') {
     requirePerm(perms, 'pos.sell')
@@ -982,6 +1408,23 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       persist()
       return customerDTO(c) as T
     }
+  }
+  // Store-credit top-up (credit.manage) — prepaid money in, wallet grows,
+  // ledger records it without touching the tab balance (server parity).
+  const topupMatch = p.match(/^\/customers\/(\d+)\/credit-topup$/)
+  if (m === 'POST' && topupMatch) {
+    requirePerm(perms, 'credit.manage')
+    const c = d.customers.find((x) => x.id === Number(topupMatch[1]))
+    if (!c) throw new ApiError(404, 'customer not found')
+    if (!c.active) throw new ApiError(409, 'customer is inactive')
+    const cents = Math.round(Number(body?.amountCents) || 0)
+    if (!(cents > 0)) throw new ApiError(400, 'amountCents (positive) required')
+    ;(c as any).storeCreditCents = Math.round(Number((c as any).storeCreditCents) || 0) + cents
+    c.updatedAt = nowIso()
+    postCreditLedger(d, c.id, 0, 'credit_topup', cents, String(body?.note || 'store credit top-up'), user.id)
+    audit(user.id, user.username, 'CREDIT_TOPUP', 'customer', String(c.id), String(cents))
+    persist()
+    return customerDTO(c) as T
   }
 
   // ---- suppliers & stock-in (mirrors the Go routes + gates) ----
@@ -1363,7 +1806,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   }
   if (m === 'GET' && p === '/permissions') {
     requirePerm(perms, 'roles.manage')
-    return { catalog: PERMISSION_CATALOG } as T
+    return { catalog: FULL_PERMS } as T
   }
   if (m === 'POST' && p === '/roles') {
     requirePerm(perms, 'roles.manage')
@@ -1371,7 +1814,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (!name) throw new ApiError(400, 'name required')
     if (d.roles.some((r) => r.name === name)) throw new ApiError(409, 'role exists')
     for (const k of body?.permissions || []) {
-      if (!PERMISSION_CATALOG.some((pc) => pc.key === k)) throw new ApiError(400, 'unknown permission: ' + k)
+      if (!FULL_PERMS.some((pc) => pc.key === k)) throw new ApiError(400, 'unknown permission: ' + k)
     }
     const role = { id: d.seq.role++, name, description: String(body?.description || ''), permissions: [...(body?.permissions || [])], system: false }
     d.roles.push(role)
@@ -1386,7 +1829,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (!role) throw new ApiError(404, 'role not found')
     if (m === 'PUT') {
       for (const k of body?.permissions || []) {
-        if (!PERMISSION_CATALOG.some((pc) => pc.key === k)) throw new ApiError(400, 'unknown permission: ' + k)
+        if (!FULL_PERMS.some((pc) => pc.key === k)) throw new ApiError(400, 'unknown permission: ' + k)
       }
       if (!role.system && body?.name) role.name = String(body.name)
       if (body?.description !== undefined) role.description = String(body.description)
