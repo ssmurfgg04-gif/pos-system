@@ -92,6 +92,11 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         api.GET("/branding", h.Branding)
         api.GET("/settings/logo", h.GetLogo)
         api.POST("/payments/mpesa/callback", h.MpesaCallback)
+        // Paystack server-to-server events (HMAC-SHA512 verified in-handler).
+        api.POST("/payments/paystack/webhook", h.PaystackWebhook)
+        // Product photos are marketing content served to <img> tags (which
+        // cannot send Authorization headers) — public like the brand logo.
+        api.GET("/products/:id/image", h.GetProductImage)
 
         // ---- Authenticated ----
         authd := api.Group("", authRequired)
@@ -110,6 +115,8 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         prod.PUT("/products/:id", h.UpdateProduct)
         prod.DELETE("/products/:id", h.DeactivateProduct)
         prod.POST("/products/:id/adjust-stock", h.AdjustStock)
+        prod.POST("/products/:id/image", h.UploadProductImage)
+        prod.DELETE("/products/:id/image", h.DeleteProductImage)
         prod.POST("/products/import", h.ProductsImport)
         prod.GET("/products/export", h.ProductsExport)
         prod.GET("/products/template", h.ProductsTemplate)
@@ -126,7 +133,23 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         authd.POST("/orders/:id/settle", perm("pos.sell"), h.SettleTab)
         authd.POST("/orders/:id/stkpush", perm("pos.sell"), h.RetrySTK)
         authd.POST("/orders/:id/manual", perm("payments.manual"), h.ManualConfirm)
+        authd.POST("/orders/:id/paystack/init", perm("pos.sell"), h.PaystackInit)
+        authd.POST("/orders/:id/paystack/verify", perm("pos.sell"), h.PaystackVerify)
+        authd.GET("/payments/config", h.PaymentConfig)
         authd.POST("/sync", perm("pos.sell"), h.Sync)
+
+        // Parked sales (pos.hold) — hold, list, resume-read, discard.
+        hold := authd.Group("", perm("pos.hold"))
+        hold.POST("/held-sales", h.HoldSale)
+        hold.GET("/held-sales", h.ListHeldSales)
+        hold.DELETE("/held-sales/:id", h.DeleteHeldSale)
+
+        // Void-reason catalog: every till offers the same reasons, and the
+        // catalog itself team-syncs (settings.manage to edit).
+        authd.GET("/void-reasons", h.ListVoidReasons)
+        vr := authd.Group("", perm("settings.manage"))
+        vr.POST("/void-reasons", h.CreateVoidReason)
+        vr.PUT("/void-reasons/:id", h.UpdateVoidReason)
 
         // Reports / shifts.
         authd.GET("/reports/daily", perm("reports.view"), h.DailyReport)
@@ -143,6 +166,12 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         design.POST("/design", h.CreateDesignJob)
         design.PUT("/design/:id", h.UpdateDesignJob)
         design.POST("/design/:id/move", h.MoveDesignJob)
+        // Job attachments: share files with the team (upload/manage gated,
+        // download rides design.view).
+        design.POST("/design/:id/files", h.UploadDesignFile)
+        design.DELETE("/design/:id/files/:fileId", h.DeleteDesignFile)
+        authd.GET("/design/:id/files", perm("design.view"), h.ListDesignFiles)
+        authd.GET("/design/:id/files/:fileId", perm("design.view"), h.DownloadDesignFile)
 
         // Customers & tabs.
         custv := authd.Group("", perm("customers.view"))
@@ -152,6 +181,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         custm.POST("/customers", h.CreateCustomer)
         custm.PUT("/customers/:id", h.UpdateCustomer)
         custm.POST("/customers/:id/adjustments", h.RecordCustomerAdjustment)
+        custm.POST("/customers/:id/credit-topup", h.TopUpCredit)
         // Walk-in till payments ride pos.sell: cashiers take them all day.
         authd.POST("/customers/:id/payments", perm("pos.sell"), h.RecordCustomerPayment)
 
@@ -176,6 +206,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         // Users & roles.
         users := authd.Group("", perm("users.manage"))
         users.GET("/users", h.ListUsers)
+        users.GET("/team", h.TeamOverview)
         users.POST("/users", h.CreateUser)
         users.PUT("/users/:id", h.UpdateUser)
         users.DELETE("/users/:id", h.DeactivateUser)
@@ -186,9 +217,11 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 
         roles := authd.Group("", perm("roles.manage"))
         roles.GET("/roles", h.ListRoles)
+        roles.GET("/roles/:id", h.GetRole)
         roles.GET("/permissions", h.Permissions)
         roles.POST("/roles", h.CreateRole)
         roles.PUT("/roles/:id", h.UpdateRole)
+        roles.PUT("/roles/:id/dashboard", h.SetRoleDashboard)
         roles.DELETE("/roles/:id", h.DeleteRole)
 
         // Settings, printer, audit, system.
@@ -209,6 +242,13 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         authd.POST("/system/update/install", perm("settings.manage"), h.UpdateInstall)
         // Desktop-mode admin shutdown (no-op in server mode: OnQuit unset).
         authd.POST("/system/quit", perm("settings.manage"), h.QuitApp)
+
+        // Team sync admin (Settings → Team): link tills through Supabase.
+        ts := authd.Group("", perm("settings.manage"))
+        ts.GET("/team-sync", h.TeamSyncStatus)
+        ts.PUT("/team-sync", h.TeamSyncConfigure)
+        ts.POST("/team-sync/create", h.TeamSyncCreate)
+        ts.POST("/team-sync/now", h.TeamSyncNow)
 
         // ---- Embedded SPA ----
         // NOTE: gin only runs group middleware for matched routes, so the

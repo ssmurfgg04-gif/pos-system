@@ -30,6 +30,7 @@ func (s *Service) ListOrders(f OrderFilter) ([]models.Order, error) {
         q.WriteString(`
                 SELECT o.id, o.number, o.status, o.subtotal_cents, o.tax_cents, o.total_cents,
                         COALESCE(o.tax_percent,16), COALESCE(o.tax_included,1),
+                        COALESCE(o.discount_cents,0), COALESCE(o.discount_label,''), COALESCE(o.points_redeemed,0),
                         o.cashier_id, COALESCE(u.full_name, u.username, ''), COALESCE(o.customer_name,''),
                         COALESCE(o.customer_id,0),
                         COALESCE(o.note,''), COALESCE(o.client_uuid,''), COALESCE(o.discrepancy,0),
@@ -73,6 +74,7 @@ func (s *Service) ListOrders(f OrderFilter) ([]models.Order, error) {
                 var taxIncluded int
                 if err := rows.Scan(&o.ID, &o.Number, &o.Status, &o.SubtotalCents, &o.TaxCents, &o.TotalCents,
                         &o.TaxPercent, &taxIncluded,
+                        &o.DiscountCents, &o.DiscountLabel, &o.PointsRedeemed,
                         &o.CashierID, &o.CashierName, &o.CustomerName, &o.CustomerID,
                         &o.Note, &o.ClientUUID, &o.Discrepancy,
                         &o.CreatedAt, &o.PaidAt, &o.VoidedAt, &o.VoidReason); err != nil {
@@ -133,7 +135,7 @@ func (s *Service) itemsForOrders(ids []string) (map[int64][]models.OrderItem, er
 func (s *Service) paymentsForOrders(ids []string) (map[int64][]models.Payment, error) {
         out := map[int64][]models.Payment{}
         q := s.db.Rebind(`SELECT order_id, id, method, COALESCE(mode,''), amount_cents, status,
-                COALESCE(phone,''), COALESCE(mpesa_receipt,''), COALESCE(checkout_request_id,''), COALESCE(result_desc,''),
+                COALESCE(phone,''), COALESCE(email,''), COALESCE(mpesa_receipt,''), COALESCE(checkout_request_id,''), COALESCE(result_desc,''),
                 COALESCE(discrepancy,0), created_at, COALESCE(completed_at,'')
                 FROM payments WHERE order_id IN (` + placeholders(len(ids)) + `) ORDER BY id`)
         args := toAny(ids)
@@ -146,7 +148,7 @@ func (s *Service) paymentsForOrders(ids []string) (map[int64][]models.Payment, e
                 var orderID int64
                 var pm models.Payment
                 if err := rows.Scan(&orderID, &pm.ID, &pm.Method, &pm.Mode, &pm.AmountCents, &pm.Status,
-                        &pm.Phone, &pm.MpesaReceipt, &pm.CheckoutRequestID, &pm.ResultDesc, &pm.Discrepancy,
+                        &pm.Phone, &pm.Email, &pm.MpesaReceipt, &pm.CheckoutRequestID, &pm.ResultDesc, &pm.Discrepancy,
                         &pm.CreatedAt, &pm.CompletedAt); err != nil {
                         return out, err
                 }
@@ -174,6 +176,7 @@ func (s *Service) GetOrder(orderID int64) (*models.Order, error) {
         err := s.db.QueryRow(s.db.Rebind(`
                 SELECT o.id, o.number, o.status, o.subtotal_cents, o.tax_cents, o.total_cents,
                         COALESCE(o.tax_percent,16), COALESCE(o.tax_included,1),
+                        COALESCE(o.discount_cents,0), COALESCE(o.discount_label,''), COALESCE(o.points_redeemed,0),
                         o.cashier_id, COALESCE(u.full_name, u.username, ''), COALESCE(o.customer_name,''),
                         COALESCE(o.customer_id,0),
                         COALESCE(o.note,''), COALESCE(o.client_uuid,''), COALESCE(o.discrepancy,0),
@@ -182,6 +185,7 @@ func (s *Service) GetOrder(orderID int64) (*models.Order, error) {
                 WHERE o.id = ?`), orderID).
                 Scan(&o.ID, &o.Number, &o.Status, &o.SubtotalCents, &o.TaxCents, &o.TotalCents,
                         &o.TaxPercent, &taxIncluded,
+                        &o.DiscountCents, &o.DiscountLabel, &o.PointsRedeemed,
                         &o.CashierID, &o.CashierName, &o.CustomerName, &o.CustomerID,
                         &o.Note, &o.ClientUUID, &o.Discrepancy,
                         &o.CreatedAt, &o.PaidAt, &o.VoidedAt, &o.VoidReason)
