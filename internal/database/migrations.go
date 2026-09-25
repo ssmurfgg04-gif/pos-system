@@ -677,6 +677,96 @@ CREATE TABLE IF NOT EXISTS sync_state (
                 Version: 9,
                 Go:      backfillRolePermsV9,
         },
+        {
+                // v10: stocktake (count sessions with variance report) and
+                // gift cards (sellable products that mint redeemable codes
+                // loading prepaid store credit on a customer account).
+                Version: 10,
+                SQLite: `
+CREATE TABLE IF NOT EXISTS stock_counts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        number TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'OPEN',
+        note TEXT NOT NULL DEFAULT '',
+        counted_by INTEGER NOT NULL DEFAULT 0,
+        counted_by_name TEXT NOT NULL DEFAULT '',
+        opened_at TEXT NOT NULL DEFAULT '',
+        closed_at TEXT NOT NULL DEFAULT '',
+        lines_total INTEGER NOT NULL DEFAULT 0,
+        lines_counted INTEGER NOT NULL DEFAULT 0,
+        variance_units INTEGER NOT NULL DEFAULT 0,
+        variance_value_cents INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS stock_count_lines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        count_id INTEGER NOT NULL REFERENCES stock_counts(id) ON DELETE CASCADE,
+        product_id INTEGER NOT NULL,
+        sku TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL DEFAULT '',
+        expected_qty INTEGER NOT NULL DEFAULT 0,
+        counted_qty INTEGER,
+        system_qty INTEGER NOT NULL DEFAULT 0,
+        unit_cost_cents INTEGER NOT NULL DEFAULT 0,
+        applied INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_stock_count_lines_count ON stock_count_lines(count_id);
+ALTER TABLE products ADD COLUMN is_gift_card INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS gift_cards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT NOT NULL UNIQUE,
+        order_id INTEGER NOT NULL DEFAULT 0,
+        initial_cents INTEGER NOT NULL DEFAULT 0,
+        remaining_cents INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        issued_at TEXT NOT NULL DEFAULT '',
+        redeemed_at TEXT NOT NULL DEFAULT '',
+        redeemed_by_customer INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_gift_cards_code ON gift_cards(code);
+`,
+                Pg: `
+CREATE TABLE IF NOT EXISTS stock_counts (
+        id SERIAL PRIMARY KEY,
+        number TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'OPEN',
+        note TEXT NOT NULL DEFAULT '',
+        counted_by BIGINT NOT NULL DEFAULT 0,
+        counted_by_name TEXT NOT NULL DEFAULT '',
+        opened_at TEXT NOT NULL DEFAULT '',
+        closed_at TEXT NOT NULL DEFAULT '',
+        lines_total BIGINT NOT NULL DEFAULT 0,
+        lines_counted BIGINT NOT NULL DEFAULT 0,
+        variance_units BIGINT NOT NULL DEFAULT 0,
+        variance_value_cents BIGINT NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS stock_count_lines (
+        id SERIAL PRIMARY KEY,
+        count_id BIGINT NOT NULL REFERENCES stock_counts(id) ON DELETE CASCADE,
+        product_id BIGINT NOT NULL,
+        sku TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL DEFAULT '',
+        expected_qty BIGINT NOT NULL DEFAULT 0,
+        counted_qty BIGINT,
+        system_qty BIGINT NOT NULL DEFAULT 0,
+        unit_cost_cents BIGINT NOT NULL DEFAULT 0,
+        applied INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_stock_count_lines_count ON stock_count_lines(count_id);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS is_gift_card INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS gift_cards (
+        id SERIAL PRIMARY KEY,
+        code TEXT NOT NULL UNIQUE,
+        order_id BIGINT NOT NULL DEFAULT 0,
+        initial_cents BIGINT NOT NULL DEFAULT 0,
+        remaining_cents BIGINT NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        issued_at TEXT NOT NULL DEFAULT '',
+        redeemed_at TEXT NOT NULL DEFAULT '',
+        redeemed_by_customer BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_gift_cards_code ON gift_cards(code);
+`,
+        },
 }
 
 // backfillRolePermsV9 unions the v8 permission additions into seeded roles:

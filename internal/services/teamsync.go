@@ -72,30 +72,63 @@ func (s *Service) Emit(entity, op string, payload any) {
 // ---- PostgREST client ----
 
 type syncClient struct {
-        base   string
-        key    string
-        team   string
-        device string
-        hc     *http.Client
+        base       string
+        key        string
+        team       string
+        device     string
+        secretHash string
+        mode       string // "rest" = direct PostgREST tables (manual key), "rpc" = cloud identity
+        hc         *http.Client
 }
 
+// syncConfig resolves the team link. Cloud identity is the default: a till
+// that finds its team in the sync_bootstrap row is linked — no settings
+// screen, no join codes. Explicit manual configuration still wins.
 func (s *Service) syncConfig() (*syncClient, bool) {
         if !s.settings.GetBool("sync_enabled", false) {
+                if s.ensureCloudBootstrap() == nil {
+                        return nil, false
+                }
+        }
+        if s.settings.Get("sync_source") == "manual" {
+                if c := manualSyncClient(s); c != nil {
+                        return c, true
+                }
                 return nil, false
         }
+        if bs := s.ensureCloudBootstrap(); bs != nil {
+                return &syncClient{
+                        base:       strings.TrimRight(bs.ProjectURL, "/"),
+                        key:        cloudAnonKey,
+                        team:       bs.TeamCode,
+                        device:     s.deviceID(),
+                        secretHash: secretHash(s.deviceSecret()),
+                        mode:       "rpc",
+                        hc:         &http.Client{Timeout: syncHTTPTimeout},
+                }, true
+        }
+        // Legacy fallback: manual values saved before cloud mode existed.
+        if c := manualSyncClient(s); c != nil {
+                return c, true
+        }
+        return nil, false
+}
+
+func manualSyncClient(s *Service) *syncClient {
         endpoint := strings.TrimRight(s.settings.Get("sync_endpoint"), "/")
         key := s.settings.Get("sync_service_key")
         team := strings.TrimSpace(s.settings.Get("sync_team_code"))
         if endpoint == "" || key == "" || team == "" {
-                return nil, false
+                return nil
         }
         return &syncClient{
                 base:   endpoint + "/rest/v1",
                 key:    key,
                 team:   team,
                 device: s.deviceID(),
+                mode:   "rest",
                 hc:     &http.Client{Timeout: syncHTTPTimeout},
-        }, true
+        }
 }
 
 func (c *syncClient) headers() http.Header {
@@ -117,6 +150,9 @@ type wireEvent struct {
 
 // push uploads pending outbox rows (oldest first) and marks them pushed.
 func (c *syncClient) push(s *Service) (int, error) {
+        if c.mode == "rpc" {
+                return c.pushRPC(s)
+        }
         rows, err := s.db.Query(s.db.Rebind(`
                 SELECT seq, entity, op, client_uuid, payload FROM sync_outbox
                 WHERE pushed_at = '' ORDER BY seq LIMIT ?`), syncBatchSize)
@@ -175,8 +211,115 @@ func (c *syncClient) push(s *Service) (int, error) {
         return len(batch), nil
 }
 
+// pushRPC uploads pending outbox rows through the identity-checked RPC.
+// The server stamps team_code + device_id from the validated identity, so
+// events carry no spoofable identity fields.
+func (c *syncClient) pushRPC(s *Service) (int, error) {
+        rows, err := s.db.Query(s.db.Rebind(`
+                SELECT seq, entity, op, client_uuid, payload FROM sync_outbox
+                WHERE pushed_at = '' ORDER BY seq LIMIT ?`), syncBatchSize)
+        if err != nil {
+                return 0, err
+        }
+        type rpcEvent struct {
+                Entity     string          `json:"entity"`
+                Op         string          `json:"op"`
+                ClientUUID string          `json:"client_uuid"`
+                Payload    json.RawMessage `json:"payload"`
+        }
+        var events []rpcEvent
+        var seqs []int64
+        for rows.Next() {
+                var seq int64
+                var entity, op, uuid, payload string
+                if err := rows.Scan(&seq, &entity, &op, &uuid, &payload); err != nil {
+                        rows.Close()
+                        return 0, err
+                }
+                events = append(events, rpcEvent{Entity: entity, Op: op, ClientUUID: uuid,
+                        Payload: json.RawMessage(payload)})
+                seqs = append(seqs, seq)
+        }
+        rows.Close()
+        if err := rows.Err(); err != nil {
+                return 0, err
+        }
+        if len(events) == 0 {
+                return 0, nil
+        }
+        var out struct {
+                OK     bool   `json:"ok"`
+                Error  string `json:"error"`
+                Pushed int    `json:"pushed"`
+        }
+        if err := rpcCall(c.base, "sync_push", map[string]any{
+                "p_device_id": c.device, "p_secret_hash": c.secretHash, "p_events": events,
+        }, &out); err != nil {
+                return 0, err
+        }
+        if !out.OK {
+                return 0, fmt.Errorf("push: %s", out.Error)
+        }
+        now := nowStamp()
+        for _, seq := range seqs {
+                s.db.Exec(s.db.Rebind(`UPDATE sync_outbox SET pushed_at = ? WHERE seq = ?`), now, seq)
+        }
+        return out.Pushed, nil
+}
+
+// pulledEvent is the wire shape of a remote change (both transports).
+type pulledEvent struct {
+        ID         int64           `json:"id"`
+        DeviceID   string          `json:"device_id"`
+        Entity     string          `json:"entity"`
+        Op         string          `json:"op"`
+        ClientUUID string          `json:"client_uuid"`
+        Payload    json.RawMessage `json:"payload"`
+}
+
+// applyPulled applies a batch, always advancing the cursor past every event
+// (a bad event is logged and skipped, never allowed to wedge the stream).
+func applyPulled(s *Service, events []pulledEvent) int {
+        applied := 0
+        own := s.deviceID()
+        for _, ev := range events {
+                if ev.DeviceID == own {
+                        continue // never replay own events
+                }
+                if err := s.applyEvent(ev.Entity, ev.Op, ev.Payload); err != nil {
+                        log.Printf("[sync] apply %s/%s: %v", ev.Entity, ev.Op, err)
+                }
+                s.syncSetInt("last_event_"+s.settings.Get("sync_team_code"), ev.ID)
+                applied++
+        }
+        return applied
+}
+
+// pullRPC fetches other approved devices' events through the RPC gateway.
+func (c *syncClient) pullRPC(s *Service) (int, error) {
+        cursor := s.syncGetInt("last_event_" + c.team)
+        var out struct {
+                OK     bool          `json:"ok"`
+                Error  string        `json:"error"`
+                Events []pulledEvent `json:"events"`
+        }
+        if err := rpcCall(c.base, "sync_pull", map[string]any{
+                "p_device_id": c.device, "p_secret_hash": c.secretHash,
+                "p_since_id": cursor, "p_limit": syncBatchSize,
+        }, &out); err != nil {
+                return 0, err
+        }
+        if !out.OK {
+                return 0, fmt.Errorf("pull: %s", out.Error)
+        }
+        return applyPulled(s, out.Events), nil
+}
+
 // pull fetches other devices' events past the cursor and applies them.
 func (c *syncClient) pull(s *Service) (int, error) {
+        if c.mode == "rpc" {
+                return c.pullRPC(s)
+        }
         cursor := s.syncGetInt("last_event_" + c.team)
         q := url.Values{}
         q.Set("team_code", "eq."+c.team)
@@ -198,34 +341,18 @@ func (c *syncClient) pull(s *Service) (int, error) {
                 io.Copy(io.Discard, resp.Body)
                 return 0, fmt.Errorf("pull: status %d", resp.StatusCode)
         }
-        var events []struct {
-                ID         int64           `json:"id"`
-                DeviceID   string          `json:"device_id"`
-                Entity     string          `json:"entity"`
-                Op         string          `json:"op"`
-                ClientUUID string          `json:"client_uuid"`
-                Payload    json.RawMessage `json:"payload"`
-        }
+        var events []pulledEvent
         if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
                 return 0, err
         }
-        applied := 0
-        for _, ev := range events {
-                if err := s.applyEvent(ev.Entity, ev.Op, ev.Payload); err != nil {
-                        // A bad event must not wedge the stream: log, advance past it.
-                        log.Printf("[sync] apply %s/%s: %v", ev.Entity, ev.Op, err)
-                }
-                s.syncSetInt("last_event_"+c.team, ev.ID)
-                applied++
-                if len(events) == syncBatchSize && applied == len(events) {
-                        // More pages may exist; the loop runs again on the next tick.
-                }
-        }
-        return applied, nil
+        return applyPulled(s, events), nil
 }
 
 // heartbeat registers this device (upsert) so the team list is live.
 func (c *syncClient) heartbeat(s *Service, version string) error {
+        if c.mode == "rpc" {
+                return c.registerCloud(s, version)
+        }
         host, _ := os.Hostname()
         row := map[string]any{
                 "device_id":   c.device,
@@ -249,6 +376,38 @@ func (c *syncClient) heartbeat(s *Service, version string) error {
         resp.Body.Close()
         if resp.StatusCode != 201 && resp.StatusCode != 200 {
                 return fmt.Errorf("heartbeat: status %d", resp.StatusCode)
+        }
+        return nil
+}
+
+// registerCloud identifies this till to the database (device id + secret
+// hash). The DB decides who is who: approved/revoked live in sync_devices.
+func (c *syncClient) registerCloud(s *Service, version string) error {
+        var out struct {
+                OK       bool   `json:"ok"`
+                Error    string `json:"error"`
+                Approved bool   `json:"approved"`
+                TeamCode string `json:"team_code"`
+        }
+        err := rpcCall(c.base, "sync_register", map[string]any{
+                "p_device_id":   c.device,
+                "p_secret_hash": c.secretHash,
+                "p_device_name": s.deviceName(),
+                "p_app_version": version,
+        }, &out)
+        if err != nil {
+                return err
+        }
+        if !out.OK {
+                return fmt.Errorf("register: %s", out.Error)
+        }
+        _ = s.settings.Set("sync_registered", "true")
+        _ = s.settings.Set("sync_approved", boolStr(out.Approved))
+        if out.TeamCode != "" {
+                _ = s.settings.Set("sync_team_code", out.TeamCode)
+        }
+        if !out.Approved {
+                return fmt.Errorf("awaiting approval in the cloud device list")
         }
         return nil
 }
@@ -291,15 +450,23 @@ func (s *Service) syncError(err error) {
 
 // TeamSyncStatus reports config + devices for the Settings → Team tab.
 func (s *Service) TeamSyncStatus(version string) (*models.TeamSyncStatus, error) {
+        source := s.settings.Get("sync_source")
+        if source == "" && s.settings.Get("sync_endpoint") != "" {
+                source = "manual"
+        }
         st := &models.TeamSyncStatus{
-                Enabled:    s.settings.GetBool("sync_enabled", false),
-                TeamCode:   s.settings.Get("sync_team_code"),
-                DeviceID:   s.deviceID(),
-                DeviceName: s.deviceName(),
-                LastPush:   s.settings.Get("sync_last_push"),
-                LastPull:   s.settings.Get("sync_last_pull"),
-                LastError:  s.settings.Get("sync_last_error"),
-                Devices:    []models.TeamDevice{},
+                Enabled:     s.settings.GetBool("sync_enabled", false),
+                TeamCode:    s.settings.Get("sync_team_code"),
+                DeviceID:    s.deviceID(),
+                DeviceName:  s.deviceName(),
+                LastPush:    s.settings.Get("sync_last_push"),
+                LastPull:    s.settings.Get("sync_last_pull"),
+                LastError:   s.settings.Get("sync_last_error"),
+                Devices:     []models.TeamDevice{},
+                Source:      source,
+                Registered:  s.settings.GetBool("sync_registered", false),
+                Approved:    s.settings.GetBool("sync_approved", false),
+                AutoApprove: s.settings.GetBool("sync_auto_approve", true),
         }
         var pending int64
         s.db.QueryRow(`SELECT COUNT(*) FROM sync_outbox WHERE pushed_at = ''`).Scan(&pending)
@@ -358,15 +525,19 @@ func (c *syncClient) fetchDevices(s *Service) ([]models.TeamDevice, error) {
 }
 
 // TeamSyncConfigure stores endpoint + key + team code (admin action).
+// Setting any of these explicitly switches the till to manual mode; the
+// automatic cloud bootstrap no longer overrides it.
 func (s *Service) TeamSyncConfigure(req models.TeamSyncConfigRequest) error {
         if req.ProjectURL != "" && !strings.HasPrefix(req.ProjectURL, "https://") {
                 return fmt.Errorf("project URL must be an https Supabase URL")
         }
         if req.ServiceKey != "" && req.ServiceKey != settings.MaskToken {
                 _ = s.settings.Set("sync_service_key", req.ServiceKey)
+                _ = s.settings.Set("sync_source", "manual")
         }
         if req.ProjectURL != "" {
                 _ = s.settings.Set("sync_endpoint", strings.TrimRight(req.ProjectURL, "/"))
+                _ = s.settings.Set("sync_source", "manual")
         }
         if req.TeamCode != "" {
                 _ = s.settings.Set("sync_team_code", strings.ToUpper(strings.TrimSpace(req.TeamCode)))
@@ -390,7 +561,13 @@ func boolStr(b bool) string {
 }
 
 // TeamSyncCreate mints a fresh team code and enables sync (first device).
+// In cloud mode the team already exists in the database — this just returns
+// it and enables sync (keeps the Settings button meaningful).
 func (s *Service) TeamSyncCreate() (string, error) {
+        if bs := s.ensureCloudBootstrap(); bs != nil {
+                _ = s.settings.Set("sync_enabled", "true")
+                return bs.TeamCode, nil
+        }
         code := "TEAM-" + strings.ToUpper(randToken(3))
         _ = s.settings.Set("sync_team_code", code)
         if s.settings.Get("sync_endpoint") == "" || s.settings.Get("sync_service_key") == "" {
@@ -398,6 +575,17 @@ func (s *Service) TeamSyncCreate() (string, error) {
         }
         _ = s.settings.Set("sync_enabled", "true")
         return code, nil
+}
+
+// TeamSyncUseCloud reverts a manually-configured till to automatic cloud
+// identity (the sync_bootstrap row). Manual secrets are kept but unused.
+func (s *Service) TeamSyncUseCloud() error {
+        _ = s.settings.Set("sync_source", "")
+        _ = s.settings.Set("sync_registered", "false")
+        if s.ensureCloudBootstrap() == nil {
+                return fmt.Errorf("could not reach the cloud — check internet and try again")
+        }
+        return nil
 }
 
 // TeamSyncLoop runs until ctx closes, syncing every interval when enabled.

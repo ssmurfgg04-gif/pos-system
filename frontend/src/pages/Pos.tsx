@@ -17,15 +17,16 @@
 // with a reason from the shop's catalog.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, Category, CheckoutRequest, Customer, HeldSale, Order, PaymentConfig, Product } from '../lib/api'
+import { api, Category, CheckoutRequest, Customer, HeldSale, Order, PaymentConfig, Product, SplitLeg } from '../lib/api'
 import { useCart } from '../stores/cart'
 import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
-import { formatMoneyCompact, formatMoney, normalizePhoneKe } from '../lib/money'
+import { formatMoneyCompact, formatMoney, normalizePhoneKe, splitRemaining } from '../lib/money'
 import { Button, EmptyState, Input, Modal, Field, MoneyInput, Spinner, Tabs } from '../components/ui'
 import { MpesaModal } from '../components/MpesaModal'
 import { PaystackModal } from '../components/PaystackModal'
 import { HeldSalesDrawer } from '../components/HeldSalesDrawer'
+import { SplitTenderEditor, isAsyncLeg } from '../components/SplitTenderEditor'
 import { ReceiptModal } from '../components/Receipt'
 import { toast } from '../stores/toasts'
 import { enqueue, newClientUuid } from '../offline/queue'
@@ -34,7 +35,7 @@ import { onWsEvent } from '../ws/client'
 import type { WsEvent } from '../ws/client'
 import {
   ShoppingCart, Search, Banknote, Smartphone, X, Minus, Plus, ScanBarcode, AlertTriangle, BookUser,
-  CreditCard, Wallet, Pause, Archive, Star,
+  CreditCard, Wallet, Pause, Archive, Star, SplitSquareHorizontal,
 } from 'lucide-react'
 
 export function Pos() {
@@ -628,6 +629,10 @@ function ChargeModal({
   const [discountCents, setDiscountCents] = useState(0)
   const [discountLabel, setDiscountLabel] = useState('')
   const [redeem, setRedeem] = useState(0)
+  // Split (mixed) tender — opt-in; null/[] logic lives in splitMode so the
+  // single-method UI stays the untouched default.
+  const [splitMode, setSplitMode] = useState(false)
+  const [splitLegs, setSplitLegs] = useState<SplitLeg[]>([])
   const totals = cart.totals()
 
   // Fresh slate every time the modal opens (no stale tender amounts).
@@ -645,13 +650,18 @@ function ChargeModal({
       setDiscountCents(0)
       setDiscountLabel('')
       setRedeem(0)
+      setSplitMode(false)
+      setSplitLegs([])
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  // Tab / store-credit customer search (server enforces limits at charge time).
+  // Tab / store-credit customer search (server enforces limits at charge
+  // time). Split credit legs use the same picker.
+  const splitNeedsCustomer = splitMode && splitLegs.some((l) => l.method === 'credit')
   useEffect(() => {
-    if ((method !== 'tab' && method !== 'credit') || !open) return
+    if (!open) return
+    if (method !== 'tab' && method !== 'credit' && !splitNeedsCustomer) return
     const q = tabQuery.trim()
     if (!q) {
       setTabOptions([])
@@ -665,7 +675,7 @@ function ChargeModal({
       }
     }, 250)
     return () => window.clearTimeout(t)
-  }, [method, open, tabQuery])
+  }, [method, open, tabQuery, splitNeedsCustomer])
 
   // Order-level adjustments — an APPROXIMATION of the server's math (the
   // backend recomputes tax on the discounted subtotal and caps redemption
@@ -682,13 +692,33 @@ function ChargeModal({
   const change = received !== null ? received - tenderDue : null
   const canCash = received === null || change !== null && change >= 0
 
+  // ---- Split-tender validation (mirrors the backend rules) ----
+  const splitAsyncLeg = splitMode ? splitLegs.find(isAsyncLeg) : undefined
+  const splitMpesaLeg = splitMode ? splitLegs.find((l) => l.method === 'mpesa') : undefined
+  const splitValid =
+    !!splitMode &&
+    splitLegs.length > 0 &&
+    splitLegs.every((l) => l.amountCents > 0) &&
+    splitRemaining(tenderDue, splitLegs) === 0 &&
+    splitLegs.filter(isAsyncLeg).length <= 1 &&
+    (!splitLegs.some((l) => l.method === 'credit') || (!!tabCustomer && creditOf(tabCustomer) > 0 && online)) &&
+    (!splitLegs.some((l) => l.method === 'paystack') || online) &&
+    (!splitMpesaLeg || branding.payment_mode === 'manual' || !!normalizePhoneKe(splitMpesaLeg.phone || ''))
+
   const checkout = async (
     paymentMethod: 'cash' | 'mpesa' | 'tab' | 'credit' | 'paystack',
     paymentMode?: 'auto' | 'stk' | 'manual',
+    legs?: SplitLeg[],
   ) => {
     setBusy(true)
     setError('')
     const clientUuid = newClientUuid()
+    // The async leg rides LAST so the pending-payment modals (which read
+    // payments[payments.length-1]) find it on the raw order too.
+    const asyncLeg = legs?.find(isAsyncLeg)
+    const orderedLegs = asyncLeg
+      ? [...(legs ?? []).filter((l) => !isAsyncLeg(l)), asyncLeg]
+      : legs
     const body: CheckoutRequest = {
       items: cart.lines.map((l) => ({ productId: l.productId, qty: l.qty })),
       paymentMethod: paymentMethod === 'tab' ? 'account' : paymentMethod,
@@ -701,10 +731,17 @@ function ChargeModal({
       discountCents: canDiscount && discountCents > 0 ? discountCents : undefined,
       discountLabel: canDiscount && discountCents > 0 && discountLabel.trim() ? discountLabel.trim() : undefined,
       redeemPoints: redeem > 0 && tabCustomer ? redeem : undefined,
+      splitPayments: orderedLegs && orderedLegs.length > 0 ? orderedLegs : undefined,
     }
     try {
       const o = await api.post<Order>('/api/v1/orders/checkout', body)
-      if (paymentMethod === 'mpesa' && o.status === 'PENDING') {
+      if (asyncLeg && o.status === 'PENDING') {
+        if (asyncLeg.method === 'mpesa') {
+          onMpesa(o)
+        } else {
+          onPaystack(o, asyncLeg.email?.trim() || email.trim())
+        }
+      } else if (paymentMethod === 'mpesa' && o.status === 'PENDING') {
         onMpesa(o)
       } else if (paymentMethod === 'paystack' && o.status === 'PENDING') {
         onPaystack(o, email.trim())
@@ -713,9 +750,11 @@ function ChargeModal({
       }
     } catch (err: any) {
       // Network failure → queue offline (cash only; M-Pesa/Paystack need a
-      // live connection to know payment state).
+      // live connection to know payment state). Same rule for a split made
+      // purely of cash legs.
+      const splitNeedsServer = !!legs && legs.some((l) => isAsyncLeg(l) || l.method === 'credit')
       if (!navigator.onLine || /network|fetch/i.test(String(err))) {
-        if (paymentMethod === 'cash') {
+        if (paymentMethod === 'cash' && !splitNeedsServer) {
           try {
             await enqueue(body)
             toast.info('Saved offline', 'Will sync when back online.')
@@ -753,14 +792,46 @@ function ChargeModal({
             ...(paystackReady ? [{ key: 'paystack' as const, label: 'Card / M-M', icon: <CreditCard size={15} strokeWidth={2.25} aria-hidden /> }] : []),
           ]}
           value={method}
-          onChange={setMethod}
+          onChange={(m) => { setMethod(m); if (m !== 'tab' && m !== 'credit') { setTabCustomer(null); setTabQuery('') } }}
         />
+
+        {/* Split (mixed) tender — opt-in toggle, single-method UI untouched. */}
+        <label className="flex items-center gap-2 text-[13px] font-semibold text-ink cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={splitMode}
+            onChange={(e) => {
+              const on = e.target.checked
+              setSplitMode(on)
+              setError('')
+              if (on && splitLegs.length === 0) {
+                // Start from a cash leg covering everything + an empty one.
+                setSplitLegs([
+                  { method: 'cash', amountCents: tenderDue },
+                  { method: 'cash', amountCents: 0 },
+                ])
+              }
+            }}
+            className="w-5 h-5 accent-[#10B981]"
+          />
+          <SplitSquareHorizontal size={15} strokeWidth={2.25} aria-hidden />
+          Split payment — part cash, part M-Pesa / card / credit
+        </label>
 
         <Field label="Customer name (optional)">
           <Input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Walk-in" />
         </Field>
 
-        {method === 'cash' ? (
+        {splitMode ? (
+          <SplitTenderEditor
+            legs={splitLegs}
+            onChange={setSplitLegs}
+            totalCents={tenderDue}
+            creditEnabled={!!creditEnabled}
+            paystackReady={!!paystackReady}
+            creditReady={!!tabCustomer && creditOf(tabCustomer) > 0}
+          />
+        ) : method === 'cash' ? (
           <>
             <Field label="Cash received">
               <MoneyInput value={received ?? 0} onCents={(c) => setReceived(c)} placeholder="0.00" className="text-lg font-bold" />
@@ -787,16 +858,16 @@ function ChargeModal({
               </div>
             )}
           </>
-        ) : method === 'tab' || method === 'credit' ? (
+        ) : method === 'tab' || method === 'credit' || splitNeedsCustomer ? (
           <>
             <Field
-              label={method === 'credit' ? 'Customer (store credit)' : 'Tab customer'}
-              hint={method === 'credit' ? 'Pays from their prepaid store credit.' : 'Their limit is checked automatically.'}
+              label={splitNeedsCustomer ? 'Customer (store credit leg)' : method === 'credit' ? 'Customer (store credit)' : 'Tab customer'}
+              hint={splitNeedsCustomer || method === 'credit' ? 'Pays from their prepaid store credit.' : 'Their limit is checked automatically.'}
             >
               <Input
                 value={
                   tabCustomer
-                    ? method === 'credit'
+                    ? splitNeedsCustomer || method === 'credit'
                       ? `${tabCustomer.name} · credit ${formatMoney(creditOf(tabCustomer))}`
                       : `${tabCustomer.name} · owes ${formatMoney(tabCustomer.balanceCents)}`
                     : tabQuery
@@ -834,6 +905,9 @@ function ChargeModal({
             {method === 'credit' && tabCustomer && creditOf(tabCustomer) <= 0 && (
               <p className="text-danger-text text-[13px] font-semibold">This customer has no store credit — top up from their profile first.</p>
             )}
+            {splitNeedsCustomer && tabCustomer && creditOf(tabCustomer) <= 0 && (
+              <p className="text-danger-text text-[13px] font-semibold">This customer has no store credit — top up from their profile first.</p>
+            )}
             {method === 'tab' && tabCustomer && tabCustomer.creditLimitCents <= 0 && (
               <p className="text-danger-text text-[13px] font-semibold">This customer is cash-only — pick someone with credit.</p>
             )}
@@ -844,7 +918,7 @@ function ChargeModal({
               <p className="text-[11px] text-ink-subtle">Charge is disabled offline. Reconnect to use {method === 'credit' ? 'store credit' : 'tabs'}.</p>
             )}
           </>
-        ) : method === 'paystack' ? (
+        ) : !splitMode && method === 'paystack' ? (
           <>
             <Field label="Customer email (optional)" hint="Goes on the Paystack receipt.">
               <Input
@@ -974,25 +1048,35 @@ function ChargeModal({
           className="w-full h-16 text-xl"
           disabled={
             busy ||
-            (method === 'cash' && !canCash) ||
-            (canDiscount && !discountOk) ||
-            (method === 'mpesa' && branding.payment_mode !== 'manual' && !normalizePhoneKe(phone)) ||
-            ((method === 'tab' || method === 'credit') && (!online || !tabCustomer || (method === 'tab' ? tabCustomer!.creditLimitCents <= 0 : creditOf(tabCustomer!) <= 0))) ||
-            (method === 'paystack' && !online)
+            (splitMode
+              ? !splitValid
+              : (method === 'cash' && !canCash) ||
+                (canDiscount && !discountOk) ||
+                (method === 'mpesa' && branding.payment_mode !== 'manual' && !normalizePhoneKe(phone)) ||
+                ((method === 'tab' || method === 'credit') && (!online || !tabCustomer || (method === 'tab' ? tabCustomer!.creditLimitCents <= 0 : creditOf(tabCustomer!) <= 0))) ||
+                (method === 'paystack' && !online))
           }
-          onClick={() => checkout(method, method === 'mpesa' ? (branding.payment_mode as 'auto' | 'stk' | 'manual') : undefined)}
+          onClick={() =>
+            splitMode
+              ? checkout(splitLegs[0]?.method ?? 'cash', splitAsyncLeg?.method === 'mpesa' ? (branding.payment_mode as 'auto' | 'stk' | 'manual') : undefined, splitLegs)
+              : checkout(method, method === 'mpesa' ? (branding.payment_mode as 'auto' | 'stk' | 'manual') : undefined)
+          }
         >
-          {busy
-            ? <Spinner className="border-t-brand-ink" />
-            : method === 'cash'
-              ? `Take ${formatMoney(tenderDue)}`
-              : method === 'tab'
-                ? `Charge ${formatMoney(tenderDue)} to tab`
-                : method === 'credit'
-                  ? `Take ${formatMoney(tenderDue)} from credit`
-                  : method === 'paystack'
-                    ? `Pay ${formatMoney(tenderDue)} via Paystack →`
-                    : 'Charge via M-Pesa →'}
+          {busy ? (
+            <Spinner className="border-t-brand-ink" />
+          ) : splitMode ? (
+            `Charge ${formatMoney(tenderDue)} — ${splitLegs.length} payment${splitLegs.length === 1 ? '' : 's'}`
+          ) : method === 'cash' ? (
+            `Take ${formatMoney(tenderDue)}`
+          ) : method === 'tab' ? (
+            `Charge ${formatMoney(tenderDue)} to tab`
+          ) : method === 'credit' ? (
+            `Take ${formatMoney(tenderDue)} from credit`
+          ) : method === 'paystack' ? (
+            `Pay ${formatMoney(tenderDue)} via Paystack →`
+          ) : (
+            'Charge via M-Pesa →'
+          )}
         </Button>
         <p className="text-center text-[11px] text-ink-subtle">Served by {cashierName}</p>
       </div>

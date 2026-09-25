@@ -43,6 +43,8 @@ export interface DemoProduct {
   costCents: number
   stockQty: number
   trackStock: boolean
+  /** Gift-card products mint redeemable codes when sold (never track stock). */
+  isGiftCard: boolean
   active: boolean
   updatedAt: string
 }
@@ -341,6 +343,7 @@ const PRODUCTS: [string, string, string, string, number, number, number, boolean
   ['SV-001', '', 'Custom Print Run — per design', 'services', 25000, 0, 0, false],
   ['SV-002', '', 'Artwork & Branding Setup', 'services', 100000, 0, 0, false],
   ['SV-003', '', 'Same-Day Rush Fee', 'services', 50000, 0, 0, false],
+  ['GC-001', '', 'Gift Card', 'services', 100000, 0, 0, false],
 ]
 
 const CUSTOMERS = [
@@ -380,6 +383,7 @@ export function buildSeed(): DemoDB {
     costCents: p[5],
     stockQty: p[6],
     trackStock: p[7],
+    isGiftCard: p[0].startsWith('GC-'),
     active: true,
     updatedAt: iso(new Date(now.getTime() - Math.floor(rnd() * 20) * 864e5)),
   }))

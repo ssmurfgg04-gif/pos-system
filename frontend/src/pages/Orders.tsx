@@ -4,7 +4,7 @@
 // Paystack payments (card / M-Money via Paystack) render in the detail.
 
 import { useEffect, useMemo, useState } from 'react'
-import { api, Order } from '../lib/api'
+import { api, GiftCard, Order } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Input, Modal, Spinner, StatusPill, Table, Tabs, Textarea, Field } from '../components/ui'
 import { ReceiptModal } from '../components/Receipt'
@@ -204,7 +204,22 @@ function OrderDrawer({
 }) {
   const [live, setLive] = useState<OrderDetail>(order)
   const [receiptOpen, setReceiptOpen] = useState(false)
+  // Gift cards mint on paid sales — fetch them lazily, only when this order
+  // plausibly contains a gift-card line and only for PAID orders. Fails
+  // soft: an old backend just shows no chips.
+  const [giftCards, setGiftCards] = useState<GiftCard[] | null>(null)
   const branding = useBranding((s) => s.branding)
+  const looksGiftCard = live.items.some((i) => /^gc-/i.test(i.sku) || /gift card/i.test(i.name))
+  useEffect(() => {
+    setGiftCards(null)
+    if (live.status !== 'PAID' || !looksGiftCard) return
+    let alive = true
+    api.get<{ cards: GiftCard[] }>(`/api/v1/gift-cards?orderId=${order.id}`)
+      .then((r) => { if (alive) setGiftCards(Array.isArray(r) ? (r as unknown as GiftCard[]) : r?.cards ?? []) })
+      .catch(() => { if (alive) setGiftCards([]) })
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order.id, live.status, looksGiftCard])
   useEffect(() => {
     const t = setInterval(async () => {
       try {
@@ -307,6 +322,25 @@ function OrderDrawer({
           </div>
         )
       })}
+
+      {giftCards && giftCards.length > 0 && (
+        <div className="mt-3">
+          <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Gift cards minted</p>
+          <div className="flex flex-wrap gap-2">
+            {giftCards.map((g) => (
+              <span
+                key={g.id}
+                className="inline-flex items-center gap-2 px-2.5 py-1 rounded-pill border-2 border-line-strong bg-surface text-[12px] font-bold"
+                title={g.status === 'ACTIVE' ? 'Redeemable — credit the code to a customer from their profile' : 'Already redeemed to store credit'}
+              >
+                <span className="font-mono tracking-wider text-ink">{g.code}</span>
+                <span className="text-ink-muted tabular">{formatMoney(g.initialCents)}</span>
+                <StatusPill status={g.status === 'ACTIVE' ? 'paid' : 'void'} label={g.status === 'ACTIVE' ? 'Active' : 'Redeemed'} />
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {live.voidReason && (
         <div className="mt-3 flex items-start gap-2 text-[13px] font-bold text-void-text bg-void-bg border-2 border-void-text/30 rounded-input p-3">

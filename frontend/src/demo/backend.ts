@@ -13,7 +13,7 @@ function isDefaultPassword(pw: string) {
 
 import { ApiError, token } from '../lib/api'
 import { cartTotals } from '../lib/money'
-import { buildSeed, receiptCode, DemoDB, DemoOrder, DemoUser, DemoCustomer, DemoLedgerEntry, DemoSupplier, DemoPurchaseOrder, DemoStockTake, PERMISSION_CATALOG } from './seed'
+import { buildSeed, receiptCode, DemoDB, DemoOrder, DemoUser, DemoCustomer, DemoLedgerEntry, DemoPayment, DemoSupplier, DemoPurchaseOrder, DemoStockTake, PERMISSION_CATALOG } from './seed'
 
 const KEY = 'pos-demo-db-v1'
 const MASK = '__SET__'
@@ -48,6 +48,51 @@ type DemoDBX = DemoDB & {
   voidReasons?: DemoVoidReason[]
   heldSales?: DemoHeldSale[]
   productImages?: Record<string, string>
+  stockCounts?: DemoStockCount[]
+  giftCards?: DemoGiftCard[]
+}
+
+// ---- Stocktake (count sessions) & gift cards (v10 server parity) ----
+
+interface DemoStockCountLine {
+  id: number
+  countId: number
+  productId: number
+  sku: string
+  name: string
+  expectedQty: number
+  countedQty: number | null
+  systemQty: number
+  unitCostCents: number
+  applied: boolean
+}
+
+interface DemoStockCount {
+  id: number
+  number: string
+  status: 'OPEN' | 'DONE' | 'CANCELLED'
+  note: string
+  countedBy: number
+  countedByName: string
+  openedAt: string
+  closedAt: string
+  linesTotal: number
+  linesCounted: number
+  varianceUnits: number
+  varianceValueCents: number
+  lines: DemoStockCountLine[]
+}
+
+interface DemoGiftCard {
+  id: number
+  code: string
+  orderId: number
+  initialCents: number
+  remainingCents: number
+  status: 'ACTIVE' | 'EMPTY'
+  issuedAt: string
+  redeemedAt: string
+  redeemedByCustomerId: number
 }
 
 const DEFAULT_VOID_REASONS = [
@@ -163,6 +208,30 @@ function migrateDemo(d: DemoDB) {
     ;(d.seq as any).held = 1
     dirty = true
   }
+  // v10: stock-count sessions, gift cards, gift-card flag on old products.
+  if (!Array.isArray(x.stockCounts)) {
+    x.stockCounts = []
+    dirty = true
+  }
+  if (!Array.isArray(x.giftCards)) {
+    x.giftCards = []
+    dirty = true
+  }
+  if ((d.seq as any).stockCount === undefined) {
+    ;(d.seq as any).stockCount = 1
+    ;(d.seq as any).stockCountLine = 1
+    dirty = true
+  }
+  if ((d.seq as any).giftCard === undefined) {
+    ;(d.seq as any).giftCard = 1
+    dirty = true
+  }
+  for (const p of d.products) {
+    if (typeof (p as any).isGiftCard !== 'boolean') {
+      ;(p as any).isGiftCard = false
+      dirty = true
+    }
+  }
   if (!x.productImages || typeof x.productImages !== 'object') {
     x.productImages = {}
     dirty = true
@@ -218,6 +287,7 @@ function persist() {
 
 export function resetDemo() {
   db = buildSeed()
+  migrateDemo(db) // seed alone lacks v8+/v9+ unions (retail perms, seq keys)
   persist()
 }
 
@@ -287,7 +357,8 @@ function productDTO(p: DemoDB['products'][number]) {
     id: p.id, sku: p.sku, barcode: p.barcode, name: p.name,
     categoryId: p.categoryId, categoryName: c ? c.name : '',
     priceCents: p.priceCents, costCents: p.costCents, stockQty: p.stockQty,
-    trackStock: p.trackStock, active: p.active, updatedAt: p.updatedAt,
+    trackStock: p.trackStock, isGiftCard: !!(p as { isGiftCard?: boolean }).isGiftCard,
+    active: p.active, updatedAt: p.updatedAt,
   }
 }
 
@@ -443,6 +514,14 @@ function completeOrder(orderId: number, opts: { receipt?: string; method: 'cash'
   }
   // Guarded stock decrement (never double-deduct: only PENDING→PAID passes).
   for (const it of o.items) adjustStock(it.productId, -it.qty)
+  // Gift-card products mint one redeemable code per unit when the sale is
+  // PAID (server parity — value products, stock is never deducted).
+  for (const it of o.items) {
+    const p = d.products.find((x) => x.id === it.productId)
+    if (p && p.isGiftCard) {
+      for (let i = 0; i < it.qty; i++) mintGiftCard(d, o.id, it.unitPriceCents)
+    }
+  }
   // Loyalty earns on EVERY paid order tied to a customer (server parity).
   if (o.customerId && (d.settings.loyalty_enabled ?? 'true') !== 'false') {
     const per = Math.round(Number(d.settings.loyalty_earn_per_cents))
@@ -451,6 +530,26 @@ function completeOrder(orderId: number, opts: { receipt?: string; method: 'cash'
       postLedger(o.customerId, o.id, 'loyalty', 0, earn, `loyalty earned ${o.number}`, o.cashierId)
     }
   }
+}
+
+/** Mint one gift-card code (GC-XXXX-XXXX) for a paid order. */
+function mintGiftCard(d: DemoDBX, orderId: number, amountCents: number): DemoGiftCard {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  const token = (n: number) =>
+    Array.from({ length: n }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+  const card: DemoGiftCard = {
+    id: (d.seq as any).giftCard++,
+    code: `GC-${token(4)}-${token(4)}`,
+    orderId,
+    initialCents: amountCents,
+    remainingCents: amountCents,
+    status: 'ACTIVE',
+    issuedAt: nowIso(),
+    redeemedAt: '',
+    redeemedByCustomerId: 0,
+  }
+  d.giftCards = [...(d.giftCards || []), card]
+  return card
 }
 
 // ---- product photo helpers (demo stores data URLs in-memory) ----
@@ -725,11 +824,13 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const sku = String(body?.sku || '').trim() || `SKU-${d.seq.product}`
     if (d.products.some((x) => x.sku === sku)) throw new ApiError(409, 'sku already exists')
     const cat = d.categories.find((c) => c.id === Number(body?.categoryId)) || d.categories[0]
+    const isGiftCard = !!body?.isGiftCard
     const prod = {
       id: d.seq.product++, sku, barcode: String(body?.barcode || ''), name: String(body?.name || ''),
       categoryId: cat.id, priceCents: Math.max(0, Number(body?.priceCents) || 0),
       costCents: Math.max(0, Number(body?.costCents) || 0), stockQty: Math.max(0, Number(body?.stockQty) || 0),
-      trackStock: body?.trackStock !== false, active: body?.active !== false, updatedAt: nowIso(),
+      trackStock: isGiftCard ? false : body?.trackStock !== false, // gift cards sell value, not shelf stock
+      isGiftCard, active: body?.active !== false, updatedAt: nowIso(),
     }
     d.products.push(prod)
     audit(user.id, user.username, 'PRODUCT_CREATED', 'product', String(prod.id), prod.name)
@@ -750,6 +851,10 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       if (body?.costCents !== undefined) prod.costCents = Math.max(0, Number(body.costCents))
       if (body?.stockQty !== undefined) prod.stockQty = Math.max(0, Number(body.stockQty))
       if (body?.trackStock !== undefined) prod.trackStock = !!body.trackStock
+      if (body?.isGiftCard !== undefined) {
+        prod.isGiftCard = !!body.isGiftCard
+        if (prod.isGiftCard) prod.trackStock = false // server parity: value, not shelf stock
+      }
       if (body?.active !== undefined) prod.active = !!body.active
       prod.updatedAt = nowIso()
       audit(user.id, user.username, 'PRODUCT_UPDATED', 'product', String(prod.id), prod.name)
@@ -853,7 +958,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
         existing.updatedAt = nowIso()
         updated++
       } else {
-        d.products.push({ id: d.seq.product++, sku: get('sku') || `SKU-${d.seq.product}`, ...fields, updatedAt: nowIso() })
+        d.products.push({ id: d.seq.product++, sku: get('sku') || `SKU-${d.seq.product}`, ...fields, isGiftCard: false, updatedAt: nowIso() })
         created++
       }
     }
@@ -1010,6 +1115,49 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     }
     // Payable is what changes hands (discount + points already applied).
     const payable = Math.max(0, totalCents - redeemCents)
+    // ---- Split / mixed tender validation (server parity): legs must sum
+    // exactly to the payable, at most one async leg (mpesa/paystack), no
+    // account tabs; credit legs need a live customer and wallet coverage.
+    const rawLegs: any[] = Array.isArray(body?.splitPayments) ? body.splitPayments : []
+    const isSplit = rawLegs.length > 0
+    const splitLegs: { method: 'cash' | 'mpesa' | 'paystack' | 'credit'; amountCents: number; phone: string; email: string; mode: string }[] = []
+    if (isSplit) {
+      if (method === 'account') throw new ApiError(400, 'split tender cannot include account tabs')
+      let sum = 0
+      let asyncCount = 0
+      for (const lg of rawLegs) {
+        const lm = String(lg?.method || '')
+        if (lm !== 'cash' && lm !== 'mpesa' && lm !== 'paystack' && lm !== 'credit') {
+          throw new ApiError(400, `invalid split method "${lm}"`)
+        }
+        const amt = Math.round(Number(lg?.amountCents) || 0)
+        if (!(amt > 0)) throw new ApiError(400, 'split legs need positive amounts')
+        sum += amt
+        if (lm === 'mpesa' || lm === 'paystack') asyncCount++
+        splitLegs.push({
+          method: lm, amountCents: amt,
+          phone: String(lg?.phone || ''), email: String(lg?.email || ''),
+          mode: lm === 'cash'
+            ? 'cash'
+            : lm === 'mpesa'
+              ? String(body?.paymentMode || d.settings.payment_mode || 'auto')
+              : '',
+        })
+      }
+      if (sum !== payable) throw new ApiError(400, `split total (${sum}) does not match the amount due (${payable})`)
+      if (asyncCount > 1) throw new ApiError(400, 'only one asynchronous leg (M-Pesa or card) per split')
+      const creditTotal = splitLegs.filter((l) => l.method === 'credit').reduce((s, l) => s + l.amountCents, 0)
+      if (creditTotal > 0) {
+        const cid = Number(body?.customerId) || 0
+        if (!cid) throw new ApiError(400, 'credit split needs a customer')
+        tabCustomer = d.customers.find((x) => x.id === cid)
+        if (!tabCustomer) throw new ApiError(404, 'customer not found')
+        if (!tabCustomer.active) throw new ApiError(409, 'customer is inactive')
+        const wallet = Math.round(Number((tabCustomer as any).storeCreditCents) || 0)
+        if (wallet < creditTotal) throw new ApiError(409, `not enough store credit: has ${wallet}, needs ${creditTotal}`)
+        ;(tabCustomer as any).storeCreditCents = wallet - creditTotal
+      }
+    }
     const o: DemoOrder = {
       id: d.seq.order++, number: nextOrderNumber(d), status: 'PENDING',
       subtotalCents: t.subtotal, taxCents: taxCents, totalCents: payable,
@@ -1028,6 +1176,55 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       if (body?.discountLabel) (o as any).discountLabel = String(body.discountLabel).slice(0, 120)
     }
     ;(o as any).pointsRedeemed = redeemSpent
+    if (isSplit) {
+      // Record each leg as a payment; the async leg rides LAST so the STK
+      // simulator / manual completion targets it (payments[last]).
+      const asyncLeg = splitLegs.find((l) => l.method === 'mpesa' || l.method === 'paystack')
+      const ordered = asyncLeg ? [...splitLegs.filter((l) => l !== asyncLeg), asyncLeg] : splitLegs
+      for (const l of ordered) {
+        o.payments.push({
+          id: d.seq.pay++, orderId: o.id, method: l.method as 'cash' | 'mpesa' | 'account', mode: l.mode,
+          amountCents: l.amountCents, status: 'PENDING' as const, phone: l.phone,
+          mpesaReceipt: '', checkoutRequestId: '',
+          resultDesc: '', discrepancy: false, createdAt: nowIso(), completedAt: '',
+        })
+      }
+      d.orders.push(o)
+      const creditTotal = splitLegs.filter((l) => l.method === 'credit').reduce((s, l) => s + l.amountCents, 0)
+      if (creditTotal > 0 && tabCustomer) {
+        postCreditLedger(d, tabCustomer.id, o.id, 'credit_redeem', -creditTotal, `store credit payment ${o.number}`, user.id)
+      }
+      if (redeemSpent > 0 && tabCustomer) {
+        postLedger(tabCustomer.id, o.id, 'loyalty', 0, -redeemSpent, 'points redeemed at checkout', user.id)
+      }
+      if (asyncLeg?.method === 'mpesa') {
+        if (asyncLeg.mode !== 'manual') {
+          ;(o.payments[o.payments.length - 1] as DemoPayment).checkoutRequestId = 'ws_CO_' + Math.random().toString(36).slice(2, 12)
+          simulateStk(o.id)
+        } // manual mode: stays PENDING until the receipt code is entered
+        // Instant legs complete at the till even while the async leg pends
+        // (server parity); a later void refunds them via the existing rules.
+        for (const p of o.payments) {
+          if (p.method === 'cash' || (p.method as string) === 'credit') {
+            p.status = 'COMPLETED'
+            p.completedAt = nowIso()
+          }
+        }
+      } else if (!asyncLeg) {
+        // All-instant split (cash/credit only): complete now, then finish
+        // every leg so reports see the full mixed tender.
+        completeOrder(o.id, { method: 'cash', mode: 'cash' })
+        for (const p of o.payments) {
+          if (p.status === 'PENDING') {
+            p.status = 'COMPLETED'
+            p.completedAt = nowIso()
+          }
+        }
+      } // paystack async: PENDING until init/verify (501 in the demo)
+      audit(user.id, user.username, 'ORDER_CREATED', 'order', String(o.id), `${o.number} split(${ordered.map((l) => l.method).join('+')})`)
+      persist()
+      return orderDTO(o) as T
+    }
     const pay = {
       id: d.seq.pay++, orderId: o.id, method: method as 'cash' | 'mpesa' | 'account', mode: mode as string, amountCents: payable,
       status: 'PENDING' as const, phone: '', mpesaReceipt: '', checkoutRequestId: '',
@@ -1615,6 +1812,180 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       persist()
       return t as T
     }
+  }
+
+  // ---- stock-count sessions (suppliers.manage group, server parity) ----
+  const countDTO = (c: DemoStockCount): Omit<DemoStockCount, 'lines'> => {
+    const { lines, ...rest } = c
+    void lines
+    return { ...rest }
+  }
+  if (m === 'GET' && p === '/stock-counts') {
+    requirePerm(perms, 'suppliers.manage')
+    const limit = Math.min(200, Number(q.get('limit')) || 50)
+    const x = d as DemoDBX
+    return { counts: [...(x.stockCounts || [])].sort((a, b) => b.id - a.id).slice(0, limit).map(countDTO) } as T
+  }
+  if (m === 'POST' && p === '/stock-counts') {
+    requirePerm(perms, 'suppliers.manage')
+    const x = d as DemoDBX
+    const cid = (d.seq as any).stockCount++
+    // Snapshot every active, stock-tracked product (gift cards never track stock).
+    const snap = d.products.filter((prod) => prod.active && prod.trackStock)
+    const c: DemoStockCount = {
+      id: cid, number: nextDocNumber(d, 'CNT'), status: 'OPEN',
+      note: String(body?.note || '').slice(0, 300),
+      countedBy: user.id, countedByName: user.fullName || user.username,
+      openedAt: nowIso(), closedAt: '',
+      linesTotal: snap.length, linesCounted: 0, varianceUnits: 0, varianceValueCents: 0,
+      lines: snap.map((prod) => ({
+        id: (d.seq as any).stockCountLine++, countId: cid, productId: prod.id,
+        sku: prod.sku, name: prod.name, expectedQty: prod.stockQty, countedQty: null,
+        systemQty: prod.stockQty, unitCostCents: prod.costCents, applied: false,
+      })),
+    }
+    x.stockCounts = [...(x.stockCounts || []), c]
+    audit(user.id, user.username, 'STOCKCOUNT_OPENED', 'stocktake', c.number, `${c.linesTotal} lines`)
+    persist()
+    return countDTO(c) as T
+  }
+  const cntMatch = p.match(/^\/stock-counts\/(\d+)(\/(lines|complete))?$/)
+  if (cntMatch) {
+    requirePerm(perms, 'suppliers.manage')
+    const x = d as DemoDBX
+    const c = (x.stockCounts || []).find((s) => s.id === Number(cntMatch[1]))
+    if (!c) throw new ApiError(404, 'count session not found')
+    const op = cntMatch[3] || ''
+    if (m === 'GET' && !op) {
+      return { count: countDTO(c), lines: c.lines.map((l) => ({ ...l })) } as T
+    }
+    if (m === 'PUT' && op === 'lines') {
+      if (c.status !== 'OPEN') throw new ApiError(422, `count session ${c.number} is closed`)
+      const pid = Math.round(Number(body?.productId) || 0)
+      const line = c.lines.find((l) => l.productId === pid)
+      if (!line) throw new ApiError(400, 'product is not on this count')
+      if (body?.countedQty === null || body?.countedQty === undefined || body?.countedQty === '') {
+        line.countedQty = null // clears the count
+      } else {
+        const qty = Math.round(Number(body.countedQty))
+        if (!(qty >= 0) || qty > 1_000_000) throw new ApiError(422, 'counted quantity out of range')
+        line.countedQty = qty
+      }
+      c.linesCounted = c.lines.filter((l) => l.countedQty !== null).length
+      audit(user.id, user.username, 'STOCKCOUNT_LINE_SAVED', 'stocktake', c.number, `${line.sku} = ${line.countedQty ?? '—'}`)
+      persist()
+      return { saved: true } as T
+    }
+    if (m === 'POST' && op === 'complete') {
+      if (c.status !== 'OPEN') throw new ApiError(422, `count session ${c.number} is already closed`)
+      const apply = !!body?.apply
+      // Variance vs LIVE stock at close time (sales may have moved since open).
+      let varianceUnits = 0
+      let varianceValue = 0
+      for (const l of c.lines) {
+        if (l.countedQty === null) continue
+        const prod = d.products.find((pp) => pp.id === l.productId)
+        const system = prod ? prod.stockQty : l.expectedQty
+        l.systemQty = system
+        const diff = l.countedQty - system
+        varianceUnits += diff
+        varianceValue += diff * l.unitCostCents
+        l.applied = apply && diff !== 0
+        if (apply && diff !== 0 && prod) {
+          prod.stockQty = Math.max(0, l.countedQty)
+          prod.updatedAt = nowIso()
+        }
+      }
+      c.status = 'DONE'
+      c.closedAt = nowIso()
+      c.varianceUnits = varianceUnits
+      c.varianceValueCents = varianceValue
+      audit(user.id, user.username, apply ? 'STOCKCOUNT_APPLIED' : 'STOCKCOUNT_CLOSED', 'stocktake', c.number,
+        `variance ${varianceUnits} units, value ${varianceValue}${apply ? ' (applied)' : ''}`)
+      persist()
+      return countDTO(c) as T
+    }
+  }
+
+  // ---- gift cards (credit.manage, server parity) ----
+  if (m === 'GET' && p === '/gift-cards') {
+    requirePerm(perms, 'credit.manage')
+    const x = d as DemoDBX
+    const orderId = Number(q.get('orderId')) || 0
+    let cards = [...(x.giftCards || [])].sort((a, b) => b.id - a.id)
+    if (orderId > 0) cards = cards.filter((g) => g.orderId === orderId)
+    return { cards: cards.slice(0, 200) } as T
+  }
+  if (m === 'POST' && p === '/gift-cards/redeem') {
+    requirePerm(perms, 'credit.manage')
+    const x = d as DemoDBX
+    const code = String(body?.code || '').trim().toUpperCase()
+    if (!code) throw new ApiError(400, 'code is required')
+    const card = (x.giftCards || []).find((g) => g.code.toUpperCase() === code)
+    if (!card) throw new ApiError(422, `gift card ${code} not found`)
+    if (card.status !== 'ACTIVE' || card.remainingCents <= 0) throw new ApiError(422, `gift card ${code} is already used`)
+    const cust = d.customers.find((c) => c.id === Number(body?.customerId))
+    if (!cust) throw new ApiError(422, 'customer not found')
+    if (!cust.active) throw new ApiError(422, 'customer is inactive')
+    const amount = card.remainingCents
+    ;(cust as any).storeCreditCents = Math.round(Number((cust as any).storeCreditCents) || 0) + amount
+    cust.updatedAt = nowIso()
+    postCreditLedger(d, cust.id, 0, 'credit_topup', amount, `gift card ${card.code}`, user.id)
+    card.status = 'EMPTY'
+    card.remainingCents = 0
+    card.redeemedAt = nowIso()
+    card.redeemedByCustomerId = cust.id
+    audit(user.id, user.username, 'GIFT_CARD_REDEEMED', 'customer', String(cust.id), `${card.code}: ${amount} to ${cust.name}`)
+    persist()
+    return { customer: customerDTO(cust) } as T
+  }
+
+  // ---- team sync (Settings → Team; the demo till is always cloud-linked) ----
+  if (m === 'GET' && p === '/team-sync') {
+    requirePerm(perms, 'settings.manage')
+    return {
+      enabled: true,
+      teamCode: 'KQ7-P2MX-91',
+      deviceId: 'demo-device',
+      deviceName: 'Demo Till',
+      lastPush: nowIso(),
+      lastPull: nowIso(),
+      pending: 0,
+      lastError: '',
+      source: 'cloud',
+      registered: true,
+      approved: true,
+      autoApprove: true,
+      devices: [
+        { deviceId: 'demo-device', deviceName: 'Demo Till (this browser)', appVersion: 'demo', lastSeen: nowIso(), thisDevice: true, approved: true },
+        { deviceId: 'till-back-counter', deviceName: 'Back-counter laptop', appVersion: 'demo', lastSeen: nowIso(), thisDevice: false, approved: true },
+      ],
+    } as T
+  }
+  if (m === 'PUT' && p === '/team-sync') {
+    requirePerm(perms, 'settings.manage')
+    audit(user.id, user.username, 'TEAM_SYNC_CONFIGURED', 'settings', '', 'team sync settings changed')
+    persist()
+    return { saved: true } as T
+  }
+  if (m === 'POST' && p === '/team-sync/create') {
+    requirePerm(perms, 'settings.manage')
+    const code = 'KQ7-P2MX-91'
+    audit(user.id, user.username, 'TEAM_SYNC_CREATED', 'settings', '', code)
+    persist()
+    return { teamCode: code } as T
+  }
+  if (m === 'POST' && p === '/team-sync/now') {
+    requirePerm(perms, 'settings.manage')
+    audit(user.id, user.username, 'TEAM_SYNC_NOW', 'settings', '', 'pushed 0, applied 0')
+    persist()
+    return { pushed: 0, applied: 0 } as T
+  }
+  if (m === 'POST' && p === '/team-sync/use-cloud') {
+    requirePerm(perms, 'settings.manage')
+    audit(user.id, user.username, 'TEAM_SYNC_CLOUD', 'settings', '', 'switched to automatic cloud identity')
+    persist()
+    return { saved: true } as T
   }
 
   if (m === 'POST' && p === '/printer/kick') {

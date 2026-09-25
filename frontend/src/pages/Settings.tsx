@@ -20,7 +20,7 @@ import { resetDemo } from '../demo/backend'
 import { useBranding } from '../stores/branding'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
-import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone } from 'lucide-react'
+import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle } from 'lucide-react'
 
 type SettingsMap = Record<string, string>
 
@@ -822,6 +822,7 @@ function TeamSyncPanel() {
   const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [switching, setSwitching] = useState(false)
 
   const load = async () => {
     try {
@@ -885,6 +886,21 @@ function TeamSyncPanel() {
     }
   }
 
+  // Revert a hand-configured till to the automatic cloud identity
+  // (no project URL / service key / team code needed on this device).
+  const switchToCloud = async () => {
+    setSwitching(true)
+    try {
+      await api.post('/api/v1/team-sync/use-cloud')
+      toast.success('Switched to LedgerPOS Cloud', 'This till now finds its team automatically.')
+      await load()
+    } catch (e: any) {
+      toast.error('Could not switch to cloud', e?.message)
+    } finally {
+      setSwitching(false)
+    }
+  }
+
   if (loadError && !status) {
     return (
       <div className="px-4 pb-4 sm:px-5">
@@ -916,12 +932,38 @@ function TeamSyncPanel() {
               {status.pending > 0 && (
                 <StatusPill status="info" label={`${status.pending} change${status.pending === 1 ? '' : 's'} waiting to push`} />
               )}
+              {status.source === 'cloud' && (
+                <span className="inline-flex flex-col gap-1">
+                  <StatusPill status="paid" label="LedgerPOS Cloud — automatic" />
+                  <span className="text-[12px] text-ink-muted">This till found its team in the cloud database. No codes, no keys.</span>
+                </span>
+              )}
+              {status.source === 'manual' && (
+                <span className="inline-flex flex-col gap-1">
+                  <StatusPill status="pending" label="Manual configuration" />
+                  <span>
+                    <Button size="sm" variant="secondary" onClick={switchToCloud} disabled={switching} title="Drop the hand-entered keys and use the automatic cloud identity">
+                      {switching ? <Spinner className="border-t-brand-ink" /> : <Cloud size={14} strokeWidth={2.5} aria-hidden />}
+                      Switch to LedgerPOS Cloud (automatic)
+                    </Button>
+                  </span>
+                </span>
+              )}
               {status.teamCode && (
                 <span className="text-[12px] text-ink-muted">
                   Team code <span className="font-mono font-bold text-ink tracking-wider">{status.teamCode}</span>
                 </span>
               )}
             </div>
+            {status.registered && !status.approved && (
+              <div className="flex items-start gap-2 bg-pending-bg border-2 border-pending-text/30 rounded-input p-3 text-[13px] font-bold text-pending-text">
+                <AlertTriangle size={15} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
+                <span>
+                  This till is registered but awaiting approval — it cannot push or pull events until another
+                  approved device on the team accepts it{status.autoApprove ? ' (auto-approve is on, this should clear shortly)' : ''}.
+                </span>
+              </div>
+            )}
             <div className="grid sm:grid-cols-2 gap-x-4 gap-y-1 text-[12px] text-ink-muted">
               <span>Last push: <span className="tabular text-ink">{status.lastPush ? new Date(status.lastPush).toLocaleString() : 'never'}</span></span>
               <span>Last pull: <span className="tabular text-ink">{status.lastPull ? new Date(status.lastPull).toLocaleString() : 'never'}</span></span>
@@ -930,7 +972,7 @@ function TeamSyncPanel() {
               <p className="text-[12px] font-bold text-danger-text">Last error: {status.lastError}</p>
             )}
             {status.devices.length > 0 && (
-              <Table head={['Device', 'Version', 'Last seen', '']}>
+              <Table head={['Device', 'Version', 'Last seen', 'Approval', '']}>
                 {status.devices.map((d) => (
                   <tr key={d.deviceId} className={d.thisDevice ? 'bg-brand/5' : ''}>
                     <td className="px-3 py-2">
@@ -942,6 +984,9 @@ function TeamSyncPanel() {
                     <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || '—'}</td>
                     <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">
                       {d.lastSeen ? new Date(d.lastSeen).toLocaleString() : 'never'}
+                    </td>
+                    <td className="px-3 py-2">
+                      <StatusPill status={d.approved ? 'paid' : 'pending'} label={d.approved ? 'Approved' : 'Pending'} />
                     </td>
                     <td className="px-3 py-2 text-right">
                       {d.thisDevice && <StatusPill status="info" label="This device" />}
