@@ -917,8 +917,9 @@ function TeamSyncPanel() {
   return (
     <div className="px-4 pb-4 sm:px-5 space-y-4">
       <div className="bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
-        <p><strong className="text-ink">Multi-till syncing.</strong> Link every till in the shop to one
-        Supabase project and they keep each other up to date — sell on one, see it on all.</p>
+        <p><strong className="text-ink">Multi-till syncing.</strong> Every till links itself to the team
+        automatically — it finds its team in the cloud database the moment it gets online. No codes to send,
+        no keys to paste. Sell on one till, see it on all of them.</p>
       </div>
 
       <div>
