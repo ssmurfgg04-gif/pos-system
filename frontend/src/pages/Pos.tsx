@@ -616,6 +616,11 @@ function ChargeModal({
 }) {
   const cart = useCart()
   const branding = useBranding((s) => s.branding)
+  // M-Pesa via Paystack: with Paystack connected (and the till not locked to
+  // manual receipt entry), the M-Pesa button routes through the Paystack
+  // popup — the customer picks M-Pesa/mobile-money in the popup and no
+  // Safaricom Daraja keys are needed. Card payments ride the same popup.
+  const mpesaViaPaystack = paystackReady && branding.payment_mode !== 'manual'
   const [method, setMethod] = useState<'cash' | 'mpesa' | 'tab' | 'credit' | 'paystack'>('cash')
   const [customerName, setCustomerName] = useState('')
   const [phone, setPhone] = useState('')
@@ -702,8 +707,8 @@ function ChargeModal({
     splitRemaining(tenderDue, splitLegs) === 0 &&
     splitLegs.filter(isAsyncLeg).length <= 1 &&
     (!splitLegs.some((l) => l.method === 'credit') || (!!tabCustomer && creditOf(tabCustomer) > 0 && online)) &&
-    (!splitLegs.some((l) => l.method === 'paystack') || online) &&
-    (!splitMpesaLeg || branding.payment_mode === 'manual' || !!normalizePhoneKe(splitMpesaLeg.phone || ''))
+    (!splitLegs.some((l) => l.method === 'paystack' || (mpesaViaPaystack && l.method === 'mpesa')) || online) &&
+    (!splitMpesaLeg || mpesaViaPaystack || branding.payment_mode === 'manual' || !!normalizePhoneKe(splitMpesaLeg.phone || ''))
 
   const checkout = async (
     paymentMethod: 'cash' | 'mpesa' | 'tab' | 'credit' | 'paystack',
@@ -712,17 +717,24 @@ function ChargeModal({
   ) => {
     setBusy(true)
     setError('')
+    // M-Pesa via Paystack: the order is created as a paystack checkout and
+    // completed in the Paystack popup (mobile-money channel). paymentMode
+    // is a Daraja concept — never sent on this path.
+    const wire = (m: 'cash' | 'mpesa' | 'tab' | 'credit' | 'paystack') =>
+      mpesaViaPaystack && m === 'mpesa' ? 'paystack' as const : m
+    const wiredMethod = wire(paymentMethod)
+    const wiredLegs = legs?.map((l) => ({ ...l, method: wire(l.method) as SplitLeg['method'] }))
     const clientUuid = newClientUuid()
     // The async leg rides LAST so the pending-payment modals (which read
     // payments[payments.length-1]) find it on the raw order too.
-    const asyncLeg = legs?.find(isAsyncLeg)
+    const asyncLeg = wiredLegs?.find(isAsyncLeg)
     const orderedLegs = asyncLeg
-      ? [...(legs ?? []).filter((l) => !isAsyncLeg(l)), asyncLeg]
-      : legs
+      ? [...(wiredLegs ?? []).filter((l) => !isAsyncLeg(l)), asyncLeg]
+      : wiredLegs
     const body: CheckoutRequest = {
       items: cart.lines.map((l) => ({ productId: l.productId, qty: l.qty })),
-      paymentMethod: paymentMethod === 'tab' ? 'account' : paymentMethod,
-      paymentMode,
+      paymentMethod: wiredMethod === 'tab' ? 'account' : wiredMethod,
+      paymentMode: wiredMethod === 'mpesa' ? paymentMode : undefined,
       customerName: customerName.trim() || undefined,
       customerPhone: phone.trim() || undefined,
       customerEmail: email.trim() || undefined,
@@ -741,9 +753,9 @@ function ChargeModal({
         } else {
           onPaystack(o, asyncLeg.email?.trim() || email.trim())
         }
-      } else if (paymentMethod === 'mpesa' && o.status === 'PENDING') {
+      } else if (wiredMethod === 'mpesa' && o.status === 'PENDING') {
         onMpesa(o)
-      } else if (paymentMethod === 'paystack' && o.status === 'PENDING') {
+      } else if (wiredMethod === 'paystack' && o.status === 'PENDING') {
         onPaystack(o, email.trim())
       } else {
         onDone(o)
@@ -786,10 +798,10 @@ function ChargeModal({
         <Tabs
           tabs={[
             { key: 'cash' as const, label: 'Cash', icon: <Banknote size={15} strokeWidth={2.25} aria-hidden /> },
-            { key: 'mpesa' as const, label: `M-Pesa${branding.mpesa_env === 'mock' ? ' (demo)' : ''}`, icon: <Smartphone size={15} strokeWidth={2.25} aria-hidden /> },
+            { key: 'mpesa' as const, label: mpesaViaPaystack ? 'M-Pesa / Card' : 'M-Pesa', icon: <Smartphone size={15} strokeWidth={2.25} aria-hidden /> },
             { key: 'tab' as const, label: 'Tab', icon: <BookUser size={15} strokeWidth={2.25} aria-hidden /> },
             ...(creditEnabled ? [{ key: 'credit' as const, label: 'Credit', icon: <Wallet size={15} strokeWidth={2.25} aria-hidden /> }] : []),
-            ...(paystackReady ? [{ key: 'paystack' as const, label: 'Card / M-M', icon: <CreditCard size={15} strokeWidth={2.25} aria-hidden /> }] : []),
+            ...(paystackReady && !mpesaViaPaystack ? [{ key: 'paystack' as const, label: 'Card / M-M', icon: <CreditCard size={15} strokeWidth={2.25} aria-hidden /> }] : []),
           ]}
           value={method}
           onChange={(m) => { setMethod(m); if (m !== 'tab' && m !== 'credit') { setTabCustomer(null); setTabQuery('') } }}
@@ -918,7 +930,7 @@ function ChargeModal({
               <p className="text-[11px] text-ink-subtle">Charge is disabled offline. Reconnect to use {method === 'credit' ? 'store credit' : 'tabs'}.</p>
             )}
           </>
-        ) : !splitMode && method === 'paystack' ? (
+        ) : !splitMode && method === 'paystack' || (!splitMode && method === 'mpesa' && mpesaViaPaystack) ? (
           <>
             <Field label="Customer email (optional)" hint="Goes on the Paystack receipt.">
               <Input
@@ -930,7 +942,10 @@ function ChargeModal({
               />
             </Field>
             <div className="bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted space-y-1">
-              <p>A secure Paystack popup opens — the customer pays by card or mobile money.</p>
+              <p>
+                A secure Paystack popup opens — the customer pays by M-Pesa (they enter their number in the
+                popup), card, or any mobile-money channel.
+              </p>
               <p>If the popup closes early, the order stays pending and checkout can be reopened later.</p>
               {!online && (
                 <p className="text-pending-text font-bold flex items-center gap-1.5">
@@ -1052,9 +1067,9 @@ function ChargeModal({
               ? !splitValid
               : (method === 'cash' && !canCash) ||
                 (canDiscount && !discountOk) ||
-                (method === 'mpesa' && branding.payment_mode !== 'manual' && !normalizePhoneKe(phone)) ||
+                (method === 'mpesa' && !mpesaViaPaystack && branding.payment_mode !== 'manual' && !normalizePhoneKe(phone)) ||
                 ((method === 'tab' || method === 'credit') && (!online || !tabCustomer || (method === 'tab' ? tabCustomer!.creditLimitCents <= 0 : creditOf(tabCustomer!) <= 0))) ||
-                (method === 'paystack' && !online))
+                ((method === 'paystack' || (method === 'mpesa' && mpesaViaPaystack)) && !online))
           }
           onClick={() =>
             splitMode
@@ -1075,7 +1090,9 @@ function ChargeModal({
           ) : method === 'paystack' ? (
             `Pay ${formatMoney(tenderDue)} via Paystack →`
           ) : (
-            'Charge via M-Pesa →'
+            mpesaViaPaystack
+              ? `Charge ${formatMoney(tenderDue)} via M-Pesa →`
+              : 'Charge via M-Pesa →'
           )}
         </Button>
         <p className="text-center text-[11px] text-ink-subtle">Served by {cashierName}</p>
