@@ -39,9 +39,10 @@ DIST = os.path.join(FRONTEND, "dist")
 DL_SRC = os.path.join(ROOT, "downloads")
 ICONS_SRC = os.path.join(ROOT, "scripts", "assets", "icons")
 TEMPLATE = os.path.join(ROOT, "scripts", "assets", "download-page.html")
+PORTAL_TEMPLATE = os.path.join(ROOT, "scripts", "assets", "portal-page.html")
 
 RELEASES_PAGE = "https://github.com/ssmurfgg04-gif/pos-system/releases"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 
 INSTALLERS = [
     "ledgerpos-setup-windows-x64.exe",
@@ -145,6 +146,18 @@ def render_landing(sizes: dict) -> None:
     print("index.html rendered")
 
 
+def render_portal() -> None:
+    """The owner portal — a standalone page (no build step) that calls the
+    cloud's portal_login RPC and renders shop performance."""
+    src = PORTAL_TEMPLATE
+    if not os.path.isfile(src):
+        die("scripts/assets/portal-page.html missing")
+    portal_dir = os.path.join(DIST, "portal")
+    os.makedirs(portal_dir, exist_ok=True)
+    shutil.copy2(src, os.path.join(portal_dir, "index.html"))
+    print("portal/index.html rendered")
+
+
 def copy_assets() -> None:
     dl = os.path.join(DIST, "downloads")
     os.makedirs(dl, exist_ok=True)
@@ -187,12 +200,13 @@ def main() -> None:
     build_demo(skip_npm)
     restructure()
     render_landing(sizes)
+    render_portal()
     copy_assets()
     link_check()
     n_files = sum(len(fs) for _, _, fs in os.walk(DIST))
     total = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(DIST) for f in fs)
     print(f"\nDONE — {n_files} files, {total/1e6:.1f} MB in frontend/dist "
-          "(landing page at /, demo at /demo/, installers at /downloads/)")
+          "(landing at /, demo at /demo/, owner portal at /portal/, installers at /downloads/)")
 
 
 if __name__ == "__main__":

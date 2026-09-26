@@ -12,6 +12,7 @@ package services
 import (
         "bytes"
         "crypto/sha256"
+        "flag"
         "encoding/hex"
         "encoding/json"
         "fmt"
@@ -152,7 +153,28 @@ func (s *Service) bootstrapAt() time.Time {
 // cloudBaseURL is a var so tests can point it at a fake Supabase.
 var cloudBaseURL = cloudProjectURL
 
+// cloudProjectRef identifies the production project; any network call to it
+// from a test binary is refused. This exists because a test that boots a
+// ShopPool starts a REAL sync loop — 28 test devices once registered
+// themselves against production before this guard existed. Tests that
+// exercise sync must point cloudBaseURL at a fake server.
+const cloudProjectRef = "ixxiqrobcwkvyjtxdkvh"
+
+func underGoTest() bool {
+        return flag.Lookup("test.v") != nil
+}
+
+func guardProduction(host string) error {
+        if underGoTest() && strings.Contains(host, cloudProjectRef) {
+                return fmt.Errorf("test refused to touch the production cloud — point cloudBaseURL at a fake server")
+        }
+        return nil
+}
+
 func fetchBootstrap() (*cloudBootstrap, error) {
+        if err := guardProduction(cloudBaseURL); err != nil {
+                return nil, err
+        }
         q := url.Values{}
         q.Set("id", "eq.1")
         q.Set("select", "project_url,team_code,auto_approve")
@@ -186,6 +208,9 @@ func fetchBootstrap() (*cloudBootstrap, error) {
 // fetchStores reads the cloud's active store registry with the public anon
 // key (RLS exposes exactly the active rows — no secrets, no device data).
 func fetchStores() ([]cloudStore, error) {
+        if err := guardProduction(cloudBaseURL); err != nil {
+                return nil, err
+        }
         q := url.Values{}
         q.Set("active", "eq.true")
         q.Set("select", "slug,name,team_code,auto_approve")
@@ -234,6 +259,9 @@ func secretHash(sec string) string {
 // comes from the arguments (device id + secret hash), validated by the
 // database on every call.
 func rpcCall(base, fn string, args map[string]any, out any) error {
+        if err := guardProduction(base); err != nil {
+                return err
+        }
         body, _ := json.Marshal(args)
         req, err := http.NewRequest("POST", strings.TrimRight(base, "/")+"/rest/v1/rpc/"+fn, bytes.NewReader(body))
         if err != nil {

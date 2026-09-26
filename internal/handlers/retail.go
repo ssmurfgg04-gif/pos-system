@@ -516,6 +516,72 @@ func (h *H) TeamSyncNow(c *gin.Context) {
         h.ok(c, gin.H{"pushed": pushed, "applied": applied})
 }
 
+// TeamDeviceApprove (settings.manage) — approve a pending device from the
+// roster (auto-approve is off; this is the Approve button).
+func (h *H) TeamDeviceApprove(c *gin.Context) {
+        p := h.principal(c)
+        var body models.TeamRemoveRequest
+        if err := c.ShouldBindJSON(&body); err != nil {
+                h.fail(c, 400, err.Error())
+                return
+        }
+        if body.DeviceID == "" {
+                h.fail(c, 422, "deviceId is required")
+                return
+        }
+        if err := h.svc(c).TeamApproveDevice(body.DeviceID); err != nil {
+                h.fail(c, 422, err.Error())
+                return
+        }
+        h.svc(c).Audit(p.ID, p.Username, "TEAM_DEVICE_APPROVED", "settings", "",
+                body.DeviceID)
+        h.ok(c, gin.H{"saved": true})
+}
+
+// TeamInviteCreate (settings.manage) — mint a team join link for a worker.
+// The cloud returns the token exactly once.
+func (h *H) TeamInviteCreate(c *gin.Context) {
+        p := h.principal(c)
+        var body models.TeamInviteCreateRequest
+        if err := c.ShouldBindJSON(&body); err != nil {
+                h.fail(c, 400, err.Error())
+                return
+        }
+        if len(body.RoleName) < 2 {
+                h.fail(c, 422, "pick the role this worker should have")
+                return
+        }
+        inv, err := h.svc(c).TeamCreateInvite(body.RoleName, body.Permissions, body.Note)
+        if err != nil {
+                h.fail(c, 422, err.Error())
+                return
+        }
+        h.svc(c).Audit(p.ID, p.Username, "TEAM_INVITE_CREATED", "settings", "",
+                inv.RoleName)
+        h.ok(c, inv)
+}
+
+// TeamInviteRevoke (settings.manage) — kill an unused join link.
+func (h *H) TeamInviteRevoke(c *gin.Context) {
+        p := h.principal(c)
+        var body models.TeamInviteRevokeRequest
+        if err := c.ShouldBindJSON(&body); err != nil {
+                h.fail(c, 400, err.Error())
+                return
+        }
+        if body.ID <= 0 {
+                h.fail(c, 422, "invite id is required")
+                return
+        }
+        if err := h.svc(c).TeamRevokeInvite(body.ID); err != nil {
+                h.fail(c, 422, err.Error())
+                return
+        }
+        h.svc(c).Audit(p.ID, p.Username, "TEAM_INVITE_REVOKED", "settings", "",
+                fmt.Sprint(body.ID))
+        h.ok(c, gin.H{"saved": true})
+}
+
 // TeamSyncUseCloud (settings.manage) — revert this till to automatic cloud
 // identity after a manual configuration (the join-code-free default).
 func (h *H) TeamSyncUseCloud(c *gin.Context) {

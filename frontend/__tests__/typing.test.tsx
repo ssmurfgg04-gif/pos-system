@@ -82,9 +82,9 @@ async function walkOnboarding() {
     const pin = document.querySelector('input[placeholder="4 digits"]') as HTMLInputElement | null
     if (pin) typeText(pin, '4321')
   }
-  await clickButton('Open shop') // staff → banner
-  await waitForText('Shop is live')
-  await clickButton('go sell')
+  await clickButton('Open shop') // staff → finish() saves and navigates to the main page
+  // Continue now lands straight on the main page (POS shell) — no extra click.
+  await waitForText('Point of Sale')
 }
 
 describe('typing repro', () => {

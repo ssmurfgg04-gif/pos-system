@@ -10,6 +10,7 @@ import { Login } from './pages/Login'
 import { Pin } from './pages/Pin'
 import { Rotate } from './pages/Rotate'
 import { Signup } from './pages/Signup'
+import { Join } from './pages/Join'
 import { Onboarding } from './pages/Onboarding'
 import { Pos } from './pages/Pos'
 import { Customers } from './pages/Customers'
@@ -36,6 +37,7 @@ export function App() {
 
   // Public routes.
   if (!user) {
+    if (path === '/join') return <Join />
     if (path === '/pin') return <Pin />
     if (path === '/signup') return <Signup />
     return <Login />

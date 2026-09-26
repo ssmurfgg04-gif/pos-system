@@ -11,7 +11,9 @@ import {
   BackupResult,
   OffsiteStatus,
   PaymentConfig,
+  Role,
   TeamDevice,
+  TeamInviteCreated,
   TeamSyncStatus,
   UpdateStatus,
   VoidReason,
@@ -21,7 +23,7 @@ import { resetDemo } from '../demo/backend'
 import { useBranding } from '../stores/branding'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
-import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2 } from 'lucide-react'
+import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck } from 'lucide-react'
 
 type SettingsMap = Record<string, string>
 
@@ -844,6 +846,14 @@ function TeamSyncPanel() {
   const [addingStore, setAddingStore] = useState(false)
   const [assignPick, setAssignPick] = useState<Record<string, string>>({})
   const [workingDevice, setWorkingDevice] = useState('')
+  // Join-link invites: pick a role, mint the link, show it once.
+  const [roles, setRoles] = useState<Role[]>([])
+  const [inviteRole, setInviteRole] = useState('')
+  const [inviteNote, setInviteNote] = useState('')
+  const [inviteBusy, setInviteBusy] = useState(false)
+  const [invite, setInvite] = useState<TeamInviteCreated | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [workingInvite, setWorkingInvite] = useState(0)
 
   const load = async () => {
     try {
@@ -856,7 +866,14 @@ function TeamSyncPanel() {
       setLoadError(e?.message || 'Team sync status unavailable')
     }
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    api.get<Role[]>('/api/v1/roles').then((rs) => {
+      setRoles(rs)
+      const fallback = rs.find((r) => r.name === 'Cashier') || rs[0]
+      setInviteRole((cur) => cur || fallback?.name || '')
+    }).catch(() => undefined)
+  }, [])
 
   const toggleSync = async (next: boolean) => {
     setBusy(true)
@@ -950,6 +967,72 @@ function TeamSyncPanel() {
       toast.error('Could not revoke the till', e?.message)
     } finally {
       setWorkingDevice('')
+    }
+  }
+
+  const approveDevice = async (d: TeamDevice) => {
+    const label = d.deviceName || d.deviceId.slice(0, 8)
+    setWorkingDevice(d.deviceId)
+    try {
+      await api.post('/api/v1/team-sync/approve', { deviceId: d.deviceId })
+      toast.success('Till approved', `${label} joins the team on its next heartbeat.`)
+      await load()
+    } catch (e: any) {
+      toast.error('Could not approve the till', e?.message)
+    } finally {
+      setWorkingDevice('')
+    }
+  }
+
+  const joinLinkFor = (t: TeamInviteCreated) =>
+    `https://awesomeposs.netlify.app/join#t=${encodeURIComponent(t.teamCode)}&r=${encodeURIComponent(t.roleName)}&k=${encodeURIComponent(t.token)}`
+
+  const createInvite = async () => {
+    const role = roles.find((r) => r.name === inviteRole)
+    if (!role) {
+      toast.error('Pick a role first', 'The link carries the role the worker gets.')
+      return
+    }
+    setInviteBusy(true)
+    setCopied(false)
+    try {
+      const inv = await api.post<TeamInviteCreated>('/api/v1/team-sync/invites', {
+        roleName: role.name,
+        permissions: role.permissions || [],
+        note: inviteNote.trim(),
+      })
+      setInvite(inv)
+      setInviteNote('')
+      await load()
+    } catch (e: any) {
+      toast.error('Could not create the invite', e?.message)
+    } finally {
+      setInviteBusy(false)
+    }
+  }
+
+  const copyInvite = async () => {
+    if (!invite) return
+    try {
+      await navigator.clipboard.writeText(joinLinkFor(invite))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2500)
+    } catch {
+      toast.error('Copy failed', 'Select the link text and copy it manually.')
+    }
+  }
+
+  const revokeInvite = async (id: number) => {
+    if (!window.confirm('Revoke this join link? Nobody will be able to use it.')) return
+    setWorkingInvite(id)
+    try {
+      await api.post('/api/v1/team-sync/invites/revoke', { id })
+      toast.success('Invite revoked')
+      await load()
+    } catch (e: any) {
+      toast.error('Could not revoke the invite', e?.message)
+    } finally {
+      setWorkingInvite(0)
     }
   }
 
@@ -1052,18 +1135,32 @@ function TeamSyncPanel() {
                       <StatusPill status={d.approved ? 'paid' : 'pending'} label={d.approved ? 'Approved' : 'Pending'} />
                     </td>
                     <td className="px-3 py-2 text-right">
-                      {d.thisDevice ? <StatusPill status="info" label="This device" /> : (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => removeDevice(d)}
-                          disabled={workingDevice === d.deviceId}
-                          title="Revoke this till — it is cut off from the cloud immediately"
-                        >
-                          {workingDevice === d.deviceId ? <Spinner /> : <Trash2 size={14} strokeWidth={2.25} aria-hidden />}
-                          Revoke
-                        </Button>
-                      )}
+                      <div className="inline-flex items-center gap-1.5">
+                        {!d.approved && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => approveDevice(d)}
+                            disabled={workingDevice === d.deviceId}
+                            title="Approve this till — it joins the team on its next heartbeat"
+                          >
+                            {workingDevice === d.deviceId ? <Spinner /> : <CircleCheck size={14} strokeWidth={2.5} aria-hidden />}
+                            Approve
+                          </Button>
+                        )}
+                        {d.thisDevice ? <StatusPill status="info" label="This device" /> : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => removeDevice(d)}
+                            disabled={workingDevice === d.deviceId}
+                            title="Revoke this till — it is cut off from the cloud immediately"
+                          >
+                            {workingDevice === d.deviceId ? <Spinner /> : <Trash2 size={14} strokeWidth={2.25} aria-hidden />}
+                            Revoke
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1072,7 +1169,7 @@ function TeamSyncPanel() {
 
             {/* Stores under this owner's cloud project (multi-store view). */}
             {(status.stores?.length ?? 0) > 0 && (
-              <div className="pt-1">
+              <div className="pt-4">
                 <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5 flex items-center gap-1.5">
                   <Store size={13} strokeWidth={2.5} aria-hidden /> Stores in the cloud
                 </p>
@@ -1118,7 +1215,7 @@ function TeamSyncPanel() {
 
             {/* Registered tills waiting for a store assignment (owner view). */}
             {(status.pendingDevices?.length ?? 0) > 0 && (
-              <div className="pt-1">
+              <div className="pt-4">
                 <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5 flex items-center gap-1.5">
                   <UserPlus size={13} strokeWidth={2.5} aria-hidden /> New tills waiting for a store
                 </p>
@@ -1153,6 +1250,81 @@ function TeamSyncPanel() {
                     </tr>
                   ))}
                 </Table>
+              </div>
+            )}
+            {/* Join-link invites: the owner mints, the worker pastes on a new machine. */}
+            {status.approved && (
+              <div className="pt-4">
+                <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5 flex items-center gap-1.5">
+                  <Link2 size={13} strokeWidth={2.5} aria-hidden /> Invite a worker with a join link
+                </p>
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="w-48">
+                    <Field label="Role">
+                      <Select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}>
+                        {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
+                      </Select>
+                    </Field>
+                  </div>
+                  <div className="w-60">
+                    <Field label="Note (optional)">
+                      <Input value={inviteNote} onChange={(e) => setInviteNote(e.target.value)} placeholder="e.g. Brian — front counter" />
+                    </Field>
+                  </div>
+                  <Button size="sm" onClick={createInvite} disabled={inviteBusy || !inviteRole} title="Mints a single-use link that expires in 7 days">
+                    {inviteBusy ? <Spinner /> : <UserPlus size={15} strokeWidth={2.5} aria-hidden />}
+                    Create join link
+                  </Button>
+                </div>
+                {invite && (
+                  <div className="mt-2 rounded-input border-2 border-paid-text/40 bg-paid-bg p-3">
+                    <p className="text-[12px] font-bold text-paid-text mb-1.5">
+                      Join link for a {invite.roleName} — shown once, expires in 7 days. Send it to the worker:
+                    </p>
+                    <div className="flex gap-2 items-center">
+                      <code className="flex-1 min-w-0 text-[11px] font-mono bg-surface border border-line rounded-input px-2 py-1.5 truncate text-ink">{joinLinkFor(invite)}</code>
+                      <Button size="sm" variant="secondary" onClick={copyInvite}>
+                        {copied ? <Check size={14} strokeWidth={2.5} aria-hidden /> : <Copy size={14} strokeWidth={2.5} aria-hidden />}
+                        {copied ? 'Copied' : 'Copy'}
+                      </Button>
+                    </div>
+                    <p className="text-[11px] text-ink-subtle mt-1.5">
+                      The worker installs the app on their machine and pastes this on the login screen — they pick a name + PIN and are selling in a minute, no admin setup.
+                    </p>
+                  </div>
+                )}
+                {(status.invites?.length ?? 0) > 0 && (
+                  <div className="mt-3">
+                    <Table head={['Role', 'Note', 'Created', 'Status', '']}>
+                      {status.invites!.map((inv) => {
+                        const expired = new Date(inv.expiresAt).getTime() < Date.now()
+                        const state = inv.revoked ? 'revoked' : inv.usedBy ? 'used' : expired ? 'expired' : 'active'
+                        return (
+                          <tr key={inv.id}>
+                            <td className="px-3 py-2 text-[13px] font-semibold text-ink">{inv.roleName}</td>
+                            <td className="px-3 py-2 text-[12px] text-ink-muted">{inv.note || '—'}</td>
+                            <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{new Date(inv.createdAt).toLocaleDateString()}</td>
+                            <td className="px-3 py-2">
+                              <StatusPill status={state === 'active' ? 'paid' : state === 'used' ? 'info' : 'pending'}
+                                label={state === 'active' ? 'Waiting' : state === 'used' ? 'Used' : state} />
+                            </td>
+                            <td className="px-3 py-2 text-right">
+                              {state === 'active' && (
+                                <Button size="sm" variant="ghost" onClick={() => revokeInvite(inv.id)} disabled={workingInvite === inv.id}>
+                                  {workingInvite === inv.id ? <Spinner /> : <Trash2 size={14} strokeWidth={2.25} aria-hidden />}
+                                  Revoke
+                                </Button>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </Table>
+                  </div>
+                )}
+                <p className="text-[12px] text-ink-subtle mt-1.5">
+                  The link carries the role: whoever pastes it becomes that role on their own machine — they never touch the admin setup, and the token is single-use.
+                </p>
               </div>
             )}
           </div>

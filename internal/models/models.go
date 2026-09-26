@@ -482,6 +482,7 @@ type TeamSyncStatus struct {
         MultiStore     bool         `json:"multiStore"`
         Stores         []TeamStore  `json:"stores"`
         PendingDevices []TeamDevice `json:"pendingDevices"`
+        Invites        []TeamInvite `json:"invites"`
 }
 
 // TeamStore is one store under the owner's cloud project. TeamCode is the
@@ -506,6 +507,47 @@ type TeamAssignRequest struct {
 
 type TeamRemoveRequest struct {
         DeviceID string `json:"deviceId"`
+}
+
+// TeamInvite is a team join link the owner minted (invite rows carry the
+// role; the token lives only in the link and is stored hashed cloud-side).
+type TeamInvite struct {
+        ID        int64  `json:"id"`
+        RoleName  string `json:"roleName"`
+        Note      string `json:"note"`
+        CreatedAt string `json:"createdAt"`
+        ExpiresAt string `json:"expiresAt"`
+        UsedBy    string `json:"usedBy"`
+        UsedAt    string `json:"usedAt"`
+        Revoked   bool   `json:"revoked"`
+}
+
+// TeamInviteCreated is returned once, right after minting: the token is
+// shown exactly once (the cloud keeps only its hash).
+type TeamInviteCreated struct {
+        TeamCode  string `json:"teamCode"`
+        Token     string `json:"token"`
+        RoleName  string `json:"roleName"`
+        ExpiresAt string `json:"expiresAt"`
+}
+
+type TeamInviteCreateRequest struct {
+        RoleName    string   `json:"roleName"`
+        Permissions []string `json:"permissions"`
+        Note        string   `json:"note"`
+}
+
+type TeamInviteRevokeRequest struct {
+        ID int64 `json:"id"`
+}
+
+// TeamJoinInfo is what a till learns when it redeems a join link.
+type TeamJoinInfo struct {
+        TeamCode  string
+        StoreName string
+        RoleName  string
+        Username  string
+        UserID    int64
 }
 
 type TeamDevice struct {

@@ -621,6 +621,33 @@ export interface TeamStore {
   devices: number
 }
 
+export interface TeamInvite {
+  id: number
+  roleName: string
+  note: string
+  createdAt: string
+  expiresAt: string
+  usedBy: string
+  usedAt: string
+  revoked: boolean
+}
+
+/** Minted once — the token is shown a single time and stored hashed in the cloud. */
+export interface TeamInviteCreated {
+  teamCode: string
+  token: string
+  roleName: string
+  expiresAt: string
+}
+
+export interface TeamJoinResult {
+  token: string
+  user: User
+  teamCode: string
+  storeName: string
+  roleName: string
+}
+
 export interface TeamSyncStatus {
   enabled: boolean
   /** Legacy join code — empty/absent for zero-config cloud-identity tills. */
@@ -644,6 +671,8 @@ export interface TeamSyncStatus {
   stores?: TeamStore[]
   /** Registered tills awaiting store assignment (owner view). */
   pendingDevices?: TeamDevice[]
+  /** Recent join links minted by this team's owner. */
+  invites?: TeamInvite[]
 }
 
 export interface PaymentConfig {

@@ -343,3 +343,54 @@ TestMultiStorePendingThenAssigned); tsc clean; vitest 73/73; E2E multi-store
 flow exercised against the real cloud (create → pending → assign → remove →
 cleanup); site build green (35.1 MB dist, link check ok); v1.1.1 release
 cut with 4 installers + checksums (ledgerpos-linux stamps `1.1.1`).
+
+## v1.1.2 — join links, owner portal, onboarding fix (2026-09-26)
+
+**Team join links with role:**
+
+- Cloud: `sync_invites` (single-use token stored as SHA-256, role_name +
+  permissions snapshot, 7-day expiry, revocable). RPCs: `sync_create_invite`
+  (token minted DB-side, shown once), `sync_list_invites`, `sync_revoke_invite`,
+  `sync_join_team` (redeem → device approved into the team, invite marked used).
+- App: owner mints from Settings → Team (role picker + note → link + Copy);
+  worker pastes at /join (public route, also linked from Login + Onboarding
+  step 1) → POST /auth/team-join → till joins the cloud, local role+user
+  created from the invite's role snapshot (unknown roles get created with
+  the carried permissions; empty → Cashier set), onboarding_done=true,
+  session issued → straight into the POS. Shop config syncs in normally.
+
+**Owner portal (website):**
+
+- Cloud: `portal_accounts` (one bcrypt row per team, published from tills);
+  `portal_set_credentials` (identity-checked) + `portal_login` (pgcrypto
+  crypt-verified, replay of the team's order stream → sales today/7d/30d,
+  payment mix, top products, cashiers, voids, devices, last seen).
+- Till publishes owner-level credentials (settings.manage + users.manage)
+  whenever such a password is set/created — bcrypt made locally, plaintext
+  never leaves the machine.
+- Website: /portal/ (static, vanilla JS, landing design language) with
+  login gate + dashboard; linked from the landing nav ("Owner login").
+
+**Fixed:** onboarding step 5 "Open shop" now saves and navigates straight
+to the main page (the success banner relied on a second click).
+
+**Approval flow:** auto-approve turned OFF on Main Store; roster rows get an
+Approve button for pending devices (sync_approve_device RPC).
+
+**Test-to-production guard:** handler tests boot ShopPools whose real sync
+loops registered 28 test devices against production (twice). Root-caused;
+`guardProduction()` now refuses every cloud network call under `go test`
+unless the test points cloudBaseURL at a fake. Proven: full suite run leaves
+the devices table untouched.
+
+**Cloud bugs found by E2E and fixed:** anonymous-composite crashes when
+passing JSONB/record fields into json_build_object (sync_join_team,
+portal_login) — typed locals now; cashiers block scoped wrong (c.aliases);
+pgcrypto lives in the extensions schema → search_path widened.
+
+**Verification:** go build/vet/test ./... green; tsc clean; vitest 73/73;
+real-cloud E2E: invite mint → redeem → single-use enforced → heartbeat keeps
+team → portal credentials → portal login (correct/wrong/unknown); VLM design
+pass on the Team panel (screenshots + polish: wider invite inputs, section
+spacing); v1.1.2 release cut (4 installers + checksums), site build green
+with /portal/.
