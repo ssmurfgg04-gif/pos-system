@@ -32,7 +32,7 @@ LEGACY = {"ledgerpos-linux-x64.tar.gz"}
 
 NOTES = """LedgerPOS {v} — the point of sale that installs itself.
 
-**New in 1.1.0:** every till now links itself to the team automatically (no codes, no keys — it finds its team in the cloud database), split & mixed tender (part cash, part M-Pesa/card), stocktake with variance report, gift cards (sell value, customer redeems the code to store credit), barcode label printing, one-paste cloud connection. See docs/REMOTE-SETUP.md.
+**New in 1.1.1:** grow beyond one shop — multiple stores under one owner cloud (Settings → Team → Add store; team codes are minted by the database), tills only ever see their own store's data (enforced in the database, not the app), assign pending tills to a store from any approved till, revoke a till outright with one click, M-Pesa + card payments fully live through Paystack with the secret key encrypted at rest (AES-256-GCM), product-photo uploads fixed on Windows (big phone photos are downscaled automatically), and app updates now guarantee the local database survives — store info and history stay put, no re-uploading.
 
 Download the file for your machine, double-click it, start selling. The whole shop — stock, till, M-Pesa, KRA reports — runs on that machine. No servers to configure, nothing to type into a terminal, works when the internet doesn't.
 
@@ -49,7 +49,7 @@ Download the file for your machine, double-click it, start selling. The whole sh
 - **macOS Gatekeeper**: right-click the app → *Open → Open* (once; Apple remembers).
 - **Integrity:** SHA-256 of every package is published in the release's `checksums.txt` — or verify against `downloads/checksums.txt` in the repo.
 
-What's inside: offline-first till (IndexedDB queue + SQLite WAL), M-Pesa STK push with manual receipt-code fallback (mock provider for demos; Daraja sandbox/production ready), KRA monthly VAT reports + CSV export, shifts & cash reconciliation, ESC/POS receipt printing, USB barcode scanning, white-label everything (store name, brand colour, currency, VAT % in Settings), automatic daily backups, full audit log.
+What's inside: offline-first till (IndexedDB queue + SQLite WAL), M-Pesa and card payments through Paystack (one popup — the customer picks M-Pesa / mobile money / card; direct Daraja remains under Settings → Payments → Advanced), KRA monthly VAT reports + CSV export, shifts & cash reconciliation, ESC/POS receipt printing, USB barcode scanning, white-label everything (store name, brand colour, currency, VAT % in Settings), automatic daily backups, full audit log.
 
 The same binary also runs as a LAN appliance (`ledgerpos serve`, mDNS discovery) for multi-terminal shops. The project README has the download landing page + in-browser demo details.
 """.replace("{v}", TAG.lstrip("v"))

@@ -527,3 +527,68 @@ func (h *H) TeamSyncUseCloud(c *gin.Context) {
         h.svc(c).Audit(p.ID, p.Username, "TEAM_SYNC_CLOUD", "settings", "", "switched to automatic cloud identity")
         h.ok(c, gin.H{"saved": true})
 }
+
+// TeamStoreCreate (settings.manage) — add a store under this owner's cloud
+// project; the team code is minted by the database.
+func (h *H) TeamStoreCreate(c *gin.Context) {
+        p := h.principal(c)
+        var body models.TeamStoreCreateRequest
+        if err := c.ShouldBindJSON(&body); err != nil {
+                h.fail(c, 400, err.Error())
+                return
+        }
+        if len(body.Name) < 2 {
+                h.fail(c, 422, "give the store a name (2+ characters)")
+                return
+        }
+        st, err := h.svc(c).TeamCreateStore(body.Name, body.Slug)
+        if err != nil {
+                h.fail(c, 422, err.Error())
+                return
+        }
+        h.svc(c).Audit(p.ID, p.Username, "TEAM_STORE_CREATED", "settings", "",
+                st.Name+" ("+st.TeamCode+")")
+        h.ok(c, st)
+}
+
+// TeamDeviceAssign (settings.manage) — assign a registered till to a store.
+func (h *H) TeamDeviceAssign(c *gin.Context) {
+        p := h.principal(c)
+        var body models.TeamAssignRequest
+        if err := c.ShouldBindJSON(&body); err != nil {
+                h.fail(c, 400, err.Error())
+                return
+        }
+        if body.DeviceID == "" || body.TeamCode == "" {
+                h.fail(c, 422, "deviceId and teamCode are required")
+                return
+        }
+        if err := h.svc(c).TeamAssignDevice(body.DeviceID, body.TeamCode); err != nil {
+                h.fail(c, 422, err.Error())
+                return
+        }
+        h.svc(c).Audit(p.ID, p.Username, "TEAM_DEVICE_ASSIGNED", "settings", "",
+                body.DeviceID+" → "+body.TeamCode)
+        h.ok(c, gin.H{"saved": true})
+}
+
+// TeamDeviceRemove (settings.manage) — revoke a till outright (kill switch).
+func (h *H) TeamDeviceRemove(c *gin.Context) {
+        p := h.principal(c)
+        var body models.TeamRemoveRequest
+        if err := c.ShouldBindJSON(&body); err != nil {
+                h.fail(c, 400, err.Error())
+                return
+        }
+        if body.DeviceID == "" {
+                h.fail(c, 422, "deviceId is required")
+                return
+        }
+        if err := h.svc(c).TeamRemoveDevice(body.DeviceID); err != nil {
+                h.fail(c, 422, err.Error())
+                return
+        }
+        h.svc(c).Audit(p.ID, p.Username, "TEAM_DEVICE_REVOKED", "settings", "",
+                body.DeviceID)
+        h.ok(c, gin.H{"saved": true})
+}

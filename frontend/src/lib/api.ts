@@ -613,6 +613,14 @@ export interface TeamDevice {
   approved: boolean
 }
 
+export interface TeamStore {
+  slug: string
+  name: string
+  /** Sync partition minted by the database — events never cross stores. */
+  teamCode: string
+  devices: number
+}
+
 export interface TeamSyncStatus {
   enabled: boolean
   /** Legacy join code — empty/absent for zero-config cloud-identity tills. */
@@ -629,6 +637,13 @@ export interface TeamSyncStatus {
   registered: boolean
   approved: boolean
   autoApprove: boolean
+  /** Multi-store: this till is registered but the owner has not assigned it to a store yet. */
+  storePending?: boolean
+  /** More than one store lives under this owner's cloud project. */
+  multiStore?: boolean
+  stores?: TeamStore[]
+  /** Registered tills awaiting store assignment (owner view). */
+  pendingDevices?: TeamDevice[]
 }
 
 export interface PaymentConfig {

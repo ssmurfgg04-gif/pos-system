@@ -41,7 +41,7 @@ ICONS_SRC = os.path.join(ROOT, "scripts", "assets", "icons")
 TEMPLATE = os.path.join(ROOT, "scripts", "assets", "download-page.html")
 
 RELEASES_PAGE = "https://github.com/ssmurfgg04-gif/pos-system/releases"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 INSTALLERS = [
     "ledgerpos-setup-windows-x64.exe",

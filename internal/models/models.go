@@ -475,6 +475,37 @@ type TeamSyncStatus struct {
         Registered  bool         `json:"registered"`  // this till is known to the cloud
         Approved    bool         `json:"approved"`    // cloud accepts this till's events
         AutoApprove bool         `json:"autoApprove"` // new devices self-approve
+        // Multi-store: an owner can run several stores under one cloud project.
+        // This till waits (StorePending) until the owner assigns it to a store;
+        // approved tills see the store list and the unassigned devices.
+        StorePending   bool         `json:"storePending"`
+        MultiStore     bool         `json:"multiStore"`
+        Stores         []TeamStore  `json:"stores"`
+        PendingDevices []TeamDevice `json:"pendingDevices"`
+}
+
+// TeamStore is one store under the owner's cloud project. TeamCode is the
+// sync partition minted by the database — devices only ever see events from
+// their own store's team.
+type TeamStore struct {
+        Slug     string `json:"slug"`
+        Name     string `json:"name"`
+        TeamCode string `json:"teamCode"`
+        Devices  int    `json:"devices"`
+}
+
+type TeamStoreCreateRequest struct {
+        Name string `json:"name"`
+        Slug string `json:"slug"`
+}
+
+type TeamAssignRequest struct {
+        DeviceID string `json:"deviceId"`
+        TeamCode string `json:"teamCode"`
+}
+
+type TeamRemoveRequest struct {
+        DeviceID string `json:"deviceId"`
 }
 
 type TeamDevice struct {

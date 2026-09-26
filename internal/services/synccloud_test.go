@@ -25,12 +25,15 @@ type fakeSupabase struct {
         approved map[string]bool
         events   []map[string]any
         nextID   int64
+        stores   []map[string]any // multi-store registry (nil = legacy single-store)
+        assigned map[string]string // device_id -> team_code ("sync_register" answer)
 }
 
 func newFakeSupabase(t *testing.T) *fakeSupabase {
         f := &fakeSupabase{
                 device:   map[string]string{},
                 approved: map[string]bool{},
+                assigned: map[string]string{},
                 nextID:   1,
         }
         mux := http.NewServeMux()
@@ -47,6 +50,23 @@ func newFakeSupabase(t *testing.T) *fakeSupabase {
                         "team_code":    "TEST-TEAM",
                         "auto_approve": true,
                 }})
+        })
+
+        // GET /rest/v1/sync_stores — multi-store registry (404 when absent,
+        // which exercises the legacy bootstrap fallback path).
+        mux.HandleFunc("/rest/v1/sync_stores", func(w http.ResponseWriter, r *http.Request) {
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                if r.Header.Get("apikey") == "" {
+                        w.WriteHeader(401)
+                        return
+                }
+                if f.stores == nil {
+                        w.WriteHeader(404)
+                        return
+                }
+                w.Header().Set("Content-Type", "application/json")
+                json.NewEncoder(w).Encode(f.stores)
         })
 
         // POST /rest/v1/rpc/sync_register
@@ -69,10 +89,24 @@ func newFakeSupabase(t *testing.T) *fakeSupabase {
                         return
                 }
                 f.device[in.DeviceID] = in.SecretHash
+                // Multi-store fake: a device only gets a team once the test
+                // "owner" assigns one (mirrors sync_register's DB logic).
+                if f.stores != nil {
+                        if team, ok := f.assigned[in.DeviceID]; ok {
+                                f.approved[in.DeviceID] = true
+                                json.NewEncoder(w).Encode(map[string]any{
+                                        "ok": true, "approved": true, "team_code": team, "pending": false})
+                                return
+                        }
+                        f.approved[in.DeviceID] = false
+                        json.NewEncoder(w).Encode(map[string]any{
+                                "ok": true, "approved": false, "team_code": nil,
+                                "pending": true, "stores": f.stores})
+                        return
+                }
                 f.approved[in.DeviceID] = true // auto_approve
                 json.NewEncoder(w).Encode(map[string]any{"ok": true, "approved": true, "team_code": "TEST-TEAM"})
         })
-
         // POST /rest/v1/rpc/sync_push
         mux.HandleFunc("/rest/v1/rpc/sync_push", func(w http.ResponseWriter, r *http.Request) {
                 var in struct {
@@ -267,5 +301,67 @@ func TestUseCloudRevertsManual(t *testing.T) {
         }
         if s.settings.Get("sync_team_code") != "TEST-TEAM" {
                 t.Fatalf("team=%q, want TEST-TEAM", s.settings.Get("sync_team_code"))
+        }
+}
+
+func TestMultiStorePendingThenAssigned(t *testing.T) {
+        fake := newFakeSupabase(t)
+        oldURL := cloudBaseURL
+        cloudBaseURL = fake.srv.URL
+        t.Cleanup(func() { cloudBaseURL = oldURL })
+
+        // The cloud registry answers with TWO stores: a fresh till must NOT
+        // guess. It registers as pending and sync stays inert until the
+        // owner assigns it to a store.
+        fake.mu.Lock()
+        fake.stores = []map[string]any{
+                map[string]any{"slug": "main", "name": "Main Store", "team_code": "TEST-TEAM", "auto_approve": true},
+                map[string]any{"slug": "branch", "name": "Branch Two", "team_code": "BRANCH-1", "auto_approve": false},
+        }
+        fake.mu.Unlock()
+
+        s := newSyncTestService(t)
+        c, ok := s.syncConfig()
+        if !ok {
+                t.Fatal("multi-store cloud should still resolve a client (for registration)")
+        }
+        if c.team != "" {
+                t.Fatalf("fresh till in multi-store cloud must have no team yet, got %q", c.team)
+        }
+        if err := c.heartbeat(s, "test"); err == nil {
+                t.Fatal("pending registration should report waiting-for-assignment")
+        }
+        if !s.settings.GetBool("sync_registered", false) {
+                t.Fatal("pending till is still registered (it exists in the cloud)")
+        }
+        if s.settings.GetBool("sync_approved", true) {
+                t.Fatal("pending till must not be approved")
+        }
+        if !s.settings.GetBool("sync_store_pending", false) {
+                t.Fatal("storePending flag should be set")
+        }
+        // Events emitted while pending stay queued — never pushed, never lost.
+        s.Emit("product", "upsert", map[string]any{"sku": "P1"})
+        if _, err := c.push(s); err == nil {
+                t.Fatal("push while pending must fail (device not approved)")
+        }
+
+        // The owner assigns the till to Branch Two. The next heartbeat picks
+        // up the team code and the queue drains normally.
+        fake.mu.Lock()
+        fake.assigned[c.device] = "BRANCH-1"
+        fake.mu.Unlock()
+        if err := c.heartbeat(s, "test"); err != nil {
+                t.Fatalf("register after assignment: %v", err)
+        }
+        if s.settings.Get("sync_team_code") != "BRANCH-1" {
+                t.Fatalf("team=%q, want BRANCH-1", s.settings.Get("sync_team_code"))
+        }
+        if s.settings.GetBool("sync_store_pending", true) {
+                t.Fatal("storePending must clear after assignment")
+        }
+        pushed, err := c.push(s)
+        if err != nil || pushed != 1 {
+                t.Fatalf("push after assignment: %d %v", pushed, err)
         }
 }

@@ -294,3 +294,52 @@ of the download landing page, and typing into any field froze the tab.
 **Deploy expectation:** push to main → Netlify builds
 `netlify_build.py` → live site = landing at `/`, demo at `/demo/`,
 installers at `/downloads/`.
+
+## v1.1.1 — multi-store cloud (2026-09-26)
+
+**Cloud (Supabase, applied live — canonical SQL in `db/cloud_schema.sql`):**
+
+- `sync_stores` registry: one row per store; team_code minted by the DB
+  (client never invents one). Row 1 = Main Store (KIAMBU-MAIN).
+- `sync_register` multi-store aware: 1 active store → auto-join
+  (zero-config unchanged); >1 → fresh tills register PENDING (team_code
+  NULL, approved=false) and wait for the owner.
+- Owner RPCs (all identity-checked, SECURITY DEFINER): `sync_create_store`
+  (mints slug+team code), `sync_list_stores` (with device counts),
+  `sync_list_pending`, `sync_assign_device`, `sync_remove_device`
+  (self-revoke forbidden).
+- RLS: `sync_stores` anon-readable (active rows only); devices/events
+  remain anon-denied; everything mutates through RPCs that verify
+  (device_id, secret_hash) and stamp team_code server-side.
+- `sync_bootstrap` row 1 kept in sync with store 1 → v1.1.0 tills keep
+  working untouched.
+
+**App:**
+
+- `resolveCloudStore` (synccloud.go): store registry is the source of
+  truth; served project_url wins (tests point cloudBaseURL at a fake —
+  client must never drift to the production host). Legacy bootstrap
+  fallback preserved for pre-registry deployments.
+- `registerCloud` handles `pending` → `sync_store_pending` flag; pending
+  tills queue events (never pushed, never lost) and join on the next
+  heartbeat after the owner assigns them.
+- TeamSyncStatus now carries storePending/multiStore/stores/pendingDevices.
+- New owner endpoints (settings.manage): POST /team-sync/stores,
+  /team-sync/assign, /team-sync/remove.
+- Settings → Team: Stores card + Add store, "New tills waiting for a
+  store" assign UI, Revoke kill switch on roster rows.
+- Demo mirrors the new status shape + handlers.
+
+**Incident (caught + fixed in-session):** the first resolveCloudStore draft
+hardcoded the production project URL as the client base, so the sync tests
+registered test devices and pushed ONE test event into the production
+cloud. Production impact: none — both real tills were offline during the
+window (last_seen ~09:08, leak at 10:12), the event was deleted within
+minutes, all test devices purged, and the fix derives the client base from
+the host the registry was actually fetched from.
+
+**Verification:** go build/vet clean; go test ./... ok (incl. new
+TestMultiStorePendingThenAssigned); tsc clean; vitest 73/73; E2E multi-store
+flow exercised against the real cloud (create → pending → assign → remove →
+cleanup); site build green (35.1 MB dist, link check ok); v1.1.1 release
+cut with 4 installers + checksums (ledgerpos-linux stamps `1.1.1`).

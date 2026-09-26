@@ -1943,6 +1943,8 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   // ---- team sync (Settings → Team; the demo till is always cloud-linked) ----
   // Zero-config identity: the till finds its team in the cloud database —
   // no join codes, no keys. The status carries no teamCode for that reason.
+  // Multi-store: the demo cloud has one store, so the stores view shows the
+  // default store and there is nothing pending assignment.
   if (m === 'GET' && p === '/team-sync') {
     requirePerm(perms, 'settings.manage')
     return {
@@ -1957,6 +1959,10 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       registered: true,
       approved: true,
       autoApprove: true,
+      storePending: false,
+      multiStore: false,
+      stores: [{ slug: 'main', name: 'Main Store', teamCode: 'KIAMBU-MAIN', devices: 3 }],
+      pendingDevices: [],
       devices: [
         { deviceId: 'demo-device', deviceName: 'Demo Till (this browser)', appVersion: 'demo', lastSeen: nowIso(), thisDevice: true, approved: true },
         { deviceId: 'till-back-counter', deviceName: 'Back-counter laptop', appVersion: 'demo', lastSeen: nowIso(), thisDevice: false, approved: true },
@@ -1976,6 +1982,32 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     // Codes only exist as a manual fallback for a till with no cloud
     // reachability — the demo till is always cloud-linked, so teach that.
     throw new ApiError(409, 'No team code needed — this till already found its team in the cloud automatically. Codes are only for tills that cannot reach the cloud.')
+  }
+  if (m === 'POST' && p === '/team-sync/stores') {
+    requirePerm(perms, 'settings.manage')
+    const req = body as { name?: string; slug?: string }
+    const name = (req.name || '').trim()
+    if (name.length < 2) throw new ApiError(422, 'give the store a name (2+ characters)')
+    audit(user.id, user.username, 'TEAM_STORE_CREATED', 'settings', '', name)
+    persist()
+    return { slug: (req.slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-')).replace(/^-+|-+$/g, ''), name, teamCode: 'DEMO-' + Math.random().toString(36).slice(2, 6).toUpperCase(), devices: 0 } as T
+  }
+  if (m === 'POST' && p === '/team-sync/assign') {
+    requirePerm(perms, 'settings.manage')
+    const req = body as { deviceId?: string; teamCode?: string }
+    if (!req.deviceId || !req.teamCode) throw new ApiError(422, 'deviceId and teamCode are required')
+    audit(user.id, user.username, 'TEAM_DEVICE_ASSIGNED', 'settings', '', `${req.deviceId} → ${req.teamCode}`)
+    persist()
+    return { saved: true } as T
+  }
+  if (m === 'POST' && p === '/team-sync/remove') {
+    requirePerm(perms, 'settings.manage')
+    const req = body as { deviceId?: string }
+    if (!req.deviceId) throw new ApiError(422, 'deviceId is required')
+    if (req.deviceId === 'demo-device') throw new ApiError(422, 'cannot remove this device while using it')
+    audit(user.id, user.username, 'TEAM_DEVICE_REVOKED', 'settings', '', req.deviceId)
+    persist()
+    return { saved: true } as T
   }
   if (m === 'POST' && p === '/team-sync/now') {
     requirePerm(perms, 'settings.manage')

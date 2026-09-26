@@ -250,6 +250,10 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         ts.POST("/team-sync/create", h.TeamSyncCreate)
         ts.POST("/team-sync/now", h.TeamSyncNow)
         ts.POST("/team-sync/use-cloud", h.TeamSyncUseCloud)
+        // Multi-store: stores under one owner cloud + device assignment.
+        ts.POST("/team-sync/stores", h.TeamStoreCreate)
+        ts.POST("/team-sync/assign", h.TeamDeviceAssign)
+        ts.POST("/team-sync/remove", h.TeamDeviceRemove)
 
         // Stocktake + gift cards (count sessions, code redemption).
         ct := authd.Group("", perm("suppliers.manage"))

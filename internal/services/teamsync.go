@@ -382,12 +382,16 @@ func (c *syncClient) heartbeat(s *Service, version string) error {
 
 // registerCloud identifies this till to the database (device id + secret
 // hash). The DB decides who is who: approved/revoked live in sync_devices.
+// In a multi-store cloud a fresh till registers as pending and learns its
+// store when the owner assigns it — the assignment lands on the next
+// heartbeat, when the RPC returns this device's team_code.
 func (c *syncClient) registerCloud(s *Service, version string) error {
         var out struct {
                 OK       bool   `json:"ok"`
                 Error    string `json:"error"`
                 Approved bool   `json:"approved"`
                 TeamCode string `json:"team_code"`
+                Pending  bool   `json:"pending"`
         }
         err := rpcCall(c.base, "sync_register", map[string]any{
                 "p_device_id":   c.device,
@@ -405,8 +409,14 @@ func (c *syncClient) registerCloud(s *Service, version string) error {
         _ = s.settings.Set("sync_approved", boolStr(out.Approved))
         if out.TeamCode != "" {
                 _ = s.settings.Set("sync_team_code", out.TeamCode)
+                _ = s.settings.Set("sync_store_pending", "false")
+        } else if out.Pending {
+                _ = s.settings.Set("sync_store_pending", "true")
         }
         if !out.Approved {
+                if out.Pending {
+                        return fmt.Errorf("registered — waiting for the owner to assign this till to a store")
+                }
                 return fmt.Errorf("awaiting approval in the cloud device list")
         }
         return nil
@@ -475,7 +485,20 @@ func (s *Service) TeamSyncStatus(version string) (*models.TeamSyncStatus, error)
                 if devs, err := c.fetchDevices(s); err == nil {
                         st.Devices = devs
                 }
+                // Multi-store owner view: the store registry + unassigned devices.
+                // Cloud-identity approved tills only; failures are tolerated (the
+                // panel still renders the local state).
+                if c.mode == "rpc" && s.settings.GetBool("sync_approved", false) {
+                        if stores, err := c.fetchStoresRPC(); err == nil {
+                                st.Stores = stores
+                                st.MultiStore = len(stores) > 1
+                        }
+                        if pdevs, err := c.fetchPendingRPC(s); err == nil {
+                                st.PendingDevices = pdevs
+                        }
+                }
         }
+        st.StorePending = s.settings.GetBool("sync_store_pending", false)
         return st, nil
 }
 
@@ -521,6 +544,172 @@ func (c *syncClient) fetchDevicesRPC(s *Service) ([]models.TeamDevice, error) {
                 })
         }
         return roster, nil
+}
+
+// fetchStoresRPC reads the store registry (slug, name, team code, device
+// counts) through the identity-checked RPC.
+func (c *syncClient) fetchStoresRPC() ([]models.TeamStore, error) {
+        var out struct {
+                OK     bool   `json:"ok"`
+                Error  string `json:"error"`
+                Stores []struct {
+                        Slug     string `json:"slug"`
+                        Name     string `json:"name"`
+                        TeamCode string `json:"team_code"`
+                        Devices  int    `json:"devices"`
+                } `json:"stores"`
+        }
+        if err := rpcCall(c.base, "sync_list_stores", map[string]any{
+                "p_device_id": c.device, "p_secret_hash": c.secretHash,
+        }, &out); err != nil {
+                return nil, err
+        }
+        if !out.OK {
+                return nil, fmt.Errorf("stores: %s", out.Error)
+        }
+        stores := make([]models.TeamStore, 0, len(out.Stores))
+        for _, st := range out.Stores {
+                stores = append(stores, models.TeamStore{
+                        Slug: st.Slug, Name: st.Name,
+                        TeamCode: st.TeamCode, Devices: st.Devices,
+                })
+        }
+        return stores, nil
+}
+
+// fetchPendingRPC lists devices registered but not yet assigned to a store.
+func (c *syncClient) fetchPendingRPC(s *Service) ([]models.TeamDevice, error) {
+        var out struct {
+                OK      bool   `json:"ok"`
+                Error   string `json:"error"`
+                Devices []struct {
+                        DeviceID   string `json:"device_id"`
+                        DeviceName string `json:"device_name"`
+                        AppVersion string `json:"app_version"`
+                        LastSeen   string `json:"last_seen"`
+                } `json:"devices"`
+        }
+        if err := rpcCall(c.base, "sync_list_pending", map[string]any{
+                "p_device_id": c.device, "p_secret_hash": c.secretHash,
+        }, &out); err != nil {
+                return nil, err
+        }
+        if !out.OK {
+                return nil, fmt.Errorf("pending: %s", out.Error)
+        }
+        devs := make([]models.TeamDevice, 0, len(out.Devices))
+        for _, d := range out.Devices {
+                devs = append(devs, models.TeamDevice{
+                        DeviceID: d.DeviceID, DeviceName: d.DeviceName,
+                        AppVersion: d.AppVersion, LastSeen: d.LastSeen,
+                })
+        }
+        return devs, nil
+}
+
+// ---- Multi-store owner operations ----
+
+// rpcOwnerCall runs an owner RPC with this till's identity and surfaces the
+// RPC's error string (owner actions must report WHY, not just fail).
+func (c *syncClient) rpcOwnerCall(fn string, args map[string]any) (ok bool, errMsg string, err error) {
+        var out struct {
+                OK    bool   `json:"ok"`
+                Error string `json:"error"`
+        }
+        full := map[string]any{
+                "p_device_id":   c.device,
+                "p_secret_hash": c.secretHash,
+        }
+        for k, v := range args {
+                full[k] = v
+        }
+        if err := rpcCall(c.base, fn, full, &out); err != nil {
+                return false, "", err
+        }
+        return out.OK, out.Error, nil
+}
+
+func (s *Service) ownerClient() (*syncClient, error) {
+        c, ok := s.syncConfig()
+        if !ok || c.mode != "rpc" {
+                return nil, fmt.Errorf("adding stores needs the LedgerPOS cloud link (Settings → Team)")
+        }
+        if !s.settings.GetBool("sync_approved", false) {
+                return nil, fmt.Errorf("this till is not approved by the cloud yet")
+        }
+        return c, nil
+}
+
+// TeamCreateStore adds a store under this owner's cloud project. The team
+// code is minted by the database — the client never invents one.
+func (s *Service) TeamCreateStore(name, slug string) (models.TeamStore, error) {
+        out := models.TeamStore{Slug: slug, Name: name}
+        c, err := s.ownerClient()
+        if err != nil {
+                return out, err
+        }
+        ok, errMsg, err := c.rpcOwnerCall("sync_create_store", map[string]any{
+                "p_name": name, "p_slug": slug,
+        })
+        if err != nil {
+                return out, err
+        }
+        if !ok {
+                return out, fmt.Errorf("%s", errMsg)
+        }
+        s.Audit(0, "system", "TEAM_STORE_CREATED", "settings", "",
+                truncStr(name, 80))
+        // Refresh from the registry so the caller gets the minted team code.
+        if stores, err := c.fetchStoresRPC(); err == nil {
+                for _, st := range stores {
+                        if st.Name == name || (slug != "" && st.Slug == slug) {
+                                return st, nil
+                        }
+                }
+        }
+        return out, nil
+}
+
+// TeamAssignDevice assigns a pending (or previously assigned) device to a
+// store team.
+func (s *Service) TeamAssignDevice(deviceID, teamCode string) error {
+        c, err := s.ownerClient()
+        if err != nil {
+                return err
+        }
+        ok, errMsg, err := c.rpcOwnerCall("sync_assign_device", map[string]any{
+                "p_target_device_id": deviceID, "p_team_code": teamCode,
+        })
+        if err != nil {
+                return err
+        }
+        if !ok {
+                return fmt.Errorf("%s", errMsg)
+        }
+        s.Audit(0, "system", "TEAM_DEVICE_ASSIGNED", "settings", "",
+                truncStr(deviceID, 80))
+        return nil
+}
+
+// TeamRemoveDevice revokes a device outright (kill switch from Settings →
+// Team). The database keeps the row so a stolen till can never rejoin.
+func (s *Service) TeamRemoveDevice(deviceID string) error {
+        c, err := s.ownerClient()
+        if err != nil {
+                return err
+        }
+        ok, errMsg, err := c.rpcOwnerCall("sync_remove_device", map[string]any{
+                "p_target_device_id": deviceID,
+        })
+        if err != nil {
+                return err
+        }
+        if !ok {
+                return fmt.Errorf("%s", errMsg)
+        }
+        s.Audit(0, "system", "TEAM_DEVICE_REVOKED", "settings", "",
+                truncStr(deviceID, 80))
+        return nil
 }
 
 func (c *syncClient) fetchDevices(s *Service) ([]models.TeamDevice, error) {
