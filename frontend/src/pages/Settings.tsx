@@ -11,6 +11,7 @@ import {
   BackupResult,
   OffsiteStatus,
   PaymentConfig,
+  TeamDevice,
   TeamSyncStatus,
   UpdateStatus,
   VoidReason,
@@ -20,7 +21,7 @@ import { resetDemo } from '../demo/backend'
 import { useBranding } from '../stores/branding'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
-import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck } from 'lucide-react'
+import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2 } from 'lucide-react'
 
 type SettingsMap = Record<string, string>
 
@@ -838,6 +839,11 @@ function TeamSyncPanel() {
   const [busy, setBusy] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [switching, setSwitching] = useState(false)
+  // Multi-store owner controls: add a store, assign a pending till to one.
+  const [newStoreName, setNewStoreName] = useState('')
+  const [addingStore, setAddingStore] = useState(false)
+  const [assignPick, setAssignPick] = useState<Record<string, string>>({})
+  const [workingDevice, setWorkingDevice] = useState('')
 
   const load = async () => {
     try {
@@ -893,6 +899,60 @@ function TeamSyncPanel() {
     }
   }
 
+  // Add a store under this owner's cloud project. The team code is minted
+  // by the database — the till never invents one.
+  const addStore = async () => {
+    const name = newStoreName.trim()
+    if (name.length < 2) {
+      toast.error('Name the store first', 'Two characters or more.')
+      return
+    }
+    setAddingStore(true)
+    try {
+      const st = await api.post<{ slug: string; name: string; teamCode: string }>('/api/v1/team-sync/stores', { name })
+      toast.success('Store added', `${st.name} — team code ${st.teamCode}. Assign tills to it from the pending list.`)
+      setNewStoreName('')
+      await load()
+    } catch (e: any) {
+      toast.error('Could not add the store', e?.message)
+    } finally {
+      setAddingStore(false)
+    }
+  }
+
+  const assignDevice = async (d: TeamDevice) => {
+    const teamCode = assignPick[d.deviceId]
+    if (!teamCode) {
+      toast.error('Pick a store first', 'Choose which store this till belongs to.')
+      return
+    }
+    setWorkingDevice(d.deviceId)
+    try {
+      await api.post('/api/v1/team-sync/assign', { deviceId: d.deviceId, teamCode })
+      toast.success('Till assigned', `${d.deviceName || d.deviceId.slice(0, 8)} joins ${status?.stores?.find((s) => s.teamCode === teamCode)?.name || 'the store'} on its next heartbeat.`)
+      await load()
+    } catch (e: any) {
+      toast.error('Could not assign the till', e?.message)
+    } finally {
+      setWorkingDevice('')
+    }
+  }
+
+  const removeDevice = async (d: TeamDevice) => {
+    const label = d.deviceName || d.deviceId.slice(0, 8)
+    if (!window.confirm(`Revoke ${label}? It is cut off from the cloud immediately and cannot rejoin on its own.`)) return
+    setWorkingDevice(d.deviceId)
+    try {
+      await api.post('/api/v1/team-sync/remove', { deviceId: d.deviceId })
+      toast.success('Till revoked', `${label} can no longer reach this team's data.`)
+      await load()
+    } catch (e: any) {
+      toast.error('Could not revoke the till', e?.message)
+    } finally {
+      setWorkingDevice('')
+    }
+  }
+
   if (loadError && !status) {
     return (
       <div className="px-4 pb-4 sm:px-5">
@@ -909,9 +969,10 @@ function TeamSyncPanel() {
   return (
     <div className="px-4 pb-4 sm:px-5 space-y-4">
       <div className="bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
-        <p><strong className="text-ink">Multi-till syncing.</strong> Every till links itself to the team
+        <p><strong className="text-ink">Multi-store, multi-till syncing.</strong> Every till links itself to the team
         automatically — it finds its team in the cloud database the moment it gets online. No codes to send,
-        no keys to paste. Sell on one till, see it on all of them.</p>
+        no keys to paste. Running more than one shop? Add each store below — every store keeps its own
+        products, sales and tills, and the database only ever lets a till see its own store.</p>
       </div>
 
       <div>
@@ -948,7 +1009,16 @@ function TeamSyncPanel() {
                 </span>
               )}
             </div>
-            {status.registered && !status.approved && (
+            {status.storePending && (
+              <div className="flex items-start gap-2 bg-pending-bg border-2 border-pending-text/30 rounded-input p-3 text-[13px] font-bold text-pending-text">
+                <AlertTriangle size={15} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
+                <span>
+                  This till is registered and waiting for the owner to assign it to a store. It will join
+                  automatically the moment the assignment is made — nothing to type here.
+                </span>
+              </div>
+            )}
+            {status.registered && !status.approved && !status.storePending && (
               <div className="flex items-start gap-2 bg-pending-bg border-2 border-pending-text/30 rounded-input p-3 text-[13px] font-bold text-pending-text">
                 <AlertTriangle size={15} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
                 <span>
@@ -982,11 +1052,108 @@ function TeamSyncPanel() {
                       <StatusPill status={d.approved ? 'paid' : 'pending'} label={d.approved ? 'Approved' : 'Pending'} />
                     </td>
                     <td className="px-3 py-2 text-right">
-                      {d.thisDevice && <StatusPill status="info" label="This device" />}
+                      {d.thisDevice ? <StatusPill status="info" label="This device" /> : (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => removeDevice(d)}
+                          disabled={workingDevice === d.deviceId}
+                          title="Revoke this till — it is cut off from the cloud immediately"
+                        >
+                          {workingDevice === d.deviceId ? <Spinner /> : <Trash2 size={14} strokeWidth={2.25} aria-hidden />}
+                          Revoke
+                        </Button>
+                      )}
                     </td>
                   </tr>
                 ))}
               </Table>
+            )}
+
+            {/* Stores under this owner's cloud project (multi-store view). */}
+            {(status.stores?.length ?? 0) > 0 && (
+              <div className="pt-1">
+                <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5 flex items-center gap-1.5">
+                  <Store size={13} strokeWidth={2.5} aria-hidden /> Stores in the cloud
+                </p>
+                <Table head={['Store', 'Team code', 'Tills', '']}>
+                  {status.stores!.map((st) => (
+                    <tr key={st.teamCode} className={st.teamCode === status.teamCode ? 'bg-brand/5' : ''}>
+                      <td className="px-3 py-2 text-[13px] font-semibold text-ink">
+                        {st.name}
+                        {st.teamCode === status.teamCode && (
+                          <span className="ml-2 text-[11px] font-bold text-ink-muted">this store</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-[12px] text-ink-muted tracking-wider">{st.teamCode}</td>
+                      <td className="px-3 py-2 text-[12px] text-ink-muted tabular">{st.devices}</td>
+                      <td className="px-3 py-2 text-right text-[11px] text-ink-subtle">
+                        {st.slug === 'main' ? 'default store' : ''}
+                      </td>
+                    </tr>
+                  ))}
+                </Table>
+                <div className="flex flex-wrap items-end gap-2 mt-2">
+                  <div className="w-56">
+                    <Field label="Add a store">
+                      <Input
+                        value={newStoreName}
+                        onChange={(e) => setNewStoreName(e.target.value)}
+                        placeholder="e.g. Ruiru branch"
+                        onKeyDown={(e) => { if (e.key === 'Enter') addStore() }}
+                      />
+                    </Field>
+                  </div>
+                  <Button size="sm" onClick={addStore} disabled={addingStore} title="Creates the store in the cloud; its team code is minted by the database">
+                    {addingStore ? <Spinner /> : <Store size={15} strokeWidth={2.5} aria-hidden />}
+                    Add store
+                  </Button>
+                </div>
+                <p className="text-[12px] text-ink-subtle mt-1.5">
+                  Each store keeps its own products, sales and tills. New tills join automatically while there is
+                  only one store; with several, you assign them below — the database never lets a till see another store's data.
+                </p>
+              </div>
+            )}
+
+            {/* Registered tills waiting for a store assignment (owner view). */}
+            {(status.pendingDevices?.length ?? 0) > 0 && (
+              <div className="pt-1">
+                <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5 flex items-center gap-1.5">
+                  <UserPlus size={13} strokeWidth={2.5} aria-hidden /> New tills waiting for a store
+                </p>
+                <Table head={['Till', 'Version', 'Assign to', '']}>
+                  {status.pendingDevices!.map((d) => (
+                    <tr key={d.deviceId}>
+                      <td className="px-3 py-2">
+                        <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-ink">
+                          <MonitorSmartphone size={14} strokeWidth={2.25} aria-hidden />
+                          {d.deviceName || d.deviceId.slice(0, 8)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || '—'}</td>
+                      <td className="px-3 py-2">
+                        <Select
+                          className="w-44 text-[12px]"
+                          value={assignPick[d.deviceId] || ''}
+                          onChange={(e) => setAssignPick((m) => ({ ...m, [d.deviceId]: e.target.value }))}
+                        >
+                          <option value="">Choose a store…</option>
+                          {status.stores?.map((st) => (
+                            <option key={st.teamCode} value={st.teamCode}>{st.name}</option>
+                          ))}
+                        </Select>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <Button size="sm" variant="secondary" onClick={() => assignDevice(d)} disabled={workingDevice === d.deviceId}>
+                          {workingDevice === d.deviceId ? <Spinner /> : <UserPlus size={14} strokeWidth={2.5} aria-hidden />}
+                          Assign
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </Table>
+              </div>
             )}
           </div>
         )}

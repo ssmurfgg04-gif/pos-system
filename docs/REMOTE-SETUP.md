@@ -13,6 +13,30 @@ starts syncing. No join codes, no keys to type, nothing to copy-paste.
 - Devices identify themselves in `sync_devices` (id + secret hash). The
   database decides who is who: `approved` / `revoked` columns gate every
   push and pull.
+- Canonical cloud schema (tables + RPCs + RLS): **`db/cloud_schema.sql`**
+  in the repo.
+
+## Multiple stores under one owner (v1.1.1+)
+
+One cloud project can carry any number of stores — your first store behaves
+exactly as before, and every new store grows under the same umbrella:
+
+- `sync_stores` is the registry: one row per store (slug, name, team code).
+  The **team code is minted by the database** — the app never invents one.
+- While a project has **exactly one store**, a new till auto-joins it
+  (zero-config, unchanged).
+- The moment a **second store** exists, a new till registers as *pending*
+  and waits. The owner assigns it from any approved till:
+  Settings → Team → *New tills waiting for a store* → pick the store →
+  **Assign**. The till joins within ~20 seconds, on its next heartbeat.
+- **Isolation is enforced in the database, not the app**: events are
+  partitioned by `team_code`, every RPC verifies the caller's device
+  identity and stamps the team server-side, RLS denies anon direct table
+  access, and a till can only ever read/write its own store's rows.
+- **Add a store**: Settings → Team → *Stores in the cloud* → name it →
+  **Add store**.
+- **Revoke a till** (stolen, sold, retired): Settings → Team → roster →
+  **Revoke** — or `update sync_devices set revoked = true where device_id = 'dev-…';`
 
 ## Bring a new till online (remote, 2 steps)
 

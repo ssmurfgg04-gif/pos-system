@@ -38,8 +38,17 @@ type cloudBootstrap struct {
         AutoApprove bool   `json:"auto_approve"`
 }
 
+// cloudStore is one row of the sync_stores registry — the multi-store
+// umbrella. Each store owns exactly one team_code (the sync partition).
+type cloudStore struct {
+        Slug        string `json:"slug"`
+        Name        string `json:"name"`
+        TeamCode    string `json:"team_code"`
+        AutoApprove bool   `json:"auto_approve"`
+}
+
 // ensureCloudBootstrap resolves the cloud link (project URL, team code,
-// auto-approve) from the sync_bootstrap row, cached in local settings for
+// auto-approve) from the cloud store registry, cached in local settings for
 // bootstrapRefresh so a temporarily unreachable cloud never blocks a till.
 // Returns nil when the cloud is not usable yet (never fetched + unreachable).
 func (s *Service) ensureCloudBootstrap() *cloudBootstrap {
@@ -53,22 +62,73 @@ func (s *Service) ensureCloudBootstrap() *cloudBootstrap {
                         return bs
                 }
         }
-        bs, err := fetchBootstrap()
-        if err != nil {
+        bs := s.resolveCloudStore()
+        if bs == nil {
                 if cached := s.cachedBootstrap(); cached != nil {
                         return cached // offline tolerance: keep last known team
                 }
                 return nil
         }
         _ = s.settings.Set("sync_endpoint", strings.TrimRight(bs.ProjectURL, "/"))
-        _ = s.settings.Set("sync_team_code", bs.TeamCode)
-        _ = s.settings.Set("sync_auto_approve", boolStr(bs.AutoApprove))
         _ = s.settings.Set("sync_bootstrap_at", nowStamp())
         _ = s.settings.Set("sync_source", "cloud")
-        if !s.settings.GetBool("sync_enabled", false) {
+        if bs.TeamCode != "" {
+                _ = s.settings.Set("sync_team_code", bs.TeamCode)
+                _ = s.settings.Set("sync_auto_approve", boolStr(bs.AutoApprove))
+                _ = s.settings.Set("sync_store_pending", "false")
+                if !s.settings.GetBool("sync_enabled", false) {
+                        _ = s.settings.Set("sync_enabled", "true")
+                }
+        } else {
+                // Multi-store cloud and this till has no store yet: it registers
+                // as pending and the owner assigns it from an approved till.
+                _ = s.settings.Set("sync_store_pending", "true")
                 _ = s.settings.Set("sync_enabled", "true")
         }
         return bs
+}
+
+// resolveCloudStore decides which team this till belongs to, from the
+// cloud's own registry (never from the client):
+//   - exactly one active store → join it (zero-config, unchanged behaviour);
+//   - several stores → the till's previously assigned team still wins (if
+//     the registry still contains it); a fresh till gets TeamCode ""
+//     (pending) and learns its fate from sync_register;
+//   - registry unreachable → legacy sync_bootstrap row 1 (single-store
+//     deployments predating the registry, and offline tolerance upstream).
+//
+// The project URL always comes from the cloud's own answer (the bootstrap
+// row carries its project_url; the registry is read from the constant) so
+// tests can point the client at a fake cloud.
+func (s *Service) resolveCloudStore() *cloudBootstrap {
+        stores, serr := fetchStores()
+        // cloudBaseURL is the host the registry was read from (the constant in
+        // production, the fake server in tests) — never point the sync client
+        // anywhere else when the registry answered.
+        projectURL := strings.TrimRight(cloudBaseURL, "/")
+        if serr != nil || len(stores) == 0 {
+                if bs, err2 := fetchBootstrap(); err2 == nil {
+                        projectURL = bs.ProjectURL
+                        stores = []cloudStore{{Slug: "main", Name: "Main Store",
+                                TeamCode: bs.TeamCode, AutoApprove: bs.AutoApprove}}
+                }
+        }
+        if len(stores) == 0 {
+                return nil
+        }
+        if len(stores) == 1 {
+                return &cloudBootstrap{ProjectURL: projectURL,
+                        TeamCode: stores[0].TeamCode, AutoApprove: stores[0].AutoApprove}
+        }
+        // Several stores: a previously assigned till keeps its team; everyone
+        // else registers pending and is assigned by the owner.
+        team := s.settings.Get("sync_team_code")
+        for _, st := range stores {
+                if team != "" && st.TeamCode == team {
+                        return &cloudBootstrap{ProjectURL: projectURL, TeamCode: team, AutoApprove: st.AutoApprove}
+                }
+        }
+        return &cloudBootstrap{ProjectURL: projectURL, TeamCode: "", AutoApprove: false}
 }
 
 func (s *Service) cachedBootstrap() *cloudBootstrap {
@@ -121,6 +181,37 @@ func fetchBootstrap() (*cloudBootstrap, error) {
                 return nil, fmt.Errorf("bootstrap: no row")
         }
         return &rows[0], nil
+}
+
+// fetchStores reads the cloud's active store registry with the public anon
+// key (RLS exposes exactly the active rows — no secrets, no device data).
+func fetchStores() ([]cloudStore, error) {
+        q := url.Values{}
+        q.Set("active", "eq.true")
+        q.Set("select", "slug,name,team_code,auto_approve")
+        q.Set("order", "id")
+        base := strings.TrimRight(cloudBaseURL, "/")
+        req, err := http.NewRequest("GET", base+"/rest/v1/sync_stores?"+q.Encode(), nil)
+        if err != nil {
+                return nil, err
+        }
+        req.Header.Set("apikey", cloudAnonKey)
+        req.Header.Set("Authorization", "Bearer "+cloudAnonKey)
+        hc := &http.Client{Timeout: syncHTTPTimeout}
+        resp, err := hc.Do(req)
+        if err != nil {
+                return nil, err
+        }
+        defer resp.Body.Close()
+        if resp.StatusCode != 200 {
+                io.Copy(io.Discard, resp.Body)
+                return nil, fmt.Errorf("stores: status %d", resp.StatusCode)
+        }
+        var rows []cloudStore
+        if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+                return nil, err
+        }
+        return rows, nil
 }
 
 // deviceSecret returns this till's stable random secret (generated once,
