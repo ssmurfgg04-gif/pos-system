@@ -1941,11 +1941,12 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   }
 
   // ---- team sync (Settings → Team; the demo till is always cloud-linked) ----
+  // Zero-config identity: the till finds its team in the cloud database —
+  // no join codes, no keys. The status carries no teamCode for that reason.
   if (m === 'GET' && p === '/team-sync') {
     requirePerm(perms, 'settings.manage')
     return {
       enabled: true,
-      teamCode: 'KQ7-P2MX-91',
       deviceId: 'demo-device',
       deviceName: 'Demo Till',
       lastPush: nowIso(),
@@ -1959,6 +1960,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       devices: [
         { deviceId: 'demo-device', deviceName: 'Demo Till (this browser)', appVersion: 'demo', lastSeen: nowIso(), thisDevice: true, approved: true },
         { deviceId: 'till-back-counter', deviceName: 'Back-counter laptop', appVersion: 'demo', lastSeen: nowIso(), thisDevice: false, approved: true },
+        { deviceId: 'till-kiambu-02', deviceName: 'Front-counter till 2', appVersion: '1.1.0', lastSeen: nowIso(), thisDevice: false, approved: true },
       ],
     } as T
   }
@@ -1970,10 +1972,10 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   }
   if (m === 'POST' && p === '/team-sync/create') {
     requirePerm(perms, 'settings.manage')
-    const code = 'KQ7-P2MX-91'
-    audit(user.id, user.username, 'TEAM_SYNC_CREATED', 'settings', '', code)
-    persist()
-    return { teamCode: code } as T
+    // v1.1 flow: tills find their team in the cloud database by themselves.
+    // Codes only exist as a manual fallback for a till with no cloud
+    // reachability — the demo till is always cloud-linked, so teach that.
+    throw new ApiError(409, 'No team code needed — this till already found its team in the cloud automatically. Codes are only for tills that cannot reach the cloud.')
   }
   if (m === 'POST' && p === '/team-sync/now') {
     requirePerm(perms, 'settings.manage')

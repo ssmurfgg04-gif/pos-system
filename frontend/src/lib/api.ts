@@ -615,7 +615,8 @@ export interface TeamDevice {
 
 export interface TeamSyncStatus {
   enabled: boolean
-  teamCode: string
+  /** Legacy join code — empty/absent for zero-config cloud-identity tills. */
+  teamCode?: string
   deviceId: string
   deviceName: string
   lastPush: string
