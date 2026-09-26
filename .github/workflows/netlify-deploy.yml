@@ -1,0 +1,71 @@
+# Deploys the LedgerPOS download site to Netlify straight from this repo.
+#
+# What it does on every push to main (site-affecting paths only):
+#   1. builds the exact site Netlify would serve — landing page, /demo/,
+#      /downloads/ installers — with scripts/netlify_build.py
+#   2. deploys frontend/dist to production via netlify-cli
+#
+# One-time setup (repo owner, ~2 minutes):
+#   Netlify:  User settings → Applications → Personal access tokens →
+#             New access token  → copy it (starts with nfp_)
+#             Site configuration → Site details → Site ID (API ID)
+#   GitHub:   this repo → Settings → Secrets and variables → Actions →
+#             New repository secret ×2:
+#               NETLIFY_AUTH_TOKEN = the nfp_ token
+#               NETLIFY_SITE_ID    = the site's API ID
+# Until those secrets exist the workflow stays green and only prints a
+# reminder — the build itself is still fully validated on every push.
+#
+# Fallback with zero secrets: `python3 scripts/build_site.py 1.1.0`
+# produces build/netlify-site/ — drag that folder onto
+# app.netlify.com → Deploys.
+
+name: Deploy site to Netlify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "scripts/netlify_build.py"
+      - "scripts/assets/download-page.html"
+      - "scripts/assets/icons/**"
+      - "downloads/**"
+      - "netlify.toml"
+      - ".github/workflows/netlify-deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: netlify-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build the site (landing + demo + installers)
+        working-directory: frontend
+        run: python3 ../scripts/netlify_build.py
+
+      - name: Deploy to Netlify
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          if [ -z "$NETLIFY_AUTH_TOKEN" ] || [ -z "$NETLIFY_SITE_ID" ]; then
+            echo "::notice::Site built OK, but deploy skipped — set the NETLIFY_AUTH_TOKEN and NETLIFY_SITE_ID repo secrets (see .github/workflows/netlify-deploy.yml header for the 2-minute setup). Meanwhile the live site can be updated by dragging build/netlify-site/ onto app.netlify.com → Deploys."
+            echo "To package that folder locally: python3 scripts/build_site.py"
+            exit 0
+          fi
+          npx --yes netlify-cli@latest deploy \
+            --dir frontend/dist \
+            --site "$NETLIFY_SITE_ID" \
+            --auth "$NETLIFY_AUTH_TOKEN" \
+            --prod \
+            --message "repo deploy $GITHUB_SHA"
