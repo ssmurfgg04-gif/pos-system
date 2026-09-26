@@ -563,33 +563,36 @@ func (c *syncClient) fetchDevices(s *Service) ([]models.TeamDevice, error) {
         return out, nil
 }
 
-// TeamSyncConfigure stores endpoint + key + team code (admin action).
-// Setting any of these explicitly switches the till to manual mode; the
-// automatic cloud bootstrap no longer overrides it.
+// TeamSyncConfigure toggles the team link. Manual secret entry (project
+// URL / service key / team code) was removed for security: the
+// service_role key bypasses all row-level security and must never be
+// typed into a till — anyone with it owns the entire cloud database. A
+// till links itself via the cloud bootstrap row instead. Legacy fields
+// sent by old clients are acknowledged but never stored; tills that were
+// hand-configured before cloud identity keep working until switched to
+// cloud (Settings → Team → Switch to LedgerPOS Cloud).
 func (s *Service) TeamSyncConfigure(req models.TeamSyncConfigRequest) error {
-        if req.ProjectURL != "" && !strings.HasPrefix(req.ProjectURL, "https://") {
-                return fmt.Errorf("project URL must be an https Supabase URL")
+        if req.ProjectURL != "" || (req.ServiceKey != "" && req.ServiceKey != settings.MaskToken) || req.TeamCode != "" {
+                s.Audit(0, "system", "TEAM_SYNC_MANUAL_IGNORED", "settings", "",
+                        "manual sync keys are no longer accepted — tills link via cloud identity")
         }
-        if req.ServiceKey != "" && req.ServiceKey != settings.MaskToken {
-                _ = s.settings.Set("sync_service_key", req.ServiceKey)
-                _ = s.settings.Set("sync_source", "manual")
+        if req.Enabled == nil {
+                return nil
         }
-        if req.ProjectURL != "" {
-                _ = s.settings.Set("sync_endpoint", strings.TrimRight(req.ProjectURL, "/"))
-                _ = s.settings.Set("sync_source", "manual")
+        if !*req.Enabled {
+                _ = s.settings.Set("sync_enabled", "false")
+                return nil
         }
-        if req.TeamCode != "" {
-                _ = s.settings.Set("sync_team_code", strings.ToUpper(strings.TrimSpace(req.TeamCode)))
+        if s.ensureCloudBootstrap() != nil {
+                _ = s.settings.Set("sync_enabled", "true")
+                return nil
         }
-        if req.Enabled != nil {
-                if *req.Enabled {
-                        if s.settings.Get("sync_endpoint") == "" || s.settings.Get("sync_service_key") == "" || s.settings.Get("sync_team_code") == "" {
-                                return fmt.Errorf("endpoint, service key, and team code are all required to enable sync")
-                        }
-                }
-                _ = s.settings.Set("sync_enabled", boolStr(*req.Enabled))
+        // Legacy manual configuration (saved before cloud identity existed).
+        if s.settings.Get("sync_endpoint") != "" && s.settings.Get("sync_service_key") != "" && s.settings.Get("sync_team_code") != "" {
+                _ = s.settings.Set("sync_enabled", "true")
+                return nil
         }
-        return nil
+        return fmt.Errorf("no team link yet — this till joins its team automatically once it can reach the internet")
 }
 
 func boolStr(b bool) string {

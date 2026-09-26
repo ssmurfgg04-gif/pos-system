@@ -20,7 +20,7 @@ import { resetDemo } from '../demo/backend'
 import { useBranding } from '../stores/branding'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
-import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle } from 'lucide-react'
+import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck } from 'lucide-react'
 
 type SettingsMap = Record<string, string>
 
@@ -262,58 +262,71 @@ export function Settings() {
             </div>
 
             <div className="sm:col-span-2 border-t-2 border-line pt-3 mt-1">
-              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">M-Pesa (Daraja)</p>
+              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">M-Pesa</p>
               <p className="text-[13px] text-ink-muted">
-                <strong className="text-ink">M-Pesa setup.</strong> The payment provider is swappable:
-                run in <strong>mock</strong> for demos/training, switch to <strong>sandbox</strong> to test with Safaricom,
-                or <strong>production</strong> when you go live. Manual receipt-code entry always works, even with no provider configured.
+                <strong className="text-ink">M-Pesa runs through Paystack.</strong> When Paystack is connected above,
+                the M-Pesa button at checkout opens a secure Paystack popup — the customer picks M-Pesa and enters
+                their number there. No Safaricom keys needed. Manual receipt-code entry always works, even offline.
               </p>
             </div>
-            <Field label="Provider environment">
-              <Select value={values.mpesa_env ?? 'mock'} onChange={(e) => set('mpesa_env', e.target.value)}>
-                <option value="mock">Mock (demo / training)</option>
-                <option value="sandbox">Daraja sandbox</option>
-                <option value="production">Daraja production</option>
-              </Select>
-            </Field>
-            <Field label="Default M-Pesa mode at checkout">
-              <Select value={values.payment_mode ?? 'auto'} onChange={(e) => set('payment_mode', e.target.value)}>
-                <option value="auto">Auto — STK push with manual fallback</option>
-                <option value="stk">STK push only</option>
-                <option value="manual">Manual receipt code only</option>
-              </Select>
-            </Field>
             <Field label="Till number" hint="Shown to customers when paying manually">
               <Input value={values.till_number ?? ''} onChange={(e) => set('till_number', e.target.value)} inputMode="numeric" />
             </Field>
             <Field label="Paybill number">
               <Input value={values.paybill_number ?? ''} onChange={(e) => set('paybill_number', e.target.value)} inputMode="numeric" />
             </Field>
-            <Field label="Business shortcode (Daraja)">
-              <Input value={values.mpesa_shortcode ?? ''} onChange={(e) => set('mpesa_shortcode', e.target.value)} inputMode="numeric" />
+            <Field label="Default M-Pesa mode at checkout" hint="Used when Paystack is not connected.">
+              <Select value={values.payment_mode ?? 'auto'} onChange={(e) => set('payment_mode', e.target.value)}>
+                <option value="auto">Auto — STK push with manual fallback</option>
+                <option value="stk">STK push only</option>
+                <option value="manual">Manual receipt code only</option>
+              </Select>
             </Field>
-            <Field label="Passkey" hint="Daraja Lipa Na M-Pesa passkey">
-              <Input type="password" value={values.mpesa_passkey ?? ''} onChange={(e) => set('mpesa_passkey', e.target.value)} />
-            </Field>
-            <Field label="Consumer key">
-              <Input value={values.mpesa_consumer_key ?? ''} onChange={(e) => set('mpesa_consumer_key', e.target.value)} />
-            </Field>
-            <Field label="Consumer secret">
-              <Input type="password" value={values.mpesa_consumer_secret ?? ''} onChange={(e) => set('mpesa_consumer_secret', e.target.value)} />
-            </Field>
-            <Field label="Callback URL" hint="Optional on LAN — the server also polls stkpushquery every 5s">
-              <Input value={values.mpesa_callback_url ?? ''} onChange={(e) => set('mpesa_callback_url', e.target.value)} placeholder="https://yourdomain.example/api/v1/payments/mpesa/callback" />
-            </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Mock delay (ms)" hint="Demo time before auto-success">
-                <Input value={values.mpesa_mock_delay_ms ?? '4000'} onChange={(e) => set('mpesa_mock_delay_ms', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
-              </Field>
-              <Field label="Mock result code" hint="0 = success; e.g. 1032 simulates cancel">
-                <Input value={values.mpesa_mock_result_code ?? '0'} onChange={(e) => set('mpesa_mock_result_code', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
-              </Field>
-            </div>
+
+            <details className="sm:col-span-2 border-2 border-line rounded-input p-3 bg-surface-muted">
+              <summary className="text-[13px] font-bold text-ink cursor-pointer select-none">
+                Advanced — direct Safaricom Daraja (optional, only if you don't use Paystack)
+              </summary>
+              <div className="grid sm:grid-cols-2 gap-3 pt-3">
+                <p className="sm:col-span-2 text-[12.5px] text-ink-muted">
+                  Talk to M-Pesa directly (STK push). Training mode never touches real money; sandbox tests
+                  against Safaricom; production goes live.
+                </p>
+                <Field label="Provider environment">
+                  <Select value={values.mpesa_env ?? 'mock'} onChange={(e) => set('mpesa_env', e.target.value)}>
+                    <option value="mock">Training mode — no real money moves</option>
+                    <option value="sandbox">Daraja sandbox</option>
+                    <option value="production">Daraja production</option>
+                  </Select>
+                </Field>
+                <Field label="Business shortcode (Daraja)">
+                  <Input value={values.mpesa_shortcode ?? ''} onChange={(e) => set('mpesa_shortcode', e.target.value)} inputMode="numeric" />
+                </Field>
+                <Field label="Passkey" hint="Daraja Lipa Na M-Pesa passkey">
+                  <Input type="password" value={values.mpesa_passkey ?? ''} onChange={(e) => set('mpesa_passkey', e.target.value)} />
+                </Field>
+                <Field label="Consumer key">
+                  <Input value={values.mpesa_consumer_key ?? ''} onChange={(e) => set('mpesa_consumer_key', e.target.value)} />
+                </Field>
+                <Field label="Consumer secret">
+                  <Input type="password" value={values.mpesa_consumer_secret ?? ''} onChange={(e) => set('mpesa_consumer_secret', e.target.value)} />
+                </Field>
+                <Field label="Callback URL" hint="Optional on LAN — the server also polls stkpushquery every 5s">
+                  <Input value={values.mpesa_callback_url ?? ''} onChange={(e) => set('mpesa_callback_url', e.target.value)} placeholder="https://yourdomain.example/api/v1/payments/mpesa/callback" />
+                </Field>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Training delay (ms)" hint="Time before auto-success in training mode">
+                    <Input value={values.mpesa_mock_delay_ms ?? '4000'} onChange={(e) => set('mpesa_mock_delay_ms', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
+                  </Field>
+                  <Field label="Training result code" hint="0 = success; e.g. 1032 simulates cancel">
+                    <Input value={values.mpesa_mock_result_code ?? '0'} onChange={(e) => set('mpesa_mock_result_code', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
+                  </Field>
+                </div>
+              </div>
+            </details>
             <p className="sm:col-span-2 text-[12px] text-ink-subtle">
               Secrets show as <code className="font-mono">__SET__</code> after saving — that value means “keep the stored secret”.
+              All secrets are encrypted at rest on this machine.
             </p>
           </div>
         )}
@@ -460,6 +473,11 @@ export function Settings() {
             </p>
             <div className="sm:col-span-2 border-t-2 border-line pt-3">
               <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Software updates</p>
+              <p className="text-[12px] text-ink-subtle mb-2 flex items-start gap-1.5">
+                <ShieldCheck size={13} strokeWidth={2.5} className="shrink-0 mt-0.5 text-paid-text" aria-hidden />
+                Updating only swaps the app file — every sale, product and setting on this machine stays
+                exactly as it is. No re-uploading, no data entry, ever.
+              </p>
               {!update ? (
                 <div className="py-4 flex justify-center"><Spinner /></div>
               ) : update.updateAvailable ? (
@@ -808,19 +826,16 @@ function VoidReasonsAdmin() {
 }
 
 // ---- Team sync (Team tab) ----
-// Links this till to a Supabase project so catalogues, customers, orders and
-// settings flow between tills automatically. Config lives on this device;
-// the team code is the shared secret other tills join with.
+// Links this till to its team through the cloud database: catalogues,
+// customers, orders and settings flow between tills automatically. Identity
+// is zero-config — the till finds its team in the cloud bootstrap row, no
+// keys are ever typed in.
 
 function TeamSyncPanel() {
   const [status, setStatus] = useState<TeamSyncStatus | null>(null)
   const [loadError, setLoadError] = useState('')
-  const [projectUrl, setProjectUrl] = useState('')
-  const [serviceKey, setServiceKey] = useState('')
-  const [teamCode, setTeamCode] = useState('')
   const [enabled, setEnabled] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [creating, setCreating] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [switching, setSwitching] = useState(false)
 
@@ -828,7 +843,6 @@ function TeamSyncPanel() {
     try {
       const s = await api.get<TeamSyncStatus>('/api/v1/team-sync')
       setStatus(s)
-      setTeamCode(s.teamCode || '')
       setEnabled(s.enabled)
       setLoadError('')
     } catch (e: any) {
@@ -838,38 +852,16 @@ function TeamSyncPanel() {
   }
   useEffect(() => { load() }, [])
 
-  const save = async () => {
+  const toggleSync = async (next: boolean) => {
     setBusy(true)
     try {
-      // Empty project URL / service key / team code keep the stored values
-      // (the API only overwrites fields that are sent non-empty).
-      await api.put('/api/v1/team-sync', {
-        projectUrl: projectUrl.trim(),
-        serviceKey: serviceKey.trim() === '' ? '__SET__' : serviceKey.trim(),
-        teamCode: teamCode.trim(),
-        enabled,
-      })
-      toast.success('Team sync saved', enabled ? 'Sync is on' : 'Sync is off')
-      setProjectUrl('')
-      setServiceKey('')
+      await api.put('/api/v1/team-sync', { enabled: next })
+      toast.success('Team sync saved', next ? 'Sync is on' : 'Sync is off')
       await load()
     } catch (e: any) {
       toast.error('Save failed', e?.message)
     } finally {
       setBusy(false)
-    }
-  }
-
-  const createCode = async () => {
-    setCreating(true)
-    try {
-      const res = await api.post<{ teamCode: string }>('/api/v1/team-sync/create')
-      setTeamCode(res.teamCode)
-      toast.success('Team code created', `${res.teamCode} — enter it on your other tills`)
-    } catch (e: any) {
-      toast.error('Could not create code', e?.message)
-    } finally {
-      setCreating(false)
     }
   }
 
@@ -1001,48 +993,23 @@ function TeamSyncPanel() {
       </div>
 
       <div className="border-t-2 border-line pt-3">
-        <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Link this till</p>
-        <div className="grid sm:grid-cols-2 gap-3">
-          <Field label="Supabase project URL" hint="Leave blank to keep the stored one.">
-            <Input value={projectUrl} onChange={(e) => setProjectUrl(e.target.value)} placeholder="https://xyzcompany.supabase.co" className="font-mono" />
-          </Field>
-          <Field label="Service key" hint="service_role key. Leave blank to keep the stored one.">
-            <Input type="password" value={serviceKey} onChange={(e) => setServiceKey(e.target.value)} className="font-mono" autoComplete="off" />
-          </Field>
-          <Field label="Team code" hint="Shared by all tills in this team.">
-            <div className="flex gap-2">
-              <Input
-                value={teamCode}
-                onChange={(e) => setTeamCode(e.target.value.toUpperCase())}
-                placeholder="e.g. KQ7-P2MX-91"
-                className="font-mono uppercase flex-1"
-              />
-              <Button variant="secondary" onClick={createCode} disabled={creating}>
-                {creating ? <Spinner className="border-t-brand-ink" /> : 'Create team code'}
-              </Button>
-            </div>
-          </Field>
-          <div className="flex items-end">
-            <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink">
-              <input
-                type="checkbox"
-                checked={enabled}
-                onChange={(e) => setEnabled(e.target.checked)}
-                className="w-5 h-5 accent-[#10B981]"
-              />
-              Sync with the team
-            </label>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => { setEnabled(e.target.checked); toggleSync(e.target.checked) }}
+              className="w-5 h-5 accent-[#10B981]"
+            />
+            Sync with the team
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={syncNow} disabled={syncing}>
+              {syncing ? <Spinner /> : <RefreshCw size={15} strokeWidth={2.5} aria-hidden />}
+              Sync now
+            </Button>
+            <Button variant="ghost" onClick={load} disabled={syncing || busy}>Refresh status</Button>
           </div>
-        </div>
-        <div className="flex flex-wrap gap-2 mt-3">
-          <Button variant="primary" onClick={save} disabled={busy}>
-            {busy ? <Spinner className="border-t-brand-ink" /> : 'Save team sync'}
-          </Button>
-          <Button variant="secondary" onClick={syncNow} disabled={syncing}>
-            {syncing ? <Spinner /> : <RefreshCw size={15} strokeWidth={2.5} aria-hidden />}
-            Sync now
-          </Button>
-          <Button variant="ghost" onClick={load} disabled={syncing || busy}>Refresh status</Button>
         </div>
       </div>
 
@@ -1050,6 +1017,10 @@ function TeamSyncPanel() {
         <p>
           Changes to products, prices, customers, orders, void reasons and store settings sync to every
           linked till automatically — no reinstalling. Binary updates still arrive via Settings → Updates.
+        </p>
+        <p className="mt-2 text-[12px] text-ink-subtle">
+          Manual key entry was removed for security: the database service key must never be typed into a
+          till. Every till finds its team through the cloud database on its own.
         </p>
       </div>
     </div>

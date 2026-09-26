@@ -40,12 +40,31 @@ Run via the Supabase SQL editor or the Management API.
 
 ## Payments on a new till (per machine, by design)
 
+M-Pesa and card payments both run through **Paystack**: with Paystack
+connected, the checkout's M-Pesa button opens the Paystack popup (the
+customer picks M-Pesa / mobile money / card inside it) — no Safaricom
+Daraja keys needed. A direct-Daraja path remains under Settings → Payments
+→ Advanced for shops that prefer it.
+
 The Paystack **secret** key never syncs and never leaves the machine it is
-entered on (that is the point of it). On each till that takes card/M-Pesa
-payments: Settings → Payments → paste the secret key once (it is masked and
-stored locally), or set `PAYSTACK_SECRET_KEY` as an environment variable.
-The public key, currency (KES) and callback URL
+entered on (that is the point of it). It is also **encrypted at rest**:
+AES-256-GCM with a key file (`secret.key`) that lives in the app data
+folder NEXT TO the database — a copied `pos.db` file alone reveals no
+payment secrets. On each till that takes card/M-Pesa payments:
+Settings → Payments → paste the secret key once (it is masked and stored
+encrypted locally), or set `PAYSTACK_SECRET_KEY` as an environment
+variable. The public key, currency (KES) and callback URL
 (`https://awesomeposs.netlify.app/`) are part of the synced config.
+
+## Manual key entry was removed (security)
+
+Older builds let an admin paste a Supabase `service_role` key into
+Settings → Team on any till. That key bypasses all row-level security —
+pasting it on a till everyone touches gives the whole team god access to
+the cloud database. Manual key entry is gone from the UI and the API now
+ignores those fields entirely: tills link via the cloud bootstrap row.
+Tills configured by hand before this change keep working; switch them to
+cloud identity with Settings → Team → Switch to LedgerPOS Cloud.
 
 ## What syncs (WiFi, every ~20s, offline-safe)
 
@@ -63,4 +82,15 @@ device roster. Binary app updates still arrive via Settings → Updates.
 - RLS: anon can read exactly one row — the bootstrap config. Sync tables
   deny anon entirely.
 - Paystack/M-Pesa secrets: local per machine, masked in the API, excluded
-  from sync and backups.
+  from sync and backups, and **encrypted at rest** (AES-256-GCM, key file
+  outside the database).
+- No manual service-key entry anywhere in the product (see above).
+
+## Updates keep every byte of shop data
+
+Updating (Settings → Updates, or re-running a newer installer) swaps only
+the app file in `Programs\LedgerPOS`. The shop database lives in
+`%APPDATA%\LedgerPOS\pos.db` (macOS: `~/Library/Application
+Support/LedgerPOS`, Linux: `~/.local/share/LedgerPOS`) and is never
+touched by an install or update — no re-uploading store info, no data
+re-entry. Schema upgrades apply automatically on the next start.

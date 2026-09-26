@@ -134,6 +134,15 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
         if err := db.Seed(cfg.SeedDemoData); err != nil {
                 log.Fatalf("seed: %v", err)
         }
+        // Secrets at rest (paystack_secret_key, mpesa_passkey, ...): the
+        // vault key lives NEXT TO the database, outside it — a copied DB
+        // file alone reveals no payment secrets. Existing plaintext rows
+        // are re-encrypted transparently on this boot.
+        keyDir := filepath.Dir(cfg.SQLitePath)
+        if keyDir == "" || keyDir == "." {
+                keyDir = "."
+        }
+        settings.UseKeyFile(filepath.Join(keyDir, "secret.key"))
         st, err := settings.New(db)
         if err != nil {
                 log.Fatalf("settings: %v", err)

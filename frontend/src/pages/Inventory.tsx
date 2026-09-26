@@ -13,6 +13,7 @@ import { Button, Card, EmptyState, Field, Input, Modal, MoneyInput, Select, Spin
 import { StockCountPanel } from '../components/StockCount'
 import { printBarcodeLabels } from '../lib/labels'
 import { centsToAmount } from '../lib/money'
+import { normalizeProductImage, PHOTO_ACCEPT } from '../lib/photo'
 import { toast } from '../stores/toasts'
 import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2, Printer } from 'lucide-react'
 
@@ -510,18 +511,22 @@ function ProductModal({
 
   const pickPhoto = async (f: File | undefined) => {
     if (!f) return
-    if (f.size > 2 * 1024 * 1024) {
-      toast.error('Image too large', 'Maximum 2 MB (png, jpeg, webp, gif)')
+    if (f.size > 8 * 1024 * 1024) {
+      // normalizeProductImage compresses big phone photos down to the
+      // server's 2 MB cap; this hard stop only fires when even that
+      // cannot help (an 8 MB+ source image).
+      toast.error('Image too large', 'Please pick a photo under 8 MB')
       return
     }
     if (!product) {
-      setPendingPhoto(f)
+      setPendingPhoto(await normalizeProductImage(f))
       return
     }
     setPhotoBusy(true)
     try {
+      const up = await normalizeProductImage(f)
       const fd = new FormData()
-      fd.append('file', f)
+      fd.append('file', up)
       const res = await api.form<{ imageUrl: string }>(`/api/v1/products/${product.id}/image`, fd)
       setPreviewSrc(res.imageUrl) // demo returns the data URL; real a cache-busted path
       setHasPhoto(true)
@@ -566,7 +571,7 @@ function ProductModal({
         <div className="sm:col-span-2">
           <Field
             label="Photo"
-            hint="PNG, JPEG, WebP or GIF — max 2 MB. Shows on the till and inventory."
+            hint="PNG, JPEG, WebP or GIF. Large photos are compressed automatically. Shows on the till and inventory."
           >
             <div className="flex gap-3 items-start">
               <div className="w-28 h-28 shrink-0 rounded-input border-2 border-line-strong bg-surface-muted flex items-center justify-center overflow-hidden" aria-hidden>
@@ -592,7 +597,7 @@ function ProductModal({
                       </Button>
                       <input
                         type="file"
-                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        accept={PHOTO_ACCEPT}
                         className="hidden"
                         onChange={(e) => { pickPhoto(e.target.files?.[0]); e.currentTarget.value = '' }}
                       />
@@ -614,16 +619,16 @@ function ProductModal({
                       </Button>
                       <input
                         type="file"
-                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        accept={PHOTO_ACCEPT}
                         className="hidden"
-                        onChange={(e) => {
+                        onChange={async (e) => {
                           const f = e.target.files?.[0]
-                          if (f && f.size > 2 * 1024 * 1024) {
-                            toast.error('Image too large', 'Maximum 2 MB (png, jpeg, webp, gif)')
+                          if (f && f.size > 8 * 1024 * 1024) {
+                            toast.error('Image too large', 'Please pick a photo under 8 MB')
                             e.currentTarget.value = ''
                             return
                           }
-                          setPendingPhoto(f ?? null)
+                          setPendingPhoto(f ? await normalizeProductImage(f) : null)
                           e.currentTarget.value = ''
                         }}
                       />

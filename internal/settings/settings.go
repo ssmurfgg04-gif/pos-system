@@ -28,6 +28,14 @@ func isSecretKey(k string) bool {
                 strings.Contains(k, "passphrase") || k == "jwt_secret"
 }
 
+// encryptable reports whether a key is stored encrypted at rest. jwt_secret
+// is deliberately excluded: database/seed.go reads it with raw SQL (outside
+// this store) and the tenants registry already keeps a copy outside the
+// database, so encrypting it would break boot without adding safety.
+func encryptable(k string) bool {
+        return isSecretKey(k) && k != "jwt_secret"
+}
+
 type Store struct {
         db    *database.DB
         mu    sync.RWMutex
@@ -48,14 +56,54 @@ func New(db *database.DB) (*Store, error) {
                 }
                 s.cache[k] = v
         }
-        return s, rows.Err()
+        if err := rows.Err(); err != nil {
+                return nil, err
+        }
+        s.migrateLegacySecrets()
+        return s, nil
 }
 
-// Get returns the raw string value ("" when unset).
+// migrateLegacySecrets re-encrypts secret rows written in plaintext by
+// older versions (one-time, transparent). Runs only when a key file is
+// configured; plaintext installs without a key file keep working and are
+// upgraded on a future boot once one exists.
+func (s *Store) migrateLegacySecrets() {
+        if !vaultReady() {
+                return
+        }
+        for k, v := range s.cache {
+                if !encryptable(k) || v == "" || isEncrypted(v) || IsMaskToken(v) {
+                        continue
+                }
+                enc, err := encryptSecret(v)
+                if err != nil {
+                        continue
+                }
+                q := s.db.Rebind(`INSERT INTO settings (key, value) VALUES (?, ?)
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+                if _, err := s.db.Exec(q, k, enc); err == nil {
+                        s.mu.Lock()
+                        s.cache[k] = enc
+                        s.mu.Unlock()
+                }
+        }
+}
+
+// Get returns the string value ("" when unset). Encrypted secret rows
+// decrypt transparently; a missing key file yields "" (the feature that
+// needs the secret reports itself as unconfigured rather than crashing).
 func (s *Store) Get(key string) string {
         s.mu.RLock()
-        defer s.mu.RUnlock()
-        return s.cache[key]
+        v := s.cache[key]
+        s.mu.RUnlock()
+        if isEncrypted(v) {
+                plain, err := decryptSecret(v)
+                if err != nil {
+                        return ""
+                }
+                return plain
+        }
+        return v
 }
 
 func (s *Store) GetString(key, def string) string {
@@ -101,8 +149,16 @@ func (s *Store) GetBool(key string, def bool) bool {
         return def
 }
 
-// Set persists one setting and refreshes the cache.
+// Set persists one setting and refreshes the cache. Secret-class keys are
+// encrypted at rest when a key file has been configured (UseKeyFile).
 func (s *Store) Set(key, value string) error {
+        if encryptable(key) && value != "" && !isEncrypted(value) && !IsMaskToken(value) && vaultReady() {
+                if enc, err := encryptSecret(value); err == nil {
+                        value = enc
+                }
+                // On encryption failure store nothing rather than plaintext: the
+                // caller sees the DB error and the operator can fix the key file.
+        }
         q := s.db.Rebind(`INSERT INTO settings (key, value) VALUES (?, ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
         if _, err := s.db.Exec(q, key, value); err != nil {
