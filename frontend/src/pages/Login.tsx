@@ -122,6 +122,13 @@ export function Login() {
           >
             Quick PIN switch instead →
           </button>
+          <button
+            type="button"
+            onClick={() => navigate('/join')}
+            className="w-full min-h-11 flex items-center justify-center text-center text-sm font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
+          >
+            Joining a team? Paste your join link →
+          </button>
           {desk?.signupAllowed && (
             <button
               type="button"

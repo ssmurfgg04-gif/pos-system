@@ -21,6 +21,21 @@ const LATENCY = [90, 260] as const
 
 let db: DemoDB | null = null
 
+// Demo join-link invites (Settings → Team mints them; /auth/team-join
+// redeems them). Session-scoped — exactly like a fresh till's view.
+interface DemoInvite {
+  id: number
+  token: string
+  roleName: string
+  note: string
+  createdAt: string
+  expiresAt: string
+  usedBy: string
+  usedAt: string
+  revoked: boolean
+}
+let demoInvites: DemoInvite[] = []
+
 // ---- Retail expansion (v8/v9 server parity) ----
 
 interface DemoHeldSale {
@@ -767,6 +782,35 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (!body?.shopName || String(body.shopName).trim().length > 80) throw new ApiError(400, 'shop name required')
     // Single-shop demo: no tenant provisioning here.
     throw new ApiError(501, 'signup is not available in the demo')
+  }
+  // Team join link redemption (demo): the invite minted via Settings → Team
+  // is the credential; the worker picks a name + PIN and lands in the POS.
+  if (m === 'POST' && p === '/auth/team-join') {
+    const link = String(body?.link || '')
+    const name = String(body?.name || '').trim()
+    const pin = String(body?.pin || '')
+    const km = link.match(/k=([A-Za-z0-9-]{12,64})/)
+    const inv = demoInvites.find((i) => i.token === (km ? km[1] : link.trim()) && !i.revoked && !i.usedBy)
+    if (!inv) throw new ApiError(422, 'this invite is invalid, already used, or expired — ask the owner for a fresh link')
+    if (name.length < 2) throw new ApiError(422, 'enter the worker\'s name (2-40 characters)')
+    if (!/^\d{4}$/.test(pin) || pin === '0000' || pin === '1234') throw new ApiError(422, "choose a 4-digit PIN that isn't 0000 or 1234")
+    const role = d.roles.find((r) => r.name === inv.roleName) || d.roles.find((r) => r.name === 'Cashier')
+    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'worker'
+    let username = base
+    let n = 2
+    while (d.users.some((u) => u.username === username)) username = `${base}-${n++}`
+    const u: DemoUser = {
+      id: Math.max(0, ...d.users.map((x) => x.id)) + 1,
+      username, fullName: name, password: 'demo-' + Math.random().toString(36).slice(2, 10),
+      pin, roleId: role ? role.id : d.roles[0].id, active: true, mustRotate: false,
+      passwordChangedAt: Date.now(), createdAt: nowIso(),
+    }
+    d.users.push(u)
+    inv.usedBy = 'demo-joined-till'
+    inv.usedAt = nowIso()
+    audit(u.id, u.username, 'TEAM_JOIN_LINK_USED', 'user', username, `role ${inv.roleName}`)
+    persist()
+    return { token: issueToken(u), user: userDTO(u), teamCode: 'KIAMBU-MAIN', storeName: brandingDTO().store_name || 'Main Store', roleName: inv.roleName } as T
   }
   if (m === 'GET' && p === '/branding') return brandingDTO() as T
   if (m === 'POST' && p === '/payments/mpesa/callback') return { ResultCode: 0 } as T
@@ -1963,6 +2007,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       multiStore: false,
       stores: [{ slug: 'main', name: 'Main Store', teamCode: 'KIAMBU-MAIN', devices: 3 }],
       pendingDevices: [],
+      invites: demoInvites.map((i) => ({ id: i.id, roleName: i.roleName, note: i.note, createdAt: i.createdAt, expiresAt: i.expiresAt, usedBy: i.usedBy, usedAt: i.usedAt, revoked: i.revoked })),
       devices: [
         { deviceId: 'demo-device', deviceName: 'Demo Till (this browser)', appVersion: 'demo', lastSeen: nowIso(), thisDevice: true, approved: true },
         { deviceId: 'till-back-counter', deviceName: 'Back-counter laptop', appVersion: 'demo', lastSeen: nowIso(), thisDevice: false, approved: true },
@@ -2006,6 +2051,41 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (!req.deviceId) throw new ApiError(422, 'deviceId is required')
     if (req.deviceId === 'demo-device') throw new ApiError(422, 'cannot remove this device while using it')
     audit(user.id, user.username, 'TEAM_DEVICE_REVOKED', 'settings', '', req.deviceId)
+    persist()
+    return { saved: true } as T
+  }
+  if (m === 'POST' && p === '/team-sync/invites') {
+    requirePerm(perms, 'settings.manage')
+    const req = body as { roleName?: string; note?: string }
+    const roleName = (req.roleName || '').trim()
+    if (roleName.length < 2) throw new ApiError(422, 'pick the role this worker should have')
+    const token = 'DEMO-JOIN-' + Math.random().toString(36).slice(2, 6).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase()
+    const inv: DemoInvite = {
+      id: demoInvites.length + 1, token, roleName,
+      note: (req.note || '').trim(), createdAt: nowIso(),
+      expiresAt: new Date(Date.now() + 7 * 864e5).toISOString(),
+      usedBy: '', usedAt: '', revoked: false,
+    }
+    demoInvites.unshift(inv)
+    audit(user.id, user.username, 'TEAM_INVITE_CREATED', 'settings', '', 'role ' + roleName)
+    persist()
+    return { teamCode: 'KIAMBU-MAIN', token: inv.token, roleName: inv.roleName, expiresAt: inv.expiresAt } as T
+  }
+  if (m === 'POST' && p === '/team-sync/invites/revoke') {
+    requirePerm(perms, 'settings.manage')
+    const req = body as { id?: number }
+    const inv = demoInvites.find((i) => i.id === Number(req?.id))
+    if (!inv || inv.usedBy || inv.revoked) throw new ApiError(422, 'invite not found or already used')
+    inv.revoked = true
+    audit(user.id, user.username, 'TEAM_INVITE_REVOKED', 'settings', '', String(inv.id))
+    persist()
+    return { saved: true } as T
+  }
+  if (m === 'POST' && p === '/team-sync/approve') {
+    requirePerm(perms, 'settings.manage')
+    const req = body as { deviceId?: string }
+    if (!req.deviceId) throw new ApiError(422, 'deviceId is required')
+    audit(user.id, user.username, 'TEAM_DEVICE_APPROVED', 'settings', '', req.deviceId)
     persist()
     return { saved: true } as T
   }

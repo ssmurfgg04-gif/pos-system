@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { api, Role } from '../lib/api'
+import { navigate } from '../lib/router'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
 import { Button, Card, Field, Input, Select, Spinner } from '../components/ui'
@@ -38,7 +39,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       await api.put('/api/v1/settings', { values: { onboarding_done: 'true' } })
       await useBranding.getState().load()
       toast.success('Shop ready', 'Karibu — add your products in Inventory, or go sell.')
-      mark(4)
+      // Continue means CONTINUE: land on the main page immediately instead of
+      // waiting for a second click on the success banner.
+      onDone()
     } catch (e: any) {
       toast.error('Finish failed', e?.message)
     } finally {
@@ -63,21 +66,14 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               />
             ))}
           </ol>
-          {done[4] && (
-            <div className="mb-4 rounded-input border-2 border-paid-text/30 bg-paid-bg p-3 text-[13px] text-paid-text">
-              Shop is live —{' '}
-              <button onClick={() => { useBranding.getState().load().then(() => onDone()) }} className="font-bold underline decoration-paid-text hover:decoration-paid-text/70">
-                go sell
-              </button>{' '}
-              or{' '}
-              <button onClick={() => { onDone(); window.setTimeout(() => history.pushState({}, '', '/inventory'), 50) }} className="font-bold underline decoration-paid-text hover:decoration-paid-text/70">
-                add your products
-              </button>{' '}
-              (CSV import ready).
-            </div>
-          )}
 
           {step === 0 && <StoreStep onSave={saveSettings} onNext={() => { mark(0); setStep(1) }} busy={busy} />}
+          <p className="text-[12px] text-ink-subtle mt-3 text-center">
+            Setting up a second till for a shop that already runs LedgerPOS?{' '}
+            <button type="button" onClick={() => navigate('/join')} className="font-bold underline decoration-line hover:decoration-ink">
+              Use a team join link instead
+            </button>{' '}— no setup needed, the shop syncs in.
+          </p>
           {step === 1 && <LogoStep onNext={() => { mark(1); setStep(2) }} onBack={() => setStep(0)} />}
           {step === 2 && <ReceiptStep onSave={saveSettings} onNext={() => { mark(2); setStep(3) }} onBack={() => setStep(1)} busy={busy} />}
           {step === 3 && <PrinterStep onSave={saveSettings} onNext={() => { mark(3); setStep(4) }} onBack={() => setStep(2)} busy={busy} />}

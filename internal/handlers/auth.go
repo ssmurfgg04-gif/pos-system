@@ -283,6 +283,65 @@ func (h *H) PinLogin(c *gin.Context) {
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
+type teamJoinBody struct {
+        Link string `json:"link" binding:"required"`
+        Name string `json:"name" binding:"required"`
+        PIN  string `json:"pin" binding:"required"`
+}
+
+// TeamJoin is public on purpose: the join link's single-use token IS the
+// credential (256-bit, expiring, minted by the cloud, shown once). A worker
+// pastes the owner's link on a fresh machine and lands in the POS with the
+// invite's role — no admin onboarding, no keys. The till joins the team,
+// creates the local worker account, and returns a session in one step.
+func (h *H) TeamJoin(c *gin.Context) {
+        var body teamJoinBody
+        if err := c.ShouldBindJSON(&body); err != nil {
+                h.fail(c, 400, "paste the join link, your name, and a 4-digit PIN")
+                return
+        }
+        key := "teamjoin"
+        if !h.LoginRL.Allow(key) {
+                h.fail(c, 429, "too many attempts — wait a minute")
+                return
+        }
+        svc := h.svc(c)
+        info, err := svc.TeamJoinWithLink(body.Link, body.Name, body.PIN)
+        if err != nil {
+                h.fail(c, 422, err.Error())
+                return
+        }
+        // Registry routing so the new worker can log in on multi-shop servers.
+        shopID := h.shopID(c)
+        if h.Tenants != nil {
+                if err := h.Tenants.RegisterUser(info.Username, shopID); err != nil {
+                        h.fail(c, 409, err.Error())
+                        return
+                }
+        }
+        db := svc.DB()
+        p, err := auth.LoadPrincipal(db, info.UserID)
+        if err != nil {
+                h.fail(c, 500, "joined, but the session failed — try logging in with your PIN")
+                return
+        }
+        p.ShopID = shopID
+        token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
+        if err != nil {
+                h.fail(c, 500, "token error")
+                return
+        }
+        h.LoginRL.Forget(key)
+        svc.Audit(p.ID, p.Username, "LOGIN", "user", p.Username, "team join link")
+        h.ok(c, gin.H{
+                "token":     token,
+                "user":      p.User(),
+                "teamCode":  info.TeamCode,
+                "storeName": info.StoreName,
+                "roleName":  info.RoleName,
+        })
+}
+
 // Me returns the current principal (fresh permissions every request).
 func (h *H) Me(c *gin.Context) {
         h.ok(c, h.principal(c).User())

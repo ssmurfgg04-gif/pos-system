@@ -2,6 +2,7 @@ package handlers
 
 import (
         "database/sql"
+        "encoding/json"
         "time"
 
         "github.com/gin-gonic/gin"
@@ -117,6 +118,10 @@ func (h *H) CreateUser(c *gin.Context) {
                 }
         }
         h.svc(c).Audit(p.ID, p.Username, "USER_CREATED", "user", body.Username, "")
+        // A freshly created owner-level account also activates the portal.
+        if username, ok := h.ownerLevelUsername(c, id); ok && body.Password != "" {
+                go h.svc(c).PortalPublishCredentials(username, body.Password)
+        }
         h.created(c, gin.H{"id": id})
 }
 
@@ -190,7 +195,41 @@ func (h *H) SetPassword(c *gin.Context) {
                 return
         }
         h.svc(c).Audit(p.ID, p.Username, "USER_PASSWORD_RESET", "user", itoa64(id), "")
+        // Owner portal: when an owner-level password is saved (or reset by
+        // another admin), publish its bcrypt hash to the cloud so the shop
+        // owner can log into the public website and watch performance.
+        if username, ok := h.ownerLevelUsername(c, id); ok {
+                go h.svc(c).PortalPublishCredentials(username, body.Password)
+        }
         h.ok(c, gin.H{"updated": true})
+}
+
+// ownerLevelUsername reports the username when the given user holds BOTH
+// settings.manage and users.manage (i.e. an owner whose credentials unlock
+// the public performance portal).
+func (h *H) ownerLevelUsername(c *gin.Context, userID int64) (string, bool) {
+        var username, permsJSON string
+        err := h.db(c).QueryRow(h.db(c).Rebind(`
+                SELECT u.username, COALESCE(r.permissions, '[]')
+                FROM users u JOIN roles r ON r.id = u.role_id
+                WHERE u.id = ? AND u.is_active = 1`), userID).Scan(&username, &permsJSON)
+        if err != nil {
+                return "", false
+        }
+        var perms []string
+        if err := json.Unmarshal([]byte(permsJSON), &perms); err != nil {
+                return "", false
+        }
+        want := map[string]bool{"settings.manage": false, "users.manage": false}
+        for _, p := range perms {
+                if _, hit := want[p]; hit {
+                        want[p] = true
+                }
+        }
+        if !want["settings.manage"] || !want["users.manage"] {
+                return "", false
+        }
+        return username, true
 }
 
 type pinBody2 struct {

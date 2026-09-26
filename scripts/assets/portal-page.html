@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LedgerPOS — Owner portal</title>
+<meta name="description" content="Log in with your shop's admin credentials and see how your store is doing — sales today, this week, payment mix, top products — straight from your tills' synced data.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="../icon-64.png">
+<style>
+  :root{
+    --shell:#0F172A; --shell-edge:#1E293B; --on-shell:#F8FAFC; --on-shell-muted:#94A3B8;
+    --brand:#10B981; --brand-strong:#065F46; --brand-ink:#052E22;
+    --surface:#FFFFFF; --surface-muted:#F8FAFC; --line:#E2E8F0; --line-strong:#CBD5E1;
+    --ink:#0F172A; --ink-muted:#475569; --ink-subtle:#94A3B8;
+    --paid:#10B981; --pending:#F59E0B; --danger:#EF4444;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--shell);color:var(--on-shell);line-height:1.5;min-height:100vh}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 20px}
+  a{color:inherit;text-decoration:none}
+  header{border-bottom:1px solid var(--shell-edge)}
+  .nav{display:flex;align-items:center;gap:12px;height:64px}
+  .nav img{width:38px;height:38px;border-radius:10px;border:2px solid var(--brand-strong);display:block}
+  .nav .name{font-weight:800;font-size:17px}
+  .nav .back{margin-left:auto;font-size:13px;font-weight:700;color:var(--on-shell-muted)}
+  .nav .back:hover{color:var(--brand)}
+
+  /* gate */
+  .gate{max-width:420px;margin:8vh auto 0}
+  .gate .card{background:var(--surface);color:var(--ink);border:2px solid var(--line-strong);border-radius:14px;padding:26px;box-shadow:5px 5px 0 rgba(2,6,23,.55)}
+  .gate h1{font-size:22px;font-weight:900;letter-spacing:-.01em}
+  .gate p.sub{color:var(--ink-muted);font-size:13.5px;margin:6px 0 18px}
+  label{display:block;font-size:12px;font-weight:800;color:var(--ink-muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px}
+  input{
+    width:100%;font:inherit;font-size:15px;color:var(--ink);background:var(--surface);
+    border:2px solid var(--line);border-radius:10px;padding:11px 12px;outline:none;
+  }
+  input:focus{border-color:var(--brand)}
+  .btn{
+    display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
+    background:var(--brand);color:var(--brand-ink);font-weight:900;font-size:15px;
+    border:2px solid var(--brand-strong);border-radius:10px;padding:13px 18px;
+    box-shadow:4px 4px 0 var(--brand-strong);cursor:pointer;margin-top:20px;font-family:inherit;
+  }
+  .btn:active{transform:translate(4px,4px);box-shadow:0 0 0 var(--brand-strong)}
+  .btn[disabled]{opacity:.6;cursor:default}
+  .err{display:none;margin-top:14px;font-size:13px;font-weight:700;color:var(--danger);background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.35);border-radius:9px;padding:10px 12px}
+  .hint{margin-top:16px;font-size:12px;color:var(--on-shell-muted);text-align:center}
+  .hint b{color:var(--on-shell)}
+  .note{margin-top:10px;font-size:12px;color:var(--ink-subtle);line-height:1.45}
+
+  /* dashboard */
+  .dash{display:none;padding:36px 0 60px}
+  .dash .shopline{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 16px;margin-bottom:6px}
+  .dash h1{font-size:clamp(24px,4vw,34px);font-weight:900;letter-spacing:-.02em}
+  .dash h1 em{font-style:normal;color:var(--brand)}
+  .dash .meta{color:var(--on-shell-muted);font-size:13px;display:flex;gap:8px 18px;flex-wrap:wrap}
+  .dash .meta b{color:var(--on-shell);font-weight:700}
+  .live{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;color:var(--brand);border:1px solid rgba(16,185,129,.45);border-radius:999px;padding:3px 10px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin:26px 0 8px}
+  .kpi{background:var(--surface);color:var(--ink);border:2px solid var(--line-strong);border-radius:14px;padding:18px 20px;box-shadow:5px 5px 0 rgba(2,6,23,.55)}
+  .kpi .lab{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-subtle)}
+  .kpi .val{font-size:26px;font-weight:900;margin-top:4px;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+  .kpi .sub{font-size:12px;color:var(--ink-muted);margin-top:2px;font-variant-numeric:tabular-nums}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  @media (max-width:760px){.cols{grid-template-columns:1fr}}
+  .panel{background:var(--surface);color:var(--ink);border:2px solid var(--line-strong);border-radius:14px;padding:20px 22px;box-shadow:5px 5px 0 rgba(2,6,23,.55)}
+  .panel h2{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-muted);margin-bottom:14px}
+  .row{display:flex;align-items:center;gap:10px;margin:9px 0;font-size:13.5px}
+  .row .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+  .row .num{font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .bar{height:8px;border-radius:99px;background:var(--surface-muted);border:1px solid var(--line);overflow:hidden;flex:2}
+  .bar i{display:block;height:100%;background:var(--brand);border-radius:99px}
+  .rank{width:22px;height:22px;border-radius:7px;border:2px solid var(--line-strong);background:var(--surface-muted);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:var(--ink-muted);flex:none}
+  .empty{font-size:13px;color:var(--ink-subtle)}
+  footer{border-top:1px solid var(--shell-edge);padding:22px 0 30px;color:var(--on-shell-muted);font-size:12.5px;text-align:center}
+  footer b{color:var(--on-shell)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <img src="../icon-64.png" alt="LedgerPOS">
+    <div>
+      <div class="name">LedgerPOS</div>
+      <div class="sub" style="color:var(--on-shell-muted);font-size:11px">owner portal</div>
+    </div>
+    <a class="back" href="/">← back to the download page</a>
+  </div>
+</header>
+
+<!-- login gate -->
+<div class="wrap">
+  <div class="gate" id="gate">
+    <div class="card">
+      <h1>See your shop from anywhere</h1>
+      <p class="sub">Log in with the admin credentials you set on your till — the same username and password you use in the app.</p>
+      <form id="form">
+        <label for="u">Username</label>
+        <input id="u" autocomplete="username" required placeholder="e.g. admin">
+        <label for="p">Password</label>
+        <input id="p" type="password" autocomplete="current-password" required placeholder="••••••••">
+        <div class="err" id="err"></div>
+        <button class="btn" id="go" type="submit">Show my shop's performance</button>
+      </form>
+      <p class="note">Your password is verified against a hash your till published to the cloud — the portal can read your synced sales summary, never your products, customers, or receipts. Not activated yet? Open your till's app, change the admin password once (Settings → People &amp; Roles), and this page lights up.</p>
+    </div>
+    <p class="hint">Works with any LedgerPOS shop synced to the team cloud (v1.1.2+).</p>
+  </div>
+
+  <!-- dashboard -->
+  <div class="dash" id="dash">
+    <div class="shopline">
+      <h1 id="shopName">Your shop</h1>
+      <span class="live">● live from your tills</span>
+    </div>
+    <div class="meta" id="meta"></div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="lab">Sales today</div><div class="val" id="kToday">—</div><div class="sub" id="kTodayO">—</div></div>
+      <div class="kpi"><div class="lab">Last 7 days</div><div class="val" id="k7">—</div><div class="sub" id="k7O">—</div></div>
+      <div class="kpi"><div class="lab">Last 30 days</div><div class="val" id="k30">—</div><div class="sub" id="k30O">—</div></div>
+      <div class="kpi"><div class="lab">Average basket (30d)</div><div class="val" id="kAvg">—</div><div class="sub" id="kVoids">—</div></div>
+    </div>
+
+    <div class="cols">
+      <div class="panel">
+        <h2>Payment mix — last 30 days</h2>
+        <div id="payMix"><p class="empty">No payments synced yet.</p></div>
+      </div>
+      <div class="panel">
+        <h2>Top products — last 30 days</h2>
+        <div id="topProducts"><p class="empty">No sales synced yet.</p></div>
+      </div>
+      <div class="panel">
+        <h2>Cashiers — last 30 days</h2>
+        <div id="cashiers"><p class="empty">No sales synced yet.</p></div>
+      </div>
+      <div class="panel">
+        <h2>Your tills</h2>
+        <div id="devices" class="empty">—</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <b>LedgerPOS</b> — the point of sale that installs itself. Performance here is a summary replayed from your tills' sync stream; the full books live on your machines. <a href="/" style="color:var(--brand);font-weight:700">Get the app</a>.
+  </div>
+</footer>
+
+<script>
+// Public, non-secret constants: the anon key grants nothing beyond the
+// portal_login RPC (bcrypt-verified), exactly like the tills' own RPCs.
+var CLOUD = 'https://ixxiqrobcwkvyjtxdkvh.supabase.co';
+var ANON  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4eGlxcm9iY3drdnlqdHhka3ZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1MTU0MDUsImV4cCI6MjEwNTA5MTQwNX0.hBO1kg4hLSHLUl5m-MCSHGCVFa4a7SRXF2uSioCV9Yk';
+
+var $ = function (id) { return document.getElementById(id) };
+var fmtMoney = function (cents, cur) {
+  var v = (cents || 0) / 100;
+  try { return v.toLocaleString(undefined, { style: 'currency', currency: cur || 'KES', maximumFractionDigits: 0 }); }
+  catch (e) { return cur + ' ' + Math.round(v).toLocaleString(); }
+};
+var fmtN = function (n) { return (n || 0).toLocaleString(); };
+var fmtWhen = function (s) {
+  if (!s) return 'never';
+  try { return new Date(s).toLocaleString(); } catch (e) { return s; }
+};
+
+function showErr(msg) {
+  var el = $('err'); el.textContent = msg; el.style.display = 'block';
+}
+
+function login(u, p) {
+  return fetch(CLOUD + '/rest/v1/rpc/portal_login', {
+    method: 'POST',
+    headers: { 'apikey': ANON, 'Authorization': 'Bearer ' + ANON, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_username: u, p_password: p }),
+  }).then(function (r) {
+    if (!r.ok) throw new Error('The cloud could not be reached — try again in a moment.');
+    return r.json();
+  });
+}
+
+function maxOf(map) {
+  var m = 0; for (var k in map) if (map[k] > m) m = map[k]; return m || 1;
+}
+
+function render(perf) {
+  var cur = perf.currency || 'KES';
+  $('shopName').innerHTML = '' + (perf.storeName ? escapeHtml(perf.storeName) : 'Your shop') + ' <em>at a glance</em>';
+  $('meta').innerHTML =
+    '<span><b>' + fmtN(perf.devices) + '</b> till' + (perf.devices === 1 ? '' : 's') + ' linked</span>' +
+    '<span>last activity <b>' + fmtWhen(perf.lastSeen) + '</b></span>' +
+    '<span>updated <b>' + fmtWhen(perf.generatedAt) + '</b></span>';
+
+  $('kToday').textContent = fmtMoney(perf.revenueToday, cur);
+  $('kTodayO').textContent = fmtN(perf.ordersToday) + ' order' + (perf.ordersToday === 1 ? '' : 's') + ' today';
+  $('k7').textContent = fmtMoney(perf.revenue7d, cur);
+  $('k7O').textContent = fmtN(perf.orders7d) + ' orders this week';
+  $('k30').textContent = fmtMoney(perf.revenue30d, cur);
+  $('k30O').textContent = fmtN(perf.orders30d) + ' orders this month';
+  var avg = perf.orders30d ? Math.round(perf.revenue30d / perf.orders30d) : 0;
+  $('kAvg').textContent = fmtMoney(avg, cur);
+  $('kVoids').textContent = fmtN(perf.voids30d) + ' voided sales (30d)';
+
+  // payment mix
+  var pay = perf.payments || {};
+  var keys = Object.keys(pay).sort(function (a, b) { return pay[b] - pay[a]; });
+  var mx = maxOf(pay);
+  var labels = { cash: 'Cash', mpesa: 'M-Pesa', paystack: 'Paystack / card', card: 'Card', credit: 'Store credit', other: 'Other' };
+  $('payMix').innerHTML = keys.length ? keys.map(function (k) {
+    var w = Math.max(3, Math.round(100 * pay[k] / mx));
+    return '<div class="row"><span class="name">' + (labels[k] || k) + '</span>' +
+           '<span class="bar"><i style="width:' + w + '%"></i></span>' +
+           '<span class="num">' + fmtMoney(pay[k], cur) + '</span></div>';
+  }).join('') : '<p class="empty">No payments synced yet.</p>';
+
+  // top products
+  var tops = perf.topProducts || [];
+  $('topProducts').innerHTML = tops.length ? tops.map(function (t, i) {
+    var mxq = tops[0].qty || 1;
+    var w = Math.max(3, Math.round(100 * t.qty / mxq));
+    return '<div class="row"><span class="rank">' + (i + 1) + '</span>' +
+           '<span class="name">' + escapeHtml(t.name) + '</span>' +
+           '<span class="bar"><i style="width:' + w + '%"></i></span>' +
+           '<span class="num">' + fmtN(t.qty) + ' sold</span></div>';
+  }).join('') : '<p class="empty">No sales synced yet.</p>';
+
+  // cashiers
+  var cs = perf.cashiers || [];
+  $('cashiers').innerHTML = cs.length ? cs.map(function (c) {
+    return '<div class="row"><span class="name">' + escapeHtml(c.name || '?') + '</span>' +
+           '<span class="num">' + fmtN(c.orders) + ' orders · ' + fmtMoney(c.revenue, cur) + '</span></div>';
+  }).join('') : '<p class="empty">No sales synced yet.</p>';
+
+  $('devices').innerHTML =
+    '<p style="font-size:13.5px"><b>' + fmtN(perf.devices) + '</b> tills are linked to the cloud for this shop.</p>' +
+    '<p style="font-size:13px;color:var(--ink-muted);margin-top:8px">Most recent activity: <b>' + fmtWhen(perf.lastSeen) + '</b>. Open Settings → Team on any till to see the full device roster, add stores, invite workers, or revoke a device.</p>';
+
+  $('gate').style.display = 'none';
+  $('dash').style.display = 'block';
+  window.scrollTo(0, 0);
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+$('form').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var u = $('u').value.trim(), p = $('p').value;
+  if (!u || !p) return;
+  $('err').style.display = 'none';
+  $('go').disabled = true; $('go').textContent = 'Checking…';
+  login(u, p).then(function (out) {
+    if (!out.ok) throw new Error(out.error || 'Login failed');
+    render(out.performance || {});
+  }).catch(function (ex) {
+    showErr(ex.message || 'Login failed');
+  }).finally(function () {
+    $('go').disabled = false; $('go').textContent = 'Show my shop\'s performance';
+  });
+});
+</script>
+</body>
+</html>

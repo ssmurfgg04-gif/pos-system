@@ -88,6 +88,9 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         api.POST("/auth/login", h.Login)
         api.GET("/auth/pin-users", h.PinUsers)
         api.POST("/auth/pin", h.PinLogin)
+        // Team join link redemption (public: the single-use token IS the
+        // credential — minted by the cloud, expiring, shown once).
+        api.POST("/auth/team-join", h.TeamJoin)
         api.POST("/auth/signup", h.Signup)
         api.GET("/branding", h.Branding)
         api.GET("/settings/logo", h.GetLogo)
@@ -254,6 +257,10 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         ts.POST("/team-sync/stores", h.TeamStoreCreate)
         ts.POST("/team-sync/assign", h.TeamDeviceAssign)
         ts.POST("/team-sync/remove", h.TeamDeviceRemove)
+        ts.POST("/team-sync/approve", h.TeamDeviceApprove)
+        // Team join links (owner mints; workers redeem from a new machine).
+        ts.POST("/team-sync/invites", h.TeamInviteCreate)
+        ts.POST("/team-sync/invites/revoke", h.TeamInviteRevoke)
 
         // Stocktake + gift cards (count sessions, code redemption).
         ct := authd.Group("", perm("suppliers.manage"))

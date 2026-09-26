@@ -32,7 +32,7 @@ LEGACY = {"ledgerpos-linux-x64.tar.gz"}
 
 NOTES = """LedgerPOS {v} — the point of sale that installs itself.
 
-**New in 1.1.1:** grow beyond one shop — multiple stores under one owner cloud (Settings → Team → Add store; team codes are minted by the database), tills only ever see their own store's data (enforced in the database, not the app), assign pending tills to a store from any approved till, revoke a till outright with one click, M-Pesa + card payments fully live through Paystack with the secret key encrypted at rest (AES-256-GCM), product-photo uploads fixed on Windows (big phone photos are downscaled automatically), and app updates now guarantee the local database survives — store info and history stay put, no re-uploading.
+**New in 1.1.2:** invite workers with a join link — pick a role in Settings → Team, send the link, the worker pastes it on their machine and is selling in a minute (single-use, expires in 7 days, no admin onboarding). New owner portal: log in at awesomeposs.netlify.app/portal with your shop's admin credentials and watch live performance — sales today/7d/30d, payment mix, top products, cashiers, tills online. Onboarding's last step now lands on the shop when you press Continue. Auto-approve is off for new tills: you approve each device from the roster (or revoke it).
 
 Download the file for your machine, double-click it, start selling. The whole shop — stock, till, M-Pesa, KRA reports — runs on that machine. No servers to configure, nothing to type into a terminal, works when the internet doesn't.
 
