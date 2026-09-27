@@ -77,7 +77,10 @@ func (sw *Sweeper) tick(ctx context.Context) {
                 return
         }
 
-        provider := s.GetProvider()
+        provider, perr := s.GetProvider()
+        if provider == nil || perr != nil {
+                return // no STK provider (manual mode / Paystack route) — nothing to poll here
+        }
         for _, p := range list {
                 select {
                 case <-ctx.Done():

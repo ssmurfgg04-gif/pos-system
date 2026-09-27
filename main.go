@@ -14,6 +14,7 @@ import (
         "os/signal"
         "path/filepath"
         "strconv"
+        "strings"
         "syscall"
         "time"
 
@@ -84,32 +85,76 @@ func runServer() {
 // ensureDefaultShop adopts the pre-tenancy database as the "default" shop
 // (zero data migration) and registers every existing username for routing.
 // Returns the default shop id.
+//
+// DATA-LOSS GUARD: adoption is skipped ONLY when the legacy pos.db is
+// already referenced by some registered shop. A named shop created later
+// (join link, second signup) no longer leaves pos.db orphaned — if it
+// holds data and nobody points at it, it is adopted as its own shop so
+// the inventory stays reachable. Users from that orphan also get
+// re-registered so their logins land where their work lives.
 func ensureDefaultShop(reg *tenants.Registry, db *database.DB, dbPath, storeName string) string {
+        abs, err := filepath.Abs(dbPath)
+        if err != nil {
+                abs = dbPath
+        }
+        // Already registered? Nothing to do.
+        for _, s := range reg.ShopList {
+                if sameFile(s.DBFile, abs) {
+                        return s.ID
+                }
+        }
+        // Legacy pos.db not referenced anywhere — does it hold data?
+        var products, users int64
+        _ = db.QueryRow(`SELECT COUNT(*) FROM products`).Scan(&products)
+        _ = db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&users)
+        if len(reg.ShopList) == 0 || products > 0 || users > 0 {
+                name := storeName
+                if len(reg.ShopList) > 0 {
+                        name = strings.TrimSpace(storeName + " (recovered)")
+                }
+                shop, err := reg.CreateShop(name, abs, time.Now().UTC().Format(time.RFC3339))
+                if err != nil {
+                        log.Fatalf("tenant registry: %v", err)
+                }
+                rows, err := db.Query(`SELECT username FROM users`)
+                if err == nil {
+                        defer rows.Close()
+                        for rows.Next() {
+                                var u string
+                                if err := rows.Scan(&u); err == nil {
+                                        _ = reg.RegisterUser(u, shop.ID) // best-effort; dupes impossible here
+                                }
+                        }
+                }
+                if len(reg.ShopList) > 1 {
+                        log.Printf("RECOVERED %s as shop %q (%d products, %d users) — it was no longer referenced by the registry", abs, name, products, users)
+                } else {
+                        log.Printf("adopted %s as default shop %s", abs, shop.ID)
+                }
+                return shop.ID
+        }
+        // Named shops exist and pos.db is empty — leave it alone.
         for _, s := range reg.ShopList {
                 if s.Name != "" {
                         return s.ID
                 }
         }
-        abs, err := filepath.Abs(dbPath)
-        if err != nil {
-                abs = dbPath
+        return ""
+}
+
+// sameFile compares two paths after cleaning (no syscalls — best effort).
+func sameFile(a, b string) bool {
+        if a == b {
+                return true
         }
-        shop, err := reg.CreateShop(storeName, abs, time.Now().UTC().Format(time.RFC3339))
-        if err != nil {
-                log.Fatalf("tenant registry: %v", err)
+        ra, err1 := filepath.Abs(a)
+        rb, err2 := filepath.Abs(b)
+        if err1 != nil || err2 != nil {
+                return false
         }
-        rows, err := db.Query(`SELECT username FROM users`)
-        if err == nil {
-                defer rows.Close()
-                for rows.Next() {
-                        var u string
-                        if err := rows.Scan(&u); err == nil {
-                                _ = reg.RegisterUser(u, shop.ID) // best-effort; dupes impossible here
-                        }
-                }
-        }
-        log.Printf("adopted %s as default shop %s", abs, shop.ID)
-        return shop.ID
+        // Windows paths are case-insensitive.
+        la, lb := strings.ToLower(ra), strings.ToLower(rb)
+        return la == lb || filepath.Base(la) == filepath.Base(lb) && filepath.Dir(la) == filepath.Dir(lb)
 }
 
 // desktopMeta carries the desktop-mode facts into startApp.
@@ -123,6 +168,21 @@ type desktopMeta struct {
 // admin POST /system/quit (desktop mode only). desk == nil → server mode.
 func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan struct{}) {
         gin.SetMode(cfg.GinMode)
+
+        // Deployment secrets (.env next to the database) load BEFORE anything
+        // reads the environment — PAYSTACK_SECRET_KEY and friends belong in
+        // the file, not in a settings form. Real env vars always win.
+        config.LoadEnvFileNear(cfg.SQLitePath)
+
+        // Staged rollback ("Undo update"): restore pre-update databases and
+        // registry BEFORE anything opens them.
+        restoreDataDir := filepath.Dir(cfg.SQLitePath)
+        if restoreDataDir == "" || restoreDataDir == "." {
+                restoreDataDir = "."
+        }
+        if reason := handlers.RestorePending(restoreDataDir); reason != "" {
+                log.Printf("ROLLBACK applied: %s", reason)
+        }
 
         db, err := database.Open(cfg.DBDriver, cfg.SQLitePath, cfg.PostgresDSN)
         if err != nil {
@@ -187,6 +247,7 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
         h.DefaultShop = defaultShop
         h.MasterSecret = []byte(masterSecret)
         h.Updater = update.NewChecker(version, update.Repo, defSvc.Settings())
+        h.Version = version
         // Version stamps team-sync heartbeats (device roster shows releases).
         defSvc.SetVersion(version)
         shopPool.SetVersion(version)
@@ -267,10 +328,21 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
                 log.Printf("quit requested by admin session — shutting down...")
         }
 
+        // Stop background workers BEFORE closing the database — otherwise
+        // the sweeper/backup/sync loops race db.Close() through the shutdown
+        // window (update-quit corruption risk found in the data-loss audit).
+        stop()
+
         shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
         defer cancel()
         _ = srv.Shutdown(shutdownCtx)
         _ = db.Close()
+
+        // Undo-update relaunch: the rolled-back exe takes over seamlessly.
+        if exe := handlers.RelaunchAfterQuit(restoreDataDir); exe != "" {
+                log.Printf("relaunching rolled-back build: %s", exe)
+                go handlers.RelaunchExternal(exe)
+        }
 }
 
 func atoi(s string) int {

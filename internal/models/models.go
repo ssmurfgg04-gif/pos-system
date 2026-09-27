@@ -652,9 +652,11 @@ type PaymentConfig struct {
                 Currency  string `json:"currency"`
                 Callback  string `json:"callbackUrl"`
                 Configured bool `json:"configured"` // secret key present server-side
+                FromEnv   bool `json:"fromEnv"`    // keys supplied via environment
         } `json:"paystack"`
         Mpesa struct {
                 Env    string `json:"env"`
+                Route  string `json:"route"` // paystack | daraja | mock | manual
                 Till   string `json:"till"`
                 Paybill string `json:"paybill"`
         } `json:"mpesa"`

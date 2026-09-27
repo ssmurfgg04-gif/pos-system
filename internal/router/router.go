@@ -243,6 +243,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         authd.POST("/system/update/refresh", perm("settings.manage"), h.UpdateRefresh)
         authd.POST("/system/update/download", perm("settings.manage"), h.UpdateDownload)
         authd.POST("/system/update/install", perm("settings.manage"), h.UpdateInstall)
+        authd.POST("/system/update/undo", perm("settings.manage"), h.UndoUpdate)
         // Desktop-mode admin shutdown (no-op in server mode: OnQuit unset).
         authd.POST("/system/quit", perm("settings.manage"), h.QuitApp)
 

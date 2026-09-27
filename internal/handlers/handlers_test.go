@@ -1,31 +1,31 @@
 package handlers_test
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"mime/multipart"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
-	"testing"
-	"time"
+        "bytes"
+        "context"
+        "encoding/json"
+        "fmt"
+        "mime/multipart"
+        "net/http/httptest"
+        "os"
+        "path/filepath"
+        "strings"
+        "sync"
+        "testing"
+        "time"
 
-	"github.com/gin-gonic/gin"
+        "github.com/gin-gonic/gin"
 
-	"posapp/internal/auth"
-	"posapp/internal/database"
-	"posapp/internal/handlers"
-	"posapp/internal/models"
-	"posapp/internal/printer"
-	"posapp/internal/router"
-	"posapp/internal/services"
-	"posapp/internal/settings"
-	"posapp/internal/tenants"
-	"posapp/internal/ws"
+        "posapp/internal/auth"
+        "posapp/internal/database"
+        "posapp/internal/handlers"
+        "posapp/internal/models"
+        "posapp/internal/printer"
+        "posapp/internal/router"
+        "posapp/internal/services"
+        "posapp/internal/settings"
+        "posapp/internal/tenants"
+        "posapp/internal/ws"
 )
 
 // newTestServer boots the full app on a temp SQLite file with the mock
@@ -1115,6 +1115,9 @@ func TestForcedRotation(t *testing.T) {
 func TestMain(m *testing.M) {
         // Keep gin quiet.
         os.Setenv("GIN_MODE", "test")
+        // Tests exercise the mock STK provider (auto-success) deliberately —
+        // production tills refuse it unless ALLOW_MOCK_PAYMENTS is set.
+        os.Setenv("ALLOW_MOCK_PAYMENTS", "true")
         os.Exit(m.Run())
 }
 

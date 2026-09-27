@@ -30,6 +30,9 @@ type H struct {
         Printer  *printer.Worker
         Offsite  *offsite.Worker
         Updater  *update.Checker
+        // Version is the running build version (stamped by main); used to
+        // label pre-update rollback archives.
+        Version string
         // Multi-tenancy (set post-New; DefaultShop keeps single-shop behavior).
         Tenants      *tenants.Registry
         Shops        *services.ShopPool

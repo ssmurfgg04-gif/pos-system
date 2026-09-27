@@ -127,8 +127,8 @@ to configure:
    needed); on macOS unzip and open `LedgerPOS.app`; on Linux
    `tar xf ledgerpos-linux-x64.tar.xz` then `./ledgerpos`.
 3. The app opens in its own window — no browser tabs. First login
-   `admin / admin123` (PIN `1234`) — the app forces you to set your own
-   password + PIN before anything else works (seeded defaults never serve).
+   `admin / 0000` (PIN `1234`) — demo accounts are ready to use with the
+   shared playground password `0000`; nothing needs rotating first.
 
 First launch sets up everything by itself: it creates the SQLite
 database, runs migrations, seeds the catalog and users, picks a free
@@ -216,7 +216,7 @@ Reset demo data**.
 cd frontend && npm install && npm run build && cd ..
 go build -o pos-app .
 
-# run it (SQLite, demo seed, M-Pesa in mock mode)
+# run it (SQLite; SEED_DEMO seeds the demo catalog)
 SEED_DEMO=true ./pos-app              # → http://localhost:3000
 ```
 
@@ -224,13 +224,17 @@ Demo accounts (seeded once, safe to delete):
 
 | Username | Password   | PIN  | Role    |
 |----------|------------|------|---------|
-| admin    | admin123   | 1234 | Admin   |
-| cashier  | cashier123 | 2222 | Cashier |
-| designer | designer123| 3333 | Designer |
+| admin    | 0000       | 1234 | Admin   |
+| cashier  | 0000       | 2222 | Cashier |
+| designer | 0000       | 3333 | Designer |
 
-M-Pesa starts in **mock** mode: STK pushes auto-succeed after ~4s so you
-can demo/training the whole flow. Switch the provider in
-**Settings → Payments** when you're ready for Daraja sandbox/production.
+M-Pesa runs through **Paystack** once connected: the M-Pesa button pushes a
+real STK prompt to the customer's phone and the sale completes only after
+Paystack confirms the money. Without a provider, M-Pesa falls back to
+**manual receipt-code entry** — nothing ever completes by itself (the old
+auto-succeeding "mock" provider is tests/demos only, gated behind
+`ALLOW_MOCK_PAYMENTS=true`). Connect Paystack in **Settings → Payments**
+or drop a `.env` file next to the database (see below).
 
 ### Environment variables
 
@@ -240,8 +244,34 @@ can demo/training the whole flow. Switch the provider in
 | `DB_DRIVER`   | `sqlite`   | `sqlite` or `postgres`               |
 | `DB_PATH`     | `pos.db`   | SQLite file                          |
 | `POSTGRES_DSN`| —          | e.g. `postgres://user:pw@host/db`    |
-| `SEED_DEMO`   | `true`     | Seed demo catalog + users            |
+| `SEED_DEMO`   | `false`    | Seed the demo catalog (demos/tests)  |
 | `MDNS_ENABLED`| `true`     | LAN discovery broadcast              |
+| `PAYSTACK_SECRET_KEY` | —  | `sk_live_…` — server-side only      |
+| `PAYSTACK_PUBLIC_KEY` | —  | `pk_live_…` — checkout popup        |
+| `PAYSTACK_CALLBACK_URL` | — | defaults to `https://awesomeposs.netlify.app/` |
+| `ALLOW_MOCK_PAYMENTS` | `false` | Opt-in for the auto-succeeding test provider (tests/demos) |
+
+**Secrets belong in `.env`, not forms.** Place a `.env` file next to the
+database (desktop: `%APPDATA%\LedgerPOS\.env`) with the keys above and
+restart the till — payment config becomes zero-touch and nothing
+sensitive ever appears in the Settings UI.
+
+### Go real with M-Pesa (Paystack — recommended)
+
+1. Put `PAYSTACK_SECRET_KEY` + `PAYSTACK_PUBLIC_KEY` in the till's `.env`
+   (or paste them in Settings → Payments — they are encrypted at rest).
+2. That's it: the M-Pesa button now pushes a real STK prompt via Paystack
+   and the Card button opens the Paystack popup. The webhook/callback URL
+   is `https://awesomeposs.netlify.app/`.
+3. Manual receipt-code entry always remains available as a fallback.
+
+### Direct M-Pesa (Daraja) — optional
+
+1. Settings → Payments: enter shortcode, passkey, consumer key/secret and
+   set the environment to `sandbox`/`production` on that machine (keys are
+   not part of the till UI; this is an owner/dev action).
+2. Incomplete credentials fail loudly — the till never silently fakes a
+   payment.
 
 ### Go real with M-Pesa (Daraja)
 

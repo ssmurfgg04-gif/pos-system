@@ -115,6 +115,11 @@ func (h *H) UpdateDownload(c *gin.Context) {
 
 // UpdateInstall (settings.manage) — Windows: launch the staged NSIS setup
 // and quit so it can replace the install. Other platforms: 501 + URL.
+//
+// BEFORE the installer runs, the whole shop state is archived for rollback
+// (UndoUpdate): every shop DB (VACUUM INTO snapshot), the tenants registry,
+// the vault key, and on Windows the running binary. A failed/lost update
+// never means lost work — "Undo update" restores data and the previous exe.
 func (h *H) UpdateInstall(c *gin.Context) {
         p := h.principal(c)
         if runtime.GOOS != "windows" {
@@ -126,12 +131,18 @@ func (h *H) UpdateInstall(c *gin.Context) {
                 h.fail(c, 409, "nothing staged — download first")
                 return
         }
+        archive, err := h.PreUpdateSnapshot(h.Version)
+        if err != nil {
+                h.fail(c, 500, "pre-update backup failed — update aborted so no work can be lost: "+err.Error())
+                return
+        }
+        h.svc(c).Audit(p.ID, p.Username, "UPDATE_PRE_BACKUP", "system", "update", archive)
         if err := exec.Command(staged).Start(); err != nil {
                 h.fail(c, 500, err.Error())
                 return
         }
         h.svc(c).Audit(p.ID, p.Username, "UPDATE_INSTALLED", "system", "update", staged)
-        h.ok(c, gin.H{"installing": true})
+        h.ok(c, gin.H{"installing": true, "backup": archive})
         if h.OnQuit != nil {
                 go func() {
                         time.Sleep(300 * time.Millisecond) // let the response flush

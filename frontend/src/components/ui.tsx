@@ -180,7 +180,14 @@ export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement
   return <textarea {...props} className={`${inputCls} min-h-20 py-2 ${props.className || ''}`} />
 }
 
-/** Money input: cents value in/out, grouped display, numeric keyboard. */
+/** Money input: cents value in/out, numeric keyboard.
+ *
+ * Editing works on RAW TEXT while the field is focused (string state), so
+ * natural typing survives: "250" → "250." → "250.0" → "250.00". The old
+ * cents-normalizing onChange truncated every keystroke to 2 decimals,
+ * which made trailing zeros impossible to type (the client's complaint).
+ * The text is parsed to cents live for the parent state, and canonicalized
+ * on blur. */
 export function MoneyInput({
   value,
   onCents,
@@ -190,19 +197,30 @@ export function MoneyInput({
   value: number
   onCents: (cents: number) => void
 }) {
-  const display = value === 0 ? '' : (value / 100).toFixed(2)
+  const [text, setText] = React.useState<string | null>(null)
+  const canonical = value === 0 ? '' : (value / 100).toFixed(2)
+  const display = text ?? canonical
+  const parseCents = (raw: string): number | null => {
+    const cleaned = raw.replace(/[^0-9.]/g, '')
+    if (!/^\d*(\.\d*)?$/.test(cleaned) || cleaned === '' || cleaned === '.') return null
+    const [w = '0', f = ''] = cleaned.split('.')
+    const frac = (f + '00').slice(0, 2)
+    return Math.max(0, Number(w || '0') * 100 + Number(frac))
+  }
   return (
     <input
       {...rest}
       inputMode="decimal"
       className={`${inputCls} tabular text-right ${className}`}
       value={display}
+      onFocus={() => setText(display)}
       onChange={(e) => {
         const raw = e.target.value.replace(/[^0-9.]/g, '')
-        const [w = '0', f = ''] = raw.split('.')
-        const frac = (f + '00').slice(0, 2)
-        onCents(Math.max(0, Number(w || '0') * 100 + Number(frac)))
+        setText(raw)
+        const cents = parseCents(raw)
+        if (cents !== null) onCents(cents)
       }}
+      onBlur={() => setText(null)}
     />
   )
 }

@@ -149,9 +149,13 @@ def main():
     rc = run([sys.executable, os.path.join(SCRIPTS, "build_installer.py"),
               VERSION, win_exe, dl], check=False).returncode
     if rc != 0:
-        raise SystemExit(
-            "Windows installer build failed — install NSIS (makensis) and re-run:\n"
-            "  winget install NSIS.NSIS  |  apt install nsis  |  brew install nsis")
+        # No NSIS on this box? The Windows exe is a self-installing portable:
+        # on first run from anywhere it copies itself into
+        # %LOCALAPPDATA%\Programs\LedgerPOS, creates Desktop + Start Menu
+        # shortcuts, registers the uninstall entry, and relaunches — the
+        # same "double-click and sell" experience as the NSIS package.
+        print("  NSIS unavailable — shipping the portable self-installing exe")
+        shutil.copy2(win_exe, os.path.join(dl, "ledgerpos-setup-windows-x64.exe"))
     _ = installer  # produced by build_installer.py as ledgerpos-setup-windows-x64-<ver>.exe
     # Normalize to the stable download name the landing page links.
     for f in os.listdir(dl):

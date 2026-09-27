@@ -54,7 +54,7 @@ func (s *Service) GetPaystack() *paystack.Client {
 
 // paystackConfigured reports whether a charge can actually be initialized.
 func (s *Service) paystackConfigured() bool {
-        return s.GetPaystack() != nil && s.settings.GetBool("paystack_enabled", false)
+        return s.GetPaystack() != nil
 }
 
 // PaymentConfig powers the till's tender buttons (public data only).
@@ -63,15 +63,34 @@ func (s *Service) PaymentConfig() *models.PaymentConfig {
                 CreditEnabled:  s.settings.GetBool("credit_enabled", true),
                 LoyaltyEnabled: s.settings.GetBool("loyalty_enabled", true),
         }
-        cfg.Paystack.Enabled = s.settings.GetBool("paystack_enabled", false)
-        cfg.Paystack.PublicKey = s.settings.Get("paystack_public_key")
+        cfg.Paystack.PublicKey = s.paystackPublicKey()
         cfg.Paystack.Currency = s.paystackCurrency()
-        cfg.Paystack.Callback = s.settings.GetString("paystack_callback_url", "https://awesomeposs.netlify.app/")
+        cfg.Paystack.Callback = s.paystackCallback()
         cfg.Paystack.Configured = s.GetPaystack() != nil
-        cfg.Mpesa.Env = s.settings.GetString("mpesa_env", "mock")
+        // Payment-ready the moment a valid secret exists (env or stored);
+        // admins can still switch the feature off explicitly.
+        cfg.Paystack.Enabled = cfg.Paystack.Configured && s.settings.GetBool("paystack_enabled", true)
+        cfg.Mpesa.Env = s.settings.GetString("mpesa_env", "manual")
+        cfg.Mpesa.Route = s.MpesaRoute()
         cfg.Mpesa.Till = s.settings.Get("till_number")
         cfg.Mpesa.Paybill = s.settings.Get("paybill_number")
         return cfg
+}
+
+// paystackPublicKey: PAYSTACK_PUBLIC_KEY env wins, then the stored value.
+func (s *Service) paystackPublicKey() string {
+        if k := strings.TrimSpace(os.Getenv("PAYSTACK_PUBLIC_KEY")); k != "" {
+                return k
+        }
+        return s.settings.Get("paystack_public_key")
+}
+
+// paystackCallback: PAYSTACK_CALLBACK_URL env wins, then the stored value.
+func (s *Service) paystackCallback() string {
+        if u := strings.TrimSpace(os.Getenv("PAYSTACK_CALLBACK_URL")); u != "" {
+                return u
+        }
+        return s.settings.GetString("paystack_callback_url", "https://awesomeposs.netlify.app/")
 }
 
 func (s *Service) paystackCurrency() string {
@@ -93,7 +112,7 @@ func (s *Service) PaystackInit(orderID int64, email string, p *auth.Principal) (
         if client == nil {
                 return nil, nil, fmt.Errorf("%w: paystack secret key missing", ErrNotConfigured)
         }
-        if !s.settings.GetBool("paystack_enabled", false) {
+        if !s.settings.GetBool("paystack_enabled", true) {
                 return nil, nil, fmt.Errorf("%w: paystack is disabled in settings", ErrNotConfigured)
         }
         order, err := s.GetOrder(orderID)
@@ -147,7 +166,7 @@ func (s *Service) PaystackInit(orderID int64, email string, p *auth.Principal) (
                 Amount:      amount,
                 Currency:    s.paystackCurrency(),
                 Reference:   reference,
-                CallbackURL: s.settings.GetString("paystack_callback_url", "https://awesomeposs.netlify.app/"),
+                CallbackURL: s.paystackCallback(),
                 Metadata: map[string]any{
                         "order_number": order.Number,
                         "cashier":      p.Username,
@@ -174,10 +193,73 @@ func (s *Service) PaystackInit(orderID int64, email string, p *auth.Principal) (
                 Reference:        reference,
                 AccessCode:       init.AccessCode,
                 AuthorizationURL: init.AuthorizationURL,
-                PublicKey:        s.settings.Get("paystack_public_key"),
+                PublicKey:        s.paystackPublicKey(),
                 Currency:         s.paystackCurrency(),
                 AmountCents:      amount,
         }, nil
+}
+
+// paystackMpesaSTK pushes a real M-Pesa prompt through Paystack's
+// mobile-money charge. The payment row is re-tagged method='paystack' so
+// SweepPaystack (verify API) and the charge.success webhook own completion
+// — the order is marked PAID exclusively after Paystack confirms the money.
+func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay *models.Payment, p *auth.Principal) (*models.Order, error) {
+        client := s.GetPaystack()
+        if client == nil || !s.settings.GetBool("paystack_enabled", true) {
+                return nil, fmt.Errorf("%w: paystack is not connected — M-Pesa STK needs it (or use manual receipt entry)", ErrNotConfigured)
+        }
+        if !mpesaPhoneOK(pay.Phone) {
+                return nil, fmt.Errorf("invalid customer phone %q — expected 07XX/2547XX/2541XX", pay.Phone)
+        }
+
+        // Supersede previous pending paystack attempts (fresh reference each time).
+        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new STK push' WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), order.ID)
+        // This payment now belongs to Paystack.
+        s.db.Exec(s.db.Rebind(`UPDATE payments SET method = 'paystack', mode = 'stk' WHERE id = ? AND status = 'PENDING'`), pay.ID)
+
+        reference := fmt.Sprintf("LP-%s-%s", order.Number, randToken(4))
+        email := "customer+" + strings.ToLower(order.Number) + "@ledgerpos.app"
+        init, err := client.ChargeMobileMoney(paystack.ChargeRequest{
+                Email:     email,
+                Amount:    pay.AmountCents,
+                Currency:  s.paystackCurrency(),
+                Reference: reference,
+                MobileMoney: &paystack.MobileMoney{
+                        Phone:    pay.Phone,
+                        Provider: "mpesa",
+                },
+                Metadata: map[string]any{
+                        "order_number": order.Number,
+                        "cashier":      p.Username,
+                        "method":       "mpesa_stk",
+                        "custom_fields": []map[string]string{
+                                {"display_name": "Order", "variable_name": "order", "value": order.Number},
+                        },
+                },
+        })
+        if err != nil {
+                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
+                        truncStr(err.Error(), 200), pay.ID)
+                s.Audit(p.ID, p.Username, "PAYSTACK_MPESA_FAILED", "order", order.Number, err.Error())
+                return nil, err
+        }
+        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, email = ?, result_desc = ? WHERE id = ?`),
+                reference, email, truncStr(init.DisplayText, 200), pay.ID)
+        s.Audit(p.ID, p.Username, "PAYSTACK_MPESA_INIT", "order", order.Number, "ref "+reference)
+        _ = ctx
+        return s.GetOrder(order.ID)
+}
+
+// mpesaPhoneOK accepts the normalized 2547/2541 form and local 07/01 forms.
+func mpesaPhoneOK(p string) bool {
+        p = strings.TrimSpace(p)
+        if len(p) == 12 && (strings.HasPrefix(p, "2547") || strings.HasPrefix(p, "2541")) {
+                return true
+        }
+        if len(p) == 10 && (strings.HasPrefix(p, "07") || strings.HasPrefix(p, "01")) {
+                return true
+        }
+        return false
 }
 
 // display_name metadata field is rendered in the Paystack checkout UI.
@@ -290,7 +372,7 @@ const PaystackTimeout = 15 * time.Minute
 // completion path for redirect flows whose callback never reached us.
 func (s *Service) SweepPaystack(ctx context.Context) {
         client := s.GetPaystack()
-        if client == nil || !s.settings.GetBool("paystack_enabled", false) {
+        if client == nil || !s.settings.GetBool("paystack_enabled", true) {
                 return
         }
         type pending struct {
@@ -331,7 +413,19 @@ func (s *Service) SweepPaystack(ctx context.Context) {
                 default:
                 }
                 if now.Sub(p.createdAt) > PaystackTimeout {
-                        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paystack checkout timeout (15 min)' WHERE id = ? AND status = 'PENDING'`), p.id)
+                        // NEVER fail a reference without one last verify — the
+                        // customer may have paid seconds before the timeout
+                        // (charging real money and then voiding the sale is
+                        // the worst outcome a till can produce).
+                        if v, err := client.Verify(p.reference); err == nil && v.Status == "success" {
+                                if err := s.paystackGuardVoid(p.id); err == nil {
+                                        if _, err := s.completePayment(p.id, p.reference, v.Amount, "Paystack "+v.Channel+" (late verify)"); err != nil {
+                                                log.Printf("[paystack] sweep late-complete %d: %v", p.id, err)
+                                        }
+                                        continue
+                                }
+                        }
+                        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paystack checkout timeout (15 min, final verify not success)' WHERE id = ? AND status = 'PENDING'`), p.id)
                         continue
                 }
                 v, err := client.Verify(p.reference)

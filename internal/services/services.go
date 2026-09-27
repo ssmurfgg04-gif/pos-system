@@ -9,7 +9,9 @@
 package services
 
 import (
+        "fmt"
         "log"
+        "os"
         "sync"
         "time"
 
@@ -99,11 +101,15 @@ const (
 
 // ---- M-Pesa provider factory ----
 
-// GetProvider returns the active payment provider per settings. The mock
-// is a shared singleton (its in-memory pushes must be visible to the
-// sweeper); Daraja instances are cached until credentials change.
-func (s *Service) GetProvider() mpesa.Provider {
-        env := s.settings.GetString("mpesa_env", "mock")
+// GetProvider returns the active STK provider per settings.
+//
+// FAKE-MONEY GUARD: the auto-succeeding mock provider is ONLY available
+// when ALLOW_MOCK_PAYMENTS=true (demos/tests). Shops that never set Daraja
+// credentials get "manual" mode — cashier types the M-Pesa receipt code;
+// nothing ever completes by itself. Incomplete Daraja credentials are a
+// loud error, never a silent fall back to fake money.
+func (s *Service) GetProvider() (mpesa.Provider, error) {
+        env := s.settings.GetString("mpesa_env", "manual")
         switch env {
         case "sandbox", "production":
                 key := s.settings.Get("mpesa_consumer_key")
@@ -112,20 +118,50 @@ func (s *Service) GetProvider() mpesa.Provider {
                 passkey := s.settings.Get("mpesa_passkey")
                 callback := s.settings.Get("mpesa_callback_url")
                 if key == "" || secret == "" || shortcode == "" || passkey == "" {
-                        log.Printf("[mpesa] env=%s but credentials incomplete — falling back to mock", env)
-                        s.applyMockConfig()
-                        return s.mock
+                        return nil, fmt.Errorf("mpesa_env=%s but Daraja credentials are incomplete — set them (or switch M-Pesa to Paystack) in settings; refusing to simulate payments", env)
                 }
                 cacheKey := env + "|" + shortcode + "|" + key + "|" + secret + "|" + passkey + "|" + callback
                 if s.darajaKey != cacheKey {
                         s.darajaKey = cacheKey
                         s.daraja = mpesa.NewDaraja(env, shortcode, passkey, key, secret, callback)
                 }
-                return s.daraja
-        default: // mock
-                s.applyMockConfig()
-                return s.mock
+                return s.daraja, nil
+        case "mock":
+                // Training wheels: only with the explicit env opt-in. This is what
+                // keeps a till from "confirming" payments nobody made.
+                if os.Getenv("ALLOW_MOCK_PAYMENTS") == "true" {
+                        s.applyMockConfig()
+                        return s.mock, nil
+                }
+                return nil, fmt.Errorf("mock M-Pesa is disabled (ALLOW_MOCK_PAYMENTS!=true) — real shops never auto-complete payments")
+        default: // "manual", "paystack", or anything else: no local STK provider.
+                // When Paystack is configured, STK rides the Paystack mobile-money
+                // charge (see InitiateSTK) and verifies through SweepPaystack.
+                return nil, nil
         }
+}
+
+// stkProviderReady reports whether a non-Paystack STK provider is usable.
+func (s *Service) stkProviderReady() bool {
+        p, err := s.GetProvider()
+        return err == nil && p != nil
+}
+
+// MpesaRoute tells the till how M-Pesa STK currently runs:
+//   - "paystack": real STK through the shop's Paystack integration
+//   - "daraja":   real STK through Safaricom Daraja credentials
+//   - "mock":     training mode (ALLOW_MOCK_PAYMENTS=true only)
+//   - "manual":   no STK — cashier enters the receipt code
+func (s *Service) MpesaRoute() string {
+        if s.paystackConfigured() && s.settings.GetBool("paystack_enabled", true) {
+                return "paystack"
+        }
+        if s.stkProviderReady() {
+                if p, _ := s.GetProvider(); p != nil {
+                        return p.Name()
+                }
+        }
+        return "manual"
 }
 
 func (s *Service) applyMockConfig() {

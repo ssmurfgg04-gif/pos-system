@@ -682,8 +682,16 @@ export interface PaymentConfig {
     currency: string
     callbackUrl: string
     configured: boolean
+    /** Keys are supplied via the till's .env file (owner-managed). */
+    fromEnv?: boolean
   }
-  mpesa: { env: string; till: string; paybill: string }
+  mpesa: {
+    env: string
+    /** How STK currently runs: paystack | daraja | mock | manual. */
+    route: 'paystack' | 'daraja' | 'mock' | 'manual' | string
+    till: string
+    paybill: string
+  }
   creditEnabled: boolean
   loyaltyEnabled: boolean
 }

@@ -472,6 +472,12 @@ function ProductModal({
   const [photoBusy, setPhotoBusy] = useState(false)
   const [previewSrc, setPreviewSrc] = useState(product ? productPhotoSrc(product) : '')
   const [hasPhoto, setHasPhoto] = useState<boolean | null>(product ? null : false)
+  // File pickers are opened EXPLICITLY via refs: wrapping the Button in a
+  // <label> looked right but a click on a native <button> inside a label
+  // never reaches the input (HTML activation behavior) — the "Choose photo"
+  // dialog silently never opened (the Windows complaint).
+  const newPhotoInputRef = useRef<HTMLInputElement>(null)
+  const editPhotoInputRef = useRef<HTMLInputElement>(null)
 
   const save = async () => {
     setBusy(true)
@@ -590,18 +596,23 @@ function ProductModal({
               <div className="flex-1 min-w-0 space-y-2">
                 {product ? (
                   <div className="flex flex-wrap items-center gap-2">
-                    <label>
-                      <Button size="sm" variant="secondary" disabled={photoBusy}>
-                        <Upload size={14} strokeWidth={2.5} aria-hidden />
-                        {hasPhoto ? 'Replace photo' : 'Upload photo'}
-                      </Button>
-                      <input
-                        type="file"
-                        accept={PHOTO_ACCEPT}
-                        className="hidden"
-                        onChange={(e) => { pickPhoto(e.target.files?.[0]); e.currentTarget.value = '' }}
-                      />
-                    </label>
+                    <Button size="sm" variant="secondary" disabled={photoBusy}
+                      onClick={() => editPhotoInputRef.current?.click()}>
+                      <Upload size={14} strokeWidth={2.5} aria-hidden />
+                      {hasPhoto ? 'Replace photo' : 'Upload photo'}
+                    </Button>
+                    <input
+                      ref={editPhotoInputRef}
+                      type="file"
+                      accept={PHOTO_ACCEPT}
+                      className="hidden"
+                      onChange={(e) => {
+                        const input = e.currentTarget
+                        const f = input.files?.[0]
+                        input.value = ''
+                        if (f) pickPhoto(f)
+                      }}
+                    />
                     {hasPhoto && (
                       <Button size="sm" variant="ghost" className="text-danger-text hover:bg-danger-bg" onClick={removePhoto} disabled={photoBusy}>
                         <Trash2 size={14} strokeWidth={2.5} aria-hidden />
@@ -612,27 +623,27 @@ function ProductModal({
                   </div>
                 ) : (
                   <div className="flex flex-wrap items-center gap-2">
-                    <label>
-                      <Button size="sm" variant="secondary">
-                        <Upload size={14} strokeWidth={2.5} aria-hidden />
-                        Choose photo
-                      </Button>
-                      <input
-                        type="file"
-                        accept={PHOTO_ACCEPT}
-                        className="hidden"
-                        onChange={async (e) => {
-                          const f = e.target.files?.[0]
-                          if (f && f.size > 8 * 1024 * 1024) {
-                            toast.error('Image too large', 'Please pick a photo under 8 MB')
-                            e.currentTarget.value = ''
-                            return
-                          }
-                          setPendingPhoto(f ? await normalizeProductImage(f) : null)
-                          e.currentTarget.value = ''
-                        }}
-                      />
-                    </label>
+                    <Button size="sm" variant="secondary" onClick={() => newPhotoInputRef.current?.click()}>
+                      <Upload size={14} strokeWidth={2.5} aria-hidden />
+                      Choose photo
+                    </Button>
+                    <input
+                      ref={newPhotoInputRef}
+                      type="file"
+                      accept={PHOTO_ACCEPT}
+                      className="hidden"
+                      onChange={async (e) => {
+                        const input = e.currentTarget
+                        const f = input.files?.[0]
+                        input.value = ''
+                        if (!f) return
+                        if (f.size > 8 * 1024 * 1024) {
+                          toast.error('Image too large', 'Please pick a photo under 8 MB')
+                          return
+                        }
+                        setPendingPhoto(await normalizeProductImage(f))
+                      }}
+                    />
                     {pendingPhoto && <span className="text-[12px] text-ink-muted truncate max-w-44">{pendingPhoto.name}</span>}
                   </div>
                 )}

@@ -25,7 +25,8 @@ func IsMaskToken(v string) bool { return v == MaskToken }
 func isSecretKey(k string) bool {
         k = strings.ToLower(k)
         return strings.Contains(k, "secret") || strings.Contains(k, "passkey") ||
-                strings.Contains(k, "passphrase") || k == "jwt_secret"
+                strings.Contains(k, "passphrase") || strings.Contains(k, "consumer_key") ||
+                k == "jwt_secret"
 }
 
 // encryptable reports whether a key is stored encrypted at rest. jwt_secret
@@ -60,7 +61,23 @@ func New(db *database.DB) (*Store, error) {
                 return nil, err
         }
         s.migrateLegacySecrets()
+        s.migrateLegacyPaystackToggle()
         return s, nil
+}
+
+// migrateLegacyPaystackToggle — one-time boot fix for tills upgraded from
+// releases that seeded paystack_enabled='false': a shop holding a real
+// secret key (entered in Settings or provided via env) is payment-ready,
+// so the stale seeded switch is flipped on. The companion marker key makes
+// this run exactly once; later admin toggles are always respected.
+func (s *Store) migrateLegacyPaystackToggle() {
+        if s.IsSet("paystack_enabled_touched") {
+                return
+        }
+        if s.Get("paystack_enabled") == "false" && s.Get("paystack_secret_key") != "" {
+                _ = s.Set("paystack_enabled", "true")
+        }
+        _ = s.Set("paystack_enabled_touched", "1")
 }
 
 // migrateLegacySecrets re-encrypts secret rows written in plaintext by
@@ -147,6 +164,16 @@ func (s *Store) GetBool(key string, def bool) bool {
                 }
         }
         return def
+}
+
+// IsSet reports whether the key exists in the store at all (regardless of
+// value) — lets callers distinguish "explicitly configured false" from
+// "never touched".
+func (s *Store) IsSet(key string) bool {
+        s.mu.RLock()
+        _, ok := s.cache[key]
+        s.mu.RUnlock()
+        return ok
 }
 
 // Set persists one setting and refreshes the cache. Secret-class keys are
@@ -256,5 +283,10 @@ func AllowedKeys() map[string]bool {
         for k := range database.DefaultSettings {
                 out[k] = true
         }
+        // paystack_enabled is deliberately not seeded (absence means
+        // "on whenever a valid secret key exists"), but admins may still
+        // toggle it explicitly through the API.
+        out["paystack_enabled"] = true
+        out["paystack_enabled_touched"] = true
         return out
 }
