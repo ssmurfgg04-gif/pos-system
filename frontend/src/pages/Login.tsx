@@ -9,9 +9,9 @@ import { backendMode, getDesktopStatus, type DesktopStatus } from '../lib/api'
 import { ShieldCheck, User, Palette, KeyRound } from 'lucide-react'
 
 const DEMO_ACCOUNTS = [
-  { username: 'admin', password: 'admin123', label: 'Admin', hint: 'Full control — settings, stock, KRA reports', icon: ShieldCheck },
-  { username: 'cashier', password: 'cashier123', label: 'Cashier', hint: 'POS terminal, shifts, M-Pesa entry', icon: User },
-  { username: 'designer', password: 'designer123', label: 'Designer', hint: 'Design board, production queue', icon: Palette },
+  { username: 'admin', password: '0000', label: 'Admin', hint: 'Full control — settings, stock, KRA reports', icon: ShieldCheck },
+  { username: 'cashier', password: '0000', label: 'Cashier', hint: 'POS terminal, shifts, M-Pesa entry', icon: User },
+  { username: 'designer', password: '0000', label: 'Designer', hint: 'Design board, production queue', icon: Palette },
 ]
 
 export function Login() {

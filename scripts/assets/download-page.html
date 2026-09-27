@@ -311,6 +311,24 @@
     if (el) el.style.display = 'none';
   });
 })();
+
+// Paystack redirect landing: customers returning from a hosted checkout
+// arrive here with ?reference=… (or ?trxref=…). The till completes the
+// sale via its own server-side verify — this card just reassures them.
+(function () {
+  var q = new URLSearchParams(location.search);
+  var ref = q.get('reference') || q.get('trxref');
+  if (!ref) return;
+  var banner = document.createElement('div');
+  banner.style.cssText = 'margin:0 auto 24px;max-width:560px;padding:16px 20px;border:2px solid #10B98133;background:#10B98114;border-radius:14px;text-align:center;';
+  banner.innerHTML =
+    '<div style="font-weight:800;color:#0b7a5c;font-size:15px;">Payment received — thank you!</div>' +
+    '<div style="font-size:13px;color:#4b5563;margin-top:4px;">Reference <code style="font-family:ui-monospace,monospace;">' +
+    ref.replace(/[^A-Za-z0-9._-]/g, '') + '</code></div>' +
+    '<div style="font-size:12.5px;color:#6b7280;margin-top:6px;">Your receipt at the till updates automatically within seconds. No action needed.</div>';
+  var first = document.body.firstElementChild;
+  if (first) document.body.insertBefore(banner, first); else document.body.appendChild(banner);
+})();
 </script>
 
 </body>

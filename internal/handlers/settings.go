@@ -69,6 +69,11 @@ func (h *H) UpdateSettings(c *gin.Context) {
                 h.fail(c, 500, err.Error())
                 return
         }
+        // An explicit admin toggle of paystack_enabled marks the one-time
+        // legacy-toggle migration as done — the admin's choice always wins.
+        if _, ok := body.Values["paystack_enabled"]; ok {
+                _ = h.settings(c).Set("paystack_enabled_touched", "1")
+        }
         h.svc(c).Audit(p.ID, p.Username, "SETTINGS_UPDATED", "settings", "", joinKeys(changed))
         // OTA config: whitelisted commercial settings (branding, tax,
         // loyalty, paystack public config, ...) propagate to the rest of

@@ -58,35 +58,6 @@ function fillPlaceholder(placeholder: string, text: string) {
   typeText(el, text)
 }
 
-// Walks the five onboarding wizard steps with minimal valid input.
-async function walkOnboarding() {
-  await waitForText('Set up your shop')
-  fillPlaceholder('e.g. Zawadi Prints', 'Test Shop')
-  await clickButton('Save & continue') // store
-  await waitForText('Skip for now')
-  await clickButton('Skip for now') // logo skipped → receipt step
-  await waitForText('Receipt footer')
-  await clickButton('Save & continue') // receipt (defaults kept)
-  await clickButton('Save & continue') // printer (blank target kept)
-  await waitForText('First cashier')
-  // Admin fields only appear when still needing rotation; otherwise already signed in.
-  const adminPw = document.querySelector('input[placeholder="6+ characters"]') as HTMLInputElement | null
-  if (adminPw) {
-    fillPlaceholder('6+ characters', 'wanjiku123')
-    // First '4 digits' is admin PIN when present, otherwise cashier PIN — fill whichever exists.
-    const pins = [...document.querySelectorAll('input[placeholder="4 digits"]')] as HTMLInputElement[]
-    if (pins[0]) typeText(pins[0], '5678')
-    if (pins[1]) typeText(pins[1], '4321')
-  } else {
-    // Already rotated — just add a cashier PIN
-    const pin = document.querySelector('input[placeholder="4 digits"]') as HTMLInputElement | null
-    if (pin) typeText(pin, '4321')
-  }
-  await clickButton('Open shop') // staff → finish() saves and navigates to the main page
-  // Continue now lands straight on the main page (POS shell) — no extra click.
-  await waitForText('Point of Sale')
-}
-
 describe('typing repro', () => {
   test('typing a username on Login does not crash', async () => {
     const root = createRoot(document.getElementById('root')!)
@@ -140,22 +111,8 @@ describe('typing repro', () => {
       if (useAuth.getState().user) break
     }
     expect(useAuth.getState().user?.username).toBe('admin')
-    // Seeded logins must rotate first: complete the Rotate screen.
-    await waitForText('Set your login details')
-    const pwBox = document.querySelector('input[placeholder="••••••"]') as HTMLInputElement
-    const pinBox = document.querySelector('input[placeholder="••••"]') as HTMLInputElement
-    expect(pwBox).toBeTruthy()
-    typeText(pwBox, 'wanjiku123')
-    typeText(pinBox, '5678')
-    await clickButton('Save & continue')
-    // Rotate re-logs-in after each credential save, landing live.
-    for (let i = 0; i < 50; i++) {
-      await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
-      if (useAuth.getState().user && !useAuth.getState().user!.mustRotate) break
-    }
+    // Demo accounts are ready to use — no rotate screen, no onboarding.
     expect(useAuth.getState().user?.mustRotate).toBe(false)
-    // Fresh demo boxes onboard next: walk the five wizard steps.
-    await walkOnboarding()
     // Admins land on /reports by design; go to the sell screen explicitly.
     const { navigate } = await import('../src/lib/router')
     await act(async () => { navigate('/') })

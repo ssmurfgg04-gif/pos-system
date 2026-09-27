@@ -80,8 +80,18 @@ func (h *Hub) BroadcastJSON(eventType string, data any) {
         for _, c := range targets {
                 select {
                 case c.send <- b:
-                default: // slow client — drop it
-                        h.unregister <- c
+                default: // slow client — drop it without blocking the caller
+                        // BroadcastJSON runs on request paths (post-checkout), so a
+                        // blocking send here could stall a checkout if the Run loop
+                        // were ever backed up. The next BroadcastJSON re-checks the
+                        // map; a stale drop is a safe no-op.
+                        go func(c *Client) {
+                                select {
+                                case h.unregister <- c:
+                                default:
+                                        c.conn.Close()
+                                }
+                        }(c)
                 }
         }
 }

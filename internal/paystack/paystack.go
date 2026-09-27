@@ -102,6 +102,59 @@ func (c *Client) Initialize(req InitializeRequest) (*InitializeResult, error) {
         }, nil
 }
 
+// ---- Charge (mobile money / M-Pesa STK) ----
+
+// MobileMoney identifies the wallet to charge. Kenya M-Pesa uses the
+// customer's Safaricom number; Paystack pushes the STK prompt.
+type MobileMoney struct {
+        Phone    string `json:"phone"`              // 2547XXXXXXXX / 2541XXXXXXXX
+        Provider string `json:"provider,omitempty"` // "mpesa" for Kenya
+}
+
+// ChargeRequest opens a direct charge. For M-Pesa the charge sits in
+// status "pending" until the customer confirms on their phone — completion
+// is proven by Verify (or the charge.success webhook), never by this call.
+type ChargeRequest struct {
+        Email       string         `json:"email"`
+        Amount      int64          `json:"amount"` // subunits (pesewas)
+        Currency    string         `json:"currency"`
+        Reference   string         `json:"reference"`
+        MobileMoney *MobileMoney   `json:"mobile_money,omitempty"`
+        Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+// ChargeResult is the synchronous answer. DisplayText is the customer-facing
+// instruction ("Check your phone to complete payment").
+type ChargeResult struct {
+        Status      string `json:"status"`  // pending | success | ...
+        Reference   string `json:"reference"`
+        DisplayText string `json:"display_text"`
+}
+
+// ChargeMobileMoney initiates an M-Pesa STK charge through Paystack. The
+// returned reference is verified (transaction/verify) by the sweeper or
+// the explicit verify endpoint before the order is ever marked paid.
+func (c *Client) ChargeMobileMoney(req ChargeRequest) (*ChargeResult, error) {
+        if !ValidKey(c.secret) {
+                return nil, errors.New("paystack secret key is not configured")
+        }
+        if req.MobileMoney == nil || req.MobileMoney.Phone == "" {
+                return nil, errors.New("mobile money phone is required")
+        }
+        if req.MobileMoney.Provider == "" {
+                req.MobileMoney.Provider = "mpesa"
+        }
+        body, _ := json.Marshal(req)
+        var out ChargeResult
+        if err := c.do("POST", "/charge", body, &out); err != nil {
+                return nil, err
+        }
+        if out.Reference == "" {
+                return nil, errors.New("paystack charge returned no reference")
+        }
+        return &out, nil
+}
+
 // ---- Verify ----
 
 type VerifyResult struct {

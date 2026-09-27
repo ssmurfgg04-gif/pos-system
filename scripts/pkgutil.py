@@ -108,11 +108,15 @@ def human_mb(path):
 
 
 def assert_netlify_safe(path):
-    """Hard-fail if a file exceeds the Netlify drag-and-drop guidance."""
+    """Warn when a file exceeds the old drag-and-drop guidance.
+
+    Deploys are repo-driven now (GitHub Actions → netlify-cli --prod), so
+    large assets are fine; the 12 MB drag-and-drop era is gone. The warning
+    stays as a hint for anyone hand-dragging the site zip.
+    """
     size = os.path.getsize(path)
     if size >= MAX_ASSET_BYTES:
-        raise SystemExit(
-            f"{os.path.basename(path)} is {size:,} bytes "
-            f"(>= {MAX_ASSET_BYTES:,}) — too big for Netlify drag-and-drop. "
-            "Compress harder or host this file elsewhere.")
+        print(f"    note: {os.path.basename(path)} is {size:,} bytes "
+              f"(>= {MAX_ASSET_BYTES:,}) — fine for netlify-cli deploys, "
+              "too big for manual drag-and-drop.")
     return size

@@ -47,6 +47,19 @@ func (h *H) Login(c *gin.Context) {
         var matchedID int64
         var matchedHash string
         var matchedPrincipal *auth.Principal
+        // Collect EVERY shop whose credentials match. A username may exist
+        // in more than one shop (re-onboarding, join links, second signup);
+        // picking the first match once landed staff in an EMPTY shop and
+        // their real inventory "disappeared". Prefer the shop that actually
+        // holds data — the one they worked in.
+        type shopMatch struct {
+                sid   string
+                id    int64
+                hash  string
+                princ *auth.Principal
+                rows  int64
+        }
+        var matches []shopMatch
         for _, sid := range shopIDs {
                 svc, err := h.Shops.Service(sid)
                 if err != nil {
@@ -68,12 +81,20 @@ func (h *H) Login(c *gin.Context) {
                 if err != nil {
                         continue
                 }
-                matchedShop = sid
-                matchedID = id
-                matchedHash = pwHash
-                matchedPrincipal = p
-                matchedPrincipal.ShopID = sid
-                break
+                p.ShopID = sid
+                var prod, orders int64
+                _ = db.QueryRow(`SELECT COUNT(*) FROM products`).Scan(&prod)
+                _ = db.QueryRow(`SELECT COUNT(*) FROM orders`).Scan(&orders)
+                matches = append(matches, shopMatch{sid: sid, id: id, hash: pwHash, princ: p, rows: prod + orders})
+        }
+        if len(matches) > 0 {
+                best := matches[0]
+                for _, m := range matches[1:] {
+                        if m.rows > best.rows {
+                                best = m
+                        }
+                }
+                matchedShop, matchedID, matchedHash, matchedPrincipal = best.sid, best.id, best.hash, best.princ
         }
         if matchedPrincipal == nil {
                 h.fail(c, 401, "invalid credentials")

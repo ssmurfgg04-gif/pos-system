@@ -23,7 +23,7 @@ import { resetDemo } from '../demo/backend'
 import { useBranding } from '../stores/branding'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
-import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck } from 'lucide-react'
+import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck, Undo2 } from 'lucide-react'
 
 type SettingsMap = Record<string, string>
 
@@ -44,6 +44,7 @@ export function Settings() {
   const [offsite, setOffsite] = useState<OffsiteStatus | null>(null)
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
   const [updating, setUpdating] = useState(false)
+  const [undoing, setUndoing] = useState(false)
   const [demo, setDemo] = useState(false)
 
   useEffect(() => {
@@ -203,8 +204,14 @@ export function Settings() {
               <div className="flex items-center gap-2">
                 {payConfig ? (
                   <StatusPill
-                    status={payConfig.paystack.configured ? 'paid' : 'pending'}
-                    label={payConfig.paystack.configured ? 'Connected — secret key on file' : 'Not configured — no secret key yet'}
+                    status={payConfig.paystack.configured && payConfig.paystack.enabled ? 'paid' : 'pending'}
+                    label={
+                      payConfig.paystack.configured && payConfig.paystack.enabled
+                        ? `Connected${payConfig.paystack.fromEnv ? ' (env keys)' : ''} — ready at checkout`
+                        : payConfig.paystack.configured
+                          ? 'Key on file — checkout currently disabled'
+                          : 'Not connected — no secret key yet'
+                    }
                   />
                 ) : (
                   <StatusPill status="info" label="Connection state unknown" />
@@ -225,12 +232,17 @@ export function Settings() {
             <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink sm:col-span-2">
               <input
                 type="checkbox"
-                checked={(values.paystack_enabled ?? 'false') === 'true'}
+                checked={payConfig ? payConfig.paystack.enabled : (values.paystack_enabled ?? 'true') === 'true'}
                 onChange={(e) => set('paystack_enabled', String(e.target.checked))}
                 className="w-5 h-5 accent-[#10B981]"
               />
               Accept card &amp; M-Pesa payments via Paystack
             </label>
+            {payConfig?.paystack.fromEnv && (
+              <p className="sm:col-span-2 text-[12px] text-info-text font-semibold -mt-1">
+                Keys are supplied from this till's secure .env file — nothing to paste here.
+              </p>
+            )}
             <Field label="Public key" hint="Safe for the browser — starts with pk_">
               <Input value={values.paystack_public_key ?? ''} onChange={(e) => set('paystack_public_key', e.target.value.trim())} placeholder="pk_test_…" className="font-mono" />
             </Field>
@@ -268,9 +280,26 @@ export function Settings() {
               <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">M-Pesa</p>
               <p className="text-[13px] text-ink-muted">
                 <strong className="text-ink">M-Pesa runs through Paystack.</strong> When Paystack is connected above,
-                the M-Pesa button at checkout opens a secure Paystack popup — the customer picks M-Pesa and enters
-                their number there. No Safaricom keys needed. Manual receipt-code entry always works, even offline.
+                the M-Pesa button at checkout pushes a real STK prompt to the customer's phone and the sale completes
+                only after Paystack confirms the money. Manual receipt-code entry always works, even offline.
               </p>
+              {payConfig && (
+                <p className="text-[12px] mt-1.5">
+                  Current route:{' '}
+                  <strong className={
+                    payConfig.mpesa.route === 'paystack' || payConfig.mpesa.route === 'daraja'
+                      ? 'text-paid-text'
+                      : payConfig.mpesa.route === 'mock'
+                        ? 'text-pending-text'
+                        : 'text-ink-muted'
+                  }>
+                    {payConfig.mpesa.route === 'paystack' ? 'Paystack STK push (real money)'
+                      : payConfig.mpesa.route === 'daraja' ? 'Safaricom Daraja (real money)'
+                      : payConfig.mpesa.route === 'mock' ? 'Training mode — no real money (ALLOW_MOCK_PAYMENTS)'
+                      : 'Manual receipt code — no STK configured'}
+                  </strong>
+                </p>
+              )}
             </div>
             <Field label="Till number" hint="Shown to customers when paying manually">
               <Input value={values.till_number ?? ''} onChange={(e) => set('till_number', e.target.value)} inputMode="numeric" />
@@ -285,51 +314,10 @@ export function Settings() {
                 <option value="manual">Manual receipt code only</option>
               </Select>
             </Field>
-
-            <details className="sm:col-span-2 border-2 border-line rounded-input p-3 bg-surface-muted">
-              <summary className="text-[13px] font-bold text-ink cursor-pointer select-none">
-                Advanced — direct Safaricom Daraja (optional, only if you don't use Paystack)
-              </summary>
-              <div className="grid sm:grid-cols-2 gap-3 pt-3">
-                <p className="sm:col-span-2 text-[12.5px] text-ink-muted">
-                  Talk to M-Pesa directly (STK push). Training mode never touches real money; sandbox tests
-                  against Safaricom; production goes live.
-                </p>
-                <Field label="Provider environment">
-                  <Select value={values.mpesa_env ?? 'mock'} onChange={(e) => set('mpesa_env', e.target.value)}>
-                    <option value="mock">Training mode — no real money moves</option>
-                    <option value="sandbox">Daraja sandbox</option>
-                    <option value="production">Daraja production</option>
-                  </Select>
-                </Field>
-                <Field label="Business shortcode (Daraja)">
-                  <Input value={values.mpesa_shortcode ?? ''} onChange={(e) => set('mpesa_shortcode', e.target.value)} inputMode="numeric" />
-                </Field>
-                <Field label="Passkey" hint="Daraja Lipa Na M-Pesa passkey">
-                  <Input type="password" value={values.mpesa_passkey ?? ''} onChange={(e) => set('mpesa_passkey', e.target.value)} />
-                </Field>
-                <Field label="Consumer key">
-                  <Input value={values.mpesa_consumer_key ?? ''} onChange={(e) => set('mpesa_consumer_key', e.target.value)} />
-                </Field>
-                <Field label="Consumer secret">
-                  <Input type="password" value={values.mpesa_consumer_secret ?? ''} onChange={(e) => set('mpesa_consumer_secret', e.target.value)} />
-                </Field>
-                <Field label="Callback URL" hint="Optional on LAN — the server also polls stkpushquery every 5s">
-                  <Input value={values.mpesa_callback_url ?? ''} onChange={(e) => set('mpesa_callback_url', e.target.value)} placeholder="https://yourdomain.example/api/v1/payments/mpesa/callback" />
-                </Field>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Training delay (ms)" hint="Time before auto-success in training mode">
-                    <Input value={values.mpesa_mock_delay_ms ?? '4000'} onChange={(e) => set('mpesa_mock_delay_ms', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
-                  </Field>
-                  <Field label="Training result code" hint="0 = success; e.g. 1032 simulates cancel">
-                    <Input value={values.mpesa_mock_result_code ?? '0'} onChange={(e) => set('mpesa_mock_result_code', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
-                  </Field>
-                </div>
-              </div>
-            </details>
             <p className="sm:col-span-2 text-[12px] text-ink-subtle">
               Secrets show as <code className="font-mono">__SET__</code> after saving — that value means “keep the stored secret”.
-              All secrets are encrypted at rest on this machine.
+              All secrets are encrypted at rest on this machine, and payment provider keys belong in this till's
+              <code className="font-mono"> .env</code> file or here — never in screenshots or shared documents.
             </p>
           </div>
         )}
@@ -550,6 +538,23 @@ export function Settings() {
                 </div>
               )}
               {update && update.lastError && <p className="text-[12px] text-danger-text mt-1">Last check error: {update.lastError}</p>}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button size="sm" variant="ghost" disabled={undoing} onClick={async () => {
+                  if (!confirm('Undo the last update?\n\nThe app will restore the pre-update databases and previous build. Anything recorded since the update is snapshotted first, so nothing is lost. The app restarts by itself.')) return
+                  setUndoing(true)
+                  try {
+                    await api.post('/api/v1/system/update/undo')
+                    toast.success('Rolling back', 'The app is restoring the previous version and restarting.')
+                  } catch (e: any) {
+                    toast.error('Undo failed', e?.message)
+                  } finally {
+                    setUndoing(false)
+                  }
+                }}>
+                  {undoing ? <Spinner /> : <><Undo2 size={14} strokeWidth={2.5} aria-hidden />Undo last update</>}
+                </Button>
+                <span className="text-[11px] text-ink-subtle">Restores data + app from the automatic pre-update archive.</span>
+              </div>
             </div>
             <div className="sm:col-span-2 border-t-2 border-line pt-3">
               <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Off-site backup (encrypted, automatic)</p>

@@ -2,8 +2,8 @@
 // (Netlify) build has the same feel as a live box: 3 staff roles, a full
 // catalog, ~6 weeks of order history feeding the dashboards, shifts,
 // design jobs, and an audit trail. Mirrors the Go server's seeds so demo
-// logins match the README (admin/admin123, cashier/cashier123,
-// designer/designer123).
+// logins match the README (admin/0000, cashier/0000,
+// designer/0000 — the demo is purely a playground, password is 0000).
 
 export interface DemoUser {
   id: number
@@ -290,7 +290,7 @@ const DEMO_SETTINGS: Record<string, string> = {
   offsite_prefix: '',
   offsite_keep: '14',
   offsite_passphrase: '',
-  onboarding_done: 'false',
+  onboarding_done: 'true',
   update_channel: 'stable',
   update_api_base: 'https://api.github.com',
   low_stock_threshold: '5',
@@ -363,9 +363,9 @@ export function buildSeed(): DemoDB {
   ]
 
   const users: DemoUser[] = [
-    { id: 1, username: 'admin', fullName: 'Amina Hassan', password: 'admin123', pin: '1234', roleId: 1, active: true, mustRotate: true, passwordChangedAt: 0, createdAt: iso(new Date(now.getTime() - 90 * 864e5)) },
-    { id: 2, username: 'cashier', fullName: 'Brian Otieno', password: 'cashier123', pin: '2222', roleId: 2, active: true, mustRotate: true, passwordChangedAt: 0, createdAt: iso(new Date(now.getTime() - 60 * 864e5)) },
-    { id: 3, username: 'designer', fullName: 'Wanjiru Mwangi', password: 'designer123', pin: '3333', roleId: 3, active: true, mustRotate: true, passwordChangedAt: 0, createdAt: iso(new Date(now.getTime() - 45 * 864e5)) },
+    { id: 1, username: 'admin', fullName: 'Amina Hassan', password: '0000', pin: '1234', roleId: 1, active: true, mustRotate: false, passwordChangedAt: 0, createdAt: iso(new Date(now.getTime() - 90 * 864e5)) },
+    { id: 2, username: 'cashier', fullName: 'Brian Otieno', password: '0000', pin: '2222', roleId: 2, active: true, mustRotate: false, passwordChangedAt: 0, createdAt: iso(new Date(now.getTime() - 60 * 864e5)) },
+    { id: 3, username: 'designer', fullName: 'Wanjiru Mwangi', password: '0000', pin: '3333', roleId: 3, active: true, mustRotate: false, passwordChangedAt: 0, createdAt: iso(new Date(now.getTime() - 45 * 864e5)) },
   ]
 
   const categories: DemoCategory[] = CATEGORIES.map(([name, slug], i) => ({ id: i + 1, name, slug, sortOrder: i }))

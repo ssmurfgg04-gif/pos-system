@@ -30,7 +30,11 @@ var DefaultSettings = map[string]string{
         "payment_mode":          "auto", // auto | stk | manual
         "till_number":           "",
         "paybill_number":        "",
-        "mpesa_env":             "mock", // mock | sandbox | production
+        // mpesa_env: manual (default — receipt-code entry, nothing completes
+        // by itself) | paystack (STK via the Paystack integration) | sandbox |
+        // production (Daraja). "mock" is tests/demos only: the desktop app
+        // refuses mock unless ALLOW_MOCK_PAYMENTS=true (fake-money guard).
+        "mpesa_env":             "manual",
         "mpesa_shortcode":       "",
         "mpesa_passkey":         "",
         "mpesa_consumer_key":    "",
@@ -74,7 +78,9 @@ var DefaultSettings = map[string]string{
         // on this machine (settings DB or PAYSTACK_SECRET_KEY env) — it is
         // masked in API responses and never team-synced. The PUBLIC key is
         // safe to expose and is what the checkout popup uses.
-        "paystack_enabled":       "false",
+        // paystack_enabled is intentionally NOT seeded: absence means
+        // "on whenever a valid secret key exists" — a till with live keys
+        // just works; admins can still switch it off explicitly.
         "paystack_public_key":    "", // pk_live_... / pk_test_... — safe for the frontend
         "paystack_secret_key":    "", // SECRET — sk_live_... backend only
         "paystack_currency":      "KES",

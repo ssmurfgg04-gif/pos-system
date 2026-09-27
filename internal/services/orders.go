@@ -864,7 +864,22 @@ func (s *Service) InitiateSTK(ctx context.Context, orderID int64, p *auth.Princi
         if pay.Phone == "" {
                 return nil, errors.New("payment has no phone number; collect the customer's number and retry")
         }
-        provider := s.GetProvider()
+        // REAL MONEY ROUTE: when the shop's Paystack integration is live,
+        // M-Pesa STK rides Paystack's mobile-money charge — a real prompt on
+        // the customer's phone, completed only after server-side verify.
+        if s.MpesaRoute() == "paystack" {
+                return s.paystackMpesaSTK(ctx, order, pay, p)
+        }
+        provider, err := s.GetProvider()
+        if err != nil {
+                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
+                        truncStr(err.Error(), 200), pay.ID)
+                s.Audit(p.ID, p.Username, "STK_FAILED", "order", order.Number, err.Error())
+                return nil, err
+        }
+        if provider == nil {
+                return nil, errors.New("M-Pesa STK is not configured — connect Paystack in Settings (or switch to manual receipt entry)")
+        }
         resp, err := provider.InitiateSTK(ctx, mpesa.STKRequest{
                 OrderID:          order.ID,
                 PaymentID:        pay.ID,

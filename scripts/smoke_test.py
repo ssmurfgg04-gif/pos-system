@@ -62,7 +62,21 @@ def data(body):
 
 def login(user, pw):
     st, body = req("POST", "/api/v1/auth/login", body={"username": user, "password": pw})
-    return data(body).get("token"), st
+    tok = data(body).get("token")
+    # Seeded logins start flagged for rotation — take over the account like
+    # the onboarding wizard does, so every later check runs in steady state.
+    if tok:
+        mst, mbody = req("GET", "/api/v1/me", tok)
+        me = data(mbody)
+        if mst == 200 and me.get("mustRotate"):
+            rid = me.get("id")
+            pst, _ = req("PUT", f"/api/v1/users/{rid}/password", tok,
+                         body={"password": "smoke-" + user + "-1"})
+            if pst == 200:
+                _, body = req("POST", "/api/v1/auth/login",
+                              body={"username": user, "password": "smoke-" + user + "-1"})
+                tok = data(body).get("token")
+    return tok, st
 
 
 def get_product(token, name):
@@ -107,6 +121,12 @@ def main():
     check("cashier login", st == 200 and cashier, f"{st}")
     designer, st = login("designer", "designer123")
     check("designer login", st == 200 and designer, f"{st}")
+
+    # The smoke drives the auto-succeeding mock STK provider on purpose.
+    # Real tills refuse it (ALLOW_MOCK_PAYMENTS + settings gate), so the
+    # test explicitly opts in through the admin settings API.
+    st, body = req("PUT", "/api/v1/settings", admin, body={"values": {"mpesa_env": "mock"}})
+    check("mock provider opt-in (settings)", st == 200, f"{st}")
 
     st, body = req("POST", "/api/v1/auth/login", body={"username": "admin", "password": "wrong"})
     check("bad password rejected 401", st == 401, f"{st}")

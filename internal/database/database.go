@@ -33,15 +33,19 @@ func Open(driver, sqlitePath, pgDSN string) (*DB, error) {
                 }
                 return &DB{db, "postgres", ""}, nil
         default: // sqlite
-                dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)", sqlitePath)
+                dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_txlock=immediate", sqlitePath)
                 db, err := sql.Open("sqlite", dsn)
                 if err != nil {
                         return nil, fmt.Errorf("open sqlite: %w", err)
                 }
-                // One connection serializes all access; combined with WAL this gives
-                // crash-safety without SQLITE_BUSY storms. Code must never nest
-                // queries inside an open rows loop (enforced by review + regression test).
-                db.SetMaxOpenConns(1)
+                // WAL + a small pool: reads run in parallel, writes serialize on
+                // SQLite's write lock with busy_timeout backoff. _txlock=immediate
+                // starts every transaction in WRITE mode so read-then-write txs
+                // can never fail with SQLITE_BUSY_SNAPSHOT (which busy_timeout
+                // does not retry). Code must still never nest queries inside an
+                // open rows loop (enforced by review + regression test).
+                db.SetMaxOpenConns(4)
+                db.SetMaxIdleConns(4)
                 if err := db.Ping(); err != nil {
                         return nil, fmt.Errorf("ping sqlite: %w", err)
                 }

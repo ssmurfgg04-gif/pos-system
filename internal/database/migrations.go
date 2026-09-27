@@ -767,6 +767,28 @@ CREATE TABLE IF NOT EXISTS gift_cards (
 CREATE INDEX IF NOT EXISTS idx_gift_cards_code ON gift_cards(code);
 `,
         },
+        {
+                // v11: performance indexes (composite cashier/status filters,
+                // SKU lookups, NOCASE name ordering) + the fake-money guard:
+                // tills upgraded from releases that defaulted mpesa_env to
+                // "mock" move to "manual" so no payment can auto-complete
+                // without a real provider (Paystack or Daraja credentials).
+                Version: 11,
+                SQLite: `
+CREATE INDEX IF NOT EXISTS idx_orders_cashier_created ON orders(cashier_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
+CREATE INDEX IF NOT EXISTS idx_products_name_nocase ON products(name COLLATE NOCASE);
+UPDATE settings SET value = 'manual' WHERE key = 'mpesa_env' AND value = 'mock';
+`,
+                Pg: `
+CREATE INDEX IF NOT EXISTS idx_orders_cashier_created ON orders(cashier_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
+CREATE INDEX IF NOT EXISTS idx_products_name_nocase ON products(name);
+UPDATE settings SET value = 'manual' WHERE key = 'mpesa_env' AND value = 'mock';
+`,
+        },
 }
 
 // backfillRolePermsV9 unions the v8 permission additions into seeded roles:
