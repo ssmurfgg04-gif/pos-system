@@ -174,13 +174,16 @@ func (h *H) mapErr(c *gin.Context, err error) {
                 errors.Is(err, services.ErrOrderAlreadyPaid),
                 errors.Is(err, services.ErrDuplicateReceipt),
                 errors.Is(err, services.ErrCreditLimit),
+                errors.Is(err, services.ErrNoStoreCredit),
+                errors.Is(err, services.ErrLoyaltyPoints),
                 errors.Is(err, services.ErrOverpayment),
                 errors.Is(err, services.ErrShiftOpen):
                 h.fail(c, 409, err.Error())
         case strings.Contains(msg, "phone"), strings.Contains(msg, "receipt code"),
                 strings.Contains(msg, "invalid payment"), strings.Contains(msg, "quantity"),
                 strings.Contains(msg, "invalid design status"), strings.Contains(msg, "invalid payment mode"),
-                strings.Contains(msg, "out of range"), strings.Contains(msg, "exceeds maximum"),
+                strings.Contains(msg, "out of range"), strings.Contains(msg, "must be positive"),
+         strings.Contains(msg, "exceeds maximum"),
                 strings.Contains(msg, "too many lines"):
                 h.fail(c, 422, err.Error())
         case strings.Contains(msg, "needs a customer"):

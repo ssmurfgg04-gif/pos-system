@@ -28,6 +28,9 @@ function productPhotoSrc(p: Product): string {
 function ProductThumb({ p }: { p: Product }) {
   const [failed, setFailed] = useState(false)
   const src = productPhotoSrc(p)
+  // A new photo bumps the cache-buster on src — forget the old 404 latch
+  // or the thumbnail stays a placeholder until the component unmounts.
+  useEffect(() => { setFailed(false) }, [src])
   if (!src || failed) {
     return (
       <span className="w-10 h-10 shrink-0 rounded-input border-2 border-line bg-surface-muted flex items-center justify-center text-ink-subtle" aria-hidden>

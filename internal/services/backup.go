@@ -45,14 +45,14 @@ func (s *Service) BackupNow() (*BackupResult, error) {
 	if _, err := s.db.Exec(fmt.Sprintf("VACUUM INTO '%s'", strings.ReplaceAll(dst, "'", "''"))); err != nil {
 		return nil, fmt.Errorf("vacuum into: %w", err)
 	}
-        st, err := os.Stat(dst)
-        if err != nil {
-                return nil, err
-        }
-        s.pruneBackups(dir)
-        // Off-site push is async and best-effort: sales never wait for it.
-        s.enqueueOffsite(dst)
-        return &BackupResult{File: name, Bytes: st.Size(), At: time.Now().Format(time.RFC3339)}, nil
+	st, err := os.Stat(dst)
+	if err != nil {
+		return nil, err
+	}
+	s.pruneBackups(dir)
+	// Off-site push is async and best-effort: sales never wait for it.
+	s.enqueueOffsite(dst)
+	return &BackupResult{File: name, Bytes: st.Size(), At: time.Now().Format(time.RFC3339)}, nil
 }
 
 // ListBackups returns stored snapshots, newest first.

@@ -2,12 +2,15 @@ package update
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +32,7 @@ type Checker struct {
 	notes     string
 	assetURL  string
 	assetName string
+	assetSHA  string
 	checkedAt string
 	lastErr   string
 	staged    string
@@ -55,16 +59,23 @@ func (c *Checker) Status() map[string]any {
 	}
 }
 
-// Refresh checks once (network, 15s timeout inside Check).
+// Refresh checks once. The cloud manifest (app_config in the fleet
+// project) is the primary channel — the owner publishes/pulls updates
+// with a SQL UPDATE; GitHub Releases is the fallback when the cloud has
+// no manifest or is unreachable.
 func (c *Checker) Refresh(ctx context.Context) {
 	if c.store.Get("update_channel") == "off" {
 		return
 	}
-	apiBase := c.store.Get("update_api_base")
-	if apiBase == "" {
-		apiBase = "https://api.github.com"
+	rel, err := CheckCloudManifest(ctx, "")
+	if err != nil {
+		log.Printf("[update] cloud manifest: %v — falling back to GitHub", err)
+		apiBase := c.store.Get("update_api_base")
+		if apiBase == "" {
+			apiBase = "https://api.github.com"
+		}
+		rel, err = Check(ctx, apiBase, c.repo)
 	}
-	rel, err := Check(ctx, apiBase, c.repo)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.checkedAt = time.Now().Format(time.RFC3339)
@@ -80,6 +91,7 @@ func (c *Checker) Refresh(ctx context.Context) {
 	if asset := CurrentPlatformAsset(rel); asset.URL != "" {
 		c.assetURL = asset.URL
 		c.assetName = asset.Name
+		c.assetSHA = asset.SHA256
 	}
 }
 
@@ -98,10 +110,12 @@ func (c *Checker) StartLoop(ctx context.Context) {
 	}
 }
 
-// Download fetches the picked asset into the OS temp dir; remembers the path.
+// Download fetches the picked asset into the OS temp dir; remembers the
+// path. Cloud-manifest assets are SHA-256 verified — a corrupted or
+// tampered download is deleted and refused, never staged for install.
 func (c *Checker) Download(ctx context.Context) (string, error) {
 	c.mu.Lock()
-	url, name := c.assetURL, c.assetName
+	url, name, wantSHA := c.assetURL, c.assetName, c.assetSHA
 	c.mu.Unlock()
 	if url == "" {
 		return "", fmt.Errorf("no staged update available (check first)")
@@ -124,12 +138,21 @@ func (c *Checker) Download(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	hasher := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(f, hasher), resp.Body); err != nil {
 		f.Close()
+		os.Remove(dst)
 		return "", err
 	}
 	if err := f.Close(); err != nil {
+		os.Remove(dst)
 		return "", err
+	}
+	if wantSHA != "" {
+		if got := hex.EncodeToString(hasher.Sum(nil)); !strings.EqualFold(got, wantSHA) {
+			os.Remove(dst)
+			return "", fmt.Errorf("download failed integrity check (sha256 mismatch) — update refused")
+		}
 	}
 	c.mu.Lock()
 	c.staged = dst

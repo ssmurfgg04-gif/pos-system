@@ -25,10 +25,13 @@ type Release struct {
 	Assets []Asset
 }
 
-// Asset is one downloadable file.
+// Asset is one downloadable file. SHA256 is set for cloud-manifest
+// assets (verified after download); GitHub-sourced assets have no digest
+// and fall back to HTTPS transport integrity.
 type Asset struct {
-	Name string
-	URL  string
+	Name   string
+	URL    string
+	SHA256 string
 }
 
 // ParseVersion splits "v1.2.3" / "1.2" into numbers (missing parts are 0).
