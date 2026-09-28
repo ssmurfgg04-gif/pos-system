@@ -58,24 +58,24 @@ func TestCheckAgainstStub(t *testing.T) {
 }
 
 func TestDownloadStagesBytes(t *testing.T) {
-        payload := []byte("fake-installer-bytes")
-        srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-                w.Write(payload)
-        }))
-        defer srv.Close()
-        c := &Checker{current: "1.0.0", assetURL: srv.URL + "/setup.exe", assetName: "setup-test-download.exe"}
-        path, err := c.Download(context.Background())
-        if err != nil {
-                t.Fatal(err)
-        }
-        defer os.Remove(path)
-        got, _ := os.ReadFile(path)
-        if !bytes.Equal(got, payload) {
-                t.Fatal("staged bytes mismatch")
-        }
-        if c.Staged() != path {
-                t.Fatal("Staged() must return the staged path")
-        }
+	payload := []byte("fake-installer-bytes")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(payload)
+	}))
+	defer srv.Close()
+	c := &Checker{current: "1.0.0", assetURL: srv.URL + "/setup.exe", assetName: "setup-test-download.exe"}
+	path, err := c.Download(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	got, _ := os.ReadFile(path)
+	if !bytes.Equal(got, payload) {
+		t.Fatal("staged bytes mismatch")
+	}
+	if c.Staged() != path {
+		t.Fatal("Staged() must return the staged path")
+	}
 }
 
 func TestCheck404IsError(t *testing.T) {

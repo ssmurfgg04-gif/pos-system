@@ -21,6 +21,7 @@ import {
 } from '../lib/api'
 import { resetDemo } from '../demo/backend'
 import { useBranding } from '../stores/branding'
+import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
 import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck, Undo2 } from 'lucide-react'
@@ -29,7 +30,6 @@ type SettingsMap = Record<string, string>
 
 // Secret values are echoed masked by the API; sending the mask back keeps
 // the stored secret. An empty field never clears a configured secret.
-const MASK = '__SET__'
 
 export function Settings() {
   const reloadBranding = useBranding((s) => s.load)
@@ -37,6 +37,13 @@ export function Settings() {
   const [values, setValues] = useState<SettingsMap | null>(null)
   const [busy, setBusy] = useState(false)
   const [payConfig, setPayConfig] = useState<PaymentConfig | null>(null)
+  // Infrastructure config (Supabase endpoint, service keys) is dev-only.
+  // Even the Admin role does not see it unless this browser session was
+  // opened with the ?infra unlock — the values themselves arrive from the
+  // cloud vault, so normal shops never need this screen.
+  const infraUnlocked =
+    useAuth((s) => s.user?.roleName === 'Admin') &&
+    new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '').has('infra')
   const [checkingPay, setCheckingPay] = useState(false)
   const [audit, setAudit] = useState<AuditEntry[] | null>(null)
   const [backups, setBackups] = useState<BackupResult[] | null>(null)
@@ -57,16 +64,11 @@ export function Settings() {
     try {
       const next = await api.get<SettingsMap>('/api/v1/settings')
       setValues(next)
-      paystackSecretOriginal.current = next.paystack_secret_key ?? ''
     } catch (e: any) {
       toast.error('Load failed', e?.message)
     }
   }
   useEffect(() => { load() }, [])
-
-  // Value of paystack_secret_key as the API returned it (MASK when set) —
-  // lets a cleared input restore the mask instead of wiping the key.
-  const paystackSecretOriginal = useRef('')
 
   const checkPaystack = async () => {
     setCheckingPay(true)
@@ -198,8 +200,8 @@ export function Settings() {
             <div className="sm:col-span-2 flex flex-wrap items-start justify-between gap-2 bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
               <p className="min-w-56 flex-1">
                 <strong className="text-ink inline-flex items-center gap-1.5"><CreditCard size={15} strokeWidth={2.25} aria-hidden />Paystack — cards &amp; M-Pesa.</strong>{' '}
-                Paste your Paystack keys below and save. Start with <code className="font-mono text-ink">sk_test</code> to trial,
-                switch to <code className="font-mono text-ink">sk_live</code> when you go live.
+                Keys are managed centrally and reach every till automatically — no pasting, no per-machine setup.
+                Staff only touch the Till / Paybill numbers below.
               </p>
               <div className="flex items-center gap-2">
                 {payConfig ? (
@@ -207,10 +209,10 @@ export function Settings() {
                     status={payConfig.paystack.configured && payConfig.paystack.enabled ? 'paid' : 'pending'}
                     label={
                       payConfig.paystack.configured && payConfig.paystack.enabled
-                        ? `Connected${payConfig.paystack.fromEnv ? ' (env keys)' : ''} — ready at checkout`
+                        ? `Connected${payConfig.paystack.fromEnv ? ' (server keys)' : ' (cloud keys)'} — ready at checkout`
                         : payConfig.paystack.configured
-                          ? 'Key on file — checkout currently disabled'
-                          : 'Not connected — no secret key yet'
+                          ? 'Keys on file — checkout currently disabled'
+                          : 'Waiting for keys from the cloud — they arrive automatically on boot'
                     }
                   />
                 ) : (
@@ -238,41 +240,17 @@ export function Settings() {
               />
               Accept card &amp; M-Pesa payments via Paystack
             </label>
-            {payConfig?.paystack.fromEnv && (
+            {payConfig?.paystack.configured && !payConfig?.paystack.fromEnv && (
               <p className="sm:col-span-2 text-[12px] text-info-text font-semibold -mt-1">
-                Keys are supplied from this till's secure .env file — nothing to paste here.
+                Keys delivered from your cloud vault (Supabase) — rotate them there and every till updates itself within minutes.
               </p>
             )}
-            <Field label="Public key" hint="Safe for the browser — starts with pk_">
-              <Input value={values.paystack_public_key ?? ''} onChange={(e) => set('paystack_public_key', e.target.value.trim())} placeholder="pk_test_…" className="font-mono" />
-            </Field>
-            <Field
-              label="Secret key"
-              hint={values.paystack_secret_key === MASK ? 'A key is stored — type a new one to replace it; clearing keeps it.' : 'Starts with sk_. Stored only on this machine.'}
-            >
-              <Input
-                type="password"
-                value={values.paystack_secret_key === MASK ? '' : values.paystack_secret_key ?? ''}
-                placeholder={values.paystack_secret_key === MASK ? '__SET__ — configured' : 'not configured — paste sk_ key'}
-                onChange={(e) => {
-                  const v = e.target.value
-                  set('paystack_secret_key', v.trim() === '' ? paystackSecretOriginal.current : v)
-                }}
-                className="font-mono"
-                autoComplete="off"
-              />
-            </Field>
-            <Field label="Currency" hint="Paystack charge currency, e.g. KES, GHS, NGN">
-              <Input value={values.paystack_currency ?? 'KES'} onChange={(e) => set('paystack_currency', e.target.value.toUpperCase())} placeholder="KES" className="font-mono uppercase" />
-            </Field>
-            <Field label="Callback URL" hint="Where the customer lands after paying online">
-              <Input value={values.paystack_callback_url ?? 'https://awesomeposs.netlify.app/'} onChange={(e) => set('paystack_callback_url', e.target.value.trim())} placeholder="https://awesomeposs.netlify.app/" />
-            </Field>
             <div className="sm:col-span-2 flex items-start gap-2 bg-info-bg border-2 border-info-text/30 rounded-input p-3 text-[12px] text-info-text font-semibold">
               <MonitorSmartphone size={15} strokeWidth={2.25} className="shrink-0 mt-0.5" aria-hidden />
               <p>
-                The secret key is stored only on this machine and never synced or exported.
-                Cards &amp; M-Pesa via Paystack are charged from this till.
+                {payConfig?.paystack.configured
+                  ? <>Paystack is connected. Currency <strong className="font-mono">{payConfig.paystack.currency || 'KES'}</strong> · checkout returns to <strong className="font-mono break-all">{payConfig.paystack.callbackUrl || 'the storefront'}</strong>. The secret key never appears on any till screen.</>
+                  : <>No keys yet. This till fetches them from the cloud automatically once it is registered and approved — nothing to paste, nothing to type.</>}
               </p>
             </div>
 
@@ -315,7 +293,7 @@ export function Settings() {
               </Select>
             </Field>
             <p className="sm:col-span-2 text-[12px] text-ink-subtle">
-              Secrets show as <code className="font-mono">__SET__</code> after saving — that value means “keep the stored secret”.
+              Keys are delivered from the cloud vault automatically — nothing to paste, nothing to store on this machine.
               All secrets are encrypted at rest on this machine, and payment provider keys belong in this till's
               <code className="font-mono"> .env</code> file or here — never in screenshots or shared documents.
             </p>
@@ -559,36 +537,46 @@ export function Settings() {
             <div className="sm:col-span-2 border-t-2 border-line pt-3">
               <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Off-site backup (encrypted, automatic)</p>
               <p className="text-[13px] text-ink-muted mb-3">
-                Every snapshot is encrypted on this machine and pushed to your own Supabase project
-                (free tier). Uploads retry by themselves — nobody has to be around.
-                Use one project per shop, so a leaked key only ever opens that shop.
-                <strong className="text-danger-text"> Keep the passphrase somewhere safe: without it the copies cannot be opened.</strong>
+                Every snapshot is encrypted on this machine before it leaves the shop, and uploads retry
+                by themselves — nobody has to be around.
+                {infraUnlocked
+                  ? <> Configure the destination below. Use one project per shop, so a leaked key only ever opens that shop.
+                     <strong className="text-danger-text"> Keep the passphrase somewhere safe: without it the copies cannot be opened.</strong></>
+                  : <> The destination is managed centrally and arrives with the daily cloud config — nothing for staff to enter.</>}
               </p>
             </div>
-            <Field label="Off-site backup">
-              <Select value={values.offsite_enabled ?? 'false'} onChange={(e) => set('offsite_enabled', e.target.value)}>
-                <option value="false">Disabled</option>
-                <option value="true">Enabled — push after every snapshot</option>
-              </Select>
-            </Field>
-            <Field label="Keep last N remote copies">
-              <Input value={values.offsite_keep ?? '14'} onChange={(e) => set('offsite_keep', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
-            </Field>
-            <Field label="Project URL">
-              <Input value={values.offsite_endpoint ?? ''} onChange={(e) => set('offsite_endpoint', e.target.value.trim())} placeholder="https://xyzcompany.supabase.co" className="font-mono" />
-            </Field>
-            <Field label="Bucket">
-              <Input value={values.offsite_bucket ?? ''} onChange={(e) => set('offsite_bucket', e.target.value.trim())} placeholder="ledgerpos" className="font-mono" />
-            </Field>
-            <Field label="Key prefix">
-              <Input value={values.offsite_prefix ?? ''} onChange={(e) => set('offsite_prefix', e.target.value.trim())} placeholder="Defaults to this machine's name" className="font-mono" />
-            </Field>
-            <Field label="Service role key">
-              <Input value={values.offsite_secret_key ?? ''} onChange={(e) => set('offsite_secret_key', e.target.value)} type="password" className="font-mono" />
-            </Field>
-            <Field label="Backup passphrase" hint="Encrypts every copy. Shows as __SET__ once saved — write it down now.">
-              <Input value={values.offsite_passphrase ?? ''} onChange={(e) => set('offsite_passphrase', e.target.value)} type="password" className="font-mono" />
-            </Field>
+            {infraUnlocked ? (
+              <>
+                <Field label="Off-site backup">
+                  <Select value={values.offsite_enabled ?? 'false'} onChange={(e) => set('offsite_enabled', e.target.value)}>
+                    <option value="false">Disabled</option>
+                    <option value="true">Enabled — push after every snapshot</option>
+                  </Select>
+                </Field>
+                <Field label="Keep last N remote copies">
+                  <Input value={values.offsite_keep ?? '14'} onChange={(e) => set('offsite_keep', e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
+                </Field>
+                <Field label="Project URL">
+                  <Input value={values.offsite_endpoint ?? ''} onChange={(e) => set('offsite_endpoint', e.target.value.trim())} placeholder="https://xyzcompany.supabase.co" className="font-mono" />
+                </Field>
+                <Field label="Bucket">
+                  <Input value={values.offsite_bucket ?? ''} onChange={(e) => set('offsite_bucket', e.target.value.trim())} placeholder="ledgerpos" className="font-mono" />
+                </Field>
+                <Field label="Key prefix">
+                  <Input value={values.offsite_prefix ?? ''} onChange={(e) => set('offsite_prefix', e.target.value.trim())} placeholder="Defaults to this machine's name" className="font-mono" />
+                </Field>
+                <Field label="Service role key">
+                  <Input value={values.offsite_secret_key ?? ''} onChange={(e) => set('offsite_secret_key', e.target.value)} type="password" className="font-mono" />
+                </Field>
+                <Field label="Backup passphrase" hint="Encrypts every copy. Shows as __SET__ once saved — write it down now.">
+                  <Input value={values.offsite_passphrase ?? ''} onChange={(e) => set('offsite_passphrase', e.target.value)} type="password" className="font-mono" />
+                </Field>
+              </>
+            ) : (
+              <p className="sm:col-span-2 text-[12px] text-ink-subtle">
+                Off-site backup settings are only visible to LedgerPOS support (open this page with <code className="font-mono">?infra</code> in the address bar while signed in as Admin).
+              </p>
+            )}
             <div className="sm:col-span-2">
               <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Upload status</p>
               {!offsite ? (

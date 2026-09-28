@@ -80,7 +80,7 @@ func (s *Service) TeamCreateInvite(roleName string, perms []string, note string)
 	}
 	out.TeamCode, out.Token, out.RoleName, out.ExpiresAt = res.TeamCode, res.Token, res.RoleName, res.ExpiresAt
 	s.Audit(0, "system", "TEAM_INVITE_CREATED", "settings", "",
-		"role " + truncStr(roleName, 40))
+		"role "+truncStr(roleName, 40))
 	return out, nil
 }
 
@@ -91,8 +91,8 @@ func (s *Service) TeamListInvites() ([]models.TeamInvite, error) {
 		return nil, err
 	}
 	var res struct {
-		OK      bool               `json:"ok"`
-		Error   string             `json:"error"`
+		OK      bool                `json:"ok"`
+		Error   string              `json:"error"`
 		Invites []models.TeamInvite `json:"invites"`
 	}
 	if err := rpcCall(c.base, "sync_list_invites", map[string]any{
@@ -187,12 +187,12 @@ func (s *Service) TeamJoinWithLink(link, name, pin string) (models.TeamJoinInfo,
 
 	// 1. The cloud decides: is this token real, alive, and unused?
 	var res struct {
-		OK          bool      `json:"ok"`
-		Error       string    `json:"error"`
-		TeamCode    string    `json:"team_code"`
-		StoreName   string    `json:"store_name"`
-		RoleName    string    `json:"role_name"`
-		Permissions []string  `json:"permissions"`
+		OK          bool     `json:"ok"`
+		Error       string   `json:"error"`
+		TeamCode    string   `json:"team_code"`
+		StoreName   string   `json:"store_name"`
+		RoleName    string   `json:"role_name"`
+		Permissions []string `json:"permissions"`
 	}
 	if err := rpcCall(strings.TrimRight(cloudBaseURL, "/"), "sync_join_team", map[string]any{
 		"p_device_id":   s.deviceID(),

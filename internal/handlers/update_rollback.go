@@ -19,6 +19,7 @@ import (
         "encoding/json"
         "fmt"
         "io"
+        "log"
         "os"
         "os/exec"
         "path/filepath"
@@ -37,6 +38,14 @@ type pendingRestore struct {
         Reason  string            `json:"reason"`
         Files   map[string]string `json:"files"`
         PrevExe string            `json:"prevExe,omitempty"`
+}
+
+// snapIndex maps each .snap file back to the shop DB's path RELATIVE to
+// the data dir (shops/<id>.db, pos.db, …). Older archives have no index;
+// those fall back to the historical basename behaviour.
+type snapIndexEntry struct {
+        Snap string `json:"snap"`
+        Rel  string `json:"rel"`
 }
 
 func restoreManifestPath(dataDir string) string {
@@ -62,23 +71,42 @@ func (h *H) PreUpdateSnapshot(version string) (string, error) {
         }
 
         // 1. Every registered shop DB (including shops not yet opened).
+        // Fail-closed: a shop that cannot be opened or snapshotted aborts the
+        // whole snapshot — the operator must know an update would run with that
+        // shop unprotected, not discover it after an undo cannot help.
+        index := []snapIndexEntry{}
         var snapErrs []string
         for _, sid := range h.Shops.ShopIDs() {
                 db, err := h.Shops.DB(sid)
                 if err != nil {
+                        snapErrs = append(snapErrs, fmt.Sprintf("shop %s: %v", sid, err))
                         continue
                 }
                 src := db.Path()
                 if src == "" {
                         continue
                 }
-                dst := filepath.Join(archive, filepath.Base(src)+".snap")
-                if _, err := db.Exec(db.Rebind(`VACUUM INTO ?`), dst); err != nil {
-                        snapErrs = append(snapErrs, filepath.Base(src)+": "+err.Error())
+                // Keep the path shape: pos.db → pos.db.snap, shops/x.db → shops_x.db.snap
+                rel, err := filepath.Rel(dataDir, src)
+                if err != nil || strings.HasPrefix(rel, "..") {
+                        rel = filepath.Base(src)
                 }
+                snapName := strings.ReplaceAll(rel, string(filepath.Separator), "_") + ".snap"
+                dst := filepath.Join(archive, snapName)
+                if _, err := db.Exec(db.Rebind(`VACUUM INTO ?`), dst); err != nil {
+                        snapErrs = append(snapErrs, rel+": "+err.Error())
+                        continue
+                }
+                index = append(index, snapIndexEntry{Snap: snapName, Rel: rel})
         }
         if len(snapErrs) > 0 {
                 return "", fmt.Errorf("snapshot failed: %s", strings.Join(snapErrs, "; "))
+        }
+        // The index is what makes undo path-exact — without it a shops/<id>.db
+        // snapshot would restore to <dataDir>/<id>.db and the registry would
+        // never see it (the "undo did not bring my stock back" class of bug).
+        if raw, err := json.MarshalIndent(index, "", "  "); err == nil {
+                _ = os.WriteFile(filepath.Join(archive, "snapshots.json"), raw, 0o600)
         }
 
         // 2. Tenants registry + vault key (they live next to the databases).
@@ -144,15 +172,31 @@ func (h *H) UndoUpdate(c *gin.Context) {
                 Files:  map[string]string{},
         }
         entries, _ := os.ReadDir(archive)
-        for _, e := range entries {
-                name := e.Name()
-                switch {
-                case strings.HasSuffix(name, ".snap"):
-                        // X.db.snap → restore onto X.db (basename may itself contain dots).
-                        dst := filepath.Join(dataDir, strings.TrimSuffix(name, ".snap"))
-                        manifest.Files[dst] = filepath.Join(archive, name)
-                case name == "shops.json" || name == "secret.key":
-                        manifest.Files[filepath.Join(dataDir, name)] = filepath.Join(archive, name)
+        // Preferred: the snapshot index (path-exact restore). Fallback: legacy
+        // basename behaviour for archives created before the index existed.
+        if rawIdx, err := os.ReadFile(filepath.Join(archive, "snapshots.json")); err == nil {
+                var idx []snapIndexEntry
+                if json.Unmarshal(rawIdx, &idx) == nil && len(idx) > 0 {
+                        for _, e := range idx {
+                                src := filepath.Join(archive, e.Snap)
+                                if _, err := os.Stat(src); err != nil {
+                                        continue
+                                }
+                                manifest.Files[filepath.Join(dataDir, filepath.FromSlash(e.Rel))] = src
+                        }
+                }
+        }
+        if len(manifest.Files) == 0 {
+                for _, e := range entries {
+                        name := e.Name()
+                        switch {
+                        case strings.HasSuffix(name, ".snap"):
+                                // X.db.snap → restore onto X.db (basename may itself contain dots).
+                                dst := filepath.Join(dataDir, strings.TrimSuffix(name, ".snap"))
+                                manifest.Files[dst] = filepath.Join(archive, name)
+                        case name == "shops.json" || name == "secret.key":
+                                manifest.Files[filepath.Join(dataDir, name)] = filepath.Join(archive, name)
+                        }
                 }
         }
         if len(manifest.Files) == 0 {
@@ -225,9 +269,12 @@ func RestorePending(dataDir string) string {
                 _ = os.Remove(dst + "-wal")
                 _ = os.Remove(dst + "-shm")
                 if err := copyFileExclusive(src, dst); err != nil {
-                        continue // keep the manifest for a retry on next boot
+                        log.Printf("restore: %s → %s failed (%v) — manifest kept for retry on next boot", src, dst, err)
+                        return m.Reason + " (partial — retry scheduled)"
                 }
         }
+        // Only a fully successful copy run consumes the manifest; any failure
+        // above returned early, so what remains is retried on the next boot.
         _ = os.Remove(restoreManifestPath(dataDir))
         return m.Reason
 }

@@ -7,6 +7,7 @@ package handlers
 import (
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -82,7 +83,7 @@ func (h *H) PaystackVerify(c *gin.Context) {
 // Reads the RAW body for the HMAC-SHA512 signature check, caps the body
 // size, and always answers 200 unless Paystack should retry.
 func (h *H) PaystackWebhook(c *gin.Context) {
-	if h.CallbackRL.Allow("paystack-webhook:" + c.ClientIP()) == false {
+	if h.CallbackRL.Allow("paystack-webhook:"+c.ClientIP()) == false {
 		c.Status(http.StatusTooManyRequests)
 		return
 	}
@@ -94,13 +95,18 @@ func (h *H) PaystackWebhook(c *gin.Context) {
 	}
 	signature := c.GetHeader("x-paystack-signature")
 	if err := h.svc(c).HandlePaystackWebhook(raw, signature); err != nil {
-		// Invalid signatures: 401. Transient processing failures: 500 so
-		// Paystack retries with backoff.
-		if err.Error() == "invalid webhook signature" {
+		// Invalid signatures: 401. Unconfigured till: 503 (Paystack should
+		// retry once the keys arrive from the vault). Transient processing
+		// failures: 500 so Paystack retries with backoff.
+		msg := err.Error()
+		switch {
+		case msg == "invalid webhook signature":
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
-			return
+		case strings.Contains(msg, "not configured"):
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "paystack not configured yet"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "processing failed"})
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "processing failed"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})

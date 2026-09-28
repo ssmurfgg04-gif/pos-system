@@ -118,3 +118,41 @@ the app file in `Programs\LedgerPOS`. The shop database lives in
 Support/LedgerPOS`, Linux: `~/.local/share/LedgerPOS`) and is never
 touched by an install or update — no re-uploading store info, no data
 re-entry. Schema upgrades apply automatically on the next start.
+
+
+## The key vault — payment config lives in the cloud (v1.1.5+)
+
+No till ever needs a `.env`, a pasted secret key, or a site visit. Payment
+and deployment configuration lives in the cloud's `app_config` table and
+flows to every machine by itself:
+
+- **What is in the vault:** `paystack_secret_key` (sk_live, marked secret),
+  `paystack_public_key`, `paystack_callback_url`, `paystack_currency`,
+  `paystack_mode`, `paystack_enabled` — plus, optionally, the off-site
+  backup destination (`offsite_endpoint`, `offsite_bucket`,
+  `offsite_secret_key`, `offsite_passphrase`) and anything else the fleet
+  needs later.
+- **How it reaches a till:** on boot (and every 6 hours afterwards) each
+  machine calls the `sync_device_config` RPC with its device identity.
+  Approved devices receive the full map, secrets included, over TLS;
+  rows marked secret are invisible to everyone else (RLS allows anon to
+  read only `is_secret = false`). The settings store keeps the last-good
+  copy, so an offline till keeps charging.
+- **Precedence:** real environment variables always win over the vault,
+  the vault wins over values typed locally. A value typed in a till's
+  Settings UI survives only until the next cloud refresh — rotate keys in
+  the cloud, never on machines.
+- **Rotation:** one SQL statement, zero site visits:
+
+        update app_config set value = 'sk_live_NEWKEY', updated_at = now()
+          where key = 'paystack_secret_key';
+
+  Every till picks it up at its next boot / refresh.
+- **Revocation:** revoking a device in the roster instantly cuts it off
+  from future key fetches (and from sync).
+- **Infrastructure visibility:** the Supabase/off-site config fields are
+  hidden in the till UI. LedgerPOS support reveals them by opening
+  Settings with `?infra` in the address bar while signed in as Admin.
+
+Schema + RPC: `db/cloud_schema_v115.sql` (merged into
+`db/cloud_schema.sql`).
