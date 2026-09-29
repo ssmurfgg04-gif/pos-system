@@ -15,7 +15,10 @@ export function ReceiptModal({ order, branding, open, onClose }: {
   onClose: () => void
 }) {
   if (!open) return null
-  const pay = order.payments[order.payments.length - 1]
+  // Older orders (or a partial payload) may omit items/payments — the
+  // receipt must render, never crash the POS after money has moved.
+  const pay = order.payments?.[order.payments.length - 1] ?? null
+  const items = order.items ?? []
   const store = branding.store_name || 'Store'
 
   return (
@@ -51,7 +54,7 @@ export function ReceiptModal({ order, branding, open, onClose }: {
 
         <table className="w-full">
           <tbody>
-            {order.items.map((i) => (
+            {items.map((i) => (
               <tr key={i.id} className="align-top">
                 <td className="py-0.5 pr-2">
                   <span className="block">{i.name}</span>

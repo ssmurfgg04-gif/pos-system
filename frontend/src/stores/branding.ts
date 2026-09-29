@@ -6,7 +6,7 @@ const fallback: Branding = {
   app_name: 'Point of Sale',
   store_name: '',
   brand_logo_url: '',
-  brand_color: '#10B981',
+  brand_color: '#0047AB',
   currency_symbol: 'KES',
   currency_code: 'KES',
   tax_percent: 16,
@@ -31,7 +31,7 @@ export const useBranding = create<BrandingState>((set) => ({
       const b = await api.get<Branding>('/api/v1/branding')
       configureMoney(b.currency_symbol)
       // White-label hook: override the brand color at runtime.
-      document.documentElement.style.setProperty('--color-brand', b.brand_color || '#10B981')
+      document.documentElement.style.setProperty('--color-brand', b.brand_color || '#0047AB')
       if (b.app_name) document.title = b.app_name
       set({ branding: b, loaded: true })
     } catch {

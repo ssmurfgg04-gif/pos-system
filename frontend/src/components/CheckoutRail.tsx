@@ -11,8 +11,9 @@
 // M-Pesa identifier.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, CheckoutRequest, Customer, Order, PaymentConfig, Product, SplitLeg } from '../lib/api'
+import { api, CheckoutRequest, Customer, Order, PaymentConfig, Product, SplitLeg, isDemoSync } from '../lib/api'
 import { openPaystackPopup } from '../lib/api'
+import { demoProductImageUrl } from '../demo/backend'
 import { useCart } from '../stores/cart'
 import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
@@ -29,7 +30,7 @@ import {
 } from 'lucide-react'
 
 type Method = 'mpesa' | 'card' | 'cash' | 'tab' | 'credit'
-type StkStage = 'sending' | 'waiting' | 'paid' | 'failed'
+type StkStage = 'sending' | 'sent' | 'waiting' | 'paid' | 'failed'
 type InlineStage = 'init' | 'popup' | 'verifying' | 'paid' | 'failed'
 
 export function CheckoutRail({
@@ -182,8 +183,9 @@ export function CheckoutRail({
     pollRef.current = window.setInterval(async () => {
       try {
         const o = await api.get<Order>(`/api/v1/orders/${activeOrder.id}`)
+        if (!o) return
         setActiveOrder(o)
-        const pay = o.payments[o.payments.length - 1]
+        const pay = o.payments?.[o.payments.length - 1]
         if (o.status === 'PAID') {
           setStkStage('paid')
           stopTimers()
@@ -197,7 +199,20 @@ export function CheckoutRail({
         /* transient network error — keep polling */
       }
     }, 2000)
-    timerRef.current = window.setInterval(() => setElapsed((e) => e + 1), 1000)
+    timerRef.current = window.setInterval(() => {
+      setElapsed((e) => {
+        const next = e + 1
+        // Client-side timeout: never leave a cashier staring at an eternal
+        // spinner — the STK request dies after 3 minutes with an explicit
+        // "timed out" state the cashier can retry or abandon from.
+        if (next >= 180) {
+          stopTimers()
+          setStkStage('failed')
+          setPayError('The payment request timed out after 3 minutes — no money moved. Send it again or change the number.')
+        }
+        return next
+      })
+    }, 1000)
     return stopTimers
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, stkStage, activeOrder?.id])
@@ -207,14 +222,19 @@ export function CheckoutRail({
     setPayError('')
     try {
       const o = await api.post<Order>(`/api/v1/orders/${order.id}/stkpush`, { phone: forPhone })
+      if (!o) throw new Error('Empty response from the server')
       setActiveOrder(o)
-      const pay = o.payments[o.payments.length - 1]
+      const pay = o.payments?.[o.payments.length - 1]
       if (pay?.status === 'FAILED') {
         setStkStage('failed')
         setPayError(pay.resultDesc || 'STK push failed')
       } else {
         setElapsed(0)
-        setStkStage('waiting')
+        // Brief "prompt sent" beat, then the waiting-for-PIN countdown.
+        setStkStage('sent')
+        window.setTimeout(() => {
+          setStkStage((s) => (s === 'sent' ? 'waiting' : s))
+        }, 1400)
       }
     } catch (err: any) {
       setStkStage('failed')
@@ -391,6 +411,16 @@ export function CheckoutRail({
     if (n) toast.info(`Order ${n} stays pending`, 'Void it from Orders if the sale is abandoned.')
   }
 
+  // ⚠️ Hooks MUST run before any early return — a conditional hook was the
+  //   v1.1.6 white-screen crash ("Rendered fewer hooks than expected") the
+  //   moment a sale entered the payment panel. productById lives ABOVE the
+  //   early return for that reason; never move it back down.
+  const productById = useMemo(() => {
+    const m = new Map<number, Product>()
+    for (const p of products ?? []) m.set(p.id, p)
+    return m
+  }, [products])
+
   if (mode !== 'idle' && activeOrder) {
     return (
       <>
@@ -401,7 +431,7 @@ export function CheckoutRail({
           order={activeOrder}
           reference={lastRef}
           elapsed={elapsed}
-          phone={activeOrder.payments[activeOrder.payments.length - 1]?.phone || normalizedPhone || phone}
+          phone={activeOrder.payments?.[activeOrder.payments.length - 1]?.phone || normalizedPhone || phone}
           manualOnly={manualOnly}
           branding={branding}
           payError={payError}
@@ -426,11 +456,6 @@ export function CheckoutRail({
   }
 
   const quick = [tenderDue, 100000, 200000, 500000, 1000000]
-  const productById = useMemo(() => {
-    const m = new Map<number, Product>()
-    for (const p of products ?? []) m.set(p.id, p)
-    return m
-  }, [products])
 
   return (
     <div className="h-full flex flex-col">
@@ -588,10 +613,14 @@ function Row({ label, value }: { label: string; value: string }) {
 function Thumb({ p }: { p?: Product }) {
   const [failed, setFailed] = useState(false)
   const src = p ? productImageUrlSafe(p) : ''
+  // Empty src never fires onError (resolves against the page root) — guard
+  // it so the cashier sees a clean monogram, never the broken-image glyph.
   if (!src || failed) {
     return (
       <div className="w-12 h-12 rounded-input bg-surface-muted border border-line flex items-center justify-center text-ink-subtle shrink-0" aria-hidden>
-        <ShoppingCart size={16} strokeWidth={2} />
+        <span className="font-bold text-[11px] tracking-wide text-ink-subtle/70 select-none">
+          {p?.name.split(/\s+—\s+|\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '·'}
+        </span>
       </div>
     )
   }
@@ -600,13 +629,14 @@ function Thumb({ p }: { p?: Product }) {
       src={src}
       alt=""
       onError={() => setFailed(true)}
-      className="w-12 h-12 rounded-input object-cover border border-line bg-surface-muted shrink-0"
+      className="w-12 h-12 rounded-input object-contain border border-line bg-surface-muted p-0.5 shrink-0"
       loading="lazy"
     />
   )
 }
 
 function productImageUrlSafe(p: Pick<Product, 'id' | 'updatedAt'>): string {
+  if (isDemoSync()) return demoProductImageUrl(p.id)
   return p.updatedAt ? `/api/v1/products/${p.id}/image?v=${encodeURIComponent(p.updatedAt)}` : `/api/v1/products/${p.id}/image`
 }
 
@@ -690,11 +720,11 @@ function PaymentForm(props: {
             aria-pressed={method === t.key}
             className={`min-h-[62px] rounded-input border text-left px-3 py-2 transition-colors ${
               method === t.key
-                ? 'border-paid-text bg-paid-bg'
+                ? 'border-brand bg-brand-soft'
                 : 'border-line-strong bg-surface hover:bg-surface-muted'
             } ${!t.enabled ? 'opacity-40 cursor-not-allowed' : ''}`}
           >
-            <span className={`flex items-center gap-1.5 text-[13px] font-bold ${method === t.key ? 'text-paid-text' : 'text-ink'}`}>
+            <span className={`flex items-center gap-1.5 text-[13px] font-bold ${method === t.key ? 'text-brand' : 'text-ink'}`}>
               {t.icon}
               {t.label}
             </span>
@@ -1014,6 +1044,15 @@ function PaymentPanel({
   const paid = mode === 'stk' ? stkStage === 'paid' : inlineStage === 'paid'
   const [localPhone, setLocalPhone] = useState(phone)
   useEffect(() => { setLocalPhone(phone) }, [phone])
+  const lastPayment = order.payments?.[order.payments.length - 1]
+
+  // STK progress steps — the cashier should SEE the journey, not guess:
+  // Initiating → Prompt sent → Waiting for PIN → Result (paid/failed).
+  const stkStep =
+    stkStage === 'sending' ? 0
+      : stkStage === 'sent' ? 1
+        : stkStage === 'waiting' ? 2
+          : 3 // paid or failed — terminal
 
   return (
     <div className="h-full flex flex-col">
@@ -1034,6 +1073,7 @@ function PaymentPanel({
         {mode === 'stk' && stkStage !== 'paid' && (
           <StkPanel
             stage={stkStage}
+            step={stkStep}
             elapsed={elapsed}
             phone={localPhone}
             setPhone={setLocalPhone}
@@ -1061,8 +1101,8 @@ function PaymentPanel({
             <div>
               <p className="font-extrabold text-ink text-xl">Paid</p>
               <p className="text-ink-muted text-sm mt-1">
-                {mode === 'stk' && order.payments[order.payments.length - 1]?.mpesaReceipt
-                  ? <>M-Pesa receipt <strong className="text-ink tabular">{order.payments[order.payments.length - 1].mpesaReceipt}</strong></>
+                {mode === 'stk' && lastPayment?.mpesaReceipt
+                  ? <>M-Pesa receipt <strong className="text-ink tabular">{lastPayment.mpesaReceipt}</strong></>
                   : 'Payment verified'}
               </p>
             </div>
@@ -1109,10 +1149,11 @@ function PaymentPanel({
 }
 
 function StkPanel({
-  stage, elapsed, phone, setPhone, manualOnly, branding, orderNumber, payError, busy, onSend,
+  stage, step, elapsed, phone, setPhone, manualOnly, branding, orderNumber, payError, busy, onSend,
   code, setCode, onManualCode,
 }: {
   stage: StkStage
+  step: number
   elapsed: number
   phone: string
   setPhone: (v: string) => void
@@ -1127,18 +1168,67 @@ function StkPanel({
   onManualCode: (code: string) => void
 }) {
   const till = branding.till_number || branding.paybill_number
+
+  // Visible state machine: Initiating → Prompt sent → Enter PIN → Result.
+  const steps = ['Initiating', 'Prompt sent', 'Enter PIN', 'Done']
+  const stepEl = (
+    <ol className="flex items-center gap-0 select-none" aria-label="Payment progress">
+      {steps.map((label, i) => {
+        const done = i < step
+        const active = i === step && stage !== 'failed'
+        const failedHere = i === 3 && stage === 'failed'
+        return (
+          <li key={label} className="flex items-center flex-1 last:flex-none">
+            <div className="flex flex-col items-center gap-1">
+              <span
+                aria-current={active ? 'step' : undefined}
+                className={`w-6 h-6 rounded-full text-[11px] font-bold flex items-center justify-center border transition-colors ${
+                  failedHere ? 'bg-danger-bg border-danger-text text-danger-text'
+                    : done ? 'bg-paid-bg border-paid-text text-paid-text'
+                      : active ? 'bg-brand-soft border-brand text-brand anim-pulse-dot'
+                        : 'bg-surface-muted border-line text-ink-subtle'
+                }`}
+              >
+                {done ? <Check size={12} strokeWidth={3.5} aria-hidden /> : failedHere ? '!' : i + 1}
+              </span>
+              <span className={`text-[10px] font-bold whitespace-nowrap ${failedHere ? 'text-danger-text' : done || active ? 'text-ink' : 'text-ink-subtle'}`}>
+                {label}
+              </span>
+            </div>
+            {i < steps.length - 1 && <span className={`flex-1 h-0.5 mx-1 mb-4 rounded-pill ${i < step ? 'bg-paid-text/60' : 'bg-line'}`} aria-hidden />}
+          </li>
+        )
+      })}
+    </ol>
+  )
+
   if (stage === 'sending') {
     return (
-      <div className="text-center py-8 space-y-3">
-        <Spinner className="w-7 h-7 border-4 mx-auto" />
-        <p className="font-bold text-ink">Sending STK push…</p>
-        <p className="text-ink-muted text-sm">Dialling {phone || 'the customer phone'}</p>
+      <div className="space-y-5">
+        {stepEl}
+        <div className="text-center py-6 space-y-3">
+          <Spinner className="w-7 h-7 border-4 mx-auto" />
+          <p className="font-bold text-ink">Sending STK push…</p>
+          <p className="text-ink-muted text-sm">Dialling {phone || 'the customer phone'}</p>
+        </div>
+      </div>
+    )
+  }
+  if (stage === 'sent') {
+    return (
+      <div className="space-y-5">
+        {stepEl}
+        <div className="text-center py-6 space-y-2">
+          <p className="font-bold text-ink text-lg">Prompt sent ✓</p>
+          <p className="text-ink-muted text-sm">The M-Pesa request is on its way to <strong className="text-ink tabular">{phone}</strong></p>
+        </div>
       </div>
     )
   }
   if (stage === 'waiting' && !manualOnly) {
     return (
       <div className="space-y-5 text-center pt-2 pb-4">
+        {stepEl}
         <div className="flex justify-center">
           <span className="relative flex w-16 h-16 items-center justify-center">
             <span className="absolute inset-0 rounded-full bg-pending-bg border-2 border-pending-text/40 anim-pulse-dot" aria-hidden />
@@ -1169,9 +1259,10 @@ function StkPanel({
       </div>
     )
   }
-  // failed (or manual waiting) — retry + manual entry
+  // failed (or manual waiting) — retry + change number + manual entry
   return (
     <div className="space-y-4">
+      {stepEl}
       {stage === 'failed' && (
         <div className="flex items-start gap-3 bg-danger-bg border border-danger-text/30 rounded-input p-3">
           <AlertTriangle size={20} strokeWidth={2.5} className="text-danger-text shrink-0 mt-0.5" aria-hidden />
@@ -1181,12 +1272,12 @@ function StkPanel({
           </div>
         </div>
       )}
-      <Field label="Customer M-Pesa phone" hint="Safaricom sends a payment prompt to this number.">
+      <Field label="Change M-Pesa number" hint="Wrong number? Fix it here — the cart is safe and the order stays put.">
         <Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" />
       </Field>
       <Button variant="primary" size="lg" className="w-full" onClick={onSend} disabled={busy || !phone.trim()}>
         <RotateCcw size={16} strokeWidth={2.5} aria-hidden />
-        Send payment request again
+        Retry — send the STK push again
       </Button>
       {till && (
         <div className="bg-surface-muted border border-line rounded-input p-3">
