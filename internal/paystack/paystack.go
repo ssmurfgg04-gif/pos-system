@@ -29,7 +29,9 @@ import (
         "time"
 )
 
-const apiBase = "https://api.paystack.co"
+// apiBase points at the Paystack API. It is a var so tests can point the
+// client at a fake server (never change it in production code paths).
+var apiBase = "https://api.paystack.co"
 
 // Client talks to the Paystack API with one secret key. Create it per
 // request-batch via NewClient whenever the configured key changes (the
@@ -58,6 +60,7 @@ func IsPublicKey(k string) bool {
 
 type InitializeRequest struct {
         Email       string         `json:"email"`
+        Phone       string         `json:"phone,omitempty"` // customer phone — used for mobile-money prefill
         Amount      int64          `json:"amount"` // subunits (pesewas)
         Currency    string         `json:"currency"`
         Reference   string         `json:"reference"`

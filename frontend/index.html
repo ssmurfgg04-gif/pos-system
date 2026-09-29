@@ -3,17 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#0F172A" />
+  <meta name="theme-color" content="#0F1D33" />
   <title>Point of Sale</title>
   <style>
     /* First-paint shell color to avoid white flash before CSS loads */
-    html { background: #0F172A; }
+    html { background: #F4F5F7; }
   </style>
 </head>
 <body>
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>
-  <!-- Paystack inline checkout (public-key only; charge opens server-side) -->
-  <script src="https://js.paystack.co/v1/inline.js" defer></script>
+  <!-- Paystack Popup V2 (public-key only; the charge is initialized
+       server-side and the popup resumes it via the access_code, so the
+       amount is ALWAYS the server's — never a client-supplied value). -->
+  <script src="https://js.paystack.co/v2/inline.js" defer></script>
 </body>
 </html>

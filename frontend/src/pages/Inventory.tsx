@@ -66,6 +66,8 @@ export function Inventory() {
   const [editCatId, setEditCatId] = useState<number | null>(null)
   const [editCatName, setEditCatName] = useState('')
   const [labelPicks, setLabelPicks] = useState<number[]>([])
+  const [showArchived, setShowArchived] = useState(false)
+  const [removing, setRemoving] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = async () => {
@@ -86,11 +88,50 @@ export function Inventory() {
     if (!products) return []
     const q = search.trim().toLowerCase()
     return products.filter((p) => {
+      if (!showArchived && !p.active) return false
       if (catFilter !== 'all' && p.categoryId !== Number(catFilter)) return false
       if (q && !p.name.toLowerCase().includes(q) && !p.sku.toLowerCase().includes(q) && !p.barcode.includes(q)) return false
       return true
     })
-  }, [products, search, catFilter])
+  }, [products, search, catFilter, showArchived])
+
+  // ---- Product removal (products.manage) — soft archive, restorable ----
+  // Archived products vanish from the POS immediately but keep their order
+  // history intact; restore brings them back with stock and pricing.
+  const removeProduct = async (p: Product) => {
+    if (removing) return
+    if (!window.confirm(`Remove “${p.name}” from the POS?\n\nIt disappears from the sell screen right away. Past sales keep their history, and you can restore it anytime with “Show archived”.`)) return
+    setRemoving(p.id)
+    try {
+      await api.del(`/api/v1/products/${p.id}`)
+      toast.success('Product removed', `${p.name} is archived — restore it anytime.`)
+      load()
+    } catch (e: any) {
+      toast.error('Remove failed', e?.message)
+    } finally {
+      setRemoving(null)
+    }
+  }
+
+  const restoreProduct = async (p: Product) => {
+    if (removing) return
+    setRemoving(p.id)
+    try {
+      await api.put(`/api/v1/products/${p.id}`, {
+        name: p.name,
+        categoryId: p.categoryId,
+        priceCents: p.priceCents,
+        costCents: p.costCents,
+        active: true,
+      })
+      toast.success('Product restored', p.name)
+      load()
+    } catch (e: any) {
+      toast.error('Restore failed', e?.message)
+    } finally {
+      setRemoving(null)
+    }
+  }
 
   const doImport = async (file: File) => {
     const form = new FormData()
@@ -241,6 +282,15 @@ export function Inventory() {
                 <option value="all">All categories</option>
                 {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </Select>
+              <label className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-muted cursor-pointer select-none whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-[#0047AB]"
+                  checked={showArchived}
+                  onChange={(e) => setShowArchived(e.target.checked)}
+                />
+                Show archived{products ? ` (${products.filter((p) => !p.active).length})` : ''}
+              </label>
             </>
           )}
           {tab === 'stockcount' && (
@@ -300,13 +350,36 @@ export function Inventory() {
                   {canManage && (
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                       <span className="inline-flex items-center gap-1">
-                        {p.trackStock && (
+                        {p.trackStock && p.active && (
                           <Button size="sm" variant="ghost" onClick={() => setStockFor(p)} title="Receive / adjust stock">
                             <PackagePlus size={14} strokeWidth={2.5} aria-hidden />
                             Stock
                           </Button>
                         )}
-                        <Button size="sm" variant="ghost" onClick={() => setEditing(p)}>Edit</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditing(p)} disabled={!p.active}>Edit</Button>
+                        {p.active ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-danger-text hover:bg-danger-bg"
+                            onClick={() => removeProduct(p)}
+                            disabled={removing === p.id}
+                            title="Remove from the POS (archived, restorable)"
+                          >
+                            {removing === p.id ? <Spinner className="w-4 h-4 border-t-danger-text" /> : <Trash2 size={14} strokeWidth={2.5} aria-hidden />}
+                            Remove
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => restoreProduct(p)}
+                            disabled={removing === p.id}
+                            title="Put this product back on the POS"
+                          >
+                            Restore
+                          </Button>
+                        )}
                       </span>
                     </td>
                   )}

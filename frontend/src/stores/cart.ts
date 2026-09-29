@@ -20,6 +20,9 @@ interface CartState {
   add: (p: Product, qty?: number) => void
   setQty: (productId: number, qty: number) => void
   remove: (productId: number) => void
+  /** Cashier price override (payments.override_price) — writes the unit
+   *  price back to the line so totals and the charge amount follow. */
+  setUnitPrice: (productId: number, unitPriceCents: number) => void
   clear: () => void
   setCustomerName: (v: string) => void
   setNote: (v: string) => void
@@ -60,6 +63,12 @@ export const useCart = create<CartState>((set, get) => ({
       lines: qty <= 0 ? s.lines.filter((l) => l.productId !== productId) : s.lines.map((l) => (l.productId === productId ? { ...l, qty } : l)),
     })),
   remove: (productId) => set((s) => ({ lines: s.lines.filter((l) => l.productId !== productId) })),
+  setUnitPrice: (productId, unitPriceCents) =>
+    set((s) => ({
+      lines: s.lines.map((l) =>
+        l.productId === productId ? { ...l, unitPriceCents: Math.max(0, Math.round(unitPriceCents)) } : l,
+      ),
+    })),
   clear: () => set({ lines: [], customerName: '', note: '' }),
   setCustomerName: (v) => set({ customerName: v }),
   setNote: (v) => set({ note: v }),

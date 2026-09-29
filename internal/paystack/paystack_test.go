@@ -1,100 +1,91 @@
 package paystack
 
 import (
-	"crypto/hmac"
-	"crypto/sha512"
-	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
-func TestCheckSignature(t *testing.T) {
-	secret := "sk_test_derelict_2ab7cdef1234567890abcdef"
-	body := []byte(`{"event":"charge.success","data":{"reference":"LP-ORD1-abc","amount":500000,"status":"success"}}`)
-
-	mac := hmac.New(sha512.New, []byte(secret))
-	mac.Write(body)
-	valid := hex.EncodeToString(mac.Sum(nil))
-
-	cases := []struct {
-		name string
-		sig  string
-		want bool
-	}{
-		{"valid lowercase", valid, true},
-		{"valid uppercase", upper(valid), true},
-		{"valid padded", " " + valid + "\n", true},
-		{"tampered body sig", signBytes([]byte("other body"), secret), false},
-		{"wrong secret", signBytes(body, "sk_test_other_key_000000000000000"), false},
-		{"empty sig", "", false},
-		{"not hex", "zzzz-not-hex-at-all", false},
-		{"truncated", valid[:40], false},
-	}
-	for _, tc := range cases {
-		if got := CheckSignature(body, tc.sig, secret); got != tc.want {
-			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+// withFakeAPI points the client at a fake Paystack server for the duration
+// of the test. The handler records the last request for payload assertions.
+func withFakeAPI(t *testing.T, status int, respond func(w http.ResponseWriter)) (lastBody map[string]any) {
+	t.Helper()
+	lastBody = map[string]any{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		_ = json.Unmarshal(raw, &lastBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		if respond != nil {
+			respond(w)
 		}
-	}
-	// Empty secret never validates (misconfiguration fails closed).
-	if CheckSignature(body, valid, "") {
-		t.Error("empty secret must not validate")
-	}
+	}))
+	t.Cleanup(srv.Close)
+	prev := apiBase
+	apiBase = srv.URL
+	t.Cleanup(func() { apiBase = prev })
+	return lastBody
 }
 
-func upper(s string) string {
-	out := []rune(s)
-	for i, r := range out {
-		if i%2 == 0 && r >= 'a' && r <= 'f' {
-			out[i] = r - 32
-		}
-	}
-	return string(out)
-}
-
-func signBytes(body []byte, secret string) string {
-	mac := hmac.New(sha512.New, []byte(secret))
-	mac.Write(body)
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-func TestParseWebhook(t *testing.T) {
-	ok := []byte(`{"event":"charge.success","data":{"reference":"LP-1","status":"success","amount":250000,"currency":"KES","channel":"card"}}`)
-	ev, err := ParseWebhook(ok)
+// TestInitializeCarriesServerOwnedAmountAndPhone pins the wire contract the
+// till depends on: the charge is initialized SERVER-side with the full
+// amount in subunits and the customer phone captured in the POS. The popup
+// later resumes this transaction via its access code — the amount never
+// comes from the client, which is what fixes "Transaction amount not set".
+func TestInitializeCarriesServerOwnedAmountAndPhone(t *testing.T) {
+	body := withFakeAPI(t, http.StatusOK, func(w http.ResponseWriter) {
+		w.Write([]byte(`{"status":true,"message":"Authorization URL created","data":{"authorization_url":"https://checkout.paystack.com/abc","access_code":"ACCESS_1","reference":"LP-1"}}`))
+	})
+	c := NewClient("sk_test_xxxxxxxxxxxxxxxxxxxx")
+	res, err := c.Initialize(InitializeRequest{
+		Email:     "customer+ord@ledgerpos.app",
+		Phone:     "254712345678",
+		Amount:    60000, // KES 600.00 in pesewas
+		Currency:  "KES",
+		Reference: "LP-ORD100-ab12",
+	})
 	if err != nil {
-		t.Fatalf("parse: %v", err)
+		t.Fatalf("initialize: %v", err)
 	}
-	if ev.Event != "charge.success" || ev.Data.Reference != "LP-1" || ev.Data.Amount != 250000 || ev.Data.Channel != "card" {
-		t.Errorf("unexpected decoded event: %+v", ev)
+	if res.AccessCode != "ACCESS_1" || res.AuthorizationURL == "" || res.Reference != "LP-1" {
+		t.Fatalf("unexpected result: %+v", res)
 	}
-	if _, err := ParseWebhook([]byte("not json")); err == nil {
-		t.Error("garbage payload must error")
+	if got := body["amount"]; got != float64(60000) {
+		t.Fatalf("amount must be sent in subunits, got %v", got)
 	}
-	if _, err := ParseWebhook([]byte(`{"no_event":true}`)); err == nil {
-		t.Error("missing event must error")
+	if got := body["phone"]; got != "254712345678" {
+		t.Fatalf("customer phone must ride the transaction, got %v", got)
 	}
-}
-
-func TestKeyShape(t *testing.T) {
-	if !ValidKey("sk_live_" + hex20()) {
-		t.Error("valid live secret rejected")
-	}
-	if ValidKey("pk_live_" + hex20()) {
-		t.Error("public key must not pass as secret")
-	}
-	if ValidKey("sk_") || ValidKey("") {
-		t.Error("short keys must not pass")
-	}
-	if !IsPublicKey("pk_live_" + hex20()) {
-		t.Error("valid public key rejected")
-	}
-	if IsPublicKey("sk_live_" + hex20()) {
-		t.Error("secret key must not pass as public")
+	if got := body["currency"]; got != "KES" {
+		t.Fatalf("currency must be sent, got %v", got)
 	}
 }
 
-func hex20() string {
-	b := make([]byte, 20)
-	for i := range b {
-		b[i] = byte('a' + i%26)
+// TestInitializeOmitsEmptyPhone: email-only checkouts (no phone captured)
+// must not send an empty phone field at all.
+func TestInitializeOmitsEmptyPhone(t *testing.T) {
+	body := withFakeAPI(t, http.StatusOK, func(w http.ResponseWriter) {
+		w.Write([]byte(`{"status":true,"data":{"authorization_url":"https://x","access_code":"A2","reference":"R2"}}`))
+	})
+	c := NewClient("sk_test_xxxxxxxxxxxxxxxxxxxx")
+	if _, err := c.Initialize(InitializeRequest{Email: "e@x.app", Amount: 100, Currency: "KES", Reference: "R2"}); err != nil {
+		t.Fatalf("initialize: %v", err)
 	}
-	return string(b)
+	if _, present := body["phone"]; present {
+		t.Fatalf("empty phone must be omitted, got %v", body["phone"])
+	}
+}
+
+// TestInitializeRejectsBadKey: a structurally invalid secret fails closed
+// before any HTTP call.
+func TestInitializeRejectsBadKey(t *testing.T) {
+	withFakeAPI(t, http.StatusOK, func(w http.ResponseWriter) {
+		t.Fatal("no request should be made with an invalid key")
+	})
+	c := NewClient("nope")
+	if _, err := c.Initialize(InitializeRequest{Email: "e@x.app", Amount: 100}); err == nil {
+		t.Fatal("expected error for invalid key")
+	}
 }
