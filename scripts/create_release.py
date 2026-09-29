@@ -32,9 +32,9 @@ LEGACY = {"ledgerpos-linux-x64.tar.gz"}
 
 NOTES = """LedgerPOS {v} — the point of sale that installs itself.
 
-**New in 1.1.3 — real payments only.** M-Pesa STK now rides Paystack's mobile-money charge: a real prompt lands on the customer's phone and the sale completes only after Paystack confirms the money (verified server-side, plus webhook support). The old auto-succeeding "training" provider is tests-only — a till can never again say *payment done* when nobody paid. Payments config moved out of the shop UI: keys live in the till's `.env` file (PAYSTACK_SECRET_KEY / PAYSTACK_PUBLIC_KEY) or encrypted in settings; Daraja raw keys, callback URLs and mock controls are gone from the till screen — only Till / Paybill numbers remain. **Data protection:** every update now snapshots all shop databases + registry + vault (and the running binary) before installing, and a new **Undo update** button in Settings → System restores the previous version and data in one click. Fixed: "Choose photo" doing nothing on Windows (dialog never opened) and the price field rejecting trailing zeros (type 250.00 naturally). Login and PIN switch now always land in the shop that holds your data, so inventory can't "disappear" after upgrades. Demo (awesomeposs.netlify.app/demo) is purely a playground: password 0000 for all accounts, no onboarding, no rotation. Under the hood: four performance indexes, SQLite connection pool 4x with WAL immediate transactions, safer websocket teardown, and 56-check E2E smoke green.
+**New in 1.1.6 — checkout you can trust, redesigned for speed.** The Paystack popup now uses Paystack's official Popup V2: the charge is initialized server-side and the in-app checkout resumes it with the server's access code, so the amount shown is always the exact total (fixes "Transaction amount not set") and payment completes only after Paystack confirms the money server-side. M-Pesa is phone-first: the cashier types the customer's Safaricom number in the checkout rail and the STK push goes straight to that phone — no popup phone entry, email stays optional for receipts. The whole sale lives on one screen: dark navigation rail, product workspace with photos / stock badges / sort / grid+list views, and a 430px checkout rail showing cart, VAT, total, payment method tiles (M-Pesa / Card / Cash), live STK status and retry without restarting the order. Also: **Register new account** button on the sign-in screen, product **Remove** (archive + restore) in Inventory, and the app shell rebuilt with the professional light retail look. Keys still live in the cloud vault — tills fetch them at boot; zero per-machine configuration.
 
-Download the file for your machine, double-click it, start selling. The whole shop — stock, till, M-Pesa, KRA reports — runs on that machine. No servers to configure, nothing to type into a terminal, works when the internet doesn't.
+Download the file for your machine, double-click it, start selling. The whole shop — stock, till, M-Pesa, KRA reports — runs on that machine. No servers to configure, nothing to type into a terminal, works when the internet doesn\'t.
 
 | File | For |
 |---|---|
@@ -48,11 +48,7 @@ Download the file for your machine, double-click it, start selling. The whole sh
 - **Windows SmartScreen** may warn (no code-signing certificate yet): *More info → Run anyway*.
 - **macOS Gatekeeper**: right-click the app → *Open → Open* (once; Apple remembers).
 - **Integrity:** SHA-256 of every package is published in the release's `checksums.txt` — or verify against `downloads/checksums.txt` in the repo.
-
-What's inside: offline-first till (IndexedDB queue + SQLite WAL), M-Pesa and card payments through Paystack (one popup — the customer picks M-Pesa / mobile money / card), KRA monthly VAT reports + CSV export, shifts & cash reconciliation, ESC/POS receipt printing, USB barcode scanning, white-label everything (store name, brand colour, currency, VAT % in Settings), automatic daily backups, full audit log.
-
-The same binary also runs as a LAN appliance (`ledgerpos serve`, mDNS discovery) for multi-terminal shops. The project README has the download landing page + in-browser demo details.
-""".replace("{v}", TAG.lstrip("v"))
+- **Updates:** the app checks the cloud update manifest (SHA-256 verified) and can install or undo updates from Settings → System.""".replace("{v}", TAG.lstrip("v"))
 
 
 def api(method, url, data=None, ctype="application/json", raw=False):
