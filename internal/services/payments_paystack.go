@@ -106,17 +106,29 @@ func (s *Service) paystackCurrency() string {
         return cur
 }
 
-// paystackPhoneKe forces the phone to the DETERMINISTIC 12-digit 2547/2541
-// form Safaricom (and therefore Paystack's Kenya mobile-money charge)
-// expects — inputs may legitimately arrive as 07xx/01xx, +2547xx or 2547xx
-// (cashier typing, split-tender legs, API clients), but the wire format to
-// Paystack must never vary. Returns the input when it cannot be normalized
-// (callers validate afterwards).
+// paystackPhoneKe normalizes any valid Kenyan input (07xx/01xx, +2547xx,
+// 2547xx, 7xx) to the DETERMINISTIC 12-digit 2547/2541 canonical form used
+// for validation and till-side storage. Returns the input when it cannot be
+// normalized (callers validate afterwards).
 func paystackPhoneKe(in string) string {
         if n, err := mpesa.NormalizePhone(in); err == nil {
                 return n
         }
         return strings.TrimSpace(in)
+}
+
+// paystackWirePhoneKe converts the canonical 2547/2541 form to the E.164
+// "+254…" format Paystack's mobile-money APIs require on the wire. Verified
+// against the LIVE Paystack /charge endpoint (2026-09-29): "254745000111"
+// and "0745000111" are rejected with 400 "Invalid phone number format",
+// while "+254745000111" is accepted and pushes the STK prompt. Daraja (the
+// direct Safaricom provider) keeps the bare 2547… form — only the Paystack
+// boundary converts.
+func paystackWirePhoneKe(canonical string) string {
+        if len(canonical) == 12 && strings.HasPrefix(canonical, "254") {
+                return "+" + canonical
+        }
+        return canonical
 }
 
 // PaystackInit opens (or re-opens) checkout for a PENDING paystack order.
@@ -161,6 +173,7 @@ func (s *Service) PaystackInit(orderID int64, email, phone string, p *auth.Princ
                         return nil, nil, fmt.Errorf("invalid customer phone %q — expected 07XX/2547XX/2541XX", phone)
                 }
         }
+        wirePhone := paystackWirePhoneKe(phone)
 
         // Supersede previous pending paystack attempts (fresh reference each time).
         s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new checkout' WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID)
@@ -201,15 +214,15 @@ func (s *Service) PaystackInit(orderID int64, email, phone string, p *auth.Princ
         }
         init, err := client.Initialize(paystack.InitializeRequest{
                 Email:       email,
-                Phone:       phone,
+                Phone:       wirePhone,
                 Amount:      amount,
                 Currency:    s.paystackCurrency(),
                 Reference:   reference,
                 CallbackURL: s.paystackCallback(),
                 Metadata: map[string]any{
-                        "order_number":  order.Number,
-                        "cashier":       p.Username,
-                        "customer_phone": phone,
+                        "order_number":   order.Number,
+                        "cashier":        p.Username,
+                        "customer_phone": wirePhone,
                         "custom_fields": []map[string]string{
                                 {"display_name": "Order", "variable_name": "order", "value": order.Number},
                         },
@@ -252,6 +265,7 @@ func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay
         if !mpesaPhoneOK(phone) {
                 return nil, fmt.Errorf("invalid customer phone %q — expected 07XX/2547XX/2541XX", pay.Phone)
         }
+        wirePhone := paystackWirePhoneKe(phone)
 
         // Supersede previous pending paystack attempts (fresh reference each time).
         s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new STK push' WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), order.ID)
@@ -266,14 +280,14 @@ func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay
                 Currency:  s.paystackCurrency(),
                 Reference: reference,
                 MobileMoney: &paystack.MobileMoney{
-                        Phone:    phone,
+                        Phone:    wirePhone,
                         Provider: "mpesa",
                 },
                 Metadata: map[string]any{
                         "order_number":   order.Number,
                         "cashier":        p.Username,
                         "method":         "mpesa_stk",
-                        "customer_phone": phone,
+                        "customer_phone": wirePhone,
                         "custom_fields": []map[string]string{
                                 {"display_name": "Order", "variable_name": "order", "value": order.Number},
                         },

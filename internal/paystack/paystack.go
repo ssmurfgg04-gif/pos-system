@@ -110,7 +110,7 @@ func (c *Client) Initialize(req InitializeRequest) (*InitializeResult, error) {
 // MobileMoney identifies the wallet to charge. Kenya M-Pesa uses the
 // customer's Safaricom number; Paystack pushes the STK prompt.
 type MobileMoney struct {
-        Phone    string `json:"phone"`              // 2547XXXXXXXX / 2541XXXXXXXX
+        Phone    string `json:"phone"`              // +2547XXXXXXXX (E.164) — the live /charge rejects "2547…" and "07…" forms with "Invalid phone number format"
         Provider string `json:"provider,omitempty"` // "mpesa" for Kenya
 }
 
