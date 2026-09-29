@@ -267,7 +267,7 @@ const DEMO_SETTINGS: Record<string, string> = {
   currency_symbol: 'KES',
   tax_percent: '16',
   tax_included: 'true',
-  brand_color: '#10B981',
+  brand_color: '#0047AB',
   payment_mode: 'auto',
   till_number: '987654',
   paybill_number: '',

@@ -149,6 +149,13 @@ function load(): DemoDB {
 /** Upgrade stored demo DBs (v1 → v2: tabs & credit). Idempotent. */
 function migrateDemo(d: DemoDB) {
   let dirty = false
+  // v1.1.7 brand refresh: the old demo default green made every add button
+  // and selection look "success-colored". Refresh ONLY the untouched
+  // default — stores that picked their own color keep it.
+  if (d.settings?.brand_color === '#10B981') {
+    d.settings.brand_color = '#0047AB'
+    dirty = true
+  }
   if (!Array.isArray((d as any).customers) || !Array.isArray((d as any).ledger)) {
     const fresh = buildSeed()
     d.customers = fresh.customers
@@ -587,11 +594,26 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin)
 }
 
-/** In-memory photo for a product (data URL or ''). Demo <img> srcs can't
- * hit the real /image route on a static host, so the UI reads this. */
+/** SKUs that ship with a bundled catalog photo in /public/demo-products.
+ *  Custom uploads (productImages map) always win over these. */
+const BUNDLED_PRODUCT_SKUS = new Set([
+  'TS-001', 'TS-002', 'TS-003', 'TS-004', 'TS-005', 'TS-006',
+  'HD-001', 'HD-002', 'HD-003',
+  'MG-001', 'MG-002', 'MG-003', 'MG-004',
+  'AC-001', 'AC-002', 'AC-003', 'AC-004', 'AC-005',
+  'SV-001', 'SV-002', 'SV-003', 'GC-001',
+])
+
+/** Photo for a product in demo mode: a cashier-uploaded image if one
+ *  exists, else the bundled web-sourced catalog photo for that SKU, else
+ *  '' (the UI renders its professional monogram fallback). Demo <img>
+ *  srcs can't hit the real /image route on a static host. */
 export function demoProductImageUrl(productId: number): string {
   const x = load() as DemoDBX
-  return x.productImages?.[String(productId)] || ''
+  const custom = x.productImages?.[String(productId)]
+  if (custom) return custom
+  const sku = x.products?.find((p) => p.id === productId)?.sku
+  return sku && BUNDLED_PRODUCT_SKUS.has(sku) ? `/demo-products/${sku}.jpg` : ''
 }
 
 /** Simulate the M-Pesa STK lifecycle (mock provider semantics). */

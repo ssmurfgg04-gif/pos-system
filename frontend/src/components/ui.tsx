@@ -402,3 +402,73 @@ export function OfflineBanner() {
     </div>
   )
 }
+
+// ---- ErrorBoundary — a render crash must NEVER white-screen the POS ----
+// A cashier mid-sale cannot "refresh and lose everything". Any uncaught
+// render error inside this boundary renders a recovery card; the rest of
+// the app (and the sale in progress) stays untouched where possible.
+
+interface ErrorBoundaryState {
+  error: Error | null
+}
+
+export class ErrorBoundary extends React.Component<
+  { children: React.ReactNode; label?: string; compact?: boolean },
+  ErrorBoundaryState
+> {
+  state: ErrorBoundaryState = { error: null }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { error }
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // eslint-disable-next-line no-console
+    console.error(`[ErrorBoundary${this.props.label ? ':' + this.props.label : ''}]`, error, info.componentStack)
+  }
+
+  reset = () => this.setState({ error: null })
+
+  render() {
+    const { error } = this.state
+    if (!error) return this.props.children
+    if (this.props.compact) {
+      return (
+        <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center bg-surface">
+          <span className="w-12 h-12 rounded-full bg-danger-bg border border-danger-text/40 text-danger-text flex items-center justify-center" aria-hidden>
+            <AlertTriangle size={22} strokeWidth={2.25} />
+          </span>
+          <div>
+            <p className="font-bold text-ink">This panel hit a snag</p>
+            <p className="text-[12px] text-ink-muted mt-1 max-w-[280px]">{error.message || 'Unexpected error'}</p>
+            <p className="text-[11px] text-ink-subtle mt-1">The rest of the POS keeps working — your cart is safe.</p>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="primary" onClick={this.reset}>Try again</Button>
+            <Button size="sm" variant="secondary" onClick={() => window.location.reload()}>Reload app</Button>
+          </div>
+        </div>
+      )
+    }
+    return (
+      <div className="min-h-screen bg-shell flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-surface border border-line rounded-card shadow-brutal p-6 text-center space-y-4">
+          <span className="w-14 h-14 mx-auto rounded-full bg-danger-bg border border-danger-text/40 text-danger-text flex items-center justify-center" aria-hidden>
+            <AlertTriangle size={26} strokeWidth={2.25} />
+          </span>
+          <div>
+            <p className="font-extrabold text-ink text-lg">Something went wrong</p>
+            <p className="text-[13px] text-ink-muted mt-1">{error.message || 'An unexpected error occurred.'}</p>
+            <p className="text-[12px] text-ink-subtle mt-2">
+              Completed sales are safe on the server. If this keeps happening, note the message above and reload.
+            </p>
+          </div>
+          <div className="flex gap-2 justify-center">
+            <Button variant="primary" onClick={this.reset}>Try again</Button>
+            <Button variant="secondary" onClick={() => window.location.reload()}>Reload app</Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+}
