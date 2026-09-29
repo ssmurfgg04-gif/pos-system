@@ -13,12 +13,16 @@ import { App } from '../src/App'
 import { Pos } from '../src/pages/Pos'
 import { useAuth } from '../src/stores/auth'
 import { useBranding } from '../src/stores/branding'
+import { usePosSearch } from '../src/stores/search'
 
 (React as any).actEnvironment = true
 
 beforeEach(() => {
   localStorage.clear()
   document.body.innerHTML = '<div id="root"></div>'
+  // The POS search box is backed by a shared zustand store (header + page
+  // share it) — reset it so one test's typing never leaks into the next.
+  usePosSearch.setState({ query: '' })
   vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no server'))
 })
 

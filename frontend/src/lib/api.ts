@@ -705,41 +705,51 @@ export interface PaystackInitResult {
   amountCents: number
 }
 
-// ---- Paystack popup (inline.js) ----
-// Loaded once from index.html; types the subset we use.
+// ---- Paystack popup (Popup V2 — https://js.paystack.co/v2/inline.js) ----
+// The charge is initialized SERVER-side (secret key); the popup merely
+// resumes it with the minted access_code. That is why the amount shown in
+// the popup is always the server's amount — the v1 "Transaction amount not
+// set" error came from inline.js v1 ignoring access_code and expecting a
+// client-side `amount`. V2 fixes the contract: new PaystackPop().
+// resumeTransaction(accessCode, callbacks).
 interface PaystackHandler { openIframe(): void }
-interface PaystackSetup {
-  key: string
-  access_code?: string
-  email: string
-  amount?: number
-  currency?: string
-  ref?: string
-  metadata?: Record<string, unknown>
-  callback?(r: { reference: string }): void
-  onClose?(): void
+interface PaystackResumeCallbacks {
+  onLoad?(t: { id: number; customer: unknown; accessCode: string }): void
+  onSuccess(r: { id: number; reference: string; message: string }): void
+  onError?(e: { message: string }): void
+  onCancel?(): void
+}
+interface PaystackPopupV2 {
+  resumeTransaction(accessCode: string, callbacks?: PaystackResumeCallbacks): PaystackHandler
+  cancelTransaction(id?: unknown): void
+  isLoaded(): boolean
 }
 declare global {
-  interface Window { PaystackPop?: { setup(s: PaystackSetup): PaystackHandler } }
+  interface Window { PaystackPop?: { new (): PaystackPopupV2 } }
 }
 
 /**
- * Open the Paystack popup with a server-minted access_code. Resolves with
- * the reference on success (verify happens server-side afterwards) and
- * rejects when the customer closes the popup.
+ * Open the Paystack popup (Popup V2, in-page iframe — never a separate
+ * browser window or tab) with a server-minted access_code. onSuccess
+ * resolves with the reference; verify happens server-side afterwards.
+ * onError fires when the transaction fails to load (e.g. expired access
+ * code) — callers should re-init for a fresh reference.
  */
-export function openPaystackPopup(init: PaystackInitResult, email: string,
-  callbacks: { onSuccess(ref: string): void; onCancelled(): void }): void {
+export function openPaystackPopup(init: PaystackInitResult, _email: string,
+  callbacks: { onSuccess(ref: string): void; onCancelled(): void; onError?(message: string): void }): void {
   if (!window.PaystackPop) {
+    callbacks.onError?.('Paystack popup library not loaded — check the internet connection and retry')
     callbacks.onCancelled()
-    throw new Error('Paystack popup library not loaded')
+    return
   }
-  const handler = window.PaystackPop.setup({
-    key: init.publicKey,
-    access_code: init.accessCode,
-    email,
-    callback: (r) => callbacks.onSuccess(r.reference),
-    onClose: () => callbacks.onCancelled(),
+  // eslint-disable-next-line new-cap
+  const popup = new window.PaystackPop()
+  popup.resumeTransaction(init.accessCode, {
+    onSuccess: (r) => callbacks.onSuccess(r.reference),
+    onCancel: () => callbacks.onCancelled(),
+    onError: (e) => {
+      callbacks.onError?.(e?.message || 'Paystack checkout failed to open')
+      callbacks.onCancelled()
+    },
   })
-  handler.openIframe()
 }

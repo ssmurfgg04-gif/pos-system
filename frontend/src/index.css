@@ -1,61 +1,71 @@
 @import "tailwindcss";
 
 /*
- * LEDGER design system — dark slate-900 app shell + white content surfaces.
- * Rationale: critical reading zones get 17.9:1 contrast that survives
- * bright-store glare; neubrutalism is carried by 2px borders + hard shadows
- * (hard shadows barely read dark-on-dark, so borders do the work).
- * All pairs below passed WCAG AA verification (see design spec).
+ * LEDGER design system — professional retail equipment look.
+ * Light neutral workspace (#F4F5F7) + white cards + dark navy navigation
+ * rail. Color is semantic: Creative Divine blue (#0047AB) means
+ * selection/navigation, green (#16A34A family) means success/paid/ready,
+ * amber = warning, red = destructive only. Hierarchy comes from spacing,
+ * size and brightness — never from heavy outlines or glow.
+ * All pairs below passed WCAG AA verification.
  */
 @theme {
-  /* Surfaces */
-  --color-shell: #0f172a;        /* slate-900 app chrome */
-  --color-shell-edge: #1e293b;   /* slate-800 raised chrome */
-  --color-surface: #ffffff;      /* cards, tables, modals */
-  --color-surface-muted: #f8fafc;/* slate-50 wells, table stripes */
+  /* App canvas + panels */
+  --color-shell: #f4f5f7;         /* light warm-gray workspace */
+  --color-shell-edge: #e9edf2;    /* slightly darker panel (checkout rail) */
+  --color-surface: #ffffff;       /* cards, tables, modals */
+  --color-surface-muted: #f1f4f8; /* wells, table stripes, hovers */
+
+  /* Dark slim navigation rail */
+  --color-sidebar: #0f1d33;
+  --color-sidebar-raised: #16273f;
+  --color-sidebar-line: #24395a;
+  --color-sidebar-ink: #eaf0f8;
+  --color-sidebar-muted: #93a6c2;
 
   /* Ink (text) */
-  --color-ink: #0f172a;          /* 17.85:1 on white */
-  --color-ink-muted: #475569;    /* 7.03:1 on white */
-  --color-ink-subtle: #64748b;   /* 4.76:1 on white (large/secondary only) */
-  --color-on-shell: #e2e8f0;     /* 12.6:1 on slate-900 */
-  --color-on-shell-muted: #94a3b8;
+  --color-ink: #172033;           /* primary text on white */
+  --color-ink-muted: #45566e;     /* secondary */
+  --color-ink-subtle: #5b6b84;    /* tertiary (still ≥4.5:1 on white) */
+  --color-on-shell: #eaf0f8;      /* legacy aliases → sidebar inks */
+  --color-on-shell-muted: #93a6c2;
 
-  /* Lines */
-  --color-line: #cbd5e1;         /* slate-300 dividers */
-  --color-line-strong: #0f172a;  /* neubrutalist 2px borders */
+  /* Lines — 1px only */
+  --color-line: #d9dee7;
+  --color-line-strong: #c3ccd9;
 
-  /* Brand (white-label: overridden at runtime via --color-brand) */
-  --color-brand: #10b981;        /* emerald-500 */
-  --color-brand-ink: #0f172a;    /* text ON brand: 7.04:1 — NOT white */
-  --color-brand-strong: #047857; /* emerald-700 hard shadow / pressed */
+  /* Brand — Creative Divine blue: selection, navigation, primary actions */
+  --color-brand: #0047ab;
+  --color-brand-ink: #ffffff;     /* text ON brand: 8.6:1 */
+  --color-brand-strong: #003a8f;  /* pressed/hover */
+  --color-brand-soft: #ebf1fb;    /* selected-row / active-nav tint */
 
   /* Status — never color-only; pills carry text too */
-  --color-paid-bg: #ecfdf5;  --color-paid-text: #047857;
-  --color-pending-bg: #fffbeb; --color-pending-text: #b45309;
-  --color-danger: #dc2626; --color-danger-bg: #fef2f2; --color-danger-text: #b91c1c;
-  --color-info-bg: #eff6ff;  --color-info-text: #1d4ed8;
-  --color-void-bg: #f1f5f9;  --color-void-text: #475569;
+  --color-paid-bg: #e9f9ef;  --color-paid-text: #157f3d;
+  --color-pending-bg: #fff6e5; --color-pending-text: #9a5b00;
+  --color-danger: #dc2626; --color-danger-bg: #fdeeee; --color-danger-text: #b91c1c;
+  --color-info-bg: #ebf1fb;  --color-info-text: #0047ab;
+  --color-void-bg: #eef2f7;  --color-void-text: #51617a;
 
-  /* Radius */
-  --radius-card: 10px;
-  --radius-input: 8px;
+  /* Radius: cards 12, controls 10, pills only for chips/badges */
+  --radius-card: 12px;
+  --radius-input: 10px;
   --radius-pill: 999px;
 
-  /* Hard shadows */
-  --shadow-brutal: 4px 4px 0 0 #0f172a;
-  --shadow-brutal-sm: 2px 2px 0 0 #0f172a;
-  --shadow-brutal-brand: 4px 4px 0 0 #047857;
-  --shadow-brutal-danger: 4px 4px 0 0 #b91c1c;
-  --shadow-inset-line: inset 0 -2px 0 0 #cbd5e1;
+  /* Elevation: soft realistic shadows (no hard offset blocks) */
+  --shadow-brutal: 0 1px 2px 0 rgb(15 29 51 / 0.05), 0 2px 6px 0 rgb(15 29 51 / 0.06);
+  --shadow-brutal-sm: 0 1px 2px 0 rgb(15 29 51 / 0.05);
+  --shadow-brutal-brand: 0 1px 2px 0 rgb(0 71 171 / 0.28), 0 2px 6px 0 rgb(0 71 171 / 0.18);
+  --shadow-brutal-danger: 0 1px 2px 0 rgb(220 38 38 / 0.25);
+  --shadow-inset-line: inset 0 -1px 0 0 #d9dee7;
 
-  /* Type — system stack (no webfont on flaky connections) */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+  /* Type — Inter when online, system stack offline (no layout shift) */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
 
   /* Motion */
-  --ease-pop: cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  --ease-pop: cubic-bezier(0.2, 0.9, 0.3, 1.15);
 }
 
 /* Money everywhere: tabular figures so totals don't jitter as digits change */
@@ -68,9 +78,10 @@ body {
   font-family: var(--font-sans);
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
+  font-size: 13.5px;
 }
 
-/* Focus: 2px ring + offset, visible on both white surfaces and the shell */
+/* Focus: 2px ring + offset, visible on both white surfaces and the rail */
 :focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
@@ -141,6 +152,6 @@ tbody tr:nth-child(odd) { background: var(--color-surface-muted); }
 tbody tr:hover { background: var(--color-surface-muted); }
 
 /* Scrollbars: slim, unobtrusive */
-* { scrollbar-width: thin; scrollbar-color: #94a3b8 transparent; }
+* { scrollbar-width: thin; scrollbar-color: #b3bfce transparent; }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
-*::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 4px; }
+*::-webkit-scrollbar-thumb { background: #b3bfce; border-radius: 4px; }

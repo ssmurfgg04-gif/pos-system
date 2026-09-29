@@ -71,21 +71,21 @@ export function Login() {
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-6">
           {branding.brand_logo_url ? (
-            <img src={branding.brand_logo_url} alt={branding.store_name || branding.app_name} className="w-16 h-16 rounded-card object-contain bg-surface border-2 border-line-strong shadow-brutal-brand mb-4" />
+            <img src={branding.brand_logo_url} alt={branding.store_name || branding.app_name} className="w-16 h-16 rounded-card object-contain bg-surface border border-line shadow-brutal mb-4" />
           ) : (
-            <div className="w-16 h-16 rounded-card bg-brand border-2 border-brand-strong shadow-brutal-brand flex items-center justify-center text-brand-ink font-black text-2xl mb-4">
+            <div className="w-16 h-16 rounded-card bg-brand shadow-brutal-brand flex items-center justify-center text-white font-black text-2xl mb-4">
               {(branding.store_name || branding.app_name || 'P').slice(0, 1).toUpperCase()}
             </div>
           )}
-          <h1 className="text-on-shell text-xl font-bold text-center">
+          <h1 className="text-ink text-xl font-bold text-center">
             {branding.store_name || branding.app_name}
           </h1>
-          <p className="text-on-shell-muted text-sm mt-0.5">{branding.app_name}</p>
+          <p className="text-ink-subtle text-sm mt-0.5">{branding.app_name}</p>
         </div>
 
         <form
           onSubmit={submit}
-          className="bg-surface border-2 border-line-strong rounded-card shadow-brutal p-5 space-y-4"
+          className="bg-surface border border-line rounded-card shadow-brutal p-5 space-y-4"
         >
           <Field label="Username">
             <Input
@@ -112,9 +112,14 @@ export function Login() {
               {error}
             </p>
           )}
-          <Button type="submit" variant="primary" size="lg" className="w-full" disabled={busy}>
-            {busy ? <Spinner className="border-t-brand-ink" /> : 'Sign in'}
-          </Button>
+          <div className="flex gap-2">
+            <Button type="submit" variant="primary" size="lg" className="flex-1" disabled={busy}>
+              {busy ? <Spinner className="border-t-white" /> : 'Sign in'}
+            </Button>
+            <Button type="button" variant="secondary" size="lg" className="flex-1" disabled={busy} onClick={() => navigate('/signup')} title="Create a new shop account">
+              Register new account
+            </Button>
+          </div>
           <button
             type="button"
             onClick={() => navigate('/pin')}
@@ -129,20 +134,11 @@ export function Login() {
           >
             Joining a team? Paste your join link →
           </button>
-          {desk?.signupAllowed && (
-            <button
-              type="button"
-              onClick={() => navigate('/signup')}
-              className="w-full min-h-11 flex items-center justify-center text-center text-sm font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
-            >
-              New here? Open a shop →
-            </button>
-          )}
         </form>
 
         {desk?.desktop && desk?.firstRun && (
-          <div className="mt-4 bg-surface border-2 border-brand rounded-card shadow-brutal-brand p-4 flex gap-3 items-start">
-            <span className="w-9 h-9 rounded-input bg-brand border-2 border-brand-strong flex items-center justify-center text-brand-ink shrink-0" aria-hidden>
+          <div className="mt-4 bg-surface border border-brand rounded-card shadow-brutal-brand p-4 flex gap-3 items-start">
+            <span className="w-9 h-9 rounded-input bg-brand flex items-center justify-center text-white shrink-0" aria-hidden>
               <KeyRound size={17} strokeWidth={2.25} />
             </span>
             <div className="min-w-0">
@@ -155,7 +151,7 @@ export function Login() {
         )}
 
         {demo && (
-          <div className="mt-4 bg-surface border-2 border-line-strong rounded-card shadow-brutal p-4">
+          <div className="mt-4 bg-surface border border-line rounded-card shadow-brutal p-4">
             <p className="text-[12px] uppercase font-bold text-ink-muted mb-2.5">
               Demo mode — try a role
             </p>
@@ -168,9 +164,9 @@ export function Login() {
                     type="button"
                     onClick={() => quickLogin(a.username, a.password)}
                     disabled={busy}
-                    className="w-full flex items-center gap-3 p-2.5 rounded-input border-2 border-line bg-surface-muted hover:border-line-strong hover:bg-surface text-left transition-colors"
+                    className="w-full flex items-center gap-3 p-2.5 rounded-input border border-line bg-surface-muted hover:border-line-strong hover:bg-surface text-left transition-colors"
                   >
-                    <span className="w-9 h-9 rounded-input bg-surface border-2 border-line-strong flex items-center justify-center text-ink shrink-0" aria-hidden>
+                    <span className="w-9 h-9 rounded-input bg-surface border border-line flex items-center justify-center text-ink shrink-0" aria-hidden>
                       <Icon size={17} strokeWidth={2.25} />
                     </span>
                     <span className="min-w-0 flex-1">

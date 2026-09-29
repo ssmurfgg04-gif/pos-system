@@ -593,7 +593,7 @@ func TestAgent1InitOnPaidOrVoidedOrderFailsClosed(t *testing.T) {
         if err := r.Svc.HandlePaystackWebhook(body, agent1Sign(t, agent1TestSecret, body)); err != nil {
                 t.Fatalf("webhook: %v", err)
         }
-        if _, _, err := r.Svc.PaystackInit(o.ID, "", agent1Principal()); err == nil {
+        if _, _, err := r.Svc.PaystackInit(o.ID, "", "", agent1Principal()); err == nil {
                 t.Fatal("init on PAID order must fail")
         } else if !strings.Contains(err.Error(), "already paid") {
                 t.Fatalf("wrong error: %v", err)
@@ -603,7 +603,7 @@ func TestAgent1InitOnPaidOrVoidedOrderFailsClosed(t *testing.T) {
         if _, err := r.Svc.Void(o2.ID, "agent1", agent1Principal()); err != nil {
                 t.Fatalf("void: %v", err)
         }
-        if _, _, err := r.Svc.PaystackInit(o2.ID, "", agent1Principal()); err == nil {
+        if _, _, err := r.Svc.PaystackInit(o2.ID, "", "", agent1Principal()); err == nil {
                 t.Fatal("init on VOIDED order must fail")
         }
 }

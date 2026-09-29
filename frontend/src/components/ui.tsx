@@ -1,7 +1,7 @@
-// LEDGER component kit — neubrutalist touch-first primitives.
-// Spec notes: primary = brand bg + slate-900 ink (7.04:1, never white);
-// press = translate + shadow collapse; targets ≥44px; status pills always
-// carry text (never color-only); toasts bottom-center above modals.
+// LEDGER component kit — professional retail primitives.
+// Spec notes: primary = brand bg + white ink (8.6:1); press = tone shift
+// (no translate — POS equipment, not toys); targets ≥44px; status pills
+// always carry text (never color-only); toasts bottom-center above modals.
 
 import React, { useEffect, useRef } from 'react'
 import { useToasts } from '../stores/toasts'
@@ -15,15 +15,14 @@ type ButtonSize = 'sm' | 'md' | 'lg'
 
 const buttonBase =
   'inline-flex items-center justify-center gap-2 font-semibold select-none ' +
-  'border-2 border-line-strong transition-[transform,box-shadow] duration-75 ' +
-  'active:translate-x-[2px] active:translate-y-[2px] active:shadow-none ' +
+  'border transition-colors duration-100 ' +
   'disabled:opacity-40 disabled:pointer-events-none rounded-input'
 
 const buttonVariants: Record<ButtonVariant, string> = {
-  primary: 'bg-brand text-brand-ink shadow-brutal-brand hover:brightness-105',
-  secondary: 'bg-surface text-ink shadow-brutal hover:bg-surface-muted',
-  danger: 'bg-danger text-white shadow-brutal-danger hover:brightness-105',
-  ghost: 'bg-transparent text-ink-muted border-transparent hover:bg-surface-muted hover:text-ink shadow-none',
+  primary: 'bg-brand border-brand text-white shadow-brutal-brand hover:bg-brand-strong active:bg-brand-strong',
+  secondary: 'bg-surface border-line-strong text-ink hover:bg-surface-muted active:bg-surface-muted',
+  danger: 'bg-danger border-danger text-white hover:brightness-95 active:brightness-95',
+  ghost: 'bg-transparent text-ink-muted border-transparent hover:bg-surface-muted hover:text-ink',
 }
 
 const buttonSizes: Record<ButtonSize, string> = {
@@ -66,11 +65,11 @@ export function Card({
   pad?: boolean
 }) {
   return (
-    <section className={`bg-surface border-2 border-line-strong rounded-card shadow-brutal ${className}`}>
+    <section className={`bg-surface border border-line rounded-card shadow-brutal ${className}`}>
       {(title || actions) && (
         <header className="flex items-start justify-between gap-3 px-4 pt-4 pb-2 sm:px-5">
           <div>
-            <h2 className="text-base font-bold text-ink leading-tight">{title}</h2>
+            <h2 className="text-[15px] font-bold text-ink leading-tight">{title}</h2>
             {sub && <p className="text-[13px] text-ink-muted mt-0.5">{sub}</p>}
           </div>
           {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
@@ -125,13 +124,13 @@ export function Modal({
       role="dialog"
       aria-modal="true"
     >
-      <div className="absolute inset-0 bg-black/60 anim-backdrop" onClick={onClose} aria-hidden />
+      <div className="absolute inset-0 bg-ink/45 anim-backdrop" onClick={onClose} aria-hidden />
       <div
         ref={ref}
-        className={`relative w-full ${modalSizes[size]} bg-surface border-2 border-line-strong rounded-card shadow-brutal anim-modal max-h-[92vh] flex flex-col`}
+        className={`relative w-full ${modalSizes[size]} bg-surface border border-line rounded-card shadow-brutal anim-modal max-h-[92vh] flex flex-col`}
       >
         {title && (
-          <header className="flex items-center justify-between gap-3 px-5 pt-4 pb-3 border-b-2 border-line">
+          <header className="flex items-center justify-between gap-3 px-5 pt-4 pb-3 border-b border-line">
             <h2 className="text-lg font-bold text-ink">{title}</h2>
             <button
               onClick={onClose}
@@ -143,7 +142,7 @@ export function Modal({
           </header>
         )}
         <div className="px-5 py-4 overflow-y-auto">{children}</div>
-        {footer && <footer className="px-5 py-4 border-t-2 border-line flex flex-wrap justify-end gap-3 bg-surface-muted/50">{footer}</footer>}
+        {footer && <footer className="px-5 py-4 border-t border-line flex flex-wrap justify-end gap-3 bg-surface-muted/50">{footer}</footer>}
       </div>
     </div>
   )
@@ -162,7 +161,7 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
 }
 
 const inputCls =
-  'w-full min-h-11 px-3 bg-surface border-2 border-line-strong rounded-input text-ink ' +
+  'w-full min-h-11 px-3 bg-surface border border-line-strong rounded-input text-ink ' +
   'placeholder:text-ink-subtle focus:outline-none focus-visible:outline-2 ' +
   'focus-visible:outline-brand focus-visible:-outline-offset-0 disabled:bg-surface-muted'
 
@@ -284,15 +283,15 @@ export function Table({ head, children, className = '' }: { head: React.ReactNod
 
 export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { key: T; label: string; icon?: React.ReactNode }[]; value: T; onChange: (t: T) => void }) {
   return (
-    <div role="tablist" className="flex gap-1 p-1 bg-surface-muted border-2 border-line rounded-input overflow-x-auto">
+    <div role="tablist" className="flex gap-1 p-1 bg-surface-muted rounded-input overflow-x-auto">
       {tabs.map((t) => (
         <button
           key={t.key}
           role="tab"
           aria-selected={value === t.key}
           onClick={() => onChange(t.key)}
-          className={`min-h-9 px-3.5 rounded-[5px] text-sm font-semibold whitespace-nowrap transition-colors inline-flex items-center gap-1.5 ${
-            value === t.key ? 'bg-surface text-ink border-2 border-line-strong shadow-brutal-sm' : 'text-ink-muted hover:text-ink'
+          className={`min-h-9 px-3.5 rounded-[7px] text-sm font-semibold whitespace-nowrap transition-colors inline-flex items-center gap-1.5 ${
+            value === t.key ? 'bg-surface text-ink shadow-brutal-sm' : 'text-ink-muted hover:text-ink'
           }`}
         >
           {t.icon}
@@ -308,7 +307,7 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { key:
 export function EmptyState({ icon, title, body, action }: { icon?: React.ReactNode; title: string; body?: string; action?: React.ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
-      <div className="w-14 h-14 rounded-card border-2 border-line-strong bg-surface-muted flex items-center justify-center text-ink-muted mb-3" aria-hidden>
+      <div className="w-14 h-14 rounded-card border border-line bg-surface-muted flex items-center justify-center text-ink-subtle mb-3" aria-hidden>
         {icon ?? <Package size={24} strokeWidth={2.25} />}
       </div>
       <h3 className="font-bold text-ink">{title}</h3>
@@ -321,7 +320,7 @@ export function EmptyState({ icon, title, body, action }: { icon?: React.ReactNo
 export function Spinner({ className = '' }: { className?: string }) {
   return (
     <span
-      className={`inline-block w-5 h-5 border-[3px] border-line border-t-line-strong rounded-full anim-spin ${className}`}
+      className={`inline-block w-5 h-5 border-[3px] border-line border-t-brand rounded-full anim-spin ${className}`}
       role="status"
       aria-label="Loading"
     />
@@ -341,8 +340,8 @@ export function Keypad({ onDigit, onBack, onClear }: { onDigit: (d: string) => v
           <button
             key={i}
             onClick={() => (k === '⌫' ? onBack() : k === 'C' ? onClear?.() : onDigit(k))}
-            className="min-h-14 min-w-14 text-xl font-bold bg-surface border-2 border-line-strong rounded-input shadow-brutal-sm
-              active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-transform duration-75"
+            className="min-h-14 min-w-14 text-xl font-bold bg-surface border border-line-strong rounded-input shadow-brutal-sm
+              hover:bg-surface-muted active:bg-surface-muted transition-colors duration-75"
             aria-label={k === '⌫' ? 'Backspace' : k === 'C' ? 'Clear' : k}
           >
             {k}
@@ -364,8 +363,8 @@ export function ToastHost() {
         <div
           key={t.id}
           role="status"
-          className={`w-full flex items-start gap-3 px-4 py-3 border-2 border-line-strong rounded-card shadow-brutal-sm anim-toast bg-surface ${
-            t.kind === 'success' ? 'border-l-paid-text border-l-8' : t.kind === 'error' ? 'border-l-danger-text border-l-8' : ''
+          className={`w-full flex items-start gap-3 px-4 py-3 border border-line rounded-card shadow-brutal anim-toast bg-surface ${
+            t.kind === 'success' ? 'border-l-4 border-l-paid-text' : t.kind === 'error' ? 'border-l-4 border-l-danger-text' : ''
           }`}
           onClick={() => dismiss(t.id)}
         >
@@ -390,10 +389,10 @@ export function OfflineBanner() {
   return (
     <div
       role="status"
-      className={`px-4 py-2.5 text-[13px] font-bold flex items-center gap-2 border-b-2 ${
+      className={`px-4 py-2.5 text-[13px] font-bold flex items-center gap-2 border-b ${
         online
-          ? 'bg-pending-bg text-pending-text border-pending-text/40'
-          : 'bg-pending-bg text-pending-text border-pending-text/40'
+          ? 'bg-pending-bg text-pending-text border-pending-text/30'
+          : 'bg-pending-bg text-pending-text border-pending-text/30'
       }`}
     >
       <span className={`w-2 h-2 rounded-full ${online ? 'bg-pending-text anim-pulse-dot' : 'bg-danger anim-pulse-dot'}`} aria-hidden />
