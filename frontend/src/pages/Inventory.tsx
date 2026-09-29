@@ -5,8 +5,9 @@
 // images via the public /products/:id/image route, thumbnails in the list).
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, downloadFile, isDemoSync, productImageUrl, Category, Product } from '../lib/api'
-import { demoProductImageUrl } from '../demo/backend'
+import { api, downloadFile, Category, Product } from '../lib/api'
+import { productPhotoCandidates } from '../lib/photos'
+import { ProductPhoto } from '../components/ProductPhoto'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
 import { Button, Card, EmptyState, Field, Input, Modal, MoneyInput, Select, Spinner, Table, Tabs } from '../components/ui'
@@ -17,35 +18,20 @@ import { normalizeProductImage, PHOTO_ACCEPT } from '../lib/photo'
 import { toast } from '../stores/toasts'
 import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2, Printer } from 'lucide-react'
 
-/** <img> src for a product photo. On a static/demo host the /image route
- * doesn't exist, so the demo backend's in-memory data URL is used instead. */
-function productPhotoSrc(p: Product): string {
-  if (isDemoSync()) return demoProductImageUrl(p.id)
-  return productImageUrl(p)
+/** Editor preview: the product's CURRENT best photo (uploaded first, then
+ *  the demo's bundled fallback) — unlike the thumbnails this must NOT walk
+ *  the whole chain; the cashier is editing what the server actually has. */
+function editorPhotoSrc(p: Product): string {
+  return productPhotoCandidates(p)[0] ?? ''
 }
 
-/** Small lazy thumbnail with an icon placeholder when no photo exists. */
+/** Thumbnail via the shared ProductPhoto chain (uploaded → bundled →
+ *  monogram) — the inventory list shows exactly what the POS shows. */
 function ProductThumb({ p }: { p: Product }) {
-  const [failed, setFailed] = useState(false)
-  const src = productPhotoSrc(p)
-  // A new photo bumps the cache-buster on src — forget the old 404 latch
-  // or the thumbnail stays a placeholder until the component unmounts.
-  useEffect(() => { setFailed(false) }, [src])
-  if (!src || failed) {
-    return (
-      <span className="w-10 h-10 shrink-0 rounded-input border-2 border-line bg-surface-muted flex items-center justify-center text-ink-subtle" aria-hidden>
-        <ImageIcon size={16} strokeWidth={2.25} />
-      </span>
-    )
-  }
   return (
-    <img
-      src={src}
-      alt=""
-      loading="lazy"
-      onError={() => setFailed(true)}
-      className="w-10 h-10 shrink-0 rounded-input border-2 border-line object-cover bg-surface-muted"
-    />
+    <span className="w-10 h-10 shrink-0 rounded-input border-2 border-line bg-surface-muted overflow-hidden flex" aria-hidden>
+      <ProductPhoto p={p} />
+    </span>
   )
 }
 
@@ -546,7 +532,7 @@ function ProductModal({
   // keep the file until create succeeds, then upload to the fresh id.
   const [pendingPhoto, setPendingPhoto] = useState<File | null>(null)
   const [photoBusy, setPhotoBusy] = useState(false)
-  const [previewSrc, setPreviewSrc] = useState(product ? productPhotoSrc(product) : '')
+  const [previewSrc, setPreviewSrc] = useState(product ? editorPhotoSrc(product) : '')
   const [hasPhoto, setHasPhoto] = useState<boolean | null>(product ? null : false)
   // File pickers are opened EXPLICITLY via refs: wrapping the Button in a
   // <label> looked right but a click on a native <button> inside a label

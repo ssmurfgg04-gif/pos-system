@@ -14,14 +14,13 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, Category, Product } from '../lib/api'
-import { isDemoSync, productImageUrl } from '../lib/api'
-import { demoProductImageUrl } from '../demo/backend'
 import { useCart } from '../stores/cart'
 import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { usePosSearch } from '../stores/search'
 import { formatMoney, formatMoneyCompact } from '../lib/money'
 import { Button, EmptyState, Input, Modal, Spinner, ErrorBoundary } from '../components/ui'
+import { ProductPhoto } from '../components/ProductPhoto'
 import { CheckoutRail } from '../components/CheckoutRail'
 import { HeldSalesDrawer } from '../components/HeldSalesDrawer'
 import { ReceiptModal } from '../components/Receipt'
@@ -390,11 +389,6 @@ function CategoryChip({ active, onClick, children }: { active: boolean; onClick:
   )
 }
 
-function productPhotoSrc(p: Product): string {
-  if (isDemoSync()) return demoProductImageUrl(p.id)
-  return productImageUrl(p)
-}
-
 function StockBadge({ p }: { p: Product }) {
   if (!p.trackStock) return null
   const out = p.stockQty <= 0
@@ -433,35 +427,41 @@ function ProductCard({ p, qty, onAdd, onInc, onDec }: {
         className="text-left flex flex-col flex-1 min-h-0"
       >
         <div className="h-24 sm:h-28 w-full bg-surface-muted border-b border-line overflow-hidden shrink-0 p-1">
-          <ProductImage p={p} />
+          <ProductPhoto p={p} />
         </div>
-        <div className="flex-1 min-h-0 p-2 flex flex-col">
+        <div className="flex-1 min-h-0 p-2 pb-1 flex flex-col">
           <p className="font-semibold text-[13px] leading-snug text-ink line-clamp-2 min-h-[2.1em]">{p.name}</p>
           <p className="text-[11px] text-ink-subtle mt-0.5 truncate">{p.sku || p.categoryName || '\u00a0'}</p>
         </div>
       </button>
-      <div className="px-2 pb-2 pt-1 flex items-end justify-between gap-1.5">
-        <span className={`font-bold text-[15px] tabular leading-none whitespace-nowrap ${inCart ? 'text-brand' : 'text-ink'}`}>{formatMoneyCompact(p.priceCents)}</span>
+      {/* Full-width control zone — the + Add button and the − qty + stepper
+          span the whole card, so the stepper can never be squeezed off the
+          card by a long price (the "cards only have a + button" bug). */}
+      <div className="px-2 pb-2 pt-1 space-y-1.5">
+        <div className="flex items-center justify-between gap-1.5">
+          <span className={`font-bold text-[15px] tabular leading-none ${inCart ? 'text-brand' : 'text-ink'}`}>{formatMoneyCompact(p.priceCents)}</span>
+          {inCart && <span className="text-[10px] font-bold uppercase tracking-wide text-brand shrink-0">in cart</span>}
+        </div>
         {inCart ? (
           // Quantity-aware control: once the item is in the sale the card
           // becomes a stepper (− qty +) so the cashier never has to hunt
           // through the cart to adjust a count.
-          <div className="flex items-center rounded-pill border border-brand overflow-hidden h-8 bg-brand-soft shrink-0" role="group" aria-label={`${p.name} quantity in cart`}>
+          <div className="flex items-stretch rounded-input border border-brand overflow-hidden h-9 bg-brand-soft" role="group" aria-label={`${p.name} quantity in cart`}>
             <button
               onClick={onDec}
               aria-label={qty === 1 ? `Remove ${p.name} from cart` : `Decrease ${p.name} quantity`}
-              className="w-7 h-full font-bold text-brand hover:bg-brand/10 flex items-center justify-center"
+              className="w-10 font-bold text-brand hover:bg-brand/10 flex items-center justify-center"
             >
-              <Minus size={14} strokeWidth={3} aria-hidden />
+              <Minus size={15} strokeWidth={3} aria-hidden />
             </button>
-            <span className="w-6 text-center font-extrabold text-brand text-[13px] tabular" aria-live="polite">{qty}</span>
+            <span className="flex-1 text-center font-extrabold text-brand text-[14px] tabular flex items-center justify-center" aria-live="polite">{qty}</span>
             <button
               onClick={onInc}
               aria-label={`Increase ${p.name} quantity`}
               disabled={out || (p.trackStock && qty >= p.stockQty)}
-              className="w-7 h-full font-bold text-brand hover:bg-brand/10 disabled:opacity-40 flex items-center justify-center"
+              className="w-10 font-bold text-brand hover:bg-brand/10 disabled:opacity-40 flex items-center justify-center"
             >
-              <Plus size={14} strokeWidth={3} aria-hidden />
+              <Plus size={15} strokeWidth={3} aria-hidden />
             </button>
           </div>
         ) : (
@@ -469,11 +469,14 @@ function ProductCard({ p, qty, onAdd, onInc, onDec }: {
             onClick={onAdd}
             disabled={out}
             aria-label={`Add ${p.name} to cart`}
-            className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
-              out ? 'bg-surface-muted text-ink-subtle cursor-not-allowed' : 'bg-brand text-white hover:brightness-110 active:brightness-95'
+            className={`w-full h-9 rounded-input font-bold text-[13px] flex items-center justify-center gap-1 transition-colors ${
+              out
+                ? 'bg-surface-muted text-ink-subtle cursor-not-allowed'
+                : 'bg-brand text-white hover:brightness-110 active:brightness-95'
             }`}
           >
-            <Plus size={17} strokeWidth={2.75} aria-hidden />
+            <Plus size={15} strokeWidth={2.75} aria-hidden />
+            {out ? 'Out of stock' : 'Add'}
           </button>
         )}
       </div>
@@ -493,7 +496,7 @@ function ProductRow({ p, qty, onAdd, onInc, onDec }: {
   return (
     <div className={`flex items-center gap-3 p-2 rounded-input border bg-surface ${out ? 'border-line opacity-60' : inCart ? 'border-brand/50' : 'border-line'}`}>
       <div className="w-11 h-11 rounded-input overflow-hidden bg-surface-muted border border-line shrink-0 p-0.5">
-        <ProductImage p={p} />
+        <ProductPhoto p={p} />
       </div>
       <button onClick={onAdd} disabled={out} className="flex-1 min-w-0 text-left">
         <p className="font-semibold text-[13px] text-ink leading-snug truncate">{p.name}</p>
@@ -537,38 +540,5 @@ function ProductRow({ p, qty, onAdd, onInc, onDec }: {
         </button>
       )}
     </div>
-  )
-}
-
-function ProductImage({ p }: { p: Product }) {
-  const [failed, setFailed] = useState(false)
-  const [src, setSrc] = useState(() => productPhotoSrc(p))
-  // Photo changes bump updatedAt → new src; forget any previous 404 latch.
-  useEffect(() => {
-    setSrc(productPhotoSrc(p))
-    setFailed(false)
-  }, [p.updatedAt, p.id])
-  // Empty src never fires onError — the <img> would resolve "" against the
-  // page root and render the browser's broken-image glyph forever (the
-  // "product images not loading" bug). Guard it explicitly.
-  if (!src || failed) {
-    return (
-      <div className="w-full h-full flex items-center justify-center text-ink-subtle/60 bg-surface-muted" aria-hidden>
-        <span className="w-full h-full flex items-center justify-center" title={p.name}>
-          <span className="font-bold text-[11px] tracking-wide text-ink-subtle/70 select-none">
-            {p.name.split(/\s+—\s+|\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '·'}
-          </span>
-        </span>
-      </div>
-    )
-  }
-  return (
-    <img
-      src={src}
-      alt=""
-      loading="lazy"
-      onError={() => setFailed(true)}
-      className="w-full h-full object-contain"
-    />
   )
 }

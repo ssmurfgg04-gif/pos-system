@@ -11,14 +11,14 @@
 // M-Pesa identifier.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, CheckoutRequest, Customer, Order, PaymentConfig, Product, SplitLeg, isDemoSync } from '../lib/api'
+import { api, CheckoutRequest, Customer, Order, PaymentConfig, Product, SplitLeg } from '../lib/api'
 import { openPaystackPopup } from '../lib/api'
-import { demoProductImageUrl } from '../demo/backend'
 import { useCart } from '../stores/cart'
 import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { formatMoney, formatMoneyCompact, normalizePhoneKe, splitRemaining } from '../lib/money'
 import { Button, EmptyState, Field, Input, MoneyInput, Spinner, StatusPill, Modal } from './ui'
+import { ProductPhoto } from './ProductPhoto'
 import { SplitTenderEditor, isAsyncLeg } from './SplitTenderEditor'
 import { ReceiptModal } from './Receipt'
 import { toast } from '../stores/toasts'
@@ -492,10 +492,9 @@ export function CheckoutRail({
           <EmptyState icon={<ShoppingCart size={24} strokeWidth={2.25} />} title="Cart is empty" body="Tap products or scan a barcode to add them." />
         ) : (
           cart.lines.map((l) => {
-            const p = productById.get(l.productId)
             return (
               <div key={l.productId} className="flex gap-2.5 p-2 rounded-input border border-line bg-surface">
-                <Thumb p={p} />
+                <Thumb p={productById.get(l.productId)} name={l.name} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-[13px] font-semibold text-ink leading-snug line-clamp-1">{l.name}</p>
@@ -515,7 +514,11 @@ export function CheckoutRail({
                         aria-label={l.qty === 1 ? `Remove ${l.name}` : 'Decrease quantity'}
                         className="w-8 h-full bg-surface-muted font-bold text-ink hover:bg-line flex items-center justify-center"
                       >
-                        {l.qty === 1 ? <X size={13} strokeWidth={2.75} aria-hidden /> : <Minus size={13} strokeWidth={2.75} aria-hidden />}
+                        {/* ALWAYS a − glyph: at quantity 1 it removes the line,
+                            but the control must look identical at every count
+                            (the ✕-swap made the cashier think it was a delete
+                            affordance and made the stepper shape unstable). */}
+                        <Minus size={13} strokeWidth={2.75} aria-hidden />
                       </button>
                       <span className="w-8 text-center font-bold tabular text-ink text-[13px]">{l.qty}</span>
                       <button
@@ -610,34 +613,15 @@ function Row({ label, value }: { label: string; value: string }) {
   )
 }
 
-function Thumb({ p }: { p?: Product }) {
-  const [failed, setFailed] = useState(false)
-  const src = p ? productImageUrlSafe(p) : ''
-  // Empty src never fires onError (resolves against the page root) — guard
-  // it so the cashier sees a clean monogram, never the broken-image glyph.
-  if (!src || failed) {
-    return (
-      <div className="w-12 h-12 rounded-input bg-surface-muted border border-line flex items-center justify-center text-ink-subtle shrink-0" aria-hidden>
-        <span className="font-bold text-[11px] tracking-wide text-ink-subtle/70 select-none">
-          {p?.name.split(/\s+—\s+|\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '·'}
-        </span>
-      </div>
-    )
-  }
+// ---- Cart thumbnail: 64px photo in the shared fallback chain — the
+// cashier should SEE what they're selling from the cart ("images on the
+// right"), including starter-catalog products that have no upload yet.
+function Thumb({ p, name }: { p?: Product; name: string }) {
   return (
-    <img
-      src={src}
-      alt=""
-      onError={() => setFailed(true)}
-      className="w-12 h-12 rounded-input object-contain border border-line bg-surface-muted p-0.5 shrink-0"
-      loading="lazy"
-    />
+    <div className="w-16 h-16 rounded-input overflow-hidden bg-surface-muted border border-line p-0.5 shrink-0" aria-hidden>
+      <ProductPhoto p={p} name={name} />
+    </div>
   )
-}
-
-function productImageUrlSafe(p: Pick<Product, 'id' | 'updatedAt'>): string {
-  if (isDemoSync()) return demoProductImageUrl(p.id)
-  return p.updatedAt ? `/api/v1/products/${p.id}/image?v=${encodeURIComponent(p.updatedAt)}` : `/api/v1/products/${p.id}/image`
 }
 
 function creditOf(c: Customer): number {

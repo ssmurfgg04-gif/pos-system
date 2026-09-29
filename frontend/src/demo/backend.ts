@@ -604,19 +604,28 @@ const BUNDLED_PRODUCT_SKUS = new Set([
   'SV-001', 'SV-002', 'SV-003', 'GC-001',
 ])
 
+/** Bundled catalog photo URL for a SKU ('' when that SKU has no bundled
+ *  photo). BASE_URL-relative: '/' in dev and on tills, '/demo/' on the
+ *  Netlify site. Exported so the real-mode photo chain (lib/photos.ts) can
+ *  fall back to the bundled photo on tills too — a fresh till seeds the
+ *  starter catalog with no uploads, and the bundled photos ride inside the
+ *  binary (go:embed frontend/dist → public/demo-products). */
+export function bundledDemoProductImageUrl(sku: string): string {
+  if (!sku || !BUNDLED_PRODUCT_SKUS.has(sku)) return ''
+  const base = import.meta.env.BASE_URL || '/'
+  return `${base.endsWith('/') ? base : base + '/'}demo-products/${sku}.jpg`
+}
+
 /** Photo for a product in demo mode: a cashier-uploaded image if one
  *  exists, else the bundled web-sourced catalog photo for that SKU, else
  *  '' (the UI renders its professional monogram fallback). Demo <img>
- *  srcs can't hit the real /image route on a static host. Paths are
- *  BASE_URL-relative: '/' in dev, '/demo/' on the Netlify site. */
+ *  srcs can't hit the real /image route on a static host. */
 export function demoProductImageUrl(productId: number): string {
   const x = load() as DemoDBX
   const custom = x.productImages?.[String(productId)]
   if (custom) return custom
   const sku = x.products?.find((p) => p.id === productId)?.sku
-  if (!sku || !BUNDLED_PRODUCT_SKUS.has(sku)) return ''
-  const base = import.meta.env.BASE_URL || '/'
-  return `${base.endsWith('/') ? base : base + '/'}demo-products/${sku}.jpg`
+  return bundledDemoProductImageUrl(sku || '')
 }
 
 /** Simulate the M-Pesa STK lifecycle (mock provider semantics). */
