@@ -607,13 +607,16 @@ const BUNDLED_PRODUCT_SKUS = new Set([
 /** Photo for a product in demo mode: a cashier-uploaded image if one
  *  exists, else the bundled web-sourced catalog photo for that SKU, else
  *  '' (the UI renders its professional monogram fallback). Demo <img>
- *  srcs can't hit the real /image route on a static host. */
+ *  srcs can't hit the real /image route on a static host. Paths are
+ *  BASE_URL-relative: '/' in dev, '/demo/' on the Netlify site. */
 export function demoProductImageUrl(productId: number): string {
   const x = load() as DemoDBX
   const custom = x.productImages?.[String(productId)]
   if (custom) return custom
   const sku = x.products?.find((p) => p.id === productId)?.sku
-  return sku && BUNDLED_PRODUCT_SKUS.has(sku) ? `/demo-products/${sku}.jpg` : ''
+  if (!sku || !BUNDLED_PRODUCT_SKUS.has(sku)) return ''
+  const base = import.meta.env.BASE_URL || '/'
+  return `${base.endsWith('/') ? base : base + '/'}demo-products/${sku}.jpg`
 }
 
 /** Simulate the M-Pesa STK lifecycle (mock provider semantics). */
