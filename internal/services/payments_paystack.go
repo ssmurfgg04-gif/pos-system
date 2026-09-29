@@ -30,6 +30,7 @@ import (
 
         "posapp/internal/auth"
         "posapp/internal/models"
+        "posapp/internal/mpesa"
         "posapp/internal/paystack"
 )
 
@@ -105,6 +106,19 @@ func (s *Service) paystackCurrency() string {
         return cur
 }
 
+// paystackPhoneKe forces the phone to the DETERMINISTIC 12-digit 2547/2541
+// form Safaricom (and therefore Paystack's Kenya mobile-money charge)
+// expects — inputs may legitimately arrive as 07xx/01xx, +2547xx or 2547xx
+// (cashier typing, split-tender legs, API clients), but the wire format to
+// Paystack must never vary. Returns the input when it cannot be normalized
+// (callers validate afterwards).
+func paystackPhoneKe(in string) string {
+        if n, err := mpesa.NormalizePhone(in); err == nil {
+                return n
+        }
+        return strings.TrimSpace(in)
+}
+
 // PaystackInit opens (or re-opens) checkout for a PENDING paystack order.
 // Each call mints a FRESH reference and supersedes stale pending payments
 // — abandoned popups never block a retry. The customer phone (captured in
@@ -139,8 +153,13 @@ func (s *Service) PaystackInit(orderID int64, email, phone string, p *auth.Princ
                 return nil, nil, errors.New("invalid customer email")
         }
         phone = strings.TrimSpace(phone)
-        if phone != "" && !mpesaPhoneOK(phone) {
-                return nil, nil, fmt.Errorf("invalid customer phone %q — expected 07XX/2547XX/2541XX", phone)
+        if phone != "" {
+                if n, err := mpesa.NormalizePhone(phone); err == nil {
+                        phone = n
+                }
+                if !mpesaPhoneOK(phone) {
+                        return nil, nil, fmt.Errorf("invalid customer phone %q — expected 07XX/2547XX/2541XX", phone)
+                }
         }
 
         // Supersede previous pending paystack attempts (fresh reference each time).
@@ -229,7 +248,8 @@ func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay
         if client == nil || !s.settings.GetBool("paystack_enabled", true) {
                 return nil, fmt.Errorf("%w: paystack is not connected — M-Pesa STK needs it (or use manual receipt entry)", ErrNotConfigured)
         }
-        if !mpesaPhoneOK(pay.Phone) {
+        phone := paystackPhoneKe(pay.Phone)
+        if !mpesaPhoneOK(phone) {
                 return nil, fmt.Errorf("invalid customer phone %q — expected 07XX/2547XX/2541XX", pay.Phone)
         }
 
@@ -246,13 +266,14 @@ func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay
                 Currency:  s.paystackCurrency(),
                 Reference: reference,
                 MobileMoney: &paystack.MobileMoney{
-                        Phone:    pay.Phone,
+                        Phone:    phone,
                         Provider: "mpesa",
                 },
                 Metadata: map[string]any{
-                        "order_number": order.Number,
-                        "cashier":      p.Username,
-                        "method":       "mpesa_stk",
+                        "order_number":   order.Number,
+                        "cashier":        p.Username,
+                        "method":         "mpesa_stk",
+                        "customer_phone": phone,
                         "custom_fields": []map[string]string{
                                 {"display_name": "Order", "variable_name": "order", "value": order.Number},
                         },
