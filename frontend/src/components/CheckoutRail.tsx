@@ -460,7 +460,7 @@ export function CheckoutRail({
   return (
     <div className="h-full flex flex-col">
       {/* Rail header */}
-      <header className="px-4 pt-4 pb-3 border-b border-line flex items-center justify-between bg-surface rounded-t-card">
+      <header className="px-4 pt-4 pb-3 border-b border-line flex items-center justify-between bg-surface rounded-t-card shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
           <span className="w-9 h-9 rounded-input bg-brand-soft text-brand flex items-center justify-center shrink-0" aria-hidden>
             <ShoppingCart size={17} strokeWidth={2.25} />
@@ -558,8 +558,12 @@ export function CheckoutRail({
         )}
       </div>
 
-      {/* Totals + payment */}
-      <footer className="border-t border-line bg-shell-edge rounded-b-card px-4 pt-3 pb-4 space-y-3">
+      {/* Totals + payment — the payment form is the tallest section of the
+          rail; WITHOUT an internal scroll it squeezes the cart-items area
+          down to a sliver on normal screens (the cashier literally could
+          not see what they were selling). The footer now scrolls itself,
+          and the items list always keeps its share of the rail. */}
+      <footer className="border-t border-line bg-shell-edge rounded-b-card px-4 pt-3 pb-4 space-y-3 max-h-[58%] overflow-y-auto overscroll-contain shrink-0">
         <div className="space-y-1">
           <Row label="Subtotal" value={formatMoney(totals.subtotal)} />
           <Row label={`${branding.tax_percent}% ${branding.tax_included ? 'VAT (incl.)' : 'VAT'}`} value={formatMoney(totals.tax)} />

@@ -25,7 +25,9 @@ var DefaultSettings = map[string]string{
         "currency_symbol":       "KES",
         "tax_percent":           "16",
         "tax_included":          "true",
-        "brand_color":           "#10B981",
+        // Creative Divine blue — the design system's brand (frontend/src/index.css).
+        // Green is reserved for success/payment confirmation, never brand accents.
+        "brand_color":           "#0047ab",
         "brand_logo":            "", // "1" when brand-logo.png is present
         "payment_mode":          "auto", // auto | stk | manual
         "till_number":           "",
