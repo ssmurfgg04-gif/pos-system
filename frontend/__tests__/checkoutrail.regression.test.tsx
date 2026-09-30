@@ -157,8 +157,11 @@ describe('CheckoutRail — in-rail STK payment (white-screen regression)', () =>
     const charge = Array.from(container.querySelectorAll('button')).find((b) => /Send STK/.test(b.textContent || ''))
     await click(charge!)
 
-    expect(container.textContent).toContain("STK push didn't complete")
+    expect(container.textContent).toContain('Payment not confirmed yet')
     expect(container.textContent).toContain('Request cancelled by user')
+    // The failed rail leads with the late-money recovery path (a customer can
+    // pay long after the till stopped watching) alongside the retry.
+    expect(container.textContent).toContain('Check payment status')
     expect(container.textContent).toContain('Retry')
     // The cart is NOT cleared by a failed payment (the order stays pending
     // server-side; the rail only clears on verified success or explicit void).

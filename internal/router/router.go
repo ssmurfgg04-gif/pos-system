@@ -136,6 +136,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         authd.POST("/orders/:id/settle", perm("pos.sell"), h.SettleTab)
         authd.POST("/orders/:id/stkpush", perm("pos.sell"), h.RetrySTK)
         authd.POST("/orders/:id/manual", perm("payments.manual"), h.ManualConfirm)
+        authd.POST("/orders/:id/recheck", perm("pos.sell"), h.OrderRecheck)
         authd.POST("/orders/:id/paystack/init", perm("pos.sell"), h.PaystackInit)
         authd.POST("/orders/:id/paystack/verify", perm("pos.sell"), h.PaystackVerify)
         authd.GET("/payments/config", h.PaymentConfig)

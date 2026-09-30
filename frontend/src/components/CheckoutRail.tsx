@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 
 type Method = 'mpesa' | 'card' | 'cash' | 'tab' | 'credit'
-type StkStage = 'sending' | 'sent' | 'waiting' | 'paid' | 'failed'
+type StkStage = 'sending' | 'sent' | 'waiting' | 'slow' | 'paid' | 'failed'
 type InlineStage = 'init' | 'popup' | 'verifying' | 'paid' | 'failed'
 
 export function CheckoutRail({
@@ -117,6 +117,41 @@ export function CheckoutRail({
     if (timerRef.current) { window.clearInterval(timerRef.current); timerRef.current = null }
   }
 
+  // Two-note chime when a sale completes — sellers are often turned away
+  // from the screen mid-payment; sound closes the loop vision can't.
+  // Guarded: autoplay policies or missing audio hardware must never break
+  // checkout.
+  const celebrate = () => {
+    try {
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (!Ctx) return
+      const ctx = new Ctx()
+      const notes = [880, 1318.5] // A5 → E6, a short upbeat "ding-ding"
+      notes.forEach((freq, i) => {
+        const o = ctx.createOscillator()
+        const g = ctx.createGain()
+        o.type = 'sine'
+        o.frequency.value = freq
+        const t0 = ctx.currentTime + i * 0.13
+        g.gain.setValueAtTime(0.0001, t0)
+        g.gain.exponentialRampToValueAtTime(0.16, t0 + 0.02)
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.24)
+        o.connect(g)
+        g.connect(ctx.destination)
+        o.start(t0)
+        o.stop(t0 + 0.27)
+      })
+      window.setTimeout(() => { ctx.close().catch(() => {}) }, 900)
+    } catch { /* never break checkout for sound */ }
+  }
+
+  // Single funnel for every "this sale is complete" moment — chime + parent
+  // reset. The offline queue reports a null order; skip the chime there.
+  const handlePaid = (o: Order | null) => {
+    if (o) celebrate()
+    onOrderPaid(o as Order)
+  }
+
   // Reset tender form when the cart is cleared/replaced.
   useEffect(() => {
     setCustomerName(cart.customerName)
@@ -178,8 +213,13 @@ export function CheckoutRail({
 
   // STK waiting loop — poll the order; the backend sweeper completes it via
   // Paystack verify (or the charge.success webhook) and the poll surfaces it.
+  // The cashier-facing window is 15 minutes (mirrors the backend sweep
+  // timeout): money that lands at ANY point in that window still flips this
+  // screen to paid. Field report v1.1.9: a customer paid 21 minutes after
+  // the push — the old 3-minute hard fail showed "no money moved" while the
+  // money was literally landing, and the sale sat Pending.
   useEffect(() => {
-    if (mode !== 'stk' || stkStage !== 'waiting' || !activeOrder) return
+    if (mode !== 'stk' || (stkStage !== 'waiting' && stkStage !== 'slow') || !activeOrder) return
     pollRef.current = window.setInterval(async () => {
       try {
         const o = await api.get<Order>(`/api/v1/orders/${activeOrder.id}`)
@@ -189,7 +229,7 @@ export function CheckoutRail({
         if (o.status === 'PAID') {
           setStkStage('paid')
           stopTimers()
-          onOrderPaid(o)
+          handlePaid(o)
         } else if (pay?.status === 'FAILED') {
           setStkStage('failed')
           setPayError(pay.resultDesc || 'STK push failed or timed out')
@@ -200,22 +240,27 @@ export function CheckoutRail({
       }
     }, 2000)
     timerRef.current = window.setInterval(() => {
-      setElapsed((e) => {
-        const next = e + 1
-        // Client-side timeout: never leave a cashier staring at an eternal
-        // spinner — the STK request dies after 3 minutes with an explicit
-        // "timed out" state the cashier can retry or abandon from.
-        if (next >= 180) {
-          stopTimers()
-          setStkStage('failed')
-          setPayError('The payment request timed out after 3 minutes — no money moved. Send it again or change the number.')
-        }
-        return next
-      })
+      setElapsed((e) => e + 1)
     }, 1000)
     return stopTimers
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, stkStage, activeOrder?.id])
+
+  // Stage transitions driven by elapsed time (kept OUT of the tick updater:
+  // updaters must stay pure — StrictMode double-invocation made the old
+  // in-updater timeout fire twice). 3 quiet minutes → calm "still waiting"
+  // state, never a red failure; 15 minutes → honest "stopped watching" with
+  // Check-payment-status recovery in reach.
+  useEffect(() => {
+    if (mode !== 'stk') return
+    if (elapsed >= 180 && elapsed < 900 && stkStage === 'waiting') setStkStage('slow')
+    if (elapsed >= 900 && (stkStage === 'waiting' || stkStage === 'slow')) {
+      stopTimers()
+      setStkStage('failed')
+      setPayError('We stopped auto-watching after 15 minutes. If the customer says they already paid, tap “Check payment status” — it re-verifies the charge with Paystack and completes the sale. Otherwise send the prompt again or key in the M-Pesa code.')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elapsed, mode, stkStage])
 
   const pushStk = async (order: Order, forPhone: string) => {
     setStkStage('sending')
@@ -291,10 +336,36 @@ export function CheckoutRail({
       const done = await api.post<Order>(`/api/v1/orders/${orderID}/paystack/verify`, { reference: ref })
       setActiveOrder(done)
       setInlineStage('paid')
-      onOrderPaid(done)
+      handlePaid(done)
     } catch (err: any) {
       setInlineStage('failed')
       setPayError(err?.message || 'Verification failed — try again')
+    }
+  }
+
+  // "Check payment status" — asks the server to re-verify every reference
+  // this order minted against Paystack (pending + recent failed pushes) and
+  // complete the sale if the money actually arrived. The recovery path for
+  // late PIN entries: the customer paid after the till stopped watching.
+  const recheckPayment = async () => {
+    if (!activeOrder || busy) return
+    setBusy(true)
+    try {
+      const r = await api.post<{ order: Order; message: string }>(`/api/v1/orders/${activeOrder.id}/recheck`, {})
+      if (r?.order?.status === 'PAID') {
+        setActiveOrder(r.order)
+        if (mode === 'stk') setStkStage('paid')
+        else setInlineStage('paid')
+        stopTimers()
+        handlePaid(r.order)
+        toast.success('Payment confirmed', `${r.order.number} — ${formatMoney(r.order.totalCents)}`)
+      } else {
+        toast.info('No payment yet', r?.message || 'No confirmed payment for this order yet.')
+      }
+    } catch (err: any) {
+      toast.error('Check failed', err?.message || 'Could not re-check the payment')
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -350,10 +421,10 @@ export function CheckoutRail({
               setPayError('Add the customer phone number, then send the STK push.')
             }
           } else {
-            onOrderPaid(o)
+            handlePaid(o)
           }
         } else {
-          onOrderPaid(o)
+          handlePaid(o)
         }
       } catch (err: any) {
         // Network failure → queue offline (cash only; M-Pesa/Paystack need a
@@ -364,7 +435,7 @@ export function CheckoutRail({
             try {
               await enqueue(body)
               toast.info('Saved offline', 'Will sync when back online.')
-              onOrderPaid(null as unknown as Order)
+              handlePaid(null)
               return
             } catch {
               /* IndexedDB unavailable */
@@ -393,7 +464,7 @@ export function CheckoutRail({
       setActiveOrder(o)
       setStkStage('paid')
       stopTimers()
-      onOrderPaid(o)
+      handlePaid(o)
       toast.success('Payment confirmed', `Receipt ${code.trim().toUpperCase()}`)
     } catch (err: any) {
       setPayError(err?.message || 'Invalid receipt code')
@@ -438,7 +509,7 @@ export function CheckoutRail({
           busy={busy}
           onRetryStk={(p) => pushStk(activeOrder, p)}
           onRetryInline={() => paystackInit(activeOrder, email)}
-          onVerifyAgain={() => lastRef && verify(activeOrder.id, lastRef)}
+          onRecheck={recheckPayment}
           onManualCode={submitManual}
           onBack={abandonPending}
           onVoidedOrder={(v) => { onOrderVoided(v); resetPayment(); cart.clear() }}
@@ -1005,7 +1076,7 @@ function PaymentForm(props: {
 
 function PaymentPanel({
   mode, stkStage, inlineStage, order, reference, elapsed, phone, manualOnly, branding,
-  payError, busy, onRetryStk, onRetryInline, onVerifyAgain, onManualCode, onBack, onVoidedOrder, onNewSale, onReceipt,
+  payError, busy, onRetryStk, onRetryInline, onRecheck, onManualCode, onBack, onVoidedOrder, onNewSale, onReceipt,
 }: {
   mode: 'stk' | 'inline'
   stkStage: StkStage
@@ -1020,7 +1091,7 @@ function PaymentPanel({
   busy: boolean
   onRetryStk: (phone: string) => void
   onRetryInline: () => void
-  onVerifyAgain: () => void
+  onRecheck: () => void
   onManualCode: (code: string) => void
   onBack: () => void
   onVoidedOrder: (o: Order) => void
@@ -1039,7 +1110,7 @@ function PaymentPanel({
   const stkStep =
     stkStage === 'sending' ? 0
       : stkStage === 'sent' ? 1
-        : stkStage === 'waiting' ? 2
+        : (stkStage === 'waiting' || stkStage === 'slow') ? 2
           : 3 // paid or failed — terminal
 
   return (
@@ -1071,6 +1142,7 @@ function PaymentPanel({
             payError={payError}
             busy={busy}
             onSend={() => onRetryStk(normalizePhoneKe(localPhone) || localPhone)}
+            onRecheck={onRecheck}
             code={code}
             setCode={setCode}
             onManualCode={onManualCode}
@@ -1078,24 +1150,26 @@ function PaymentPanel({
         )}
 
         {mode === 'inline' && inlineStage !== 'paid' && (
-          <InlinePanel stage={inlineStage} reference={reference} payError={payError} onRetry={onRetryInline} onVerifyAgain={onVerifyAgain} />
+          <InlinePanel stage={inlineStage} reference={reference} payError={payError} onRetry={onRetryInline} onRecheck={onRecheck} />
         )}
 
         {paid && (
-          <div className="space-y-4 text-center py-3">
-            <div className="w-16 h-16 mx-auto rounded-full bg-paid-bg border border-paid-text flex items-center justify-center text-paid-text" aria-hidden>
-              <Check size={30} strokeWidth={2.75} />
+          <div className="text-center py-4 space-y-4" role="status">
+            <div className="w-20 h-20 mx-auto rounded-full bg-paid-bg border-2 border-paid-text flex items-center justify-center text-paid-text anim-pop" aria-hidden>
+              <Check size={42} strokeWidth={3} />
             </div>
             <div>
-              <p className="font-extrabold text-ink text-xl">Paid</p>
-              <p className="text-ink-muted text-sm mt-1">
+              <p className="font-black text-paid-text text-2xl tracking-tight">Sale complete</p>
+              <p className="text-[32px] leading-none font-extrabold text-ink tabular mt-2">{formatMoney(order.totalCents)}</p>
+              <p className="text-ink-muted text-sm mt-2">
+                Order <span className="tabular font-semibold text-ink">{order.number}</span>
                 {mode === 'stk' && lastPayment?.mpesaReceipt
-                  ? <>M-Pesa receipt <strong className="text-ink tabular">{lastPayment.mpesaReceipt}</strong></>
-                  : 'Payment verified'}
+                  ? <> · M-Pesa receipt <strong className="text-ink tabular">{lastPayment.mpesaReceipt}</strong></>
+                  : null}
               </p>
             </div>
             <div className="flex justify-center">
-              <StatusPill status={order.discrepancy ? 'danger' : 'paid'} label={order.discrepancy ? 'Amount discrepancy — review' : 'Payment complete'} />
+              <StatusPill status={order.discrepancy ? 'danger' : 'paid'} label={order.discrepancy ? 'Amount discrepancy — review' : 'Payment verified'} />
             </div>
           </div>
         )}
@@ -1113,11 +1187,11 @@ function PaymentPanel({
       <footer className="border-t border-line px-4 py-3 space-y-2 bg-shell-edge rounded-b-card">
         {paid ? (
           <>
-            <Button variant="primary" size="lg" className="w-full" onClick={onReceipt}>
-              View receipt
-            </Button>
-            <Button variant="secondary" className="w-full" onClick={onNewSale}>
+            <Button variant="primary" size="lg" className="w-full" onClick={onNewSale}>
               Start a new sale
+            </Button>
+            <Button variant="secondary" className="w-full" onClick={onReceipt}>
+              View receipt
             </Button>
           </>
         ) : !voiding ? (
@@ -1137,7 +1211,7 @@ function PaymentPanel({
 }
 
 function StkPanel({
-  stage, step, elapsed, phone, setPhone, manualOnly, branding, orderNumber, payError, busy, onSend,
+  stage, step, elapsed, phone, setPhone, manualOnly, branding, orderNumber, payError, busy, onSend, onRecheck,
   code, setCode, onManualCode,
 }: {
   stage: StkStage
@@ -1151,6 +1225,7 @@ function StkPanel({
   payError: string
   busy: boolean
   onSend: () => void
+  onRecheck: () => void
   code: string
   setCode: (v: string) => void
   onManualCode: (code: string) => void
@@ -1234,6 +1309,11 @@ function StkPanel({
           <div className="h-full bg-pending-text transition-[width] duration-1000 ease-linear" style={{ width: `${Math.min(100, (elapsed / 180) * 100)}%` }} />
         </div>
         <p className="text-ink-subtle text-xs tabular">{Math.max(0, 180 - elapsed)}s left · auto-checks every 2s</p>
+        <p className="text-[11px] text-ink-subtle max-w-xs mx-auto leading-relaxed">
+          On their phone the prompt shows <strong className="text-ink">PAYSTACK PAYMENTS KENYA LIMITED</strong>
+          {branding.store_name ? <> for account <strong className="text-ink">{branding.store_name}</strong></> : null}
+          {' '}— that's Paystack, the card &amp; M-Pesa processor. Money lands in your account.
+        </p>
         {till && (
           <div className="text-left bg-surface-muted border border-line rounded-input p-3">
             <p className="text-[13px] font-bold text-ink">No prompt? Pay manually:</p>
@@ -1247,23 +1327,74 @@ function StkPanel({
       </div>
     )
   }
-  // failed (or manual waiting) — retry + change number + manual entry
+  if (stage === 'slow') {
+    // 3–15 minutes of quiet: NOT a failure — customers reach their phone
+    // late, and money that lands at any point in this window still flips
+    // the screen to paid (the poll keeps running). Calm amber, clear next
+    // moves, manual code entry always in reach.
+    return (
+      <div className="space-y-5 text-center pt-2 pb-4">
+        {stepEl}
+        <div className="flex justify-center">
+          <span className="relative flex w-16 h-16 items-center justify-center">
+            <span className="absolute inset-0 rounded-full bg-pending-bg border-2 border-pending-text/40 anim-pulse-dot" aria-hidden />
+            <Smartphone size={30} strokeWidth={2.25} className="text-pending-text" aria-hidden />
+          </span>
+        </div>
+        <div>
+          <p className="font-bold text-ink text-lg">Still waiting — checking every 2s</p>
+          <p className="text-ink-muted text-sm mt-1 max-w-xs mx-auto">
+            Taking longer than usual. If the customer already entered their PIN, this screen
+            confirms by itself the moment the money shows up.
+          </p>
+          <p className="mt-2 inline-block tabular font-extrabold text-2xl text-ink bg-surface border border-line rounded-input px-4 py-2 select-none" aria-label="Customer phone number (read-only)">
+            {phone}
+          </p>
+        </div>
+        <div className="text-left bg-pending-bg border border-pending-text/30 rounded-input p-3">
+          <p className="text-[13px] font-bold text-pending-text">While you wait:</p>
+          <ul className="text-[13px] text-ink-muted mt-1 space-y-0.5 list-disc pl-4">
+            <li>Ask them to check for the prompt — it can land under “My SIP messages”.</li>
+            <li>They can also pay from their M-Pesa menu, then you key the code below.</li>
+            <li>Wrong number? Leave pending and start the sale again.</li>
+          </ul>
+        </div>
+        <ManualEntry code={code} setCode={setCode} busy={busy} onSubmit={() => onManualCode(code)} error={payError} plain />
+        <div className="flex gap-2">
+          <Button variant="secondary" className="w-full" onClick={onSend} disabled={busy || !phone.trim()}>
+            <RotateCcw size={15} strokeWidth={2.5} aria-hidden />
+            Resend prompt
+          </Button>
+          <Button variant="secondary" className="w-full" onClick={onRecheck} disabled={busy}>
+            Check payment status
+          </Button>
+        </div>
+      </div>
+    )
+  }
+  // failed (or manual waiting) — check-status, retry, change number, manual code
   return (
     <div className="space-y-4">
       {stepEl}
       {stage === 'failed' && (
-        <div className="flex items-start gap-3 bg-danger-bg border border-danger-text/30 rounded-input p-3">
-          <AlertTriangle size={20} strokeWidth={2.5} className="text-danger-text shrink-0 mt-0.5" aria-hidden />
+        <div className="flex items-start gap-3 bg-pending-bg border border-pending-text/30 rounded-input p-3">
+          <AlertTriangle size={20} strokeWidth={2.5} className="text-pending-text shrink-0 mt-0.5" aria-hidden />
           <div>
-            <p className="font-bold text-danger-text text-sm">STK push didn't complete</p>
-            <p role="alert" className="text-[13px] text-ink-muted mt-0.5">{payError || 'The customer may have cancelled or the request timed out.'}</p>
+            <p className="font-bold text-pending-text text-sm">Payment not confirmed yet</p>
+            <p role="alert" className="text-[13px] text-ink-muted mt-0.5">{payError || 'The customer may have cancelled, or the request timed out. The order stays pending — nothing was marked paid.'}</p>
           </div>
         </div>
       )}
+      <Button variant="primary" size="lg" className="w-full" onClick={onRecheck} disabled={busy}>
+        Check payment status
+      </Button>
+      <p className="text-[12px] text-ink-muted text-center -mt-2">
+        Re-verifies every charge sent for this order with Paystack and completes the sale if the money arrived.
+      </p>
       <Field label="Change M-Pesa number" hint="Wrong number? Fix it here — the cart is safe and the order stays put.">
         <Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" />
       </Field>
-      <Button variant="primary" size="lg" className="w-full" onClick={onSend} disabled={busy || !phone.trim()}>
+      <Button variant="secondary" size="lg" className="w-full" onClick={onSend} disabled={busy || !phone.trim()}>
         <RotateCcw size={16} strokeWidth={2.5} aria-hidden />
         Retry — send the STK push again
       </Button>
@@ -1282,13 +1413,13 @@ function StkPanel({
 }
 
 function InlinePanel({
-  stage, reference, payError, onRetry, onVerifyAgain,
+  stage, reference, payError, onRetry, onRecheck,
 }: {
   stage: InlineStage
   reference: string
   payError: string
   onRetry: () => void
-  onVerifyAgain: () => void
+  onRecheck: () => void
 }) {
   return (
     <div className="space-y-4">
@@ -1339,11 +1470,11 @@ function InlinePanel({
             <RotateCcw size={16} strokeWidth={2.5} aria-hidden />
             Open checkout again
           </Button>
-          {reference && (
-            <Button variant="secondary" className="w-full" onClick={onVerifyAgain}>
-              Verify payment again
+          {reference ? (
+            <Button variant="secondary" className="w-full" onClick={onRecheck}>
+              Check payment status
             </Button>
-          )}
+          ) : null}
         </div>
       )}
     </div>

@@ -539,3 +539,220 @@ func (s *Service) SweepPaystack(ctx context.Context) {
                 }
         }
 }
+
+// ---- Late-money recovery -------------------------------------------------
+//
+// A customer can enter their M-Pesa PIN long after the till stopped
+// watching: the cashier moved on, the frontend window closed, or the
+// 15-minute sweep timeout failed the leg and THEN the money landed.
+// On a LAN deployment there is no public webhook to rescue that money —
+// the two paths below do. Field report (v1.1.9): a KES 10 sale confirmed
+// by M-Pesa 21 minutes after the push sat Pending for good.
+
+// parseStamp accepts the created_at layouts the app has written over time
+// (current UTC RFC3339 stamp and legacy SQLite datetime).
+func parseStamp(s string) (time.Time, bool) {
+        if t, err := time.Parse(time.RFC3339, s); err == nil {
+                return t, true
+        }
+        if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+                return t, true
+        }
+        return time.Time{}, false
+}
+
+// settleSiblings closes any remaining PENDING Paystack legs on a just-paid
+// order so the sweep never re-verifies dead references against it later.
+func (s *Service) settleSiblings(orderID, doneID int64) {
+        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by recovered payment'
+                WHERE order_id = ? AND id != ? AND method = 'paystack' AND status = 'PENDING'`), orderID, doneID)
+}
+
+// RecheckPayment re-verifies every Paystack reference this order ever
+// minted (the live pending one first, then recently failed ones — a
+// superseded push the customer still answered) plus any pending Daraja STK
+// leg, and completes the order when a provider confirms the money. This is
+// the engine behind the "Check payment status" button: the recovery path
+// for money that arrived after the till stopped watching. It never voids
+// and never double-completes — completePayment stays the only PENDING →
+// PAID transition, with all its guards intact.
+func (s *Service) RecheckPayment(orderID int64, p *auth.Principal) (*models.Order, string, error) {
+        order, err := s.GetOrder(orderID)
+        if err != nil {
+                return nil, "", err
+        }
+        if order.Status == models.OrderPaid {
+                return order, "This order is already paid.", nil
+        }
+        if order.Status != models.OrderPending {
+                return nil, "", fmt.Errorf("%w: cannot recheck a %s order", ErrInvalidState, order.Status)
+        }
+
+        type leg struct {
+                id  int64
+                ref string
+        }
+        var legs []leg
+        seen := map[int64]bool{}
+        // The live pending reference first — the most likely place the money is.
+        for _, pm := range order.Payments {
+                if pm.Method == models.MethodPaystack && pm.Status == models.PaymentPending && pm.CheckoutRequestID != "" {
+                        seen[pm.ID] = true
+                        legs = append(legs, leg{pm.ID, pm.CheckoutRequestID})
+                }
+        }
+        // Then references failed within the last day (superseded pushes the
+        // customer may still have paid; the till stopped watching them).
+        cutoff := time.Now().Add(-24 * time.Hour)
+        rows, err := s.db.Query(s.db.Rebind(`SELECT id, checkout_request_id, created_at FROM payments
+                WHERE order_id = ? AND method = 'paystack' AND status = 'FAILED' AND checkout_request_id != ''`),
+                orderID)
+        if err == nil {
+                for rows.Next() {
+                        var id int64
+                        var ref, created string
+                        if err := rows.Scan(&id, &ref, &created); err != nil {
+                                break
+                        }
+                        if t, ok := parseStamp(created); !ok || t.Before(cutoff) {
+                                continue
+                        }
+                        if !seen[id] {
+                                seen[id] = true
+                                legs = append(legs, leg{id, ref})
+                        }
+                }
+                rows.Close()
+        }
+
+        client := s.GetPaystack()
+        var lastStatus string
+        if client != nil && s.settings.GetBool("paystack_enabled", true) {
+                for _, l := range legs {
+                        v, err := client.Verify(l.ref)
+                        if err != nil {
+                                continue // transient — try the next reference
+                        }
+                        lastStatus = v.Status
+                        if v.Status != "success" {
+                                continue
+                        }
+                        if err := s.paystackGuardVoid(l.id); err != nil {
+                                return nil, "", err
+                        }
+                        order, err := s.completePayment(l.id, l.ref, v.Amount, "Paystack "+v.Channel+" (recheck)")
+                        if err != nil {
+                                return nil, "", err
+                        }
+                        s.settleSiblings(orderID, l.id)
+                        s.Audit(p.ID, p.Username, "PAYMENT_RECHECK", "order", order.Number,
+                                fmt.Sprintf("ref %s, channel %s, amount %d — money arrived after the till moved on", l.ref, v.Channel, v.Amount))
+                        return order, "Payment confirmed — the money arrived after we stopped watching. Sale complete.", nil
+                }
+        }
+
+        // Daraja-mode STK legs, when this till runs a direct M-Pesa provider.
+        if provider, perr := s.GetProvider(); provider != nil && perr == nil {
+                for _, pm := range order.Payments {
+                        if pm.Method != models.MethodMpesa || pm.Status != models.PaymentPending || pm.CheckoutRequestID == "" {
+                                continue
+                        }
+                        res, err := provider.QuerySTK(context.Background(), pm.CheckoutRequestID)
+                        if err != nil || res.ResultCode != 0 {
+                                continue
+                        }
+                        order, err := s.completePayment(pm.ID, res.MpesaReceiptNumber, res.AmountCents, res.ResultDesc)
+                        if err != nil {
+                                return nil, "", err
+                        }
+                        s.Audit(p.ID, p.Username, "PAYMENT_RECHECK", "order", order.Number,
+                                fmt.Sprintf("daraja receipt %s — money arrived after the till moved on", res.MpesaReceiptNumber))
+                        return order, "Payment confirmed — the M-Pesa money arrived. Sale complete.", nil
+                }
+        }
+
+        switch {
+        case client == nil:
+                return order, "Paystack is not connected on this till — nothing to re-check against. Enter the M-Pesa receipt code manually instead.", nil
+        case len(legs) == 0:
+                return order, "No Paystack or M-Pesa charge on this order to re-check. Enter the M-Pesa receipt code manually if the customer paid.", nil
+        case lastStatus != "":
+                return order, "No confirmed payment yet — Paystack reports the latest charge as “" + lastStatus + "”. Nothing has been marked paid.", nil
+        default:
+                return order, "Could not reach Paystack to re-check — check the internet connection and try again.", nil
+        }
+}
+
+// failedSweepLookback bounds the automatic deep sweep: Paystack references
+// failed within this window are re-verified in case the customer paid after
+// the till moved on. (15 min sweep timeout + over an hour of grace.)
+const failedSweepLookback = 90 * time.Minute
+
+// SweepFailedPaystack is the automatic late-money safety net. Once a minute
+// (driven by the Sweeper tick) it re-verifies recently-FAILED Paystack
+// references on still-PENDING orders; money that landed completes its sale
+// exactly-once. Orders already paid/voided are skipped — a manual receipt
+// entry and a late STK payment are the SAME money, and re-adding it would
+// double-count revenue.
+func (s *Service) SweepFailedPaystack(ctx context.Context) {
+        client := s.GetPaystack()
+        if client == nil || !s.settings.GetBool("paystack_enabled", true) {
+                return
+        }
+        rows, err := s.db.Query(`SELECT p.id, p.checkout_request_id, p.order_id, p.created_at
+                FROM payments p JOIN orders o ON o.id = p.order_id
+                WHERE p.status = 'FAILED' AND p.method = 'paystack'
+                  AND p.checkout_request_id LIKE 'LP-%' AND o.status = 'PENDING'
+                LIMIT 100`)
+        if err != nil {
+                return
+        }
+        type fleg struct {
+                id      int64
+                ref     string
+                orderID int64
+                created time.Time
+        }
+        var list []fleg
+        cutoff := time.Now().Add(-failedSweepLookback)
+        for rows.Next() {
+                var f fleg
+                var created string
+                if err := rows.Scan(&f.id, &f.ref, &f.orderID, &created); err != nil {
+                        break
+                }
+                if t, ok := parseStamp(created); ok && t.After(cutoff) {
+                        f.created = t
+                        list = append(list, f)
+                }
+        }
+        rows.Close()
+        if rows.Err() != nil || len(list) == 0 {
+                return
+        }
+        for _, f := range list {
+                select {
+                case <-ctx.Done():
+                        return
+                default:
+                }
+                v, err := client.Verify(f.ref)
+                if err != nil {
+                        continue // offline / transient — retry next sweep
+                }
+                if v.Status != "success" {
+                        continue // abandoned stays abandoned
+                }
+                if err := s.paystackGuardVoid(f.id); err != nil {
+                        continue
+                }
+                if _, err := s.completePayment(f.id, f.ref, v.Amount, "Paystack "+v.Channel+" (late recovery)"); err != nil {
+                        log.Printf("[paystack] late recovery %s: %v", f.ref, err)
+                        continue
+                }
+                s.settleSiblings(f.orderID, f.id)
+                s.Audit(0, "system", "PAYSTACK_LATE_RECOVERED", "order", fmt.Sprint(f.orderID),
+                        fmt.Sprintf("ref %s, amount %d — customer paid after the till moved on", f.ref, v.Amount))
+                log.Printf("[paystack] late-recovered reference %s onto order %d", f.ref, f.orderID)
+        }
+}

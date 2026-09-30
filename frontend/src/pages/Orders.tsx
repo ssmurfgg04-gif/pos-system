@@ -54,6 +54,28 @@ export function Orders() {
   const [manualFor, setManualFor] = useState<Order | null>(null)
   const [discrepancyOnly, setDiscrepancyOnly] = useState(false)
   const [receiptFor, setReceiptFor] = useState<Order | null>(null)
+  const [checkingId, setCheckingId] = useState<number | null>(null)
+
+  // Re-verify a stuck PENDING order's charges with the provider — the
+  // recovery path for money that arrived after the till stopped watching
+  // (late M-Pesa PIN entry). Completes the sale exactly-once when paid.
+  const recheck = async (o: Order) => {
+    if (checkingId) return
+    setCheckingId(o.id)
+    try {
+      const r = await api.post<{ order: Order; message: string }>(`/api/v1/orders/${o.id}/recheck`, {})
+      if (r?.order?.status === 'PAID') {
+        toast.success('Payment confirmed', `${r.order.number} — the money arrived, order is now paid`)
+        load()
+      } else {
+        toast.info('No payment yet', r?.message || 'No confirmed payment for this order yet.')
+      }
+    } catch (e: any) {
+      toast.error('Check failed', e?.message || 'Could not re-check the payment')
+    } finally {
+      setCheckingId(null)
+    }
+  }
 
   const load = async () => {
     try {
@@ -140,7 +162,20 @@ export function Orders() {
                   </td>
                   <td className="px-3 py-2.5 text-[13px] text-ink-muted">{o.cashierName}</td>
                   <td className="px-3 py-2.5 text-right">
-                    <Button size="sm" variant="ghost" onClick={() => setSelected(o)}>View</Button>
+                    <div className="flex items-center justify-end gap-1">
+                      {o.status === 'PENDING' && canSell && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={checkingId === o.id}
+                          onClick={() => recheck(o)}
+                          title="Re-verify the charge with Paystack / M-Pesa — completes the sale if the money arrived"
+                        >
+                          {checkingId === o.id ? <Spinner /> : 'Check payment'}
+                        </Button>
+                      )}
+                      <Button size="sm" variant="ghost" onClick={() => setSelected(o)}>View</Button>
+                    </div>
                   </td>
                 </tr>
               )
@@ -156,6 +191,8 @@ export function Orders() {
           onVoid={canVoid ? () => { setVoiding(selected); setSelected(null) } : undefined}
           onManual={canManual && selected.status === 'PENDING' ? () => { setManualFor(selected); setSelected(null) } : undefined}
           onSettle={canSell && selected.status === 'PENDING' && isTabOrder(selected) ? () => { setSettleFor(selected); setSelected(null) } : undefined}
+          onRecheck={canSell && selected.status === 'PENDING' ? () => recheck(selected) : undefined}
+          checking={checkingId === selected.id}
         />
       )}
 
@@ -195,12 +232,16 @@ function OrderDrawer({
   onVoid,
   onManual,
   onSettle,
+  onRecheck,
+  checking,
 }: {
   order: Order
   onClose: () => void
   onVoid?: () => void
   onManual?: () => void
   onSettle?: () => void
+  onRecheck?: () => void
+  checking?: boolean
 }) {
   const [live, setLive] = useState<OrderDetail>(order)
   const [receiptOpen, setReceiptOpen] = useState(false)
@@ -236,6 +277,11 @@ function OrderDrawer({
       title={`Order ${live.number}`}
       footer={
         <>
+          {onRecheck && live.status === 'PENDING' && (
+            <Button variant="secondary" onClick={onRecheck} disabled={checking} title="Re-verify the charge with Paystack / M-Pesa — completes the sale if the money arrived">
+              {checking ? <Spinner /> : 'Check payment'}
+            </Button>
+          )}
           {onManual && live.status === 'PENDING' && (
             <Button variant="secondary" onClick={onManual}>Enter receipt code</Button>
           )}

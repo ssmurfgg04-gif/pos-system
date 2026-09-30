@@ -170,7 +170,15 @@ export function Pin() {
                   {error}
                 </p>
               )}
-              {lockNote && <p className="text-center text-pending-text text-xs mb-3">{lockNote}</p>}
+              {lockNote && (
+                <div className="text-center text-pending-text text-xs mb-3 space-y-1">
+                  <p className="font-semibold">{lockNote}</p>
+                  <p className="text-ink-muted">
+                    Locked out? Use <strong className="text-ink">Password sign-in instead</strong> below — or have the owner
+                    mint a team join link from another till (Settings → Team) and join with a PIN you choose.
+                  </p>
+                </div>
+              )}
               <Keypad
                 onDigit={onDigit}
                 onBack={() => { cancelPendingSubmit(); setPin(pin.slice(0, -1)) }}
