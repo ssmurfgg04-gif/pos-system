@@ -31,7 +31,7 @@ func (s *Service) StartStockCount(p *auth.Principal, note string) (*models.Stock
 	}
 	defer tx.Rollback()
 
-	number, err := s.nextDocNumber(tx, "CNT")
+	number, err := s.nextDocNumber(tx, "CNT", 0)
 	if err != nil {
 		tx.Rollback()
 		return nil, err

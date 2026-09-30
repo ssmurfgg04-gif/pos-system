@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, PinUser } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
@@ -16,6 +16,17 @@ export function Pin() {
   const [userId, setUserId] = useState<number | null>(null)
   const [pin, setPin] = useState('')
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  // The 4th digit auto-submits after a short beat; any other submit path
+  // (Enter) or reset (Backspace/Escape/Clear/switch user) cancels it —
+  // otherwise a stale timer logs you in AFTER you cleared the code.
+  const submitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cancelPendingSubmit = () => {
+    if (submitTimer.current) {
+      clearTimeout(submitTimer.current)
+      submitTimer.current = null
+    }
+  }
   const [error, setError] = useState('')
   const [lockNote, setLockNote] = useState('')
 
@@ -24,7 +35,11 @@ export function Pin() {
   }, [])
 
   const submit = async (code: string) => {
-    if (busy || !userId) return
+    // busyRef: synchronous guard — whichever submit path wins (auto or
+    // Enter), the other must not fire a second login.
+    if (busyRef.current || busy || !userId) return
+    cancelPendingSubmit()
+    busyRef.current = true
     setBusy(true)
     setError('')
     setLockNote('')
@@ -39,6 +54,7 @@ export function Pin() {
       setError(msg)
       if (/locked/i.test(msg)) setLockNote('Too many attempts — the account is temporarily locked.')
     } finally {
+      busyRef.current = false
       setBusy(false)
     }
   }
@@ -48,8 +64,60 @@ export function Pin() {
     const next = (pin + d).slice(0, 4)
     setPin(next)
     setError('')
-    if (next.length === 4) setTimeout(() => submit(next), 120)
+    if (next.length === 4) {
+      cancelPendingSubmit()
+      submitTimer.current = setTimeout(() => submit(next), 120)
+    }
   }
+
+  // Physical keyboard alongside the touch pad: digits type the PIN,
+  // Backspace erases, Escape clears, Enter submits. The picker accepts
+  // 1–9 as a shortcut for the Nth face. Touch tills keep tapping —
+  // nobody has to reach for the mouse to start a shift.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (busy) return
+      const tag = (e.target as HTMLElement | null)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return // never hijack typing
+      if (!userId) {
+        // Picker: 1–9 selects the Nth user in grid order.
+        if (/^[1-9]$/.test(e.key)) {
+          const idx = Number(e.key) - 1
+          if (users && users[idx]) {
+            e.preventDefault()
+            setUserId(users[idx].id)
+          }
+        }
+        return
+      }
+      if (/^[0-9]$/.test(e.key)) {
+        e.preventDefault()
+        ;(document.activeElement as HTMLElement | null)?.blur?.()
+        onDigit(e.key)
+      } else if (e.key === 'Backspace') {
+        e.preventDefault()
+        cancelPendingSubmit()
+        setPin((p) => p.slice(0, -1))
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        cancelPendingSubmit()
+        setPin('')
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        // On a focused pad key (or nowhere) Enter/Space just submits —
+        // it also cancels the 4th-digit auto-submit so exactly one
+        // login fires. On other buttons ("Pick someone else") keep
+        // native activation.
+        const el = document.activeElement as HTMLElement | null
+        const onPad = !el || el === document.body || el.closest?.('[data-keypad]')
+        if (!onPad) return
+        e.preventDefault()
+        cancelPendingSubmit()
+        if (pin.length === 4) submit(pin)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   const selected = users?.find((u) => u.id === userId)
 
@@ -79,6 +147,9 @@ export function Pin() {
                   <p className="text-ink-muted text-xs mt-0.5">{u.roleName}</p>
                 </button>
               ))}
+              <p className="col-span-2 text-center text-ink-subtle text-xs mt-1">
+                Tip: press 1–{Math.min(users.length, 9)} on the keyboard to pick
+              </p>
             </div>
           ) : (
             <>
@@ -100,9 +171,16 @@ export function Pin() {
                 </p>
               )}
               {lockNote && <p className="text-center text-pending-text text-xs mb-3">{lockNote}</p>}
-              <Keypad onDigit={onDigit} onBack={() => setPin(pin.slice(0, -1))} onClear={() => setPin('')} />
+              <Keypad
+                onDigit={onDigit}
+                onBack={() => { cancelPendingSubmit(); setPin(pin.slice(0, -1)) }}
+                onClear={() => { cancelPendingSubmit(); setPin('') }}
+              />
+              <p className="text-center text-ink-subtle text-xs mt-3">
+                Type 0–9 on the keyboard · Backspace erases
+              </p>
               <button
-                onClick={() => { setUserId(null); setPin(''); setError('') }}
+                onClick={() => { cancelPendingSubmit(); setUserId(null); setPin(''); setError('') }}
                 className="w-full mt-4 min-h-11 flex items-center justify-center text-center text-sm font-semibold text-ink-muted hover:text-ink"
               >
                 ← Pick someone else
