@@ -33,6 +33,10 @@ import (
 // client at a fake server (never change it in production code paths).
 var apiBase = "https://api.paystack.co"
 
+// SetAPIBase overrides the API base URL — test hook only (a local fake
+// Paystack); production code must never call this.
+func SetAPIBase(u string) { apiBase = u }
+
 // Client talks to the Paystack API with one secret key. Create it per
 // request-batch via NewClient whenever the configured key changes (the
 // service caches by key, like the Daraja provider).
