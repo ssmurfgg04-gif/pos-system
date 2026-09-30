@@ -130,7 +130,7 @@ func (s *Service) CreatePO(supplierID int64, items []POItemInput, note string, p
 		return nil, err
 	}
 	defer tx.Rollback()
-	number, err := s.nextDocNumber(tx, "PO")
+	number, err := s.nextDocNumber(tx, "PO", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +416,7 @@ func (s *Service) CreateTake(productIDs []int64, note string, p *auth.Principal)
 		return nil, err
 	}
 	defer tx.Rollback()
-	number, err := s.nextDocNumber(tx, "STK")
+	number, err := s.nextDocNumber(tx, "STK", 0)
 	if err != nil {
 		return nil, err
 	}

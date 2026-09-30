@@ -332,7 +332,7 @@ export function Spinner({ className = '' }: { className?: string }) {
 export function Keypad({ onDigit, onBack, onClear }: { onDigit: (d: string) => void; onBack: () => void; onClear?: () => void }) {
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', onClear ? 'C' : '', '0', '⌫']
   return (
-    <div className="grid grid-cols-3 gap-2 max-w-[260px] mx-auto">
+    <div className="grid grid-cols-3 gap-2 max-w-[260px] mx-auto" data-keypad>
       {keys.map((k, i) =>
         k === '' ? (
           <span key={i} />

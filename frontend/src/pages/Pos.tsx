@@ -216,6 +216,10 @@ export function Pos() {
         onOrderPaid={(o) => {
           if (!o) { cart.clear(); return } // offline-queued sale — start fresh
           try {
+            // Verified success: reset the workspace NOW so product cards
+            // stop showing "IN CART" badges for items that just sold. The
+            // Paid panel + receipt are order-driven and stay put.
+            cart.clear()
             load()
             toast.success(`Sale complete — ${o.number}`, formatMoney(o.totalCents))
             setReceiptFor(o)

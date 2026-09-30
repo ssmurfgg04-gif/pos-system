@@ -113,10 +113,10 @@ export function Login() {
             </p>
           )}
           <div className="flex gap-2">
-            <Button type="submit" variant="primary" size="lg" className="flex-1" disabled={busy}>
+            <Button type="submit" variant="primary" size="lg" className="flex-[1.15] whitespace-nowrap" disabled={busy}>
               {busy ? <Spinner className="border-t-white" /> : 'Sign in'}
             </Button>
-            <Button type="button" variant="secondary" size="lg" className="flex-1" disabled={busy} onClick={() => navigate('/signup')} title="Create a new shop account">
+            <Button type="button" variant="secondary" size="md" className="flex-1 min-h-14 whitespace-nowrap px-3" disabled={busy} onClick={() => navigate('/signup')} title="Create a new shop account">
               Register new account
             </Button>
           </div>
