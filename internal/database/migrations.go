@@ -965,6 +965,27 @@ ALTER TABLE customers ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';
 `,
                 Go: backfillRolePermsV14,
         },
+        {
+                // v15: ERP depth (P6). eTIMS-ready invoice fields on every
+                // order: buyer_pin holds the customer's KRA PIN when a tax
+                // invoice is requested (printed on the receipt, exported in
+                // the KRA CSV), invoice_number is the eTIMS document number
+                // (defaults to the order number; an eTIMS Control Unit bridge
+                // can overwrite it without touching the order number).
+                // Rollback: docs/MIGRATION-v15-ROLLBACK.md (columns only —
+                // drop them, no data moves).
+                Version: 15,
+                SQLite: `
+ALTER TABLE orders ADD COLUMN buyer_pin TEXT NOT NULL DEFAULT '';
+ALTER TABLE orders ADD COLUMN invoice_number TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_orders_invoice ON orders(invoice_number);
+`,
+                Pg: `
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyer_pin TEXT NOT NULL DEFAULT '';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_orders_invoice ON orders(invoice_number);
+`,
+        },
 }
 
 // backfillRolePermsV9 unions the v8 permission additions into seeded roles:

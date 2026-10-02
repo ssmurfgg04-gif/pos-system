@@ -389,9 +389,9 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                         taxIncludedInt = 1
                 }
                 res, err := tx.Exec(s.db.Rebind(`
-                        INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent, tax_included, discount_cents, discount_label, points_redeemed, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-                        number, status, subtotal, tax, payable, pct, taxIncludedInt, discount, truncStr(req.DiscountLabel, 120), redeemSpent, p.ID, req.CustomerName, req.Note, req.ClientUUID, now, paidAt, req.CustomerID)
+                        INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent, tax_included, discount_cents, discount_label, points_redeemed, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id, buyer_pin, invoice_number)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                        number, status, subtotal, tax, payable, pct, taxIncludedInt, discount, truncStr(req.DiscountLabel, 120), redeemSpent, p.ID, req.CustomerName, req.Note, req.ClientUUID, now, paidAt, req.CustomerID, strings.ToUpper(strings.TrimSpace(req.BuyerPIN)), number)
                 if err != nil {
                         tx.Rollback()
                         if isUniqueViolation(err) {

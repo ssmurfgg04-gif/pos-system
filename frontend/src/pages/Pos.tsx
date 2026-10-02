@@ -463,7 +463,7 @@ function ProductCard({ p, qty, onAdd, onInc, onDec }: {
               onClick={onInc}
               aria-label={`Increase ${p.name} quantity`}
               disabled={out || (p.trackStock && qty >= p.stockQty)}
-              className="w-10 font-bold text-brand hover:bg-brand/10 disabled:opacity-40 flex items-center justify-center"
+              className="w-10 font-bold text-brand hover:bg-brand/10 disabled:opacity-55 flex items-center justify-center"
             >
               <Plus size={15} strokeWidth={3} aria-hidden />
             </button>
@@ -526,7 +526,7 @@ function ProductRow({ p, qty, onAdd, onInc, onDec }: {
             onClick={onInc}
             aria-label={`Increase ${p.name} quantity`}
             disabled={out || (p.trackStock && qty >= p.stockQty)}
-            className="w-7 h-full font-bold text-brand hover:bg-brand/10 disabled:opacity-40 flex items-center justify-center"
+            className="w-7 h-full font-bold text-brand hover:bg-brand/10 disabled:opacity-55 flex items-center justify-center"
           >
             <Plus size={13} strokeWidth={3} aria-hidden />
           </button>

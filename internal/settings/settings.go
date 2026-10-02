@@ -260,6 +260,10 @@ func (s *Store) Branding() map[string]any {
                 "till_number":     s.GetString("till_number", ""),
                 "paybill_number":  s.GetString("paybill_number", ""),
                 "mpesa_env":       s.GetString("mpesa_env", "mock"),
+                // eTIMS (P6): the shop's KRA PIN — when set, the receipt
+                // gains the tax-invoice header and the checkout rail offers
+                // a buyer PIN field.
+                "kra_pin":         s.GetString("kra_pin", ""),
         }
 }
 

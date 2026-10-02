@@ -153,6 +153,7 @@ type CheckoutRequest struct {
         CustomerName      string         `json:"customerName"`
         CustomerEmail     string         `json:"customerEmail"` // paystack receipt + receipt email
         CustomerID        int64          `json:"customerId"` // required for account tabs + credit
+        BuyerPIN          string         `json:"buyerPin"`  // eTIMS: customer KRA PIN — turns the receipt into a tax invoice
         Note              string         `json:"note"`
         ClientUUID        string         `json:"clientUuid"` // offline idempotency key
         DiscountCents     int64          `json:"discountCents"` // order-level discount (permission-gated)
@@ -227,28 +228,33 @@ type Order struct {
         Jobs           []DesignJob  `json:"jobs,omitempty"`
         AssignedToID   int64        `json:"assignedToId"`
         NotifiedAt     string       `json:"notifiedAt"`
+        // ERP depth (P6): eTIMS-ready invoice identity. BuyerPIN is the
+        // customer's KRA PIN (present ⇒ tax invoice); InvoiceNumber is the
+        // document number (defaults to the order number).
+        BuyerPIN      string `json:"buyerPin"`
+        InvoiceNumber string `json:"invoiceNumber"`
 }
 
 // OrderSummary is one row of a customer's purchase history.
 type OrderSummary struct {
-	ID         int64  `json:"id"`
-	Number     string `json:"number"`
-	Status     string `json:"status"`
-	TotalCents int64  `json:"totalCents"`
-	CreatedAt  string `json:"createdAt"`
-	PaidAt     string `json:"paidAt"`
+        ID         int64  `json:"id"`
+        Number     string `json:"number"`
+        Status     string `json:"status"`
+        TotalCents int64  `json:"totalCents"`
+        CreatedAt  string `json:"createdAt"`
+        PaidAt     string `json:"paidAt"`
 }
 
 // WhatsAppContact is the prepared "contact customer" action for a ready
 // order: the deep link opens WhatsApp with the message prefilled, the
 // staff member reviews and presses send — the app never auto-sends.
 type WhatsAppContact struct {
-	OrderID    int64  `json:"orderId"`
-	Phone      string `json:"phone"`
-	Message    string `json:"message"`
-	URL        string `json:"url"`
-	OrderRef   string `json:"orderRef"`
-	NotifiedAt string `json:"notifiedAt"`
+        OrderID    int64  `json:"orderId"`
+        Phone      string `json:"phone"`
+        Message    string `json:"message"`
+        URL        string `json:"url"`
+        OrderRef   string `json:"orderRef"`
+        NotifiedAt string `json:"notifiedAt"`
 }
 
 // OrderEvent is one line of the per-order activity timeline (job moves,

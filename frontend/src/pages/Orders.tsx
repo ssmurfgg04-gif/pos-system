@@ -135,7 +135,7 @@ export function Orders() {
             {shown.map((o) => {
               const pay = o.payments[o.payments.length - 1]
               return (
-                <tr key={o.id} className={o.discrepancy ? 'bg-danger-bg/40' : ''}>
+                <tr key={o.id} className={o.discrepancy ? 'bg-danger-bg' : ''}>
                   <td className="px-3 py-2.5">
                     <p className="font-bold text-ink text-[13px] tabular">{o.number}</p>
                     <p className="text-[11px] text-ink-subtle">{new Date(o.createdAt).toLocaleString()}</p>

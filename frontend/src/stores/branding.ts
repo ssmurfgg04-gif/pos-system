@@ -15,6 +15,7 @@ const fallback: Branding = {
   till_number: '',
   paybill_number: '',
   mpesa_env: 'mock',
+  kra_pin: '',
 }
 
 interface BrandingState {

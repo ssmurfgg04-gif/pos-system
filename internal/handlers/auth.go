@@ -368,6 +368,66 @@ func (h *H) Me(c *gin.Context) {
         h.ok(c, h.principal(c).User())
 }
 
+type ownerSigninBody struct {
+        Username   string `json:"username" binding:"required"`
+        Password   string `json:"password" binding:"required"`
+        DeviceName string `json:"deviceName"`
+}
+
+// OwnerSignin is public on purpose, and it exists for ONE moment: an owner
+// reinstalls the app (or unwraps a new till) and is staring at first-run
+// setup for a business that ALREADY exists in the cloud. They sign in with
+// their normal username + password; the cloud verifies the portal
+// credential, approves this device into the team server-side, and the shop
+// syncs down. Rate limited like every other public login.
+func (h *H) OwnerSignin(c *gin.Context) {
+        var body ownerSigninBody
+        if err := c.ShouldBindJSON(&body); err != nil {
+                h.fail(c, 400, "username and password are required")
+                return
+        }
+        key := "ownersignin:" + strings.ToLower(body.Username)
+        if !h.LoginRL.Allow(key) {
+                h.fail(c, 429, "too many attempts — wait a minute")
+                return
+        }
+        svc := h.svc(c)
+        info, err := svc.OwnerCloudSignin(body.Username, body.Password, body.DeviceName)
+        if err != nil {
+                h.fail(c, 401, err.Error())
+                return
+        }
+        // Registry routing so the owner can log in on multi-shop servers.
+        shopID := h.shopID(c)
+        if h.Tenants != nil {
+                if err := h.Tenants.RegisterUser(info.Username, shopID); err != nil {
+                        h.fail(c, 409, err.Error())
+                        return
+                }
+        }
+        db := svc.DB()
+        p, err := auth.LoadPrincipal(db, info.UserID)
+        if err != nil {
+                h.fail(c, 500, "signed in, but the session failed — try logging in again")
+                return
+        }
+        p.ShopID = shopID
+        token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
+        if err != nil {
+                h.fail(c, 500, "token error")
+                return
+        }
+        h.LoginRL.Forget(key)
+        svc.Audit(p.ID, p.Username, "LOGIN", "user", p.Username, "owner cloud sign-in")
+        h.ok(c, gin.H{
+                "token":     token,
+                "user":      p.User(),
+                "teamCode":  info.TeamCode,
+                "storeName": info.StoreName,
+                "roleName":  info.RoleName,
+        })
+}
+
 // Branding is public white-label display data for login/POS chrome.
 func (h *H) Branding(c *gin.Context) {
         st, err := h.shopSettings(c)
