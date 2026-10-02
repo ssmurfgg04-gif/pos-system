@@ -146,13 +146,13 @@ func TestStaffLifecycle(t *testing.T) {
         // rotate, and sell.
         w = do(t, engine, "POST", "/api/v1/users", admin, map[string]any{
                 "username": "cashier2", "fullName": "Cashier Two",
-                "password": "cashier2-temp", "pin": "4444", "roleId": 2,
+                "password": "cashier2-temp", "pin": "7942", "roleId": 2,
         })
         if w.Code != 201 {
                 t.Fatalf("hire: %d %s", w.Code, w.Body.String())
         }
         c2id := int64(dataMap(t, w)["id"].(float64))
-        w = do(t, engine, "POST", "/api/v1/auth/pin", "", map[string]any{"userId": c2id, "pin": "4444"})
+        w = do(t, engine, "POST", "/api/v1/auth/pin", "", map[string]any{"userId": c2id, "pin": "7942"})
         if w.Code != 200 {
                 t.Fatalf("pin login: %d %s", w.Code, w.Body.String())
         }
@@ -176,7 +176,7 @@ func TestStaffLifecycle(t *testing.T) {
         if w.Code == 200 {
                 t.Fatal("deactivated user must not log in")
         }
-        w = do(t, engine, "POST", "/api/v1/auth/pin", "", map[string]any{"userId": c2id, "pin": "4444"})
+        w = do(t, engine, "POST", "/api/v1/auth/pin", "", map[string]any{"userId": c2id, "pin": "7942"})
         if w.Code == 200 {
                 t.Fatal("deactivated user must not PIN in")
         }

@@ -39,6 +39,31 @@ func IsDefaultPassword(pw string) bool {
         return DefaultPasswords[strings.ToLower(strings.TrimSpace(pw))]
 }
 
+// WeakPINs are rejected everywhere a PIN is set (create user, rotate,
+// team join). One shared list so no entry point is softer than another:
+// sequences, repeats and the two most-guessed Kenyan patterns.
+var WeakPINs = map[string]bool{
+        "0000": true, "1111": true, "2222": true, "3333": true,
+        "4444": true, "5555": true, "6666": true, "7777": true,
+        "8888": true, "9999": true, "1212": true, "1122": true,
+        "1234": true, "4321": true, "2580": true, "0123": true,
+        "6789": true, "1379": true, "1004": true, "2000": true,
+}
+
+// ValidPIN is the single source of truth for staff PINs: EXACTLY 4 digits,
+// not a well-known/guessable pattern. Enforced at every entry point.
+func ValidPIN(p string) bool {
+        if len(p) != 4 {
+                return false
+        }
+        for i := 0; i < 4; i++ {
+                if p[i] < '0' || p[i] > '9' {
+                        return false
+                }
+        }
+        return !WeakPINs[p]
+}
+
 // HashPassword hashes passwords and PINs with bcrypt.
 func HashPassword(plain string) (string, error) { return hash.Password(plain) }
 

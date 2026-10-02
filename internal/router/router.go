@@ -88,6 +88,11 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         api.POST("/auth/login", h.Login)
         api.GET("/auth/pin-users", h.PinUsers)
         api.POST("/auth/pin", h.PinLogin)
+        // Authentication lifecycle: first-run owner setup (replaces seeded
+        // demo accounts) + the recovery-code forgot-password flow.
+        api.GET("/auth/has-users", h.HasUsers)
+        api.POST("/auth/bootstrap", h.Bootstrap)
+        api.POST("/auth/forgot-password", h.ForgotPassword)
         // Team join link redemption (public: the single-use token IS the
         // credential — minted by the cloud, expiring, shown once).
         api.POST("/auth/team-join", h.TeamJoin)
@@ -104,6 +109,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         // ---- Authenticated ----
         authd := api.Group("", authRequired)
         authd.GET("/me", h.Me)
+        authd.POST("/me/recovery-code", h.NewRecoveryCode)
         authd.GET("/shops", h.MyShops)
         authd.POST("/auth/switch", h.SwitchShop)
         authd.GET("/ws", gin.WrapH(h.Hub))
@@ -181,6 +187,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         custv := authd.Group("", perm("customers.view"))
         custv.GET("/customers", h.ListCustomers)
         custv.GET("/customers/:id/ledger", h.CustomerLedger)
+        custv.GET("/customers/:id/orders", h.CustomerOrders)
         custm := authd.Group("", perm("customers.manage"))
         custm.POST("/customers", h.CreateCustomer)
         custm.PUT("/customers/:id", h.UpdateCustomer)
@@ -275,6 +282,12 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         authd.POST("/gift-cards/redeem", perm("credit.manage"), h.RedeemGiftCard)
         authd.GET("/gift-cards", perm("credit.manage"), h.ListGiftCards)
 
+        authd.POST("/orders/:id/notify", perm("orders.notify"), h.NotifyOrderReady)
+        authd.POST("/design-jobs/:id/notify", perm("orders.notify"), h.NotifyJobReady)
+        authd.GET("/orders/:id/events", perm("orders.view"), h.GetOrderEvents)
+        authd.POST("/orders/:id/notes", perm("orders.view"), h.AddOrderNote)
+        authd.POST("/orders/:id/jobs", perm("orders.assign"), h.CreateJobFromOrder)
+        authd.GET("/assignees", perm("orders.assign"), h.ListAssignees)
         // ---- Embedded SPA ----
         // NOTE: gin only runs group middleware for matched routes, so the
         // static file serving must live inside NoRoute (the handler for

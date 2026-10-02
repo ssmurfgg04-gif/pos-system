@@ -246,7 +246,7 @@ func (h *H) PinLogin(c *gin.Context) {
                 h.fail(c, 400, "userId and 4-digit pin required")
                 return
         }
-        if !h.PinRL.Allow("pin") {
+        if !h.PinRL.Allow("pin:" + itoa64(body.UserID)) {
                 h.fail(c, 429, "too many attempts — wait a minute")
                 return
         }
@@ -291,7 +291,7 @@ func (h *H) PinLogin(c *gin.Context) {
                 return
         }
         p.ShopID = shopID
-        h.PinRL.Forget("pin")
+        h.PinRL.Forget("pin:" + itoa64(body.UserID))
         token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
         if err != nil {
                 h.fail(c, 500, "token error")

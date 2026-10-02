@@ -128,6 +128,28 @@ function Daily() {
               ))}
             </div>
           </div>
+
+          {/* Per-staff sales (P5): who sold what today. */}
+          {!!data.perStaff && data.perStaff.length > 0 && (
+            <div className="mt-5">
+              <p className="text-[12px] uppercase font-bold text-ink-muted mb-2">Per staff</p>
+              <div className="border-2 border-line rounded-input overflow-hidden">
+                {data.perStaff.map((st, i) => (
+                  <div key={st.userId} className={`flex items-center gap-3 px-3 py-2 text-[13px] ${i % 2 ? 'bg-surface-muted' : 'bg-surface'}`}>
+                    <span className="font-semibold text-ink flex-1 truncate">{st.name}</span>
+                    <span className="text-ink-muted tabular">{st.orders} order{st.orders === 1 ? '' : 's'}</span>
+                    <span className="font-bold tabular text-ink min-w-24 text-right">{centsToAmount(st.salesCents)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!!data.newCustomers && data.newCustomers > 0 && (
+            <p className="mt-3 text-[12.5px] text-ink-muted">
+              <span className="font-bold text-ink">{data.newCustomers}</span> new customer{data.newCustomers === 1 ? '' : 's'} captured today.
+            </p>
+          )}
         </>
       )}
     </Card>

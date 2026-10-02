@@ -4,14 +4,14 @@
 // Paystack payments (card / M-Money via Paystack) render in the detail.
 
 import { useEffect, useMemo, useState } from 'react'
-import { api, GiftCard, Order } from '../lib/api'
+import { api, DesignJob, GiftCard, Order, OrderEvent, WhatsAppContact } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Input, Modal, Spinner, StatusPill, Table, Tabs, Textarea, Field } from '../components/ui'
 import { ReceiptModal } from '../components/Receipt'
 import { useBranding } from '../stores/branding'
 import { centsToAmount, formatMoney } from '../lib/money'
 import { toast } from '../stores/toasts'
-import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer, BookUser, CreditCard, Wallet } from 'lucide-react'
+import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer, BookUser, CreditCard, Wallet, MessageCircle, Briefcase, History } from 'lucide-react'
 
 // Newer orders carry checkout extras the shared Order type doesn't declare
 // yet — optional locally so the shared type stays untouched.
@@ -45,6 +45,8 @@ export function Orders() {
   const canVoid = useAuth((s) => !!s.user?.permissions.includes('pos.void'))
   const canManual = useAuth((s) => !!s.user?.permissions.includes('payments.manual'))
   const canSell = useAuth((s) => !!s.user?.permissions.includes('pos.sell'))
+  const canAssign = useAuth((s) => !!s.user?.permissions.includes('orders.assign'))
+  const canNotify = useAuth((s) => !!s.user?.permissions.includes('orders.notify'))
   const [settleFor, setSettleFor] = useState<Order | null>(null)
   const [orders, setOrders] = useState<Order[] | null>(null)
   const [status, setStatus] = useState<'all' | 'PAID' | 'PENDING' | 'VOIDED'>('all')
@@ -193,6 +195,9 @@ export function Orders() {
           onSettle={canSell && selected.status === 'PENDING' && isTabOrder(selected) ? () => { setSettleFor(selected); setSelected(null) } : undefined}
           onRecheck={canSell && selected.status === 'PENDING' ? () => recheck(selected) : undefined}
           checking={checkingId === selected.id}
+          canAssign={canAssign}
+          canNotify={canNotify}
+          onChanged={load}
         />
       )}
 
@@ -234,6 +239,9 @@ function OrderDrawer({
   onSettle,
   onRecheck,
   checking,
+  canAssign,
+  canNotify,
+  onChanged,
 }: {
   order: Order
   onClose: () => void
@@ -242,8 +250,19 @@ function OrderDrawer({
   onSettle?: () => void
   onRecheck?: () => void
   checking?: boolean
+  canAssign?: boolean
+  canNotify?: boolean
+  onChanged?: () => void
 }) {
   const [live, setLive] = useState<OrderDetail>(order)
+  const [events, setEvents] = useState<OrderEvent[]>([])
+  const [jobModal, setJobModal] = useState(false)
+  const [contact, setContact] = useState<WhatsAppContact | null>(null)
+  const refreshTimeline = async () => {
+    try {
+      setEvents(await api.get<OrderEvent[]>(`/api/v1/orders/${order.id}/events`))
+    } catch { /* timeline unavailable */ }
+  }
   const [receiptOpen, setReceiptOpen] = useState(false)
   // Gift cards mint on paid sales — fetch them lazily, only when this order
   // plausibly contains a gift-card line and only for PAID orders. Fails
@@ -261,6 +280,10 @@ function OrderDrawer({
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order.id, live.status, looksGiftCard])
+  useEffect(() => {
+    refreshTimeline()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order.id])
   useEffect(() => {
     const t = setInterval(async () => {
       try {
@@ -397,9 +420,198 @@ function OrderDrawer({
         </div>
       )}
 
+      {canNotify && live.status === 'PAID' && (
+        <Button
+          variant="primary"
+          size="md"
+          className="w-full mt-3"
+          onClick={async () => {
+            try {
+              setContact(await api.post<WhatsAppContact>(`/api/v1/orders/${live.id}/notify`))
+            } catch (e: any) {
+              toast.error('Could not prepare the message', e?.message)
+            }
+          }}
+        >
+          <MessageCircle size={15} strokeWidth={2.5} aria-hidden />
+          Contact customer on WhatsApp
+        </Button>
+      )}
+
+      <div className="mt-4 border-t-2 border-line pt-3">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-[12px] uppercase font-bold text-ink-muted flex items-center gap-1.5">
+            <Briefcase size={13} strokeWidth={2.5} aria-hidden />
+            Fulfilment jobs
+          </p>
+          {canAssign && live.status === 'PAID' && (
+            <Button size="sm" variant="secondary" onClick={() => setJobModal(true)}>+ Create job</Button>
+          )}
+        </div>
+        {(live.jobs ?? []).length === 0 ? (
+          <p className="text-[12px] text-ink-subtle">
+            No jobs yet{canAssign && live.status === 'PAID' ? ' — create one to route this sale to a designer or the branding team.' : '.'}
+          </p>
+        ) : (
+          <ul className="space-y-1.5">
+            {(live.jobs ?? []).map((j: DesignJob) => (
+              <li key={j.id} className="flex items-center gap-2 text-[13px] bg-surface-muted border border-line rounded-input px-2.5 py-1.5">
+                <StatusPill
+                  status={j.status === 'delivered' ? 'paid' : j.status === 'ready' ? 'info' : j.status === 'in_progress' ? 'pending' : 'void'}
+                  label={j.status.replace('_', ' ')}
+                />
+                <span className="font-semibold text-ink truncate flex-1">{j.title}</span>
+                <span className="text-ink-subtle text-[12px]">{j.assigneeName || 'unassigned'}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="mt-4 border-t-2 border-line pt-3">
+        <p className="text-[12px] uppercase font-bold text-ink-muted mb-2 flex items-center gap-1.5">
+          <History size={13} strokeWidth={2.5} aria-hidden />
+          Activity
+        </p>
+        {events.length === 0 ? (
+          <p className="text-[12px] text-ink-subtle">Job moves, WhatsApp contacts and notes will appear here.</p>
+        ) : (
+          <ol className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+            {events.map((e) => (
+              <li key={e.id} className="text-[12.5px] flex gap-2">
+                <span className="text-ink-subtle tabular shrink-0">{new Date(e.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <span className="text-ink-muted flex-1">
+                  {e.kind === 'whatsapp' && <MessageCircle size={12} strokeWidth={2.5} className="inline mr-1 text-paid-text" aria-hidden />}
+                  {e.message}
+                  {e.username && <span className="text-ink-subtle"> — {e.username}</span>}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+
+      {contact && (
+        <Modal open onClose={() => setContact(null)} title="Contact customer on WhatsApp" size="sm"
+          footer={<Button variant="primary" onClick={() => setContact(null)}>Close</Button>}>
+          <div className="space-y-3">
+            <p className="text-[13px] text-ink-muted">
+              Ready for pickup — message to <span className="font-bold text-ink">{contact.phone}</span>:
+            </p>
+            <p className="bg-surface-muted border border-line rounded-input px-3 py-2.5 text-[13px] text-ink select-all">
+              {contact.message}
+            </p>
+            <p className="text-[11.5px] text-ink-subtle">
+              WhatsApp opens with this draft prefilled — review it and press send there. The contact attempt is
+              already on the activity timeline; the app never sends automatically.
+            </p>
+            <Button variant="primary" size="lg" className="w-full"
+              onClick={() => {
+                window.open(contact.url, '_blank', 'noopener')
+                toast.success('WhatsApp opened', 'Send the message from there.')
+                refreshTimeline()
+              }}
+            >
+              <MessageCircle size={16} strokeWidth={2.5} aria-hidden className="mr-2" />
+              Open WhatsApp
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {jobModal && (
+        <JobFromOrderModal
+          order={live}
+          onClose={() => setJobModal(false)}
+          onDone={async () => {
+            setJobModal(false)
+            setLive(await api.get<OrderDetail>(`/api/v1/orders/${order.id}`))
+            refreshTimeline()
+            onChanged?.()
+          }}
+        />
+      )}
+
       {receiptOpen && (
         <ReceiptModal open order={live} branding={branding} onClose={() => setReceiptOpen(false)} />
       )}
+    </Modal>
+  )
+}
+
+// CreateJobFromOrderModal (orders.assign): turn a paid sale into a tracked
+// job with a deadline, priority and assignee — the sale → design handoff.
+function JobFromOrderModal({ order, onClose, onDone }: { order: Order; onClose: () => void; onDone: () => void }) {
+  const [title, setTitle] = useState('')
+  const [deadline, setDeadline] = useState('')
+  const [priority, setPriority] = useState('normal')
+  const [assigneeId, setAssigneeId] = useState(0)
+  const [staff, setStaff] = useState<{ id: number; fullName: string; roleName: string }[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api.get<typeof staff>('/api/v1/assignees')
+      .then(setStaff)
+      .catch(() => { /* team list unavailable — unassigned is fine */ })
+  }, [])
+
+  const go = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.post(`/api/v1/orders/${order.id}/jobs`, {
+        title: title.trim() || `Job for ${order.number}`,
+        deadline,
+        priority,
+        assigneeId,
+      })
+      toast.success('Job created', `${order.number} routed to the production board`)
+      onDone()
+    } catch (e: any) {
+      setError(e?.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Create job from ${order.number}`} size="sm" footer={
+      <>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={go} disabled={busy}>
+          {busy ? <Spinner className="border-t-brand-ink" /> : 'Create & route'}
+        </Button>
+      </>
+    }>
+      <div className="space-y-3">
+        <Field label="Job title" hint="Defaults to the order number.">
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={`e.g. Print run for ${order.customerName || 'customer'}`} autoFocus />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Deadline">
+            <Input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+          </Field>
+          <Field label="Priority">
+            <select value={priority} onChange={(e) => setPriority(e.target.value)}
+              className="w-full min-h-10 px-3 bg-surface-muted border border-line rounded-input text-ink text-[13px]">
+              <option value="normal">Normal</option>
+              <option value="high">High</option>
+              <option value="low">Low</option>
+            </select>
+          </Field>
+        </div>
+        <Field label="Assign to">
+          <select value={assigneeId} onChange={(e) => setAssigneeId(Number(e.target.value))}
+            className="w-full min-h-10 px-3 bg-surface-muted border border-line rounded-input text-ink text-[13px]">
+            <option value={0}>Unassigned (queue)</option>
+            {staff.map((m) => (
+              <option key={m.id} value={m.id}>{m.fullName || String(m.id)}{m.roleName ? ` — ${m.roleName}` : ''}</option>
+            ))}
+          </select>
+        </Field>
+        {error && <p role="alert" className="text-danger-text text-sm font-semibold">{error}</p>}
+      </div>
     </Modal>
   )
 }

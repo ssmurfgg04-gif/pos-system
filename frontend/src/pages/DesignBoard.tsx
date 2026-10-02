@@ -5,12 +5,12 @@
 // delete — artwork, briefs, reference photos travel with the job.
 
 import { useEffect, useRef, useState } from 'react'
-import { api, ApiError, backendMode, DesignFile, DesignJob, token } from '../lib/api'
+import { api, ApiError, backendMode, DesignFile, DesignJob, WhatsAppContact, token } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Modal, Spinner, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
 import { onWsEvent } from '../ws/client'
-import { Palette, Paperclip, UploadCloud, Download, Trash2 } from 'lucide-react'
+import { Palette, Paperclip, UploadCloud, Download, Trash2, MessageCircle, CalendarClock, Link2 } from 'lucide-react'
 
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024 // matches the server cap (5 MB)
 
@@ -56,10 +56,13 @@ const COLUMNS: { key: DesignJob['status']; label: string }[] = [
 
 export function DesignBoard() {
   const canManage = useAuth((s) => !!s.user?.permissions.includes('design.manage'))
+  const canDelegate = useAuth((s) => !!s.user?.permissions.includes('orders.assign'))
+  const canNotify = useAuth((s) => !!s.user?.permissions.includes('orders.notify'))
   const [jobs, setJobs] = useState<DesignJob[] | null>(null)
   const [creating, setCreating] = useState(false)
   const [filesByJob, setFilesByJob] = useState<Record<number, DesignFile[]>>({})
   const [attachFor, setAttachFor] = useState<DesignJob | null>(null)
+  const [notifyFor, setNotifyFor] = useState<DesignJob | null>(null)
 
   const load = async () => {
     try {
@@ -98,8 +101,8 @@ export function DesignBoard() {
     <div className="space-y-4">
       <Card
         title="Design & production board"
-        sub="Custom work: artwork, branding runs, custom merch"
-        actions={canManage && <Button variant="primary" size="sm" onClick={() => setCreating(true)}>+ Job</Button>}
+        sub={canDelegate ? 'Custom work: artwork, branding runs, custom merch' : 'Your assigned jobs — move them as you progress'}
+        actions={canDelegate && <Button variant="primary" size="sm" onClick={() => setCreating(true)}>+ Job</Button>}
       >
         {empty && (
           <div className="mb-3">
@@ -123,9 +126,24 @@ export function DesignBoard() {
                 <div className="space-y-2 mt-1">
                   {items.map((j) => (
                     <article key={j.id} className="bg-surface border-2 border-line-strong rounded-input p-2.5 shadow-brutal-sm">
-                      <p className="font-bold text-[13px] text-ink leading-snug">{j.title}</p>
+                      <p className="font-bold text-[13px] text-ink leading-snug">
+                        {j.priority === 'high' && <span className="text-danger-text mr-1" title="High priority">!</span>}
+                        {j.title}
+                      </p>
                       {j.productName && <p className="text-[11px] text-ink-subtle mt-0.5">on {j.productName}</p>}
                       {j.customerName && <p className="text-[11px] text-ink-muted mt-0.5">for {j.customerName}</p>}
+                      {j.deadline && (
+                        <p className={`text-[11px] mt-0.5 font-semibold inline-flex items-center gap-1 ${isOverdue(j) ? 'text-danger-text' : 'text-ink-subtle'}`}>
+                          <CalendarClock size={11} strokeWidth={2.25} aria-hidden />
+                          due {new Date(j.deadline).toLocaleDateString()}
+                        </p>
+                      )}
+                      {!!j.orderId && (
+                        <p className="text-[11px] text-ink-subtle mt-0.5 inline-flex items-center gap-1">
+                          <Link2 size={11} strokeWidth={2.25} aria-hidden />
+                          from sale #{j.orderId}
+                        </p>
+                      )}
                       {j.notes && <p className="text-[12px] text-ink-muted mt-1 line-clamp-2">{j.notes}</p>}
                       <div className="flex items-center justify-between mt-2">
                         <span className="text-[11px] text-ink-subtle">{j.assigneeName || j.createdBy || '—'}</span>
@@ -140,6 +158,18 @@ export function DesignBoard() {
                             <Paperclip size={12} strokeWidth={2.25} aria-hidden />
                             {filesByJob[j.id]?.length ?? 0}
                           </button>
+                          {j.status === 'ready' && canNotify && (
+                            <button
+                              type="button"
+                              onClick={() => setNotifyFor(j)}
+                              title="Contact the customer on WhatsApp — you review the message before sending"
+                              aria-label={`Contact customer on WhatsApp — ${j.title}`}
+                              className="inline-flex items-center gap-1 text-[11px] font-bold text-paid-text border-2 border-paid-text/40 rounded-input px-1.5 py-1 bg-paid-bg hover:brightness-95"
+                            >
+                              <MessageCircle size={12} strokeWidth={2.5} aria-hidden />
+                              WhatsApp
+                            </button>
+                          )}
                           {canManage && (
                             <select
                               value={j.status}
@@ -164,6 +194,13 @@ export function DesignBoard() {
 
       {creating && <JobModal onClose={() => setCreating(false)} onSaved={() => { setCreating(false); load() }} />}
 
+      {notifyFor && (
+        <WhatsAppModal
+          job={notifyFor}
+          onClose={() => setNotifyFor(null)}
+        />
+      )}
+
       {attachFor && (
         <AttachmentsModal
           job={attachFor}
@@ -178,7 +215,7 @@ export function DesignBoard() {
 }
 
 function JobModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState({ title: '', productName: '', customerName: '', notes: '', status: 'queue' })
+  const [form, setForm] = useState({ title: '', productName: '', customerName: '', notes: '', status: 'queue', deadline: '', priority: 'normal' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [custQuery, setCustQuery] = useState('')
@@ -241,8 +278,24 @@ function JobModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => vo
             </div>
           )}
         </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Deadline" hint="Promised to the customer">
+            <Input type="date" value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} />
+          </Field>
+          <Field label="Priority">
+            <select
+              value={form.priority}
+              onChange={(e) => setForm({ ...form, priority: e.target.value })}
+              className="w-full min-h-10 px-3 bg-surface-muted border border-line rounded-input text-ink text-[13px]"
+            >
+              <option value="normal">Normal</option>
+              <option value="high">High</option>
+              <option value="low">Low</option>
+            </select>
+          </Field>
+        </div>
         <Field label="Notes">
-          <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Colors, placement, deadline…" />
+          <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Colors, placement, special instructions…" />
         </Field>
         {error && <p role="alert" className="text-danger-text text-sm font-semibold">{error}</p>}
       </div>
@@ -387,6 +440,83 @@ function AttachmentsModal({
             </li>
           ))}
         </ul>
+      )}
+    </Modal>
+  )
+}
+
+function isOverdue(j: DesignJob): boolean {
+  if (!j.deadline) return false
+  if (j.status === 'delivered') return false
+  const due = new Date(j.deadline)
+  const today = new Date()
+  due.setHours(23, 59, 59, 0)
+  return due.getTime() < today.getTime()
+}
+
+// WhatsAppModal (P4): prepare the "contact customer" action. The message is
+// a DRAFT the staff member reviews and edits in WhatsApp before sending —
+// the app records that the contact was prepared, never that it was delivered.
+function WhatsAppModal({ job, onClose }: { job: DesignJob; onClose: () => void }) {
+  const [contact, setContact] = useState<WhatsAppContact | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      setBusy(true)
+      try {
+        const c = await api.post<WhatsAppContact>(`/api/v1/design-jobs/${job.id}/notify`)
+        if (alive) setContact(c)
+      } catch (e: any) {
+        if (alive) setError(e?.message || 'Could not prepare the message')
+      } finally {
+        if (alive) setBusy(false)
+      }
+    })()
+    return () => { alive = false }
+  }, [job.id])
+
+  return (
+    <Modal open onClose={onClose} title={`Contact customer — ${job.title}`} size="sm"
+      footer={<Button variant="primary" onClick={onClose}>Close</Button>}>
+      {busy && <div className="py-6 flex justify-center"><Spinner /></div>}
+      {error && (
+        <div className="space-y-3">
+          <p role="alert" className="text-danger-text text-sm font-semibold bg-danger-bg border border-danger-text/30 rounded-input px-3 py-2">
+            {error}
+          </p>
+          <p className="text-[12px] text-ink-subtle">
+            Record the customer's phone number on the sale (Orders) or in Customers, then try again.
+          </p>
+        </div>
+      )}
+      {contact && (
+        <div className="space-y-3">
+          <p className="text-[13px] text-ink-muted">
+            Ready for pickup — message to <span className="font-bold text-ink">{contact.phone}</span>:
+          </p>
+          <p className="bg-surface-muted border border-line rounded-input px-3 py-2.5 text-[13px] text-ink select-all">
+            {contact.message}
+          </p>
+          <p className="text-[11.5px] text-ink-subtle">
+            WhatsApp opens with this message prefilled — you review it and press send. The contact is logged on
+            the order's timeline; the app never sends automatically or claims delivery.
+          </p>
+          <Button
+            variant="primary"
+            size="lg"
+            className="w-full"
+            onClick={() => {
+              window.open(contact.url, '_blank', 'noopener')
+              toast.success('WhatsApp opened', 'Send the message from there — the attempt is on the order timeline.')
+            }}
+          >
+            <MessageCircle size={16} strokeWidth={2.5} aria-hidden className="mr-2" />
+            Open WhatsApp
+          </Button>
+        </div>
       )}
     </Modal>
   )

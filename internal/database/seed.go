@@ -70,6 +70,8 @@ var DefaultSettings = map[string]string{
         "loyalty_point_cents":   "100",    // 1 pt = KES 1 off
         "loyalty_max_percent":   "50",     // points cover ≤50% of an order
         "credit_enabled":        "true",   // prepaid store credit feature toggle
+        "crm_auto_capture":      "true",   // checkout links/creates CRM records from the sale phone
+        "whatsapp_ready_note":   "",       // appended to ready-pickup WhatsApp drafts
         // Team sync: links standalone tills through the shop's Supabase
         // project (same one offsite backups use). Secrets masked in API.
         "sync_enabled":          "false",
@@ -128,6 +130,12 @@ var seedUsers = []struct {
 
 // Seed idempotently inserts defaults (roles, demo users, catalog, settings).
 // It never overwrites existing rows — safe on every boot.
+//
+// Demo accounts (admin/cashier/designer with public passwords) are seeded
+// ONLY when demoData is true (SEED_DEMO=true). Production boots start with
+// ZERO users; the login screen offers first-run owner setup in that case.
+// Existing databases were purged of unrotated demo accounts by migration
+// v13 (safeguarded, journalled, rollback documented).
 func (d *DB) Seed(demoData bool) error {
         if err := d.seedSettings(); err != nil {
                 return fmt.Errorf("seed settings: %w", err)
@@ -135,10 +143,10 @@ func (d *DB) Seed(demoData bool) error {
         if err := d.seedRoles(); err != nil {
                 return fmt.Errorf("seed roles: %w", err)
         }
-        if err := d.seedUsers(); err != nil {
-                return fmt.Errorf("seed users: %w", err)
-        }
         if demoData {
+                if err := d.seedUsers(); err != nil {
+                        return fmt.Errorf("seed users: %w", err)
+                }
                 if err := d.seedCatalog(); err != nil {
                         return fmt.Errorf("seed catalog: %w", err)
                 }
@@ -240,10 +248,17 @@ func (d *DB) seedRoles() error {
         for name, perms := range models.SeededRolePermissions {
                 jsonPerms, _ := json.Marshal(perms)
                 desc := map[string]string{
-                        "Admin":    "Full access to every module",
-                        "Cashier":  "Point of sale: checkout, manual M-Pesa entry, shifts",
-                        "Designer": "Design & production board, catalog visibility",
+                        "Admin":      "Technical owner — full access to every module",
+                        "Owner":      "Business owner — full control of accounts, reports, settings and staff",
+                        "Cashier":    "Point of sale: checkout, manual M-Pesa entry, shifts",
+                        "Front Desk": "Run the floor: serve customers, take payment, delegate and track jobs",
+                        "Branding":   "Sell and produce branding jobs; hand work to designers",
+                        "Cyber":      "Sell and produce cyber-café jobs; hand work to designers",
+                        "Designer":   "Work the design board — only jobs assigned to you",
                 }[name]
+                if desc == "" {
+                        desc = "Staff role"
+                }
                 q := d.Rebind(`INSERT INTO roles (name, description, is_system, permissions)
                         SELECT ?, ?, 1, ? WHERE NOT EXISTS (SELECT 1 FROM roles WHERE name = ?)`)
                 if _, err := d.Exec(q, name, desc, string(jsonPerms), name); err != nil {

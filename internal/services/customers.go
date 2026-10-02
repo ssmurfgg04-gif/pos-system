@@ -13,101 +13,164 @@ import (
 // paid sales). The live rate is settings-driven (loyalty_earn_per_cents).
 const loyaltyPerCents = 10000
 
+// customerColumns is the shared SELECT list (email + notes joined CRM).
+const customerColumns = `
+        id, name, COALESCE(phone,''), COALESCE(email,''), COALESCE(notes,''), credit_limit_cents, loyalty_points,
+        balance_cents, COALESCE(store_credit_cents,0), is_active, created_at, updated_at`
+
+func scanCustomer(scan func(...any) error) (models.Customer, error) {
+        var c models.Customer
+        var active int
+        err := scan(&c.ID, &c.Name, &c.Phone, &c.Email, &c.Notes, &c.CreditLimitCents, &c.LoyaltyPoints,
+                &c.BalanceCents, &c.StoreCreditCents, &active, &c.CreatedAt, &c.UpdatedAt)
+        c.Active = active == 1
+        return c, err
+}
+
 // GetCustomer loads one customer with its live balance.
 func (s *Service) GetCustomer(id int64) (*models.Customer, error) {
-	var c models.Customer
-	var active int
-	err := s.db.QueryRow(s.db.Rebind(`
-                SELECT id, name, COALESCE(phone,''), credit_limit_cents, loyalty_points,
-                        balance_cents, COALESCE(store_credit_cents,0), is_active, created_at, updated_at
-                FROM customers WHERE id = ?`), id).
-		Scan(&c.ID, &c.Name, &c.Phone, &c.CreditLimitCents, &c.LoyaltyPoints,
-			&c.BalanceCents, &c.StoreCreditCents, &active, &c.CreatedAt, &c.UpdatedAt)
-	if err != nil {
-		return nil, ErrNotFound
-	}
-	c.Active = active == 1
-	return &c, nil
+        c, err := scanCustomer(func(dest ...any) error {
+                return s.db.QueryRow(s.db.Rebind(`SELECT `+customerColumns+` FROM customers WHERE id = ?`), id).Scan(dest...)
+        })
+        if err != nil {
+                return nil, ErrNotFound
+        }
+        return &c, nil
 }
 
-// ListCustomers returns active-first matches for name/phone search.
+// ListCustomers returns active-first matches for name/phone/email search.
 func (s *Service) ListCustomers(search string) ([]models.Customer, error) {
-	q := "%" + strings.TrimSpace(search) + "%"
-	rows, err := s.db.Query(s.db.Rebind(`
-                SELECT id, name, COALESCE(phone,''), credit_limit_cents, loyalty_points,
-                        balance_cents, COALESCE(store_credit_cents,0), is_active, created_at, updated_at
-                FROM customers
-                WHERE name LIKE ? OR phone LIKE ?
+        q := "%" + strings.TrimSpace(search) + "%"
+        rows, err := s.db.Query(s.db.Rebind(`
+                SELECT `+customerColumns+` FROM customers
+                WHERE name LIKE ? OR phone LIKE ? OR COALESCE(email,'') LIKE ?
                 ORDER BY is_active DESC, balance_cents DESC, name ASC
-                LIMIT 200`), q, q)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []models.Customer
-	for rows.Next() {
-		var c models.Customer
-		var active int
-		if err := rows.Scan(&c.ID, &c.Name, &c.Phone, &c.CreditLimitCents,
-			&c.LoyaltyPoints, &c.BalanceCents, &c.StoreCreditCents, &active, &c.CreatedAt, &c.UpdatedAt); err != nil {
-			return nil, err
-		}
-		c.Active = active == 1
-		out = append(out, c)
-	}
-	if out == nil {
-		out = []models.Customer{}
-	}
-	return out, rows.Err()
+                LIMIT 200`), q, q, q)
+        if err != nil {
+                return nil, err
+        }
+        defer rows.Close()
+        var out []models.Customer
+        for rows.Next() {
+                c, err := scanCustomer(rows.Scan)
+                if err != nil {
+                        return nil, err
+                }
+                out = append(out, c)
+        }
+        if out == nil {
+                out = []models.Customer{}
+        }
+        return out, rows.Err()
 }
 
-// CreateCustomer registers a tab customer. limitCents 0 = cash only (no tab).
-func (s *Service) CreateCustomer(name, phone string, limitCents int64, p *auth.Principal) (*models.Customer, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, fmt.Errorf("customer name required")
-	}
-	if limitCents < 0 {
-		return nil, fmt.Errorf("credit limit cannot be negative")
-	}
-	now := nowStamp()
-	res, err := s.db.Exec(s.db.Rebind(`
-                INSERT INTO customers (name, phone, credit_limit_cents, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)`),
-		name, strings.TrimSpace(phone), limitCents, now, now)
-	if err != nil {
-		return nil, err
-	}
-	id, _ := res.LastInsertId()
-	s.Audit(p.ID, p.Username, "CUSTOMER_CREATED", "customer", fmt.Sprint(id), name)
-	return s.GetCustomer(id)
+// FindCustomerByPhone resolves the canonical CRM record for a phone number
+// (normalizes 07…/7…/2547… shapes first). Used by checkout auto-capture so
+// every sale by the same phone lands on one shared history.
+func (s *Service) FindCustomerByPhone(phone string) *models.Customer {
+        norm := normalizeKenyanPhone(phone)
+        if norm == "" {
+                return nil
+        }
+        var id int64
+        if err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM customers WHERE phone = ? LIMIT 1`), norm).Scan(&id); err != nil {
+                return nil
+        }
+        c, err := s.GetCustomer(id)
+        if err != nil {
+                return nil
+        }
+        return c
 }
 
-// UpdateCustomer edits name/phone/limit/active state.
-func (s *Service) UpdateCustomer(id int64, name, phone string, limitCents int64, active bool, p *auth.Principal) (*models.Customer, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, fmt.Errorf("customer name required")
-	}
-	if limitCents < 0 {
-		return nil, fmt.Errorf("credit limit cannot be negative")
-	}
-	activeInt := 0
-	if active {
-		activeInt = 1
-	}
-	res, err := s.db.Exec(s.db.Rebind(`
-                UPDATE customers SET name = ?, phone = ?, credit_limit_cents = ?,
+// CreateCustomer registers a customer. The phone is normalized (07… →
+// 2547…), and an exact-phone duplicate is refused — one customer, one
+// history. limitCents 0 = cash only (no tab).
+func (s *Service) CreateCustomer(name, phone, email, notes string, limitCents int64, p *auth.Principal) (*models.Customer, error) {
+        name = strings.TrimSpace(name)
+        if name == "" {
+                return nil, fmt.Errorf("customer name required")
+        }
+        if limitCents < 0 {
+                return nil, fmt.Errorf("credit limit cannot be negative")
+        }
+        norm := normalizeKenyanPhone(phone)
+        if norm != "" {
+                var existing int64
+                if err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM customers WHERE phone = ?`), norm).Scan(&existing); err == nil {
+                        return nil, fmt.Errorf("a customer with phone %s already exists (customer #%d) — open their record instead", norm, existing)
+                }
+        }
+        now := nowStamp()
+        res, err := s.db.Exec(s.db.Rebind(`
+                INSERT INTO customers (name, phone, email, notes, credit_limit_cents, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)`),
+                name, norm, strings.TrimSpace(email), truncStr(strings.TrimSpace(notes), 500), limitCents, now, now)
+        if err != nil {
+                return nil, err
+        }
+        id, _ := res.LastInsertId()
+        s.Audit(p.ID, p.Username, "CUSTOMER_CREATED", "customer", fmt.Sprint(id), name)
+        return s.GetCustomer(id)
+}
+
+// UpdateCustomer edits name/phone/email/notes/limit/active state.
+func (s *Service) UpdateCustomer(id int64, name, phone, email, notes string, limitCents int64, active bool, p *auth.Principal) (*models.Customer, error) {
+        name = strings.TrimSpace(name)
+        if name == "" {
+                return nil, fmt.Errorf("customer name required")
+        }
+        if limitCents < 0 {
+                return nil, fmt.Errorf("credit limit cannot be negative")
+        }
+        norm := normalizeKenyanPhone(phone)
+        if norm != "" {
+                var existing int64
+                if err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM customers WHERE phone = ? AND id != ?`), norm, id).Scan(&existing); err == nil {
+                        return nil, fmt.Errorf("another customer already uses phone %s", norm)
+                }
+        }
+        activeInt := 0
+        if active {
+                activeInt = 1
+        }
+        res, err := s.db.Exec(s.db.Rebind(`
+                UPDATE customers SET name = ?, phone = ?, email = ?, notes = ?, credit_limit_cents = ?,
                         is_active = ?, updated_at = ? WHERE id = ?`),
-		name, strings.TrimSpace(phone), limitCents, activeInt, nowStamp(), id)
-	if err != nil {
-		return nil, err
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return nil, ErrNotFound
-	}
-	s.Audit(p.ID, p.Username, "CUSTOMER_UPDATED", "customer", fmt.Sprint(id), name)
-	return s.GetCustomer(id)
+                name, norm, strings.TrimSpace(email), truncStr(strings.TrimSpace(notes), 500), limitCents, activeInt, nowStamp(), id)
+        if err != nil {
+                return nil, err
+        }
+        if n, _ := res.RowsAffected(); n != 1 {
+                return nil, ErrNotFound
+        }
+        s.Audit(p.ID, p.Username, "CUSTOMER_UPDATED", "customer", fmt.Sprint(id), name)
+        return s.GetCustomer(id)
+}
+
+// GetCustomerOrders is the shared purchase history: every sale linked to
+// the CRM record, newest first. This is what makes the customer book a
+// CRM and not just a list of tab balances.
+func (s *Service) GetCustomerOrders(customerID int64) ([]models.OrderSummary, error) {
+        if _, err := s.GetCustomer(customerID); err != nil {
+                return nil, ErrNotFound
+        }
+        rows, err := s.db.Query(s.db.Rebind(`
+                SELECT id, number, status, total_cents, created_at, paid_at
+                FROM orders WHERE customer_id = ? ORDER BY id DESC LIMIT 100`), customerID)
+        if err != nil {
+                return nil, err
+        }
+        defer rows.Close()
+        out := []models.OrderSummary{}
+        for rows.Next() {
+                var o models.OrderSummary
+                if err := rows.Scan(&o.ID, &o.Number, &o.Status, &o.TotalCents, &o.CreatedAt, &o.PaidAt); err != nil {
+                        return nil, err
+                }
+                out = append(out, o)
+        }
+        return out, rows.Err()
 }
 
 // recordLedgerTx appends one ledger row and applies it to the balance,

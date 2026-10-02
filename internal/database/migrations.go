@@ -5,7 +5,21 @@ import (
         "fmt"
         "regexp"
         "strings"
+        "time"
+
+        "posapp/internal/hash"
+        "posapp/internal/models"
 )
+
+// hashVerify wraps bcrypt verification for migration-time credential checks.
+func hashVerify(h, plain string) bool {
+        if h == "" {
+                return false
+        }
+        return hash.Verify(h, plain)
+}
+
+func timeNowUTC() time.Time { return time.Now().UTC() }
 
 // Migration is one schema step. SQL is split per dialect when needed; Go
 // covers data backfills that SQL can't express portably (JSON permission
@@ -848,6 +862,109 @@ ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS attempts BIGINT NOT NULL DEFAUL
 ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT '';
 `,
         },
+        {
+                // v13: authentication hardening.
+                //
+                // recovery_codes: single-use owner recovery codes (hashed at
+                // rest) backing the public forgot-password flow and the
+                // `ledgerpos reset-owner` escape hatch.
+                //
+                // Demo-account purge (Go step below, with a rollback plan):
+                // the installer seeded admin/cashier/designer with PUBLIC
+                // passwords (admin123…) into every database. Only accounts
+                // whose password AND PIN still verify against the seed
+                // values are disabled — a rotated account is owned by a real
+                // person and is left untouched. Deactivation (not deletion)
+                // keeps every historical sale, shift and audit row intact;
+                // each disabled account is journalled in audit_log for the
+                // rollback procedure (docs/MIGRATION-v13-ROLLBACK.md).
+                Version: 13,
+                SQLite: `
+CREATE TABLE IF NOT EXISTS recovery_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT '',
+        used_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_recovery_codes_user ON recovery_codes(user_id);
+`,
+                Pg: `
+CREATE TABLE IF NOT EXISTS recovery_codes (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT '',
+        used_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_recovery_codes_user ON recovery_codes(user_id);
+`,
+                Go: purgeDemoUsersV13,
+        },
+        {
+                // v14: business roles + the connected job lifecycle + CRM
+                // enrichment.
+                //
+                // Jobs: design_jobs gains the sale link (order_id), the
+                // promised deadline, a priority, and stage timestamps
+                // (assigned/ready/collected) so a job's journey is auditable.
+                // orders.assigned_to_id tracks the staff member responsible
+                // for fulfilment. order_events is the per-order activity
+                // timeline (job moves, WhatsApp contacts, notes) — the
+                // "activity history" the field asked for.
+                //
+                // CRM: customers gains email + notes.
+                Version: 14,
+                SQLite: `
+ALTER TABLE design_jobs ADD COLUMN order_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE design_jobs ADD COLUMN customer_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE design_jobs ADD COLUMN deadline_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE design_jobs ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal';
+ALTER TABLE design_jobs ADD COLUMN assigned_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE design_jobs ADD COLUMN ready_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE design_jobs ADD COLUMN collected_at TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_design_jobs_order ON design_jobs(order_id);
+ALTER TABLE orders ADD COLUMN assigned_to_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN notified_at TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS order_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL DEFAULT 'note',
+        message TEXT NOT NULL DEFAULT '',
+        user_id INTEGER NOT NULL DEFAULT 0,
+        username TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_order_events_order ON order_events(order_id);
+ALTER TABLE customers ADD COLUMN email TEXT NOT NULL DEFAULT '';
+ALTER TABLE customers ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+`,
+                Pg: `
+ALTER TABLE design_jobs ADD COLUMN IF NOT EXISTS order_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE design_jobs ADD COLUMN IF NOT EXISTS customer_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE design_jobs ADD COLUMN IF NOT EXISTS deadline_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE design_jobs ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
+ALTER TABLE design_jobs ADD COLUMN IF NOT EXISTS assigned_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE design_jobs ADD COLUMN IF NOT EXISTS ready_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE design_jobs ADD COLUMN IF NOT EXISTS collected_at TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_design_jobs_order ON design_jobs(order_id);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_to_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS notified_at TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS order_events (
+        id SERIAL PRIMARY KEY,
+        order_id BIGINT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL DEFAULT 'note',
+        message TEXT NOT NULL DEFAULT '',
+        user_id BIGINT NOT NULL DEFAULT 0,
+        username TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_order_events_order ON order_events(order_id);
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';
+`,
+                Go: backfillRolePermsV14,
+        },
 }
 
 // backfillRolePermsV9 unions the v8 permission additions into seeded roles:
@@ -859,6 +976,117 @@ func backfillRolePermsV9(d *DB, tx *sql.Tx) error {
                 "Cashier": {"payments.apply_discount", "loyalty.redeem", "credit.manage"},
         }
         return unionRolePerms(d, tx, extra)
+}
+
+// backfillRolePermsV14 unions the P2/P3 workflow permissions into existing
+// system roles (union-only, once). New role names (Owner, Front Desk,
+// Branding, Cyber) are created by seedRoles on the same boot.
+func backfillRolePermsV14(d *DB, tx *sql.Tx) error {
+        extra := map[string][]string{
+                "Admin":       models.SeededRolePermissions["Admin"],
+                "Owner":       models.SeededRolePermissions["Owner"],
+                "Front Desk":  models.SeededRolePermissions["Front Desk"],
+                "Branding":    models.SeededRolePermissions["Branding"],
+                "Cyber":       models.SeededRolePermissions["Cyber"],
+                "Designer":    models.SeededRolePermissions["Designer"],
+                "Cashier":     models.SeededRolePermissions["Cashier"],
+        }
+        return unionRolePerms(d, tx, extra)
+}
+
+// seedCredentials mirrors database/seed.go's historical seedUsers — the
+// exact public credentials the installer used to ship. The purge verifies
+// against these; any account still matching them is a demo account by
+// definition, whatever its username is now.
+var seedCredentials = []struct {
+        username, password, pin string
+}{
+        {"admin", "admin123", "1234"},
+        {"cashier", "cashier123", "2222"},
+        {"designer", "designer123", "3333"},
+}
+
+// purgeDemoUsersV13 disables installer-seeded demo accounts whose
+// credentials are still the public seed values.
+//
+// SAFEGUARDS (per the client's work order):
+//   - a user whose password or PIN was rotated is NEVER touched (they own
+//     the account now) — bcrypt verification decides, not usernames;
+//   - accounts are DEACTIVATED, never deleted — orders.cashier_id,
+//     shifts.user_id and audit history stay fully intact;
+//   - every action is journalled to audit_log so the one-SQL-statement
+//     rollback in docs/MIGRATION-v13-ROLLBACK.md can restore precisely
+//     what was disabled;
+//   - if EVERY active user would end up disabled (a box genuinely using
+//     only demo accounts), the demo admin is RE-ACTIVATED with must_rotate
+//     so the box still has one working login and is forced to set a real
+//     password on first boot after upgrade.
+func purgeDemoUsersV13(d *DB, tx *sql.Tx) error {
+        type demoRow struct {
+                id     int64
+                pwHash string
+                pin    string
+        }
+        for _, sc := range seedCredentials {
+                rows, err := tx.Query(d.Rebind(`
+                        SELECT id, COALESCE(password_hash,''), COALESCE(pin_hash,'') FROM users
+                        WHERE LOWER(username) = LOWER(?) AND is_active = 1`), sc.username)
+                if err != nil {
+                        return err
+                }
+                var found []demoRow
+                for rows.Next() {
+                        var r demoRow
+                        if err := rows.Scan(&r.id, &r.pwHash, &r.pin); err == nil {
+                                found = append(found, r)
+                        }
+                }
+                rows.Close()
+                for _, r := range found {
+                        if !hashVerify(r.pwHash, sc.password) {
+                                continue // password rotated — a real person owns this account
+                        }
+                        if r.pin != "" && !hashVerify(r.pin, sc.pin) {
+                                continue // PIN rotated — owned
+                        }
+                        if _, err := tx.Exec(`UPDATE users SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, r.id); err != nil {
+                                return err
+                        }
+                        if _, err := tx.Exec(d.Rebind(`
+                                INSERT INTO audit_log (user_id, username, action, entity, entity_id, details, created_at)
+                                VALUES (0, 'system', 'DEMO_ACCOUNT_DISABLED', 'user', ?, 'migration v13', ?)`),
+                                r.id, nowStampV13()); err != nil {
+                                return err
+                        }
+                }
+        }
+        // Guardrail: a box must never migrate to zero working logins.
+        var active int
+        if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE is_active = 1`).Scan(&active); err != nil {
+                return err
+        }
+        if active == 0 {
+                res, err := tx.Exec(`
+                        UPDATE users SET is_active = 1, must_rotate = 1, updated_at = CURRENT_TIMESTAMP
+                        WHERE LOWER(username) = 'admin'`)
+                if err != nil {
+                        return err
+                }
+                if n, _ := res.RowsAffected(); n > 0 {
+                        if _, err := tx.Exec(d.Rebind(`
+                                INSERT INTO audit_log (user_id, username, action, entity, entity_id, details, created_at)
+                                VALUES (0, 'system', 'DEMO_ACCOUNT_REENABLED_FOR_SETUP', 'user', '0', 'migration v13 guardrail', ?)`),
+                                nowStampV13()); err != nil {
+                                return err
+                        }
+                }
+        }
+        return nil
+}
+
+// nowStampV13 matches services.nowStamp (database cannot import services).
+func nowStampV13() string {
+        return timeNowUTC().Format("2006-01-02T15:04:05.000Z")
 }
 
 // Migrate applies pending migrations in order.

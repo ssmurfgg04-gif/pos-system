@@ -126,9 +126,11 @@ to configure:
    Start-menu shortcuts, Add/Remove Programs entry, no extraction
    needed); on macOS unzip and open `LedgerPOS.app`; on Linux
    `tar xf ledgerpos-linux-x64.tar.xz` then `./ledgerpos`.
-3. The app opens in its own window — no browser tabs. First login
-   `admin / 0000` (PIN `1234`) — demo accounts are ready to use with the
-   shared playground password `0000`; nothing needs rotating first.
+3. The app opens in its own window — no browser tabs. The very first
+   screen asks you to **create the owner account** — pick your own name,
+   a strong password and (optionally) a 4-digit PIN. Write down the
+   recovery code it shows you once: that code is the only way back in if
+   the password is ever forgotten.
 
 First launch sets up everything by itself: it creates the SQLite
 database, runs migrations, seeds the catalog and users, picks a free
