@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"strings"
 
+	"posapp/internal/auth"
 	"posapp/internal/hash"
 	"posapp/internal/models"
 )
@@ -181,8 +182,10 @@ func (s *Service) TeamJoinWithLink(link, name, pin string) (models.TeamJoinInfo,
 	if len(name) < 2 || len(name) > 40 {
 		return info, fmt.Errorf("enter the worker's name (2-40 characters)")
 	}
-	if !regexp.MustCompile(`^\d{4}$`).MatchString(pin) || authIsWeakPIN(pin) {
-		return info, fmt.Errorf("choose a 4-digit PIN that isn't 0000 or 1234")
+	// ValidPIN is the shared rule (exactly 4 digits, no guessable pattern) —
+	// the join flow is now as strict as user creation and rotation.
+	if !auth.ValidPIN(pin) {
+		return info, fmt.Errorf("choose a 4-digit PIN that isn't an obvious pattern like 0000 or 1234")
 	}
 
 	// 1. The cloud decides: is this token real, alive, and unused?
@@ -279,15 +282,6 @@ func (s *Service) TeamJoinWithLink(link, name, pin string) (models.TeamJoinInfo,
 		"team "+res.TeamCode+" role "+res.RoleName)
 	log.Printf("[team] join link redeemed: %s joined %s as %s", username, res.TeamCode, res.RoleName)
 	return info, nil
-}
-
-// authIsWeakPIN keeps the most guessable PINs out of worker accounts.
-func authIsWeakPIN(pin string) bool {
-	switch pin {
-	case "0000", "1234", "1111", "1212", "2580":
-		return true
-	}
-	return false
 }
 
 // ---- Owner portal ----

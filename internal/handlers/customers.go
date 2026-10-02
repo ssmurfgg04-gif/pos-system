@@ -20,13 +20,15 @@ func (h *H) CreateCustomer(c *gin.Context) {
 	var body struct {
 		Name       string `json:"name" binding:"required"`
 		Phone      string `json:"phone"`
+		Email      string `json:"email"`
+		Notes      string `json:"notes"`
 		LimitCents int64  `json:"creditLimitCents"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	customer, err := h.svc(c).CreateCustomer(body.Name, body.Phone, body.LimitCents, p)
+	customer, err := h.svc(c).CreateCustomer(body.Name, body.Phone, body.Email, body.Notes, body.LimitCents, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -44,6 +46,8 @@ func (h *H) UpdateCustomer(c *gin.Context) {
 	var body struct {
 		Name       string `json:"name" binding:"required"`
 		Phone      string `json:"phone"`
+		Email      string `json:"email"`
+		Notes      string `json:"notes"`
 		LimitCents int64  `json:"creditLimitCents"`
 		Active     *bool  `json:"active"`
 	}
@@ -55,7 +59,7 @@ func (h *H) UpdateCustomer(c *gin.Context) {
 	if body.Active != nil {
 		active = *body.Active
 	}
-	customer, err := h.svc(c).UpdateCustomer(id, body.Name, body.Phone, body.LimitCents, active, p)
+	customer, err := h.svc(c).UpdateCustomer(id, body.Name, body.Phone, body.Email, body.Notes, body.LimitCents, active, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -144,4 +148,19 @@ func (h *H) SettleTab(c *gin.Context) {
 		return
 	}
 	h.ok(c, order)
+}
+
+// CustomerOrders (customers.view) — the shared purchase history: every
+// sale linked to this CRM record, newest first.
+func (h *H) CustomerOrders(c *gin.Context) {
+	id, ok := h.pathID(c, "id")
+	if !ok {
+		return
+	}
+	orders, err := h.svc(c).GetCustomerOrders(id)
+	if err != nil {
+		h.mapErr(c, err)
+		return
+	}
+	h.ok(c, orders)
 }

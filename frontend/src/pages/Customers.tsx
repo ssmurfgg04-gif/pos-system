@@ -6,12 +6,12 @@
 // needs customers.manage, topping up credit needs credit.manage.
 
 import { useEffect, useState } from 'react'
-import { api, Customer, LedgerEntry } from '../lib/api'
+import { api, Customer, LedgerEntry, OrderSummary } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { formatMoney } from '../lib/money'
 import { Button, Card, EmptyState, Field, Input, Modal, Spinner, StatusPill, Table, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
-import { BookUser, Ticket } from 'lucide-react'
+import { BookUser, Ticket, ReceiptText } from 'lucide-react'
 
 // Older backends may not send the prepaid balance yet — optional locally so
 // the shared Customer type stays untouched.
@@ -40,6 +40,8 @@ export function Customers() {
   const [payFor, setPayFor] = useState<CustomerRow | null>(null)
   const [creditFor, setCreditFor] = useState<CustomerRow | null>(null)
   const [redeemFor, setRedeemFor] = useState<CustomerRow | null>(null)
+  const [historyFor, setHistoryFor] = useState<CustomerRow | null>(null)
+  const [history, setHistory] = useState<OrderSummary[] | null>(null)
 
   const load = async (q = search) => {
     try {
@@ -53,6 +55,16 @@ export function Customers() {
     const t = window.setTimeout(() => load(), 250)
     return () => window.clearTimeout(t)
   }, [search])
+
+  const openHistory = async (c: Customer) => {
+    setHistoryFor(c)
+    setHistory(null)
+    try {
+      setHistory(await api.get<OrderSummary[]>(`/api/v1/customers/${c.id}/orders`))
+    } catch (e: any) {
+      toast.error('History failed', e?.message)
+    }
+  }
 
   const openLedger = async (c: Customer) => {
     setLedgerFor(c)
@@ -102,6 +114,7 @@ export function Customers() {
                 </td>
                 <td className="px-3 py-2.5 text-right whitespace-nowrap">
                   <span className="inline-flex items-center gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => openHistory(c)}>History</Button>
                     <Button size="sm" variant="ghost" onClick={() => openLedger(c)}>Ledger</Button>
                     {canCredit && <Button size="sm" variant="ghost" onClick={() => setCreditFor(c)}>Top up credit</Button>}
                     {canCredit && <Button size="sm" variant="ghost" onClick={() => setRedeemFor(c)}>Redeem gift card</Button>}
@@ -117,6 +130,27 @@ export function Customers() {
 
       <Modal open={editing !== null} onClose={() => setEditing(null)} title={editing === 'new' ? 'New customer' : 'Edit customer'}>
         {editing && <CustomerForm initial={editing === 'new' ? null : editing} onDone={() => { setEditing(null); load() }} />}
+      </Modal>
+
+      <Modal open={historyFor !== null} onClose={() => { setHistoryFor(null); setHistory(null) }} title={historyFor ? `Purchases — ${historyFor.name}` : 'Purchase history'} size="lg">
+        {!history ? (
+          <div className="py-8 flex justify-center"><Spinner /></div>
+        ) : history.length === 0 ? (
+          <EmptyState icon={<ReceiptText size={24} strokeWidth={2.25} />} title="No purchases yet" body="Sales with this customer's phone attached will appear here." />
+        ) : (
+          <Table head={['Order', 'Status', 'When', 'Total']}>
+            {history.map((o) => (
+              <tr key={o.id}>
+                <td className="px-3 py-2 font-bold text-ink text-[13px] tabular">{o.number}</td>
+                <td className="px-3 py-2">
+                  <StatusPill status={o.status === 'PAID' ? 'paid' : o.status === 'PENDING' ? 'pending' : 'void'} label={o.status} />
+                </td>
+                <td className="px-3 py-2 text-[12px] text-ink-subtle">{new Date(o.paidAt || o.createdAt).toLocaleString()}</td>
+                <td className="px-3 py-2 font-bold tabular text-ink">{formatMoney(o.totalCents)}</td>
+              </tr>
+            ))}
+          </Table>
+        )}
       </Modal>
 
       <Modal open={ledgerFor !== null} onClose={() => { setLedgerFor(null); setLedger(null) }} title={ledgerFor ? `Ledger — ${ledgerFor.name}` : 'Ledger'} size="lg">
@@ -191,6 +225,8 @@ export function Customers() {
 function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: () => void }) {
   const [name, setName] = useState(initial?.name || '')
   const [phone, setPhone] = useState(initial?.phone || '')
+  const [email, setEmail] = useState(initial?.email || '')
+  const [notes, setNotes] = useState(initial?.notes || '')
   const [limit, setLimit] = useState(initial ? String(initial.creditLimitCents / 100) : '')
   const [active, setActive] = useState(initial?.active ?? true)
   const [busy, setBusy] = useState(false)
@@ -205,6 +241,8 @@ function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: (
       const body = {
         name: name.trim(),
         phone: phone.trim(),
+        email: email.trim(),
+        notes: notes.trim(),
         creditLimitCents: Math.max(0, Math.round(Number(limit || '0') * 100)),
         ...(initial ? { active } : {}),
       }
@@ -228,8 +266,14 @@ function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: (
       <Field label="Name">
         <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Mama Mboga" />
       </Field>
-      <Field label="Phone">
+      <Field label="Phone" hint="Keys the shared purchase history — one customer per number">
         <Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" />
+      </Field>
+      <Field label="Email (optional)">
+        <Input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="name@example.com" />
+      </Field>
+      <Field label="Notes (optional)">
+        <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Preferences, sizes, delivery notes…" />
       </Field>
       <Field label="Credit limit (KES)" hint="0 means cash only — no tab">
         <Input value={limit} onChange={(e) => setLimit(e.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" placeholder="0" />

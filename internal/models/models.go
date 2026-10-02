@@ -15,6 +15,12 @@ const (
         OrderPaid     = "PAID"
         OrderVoided   = "VOIDED"
 
+        // Order-event kinds (per-order activity timeline).
+        OrderEventJob      = "job"
+        OrderEventWhatsApp = "whatsapp"
+        OrderEventNote     = "note"
+        OrderEventStatus   = "status"
+
         PaymentPending    = "PENDING"
         PaymentCompleted  = "COMPLETED"
         PaymentFailed     = "FAILED"
@@ -216,6 +222,45 @@ type Order struct {
         VoidReason    string      `json:"voidReason"`
         Items         []OrderItem `json:"items"`
         Payments      []Payment   `json:"payments"`
+        // Connected job lifecycle: fulfilment jobs spawned from this sale
+        // (loaded on the detail view) + the last WhatsApp contact attempt.
+        Jobs           []DesignJob  `json:"jobs,omitempty"`
+        AssignedToID   int64        `json:"assignedToId"`
+        NotifiedAt     string       `json:"notifiedAt"`
+}
+
+// OrderSummary is one row of a customer's purchase history.
+type OrderSummary struct {
+	ID         int64  `json:"id"`
+	Number     string `json:"number"`
+	Status     string `json:"status"`
+	TotalCents int64  `json:"totalCents"`
+	CreatedAt  string `json:"createdAt"`
+	PaidAt     string `json:"paidAt"`
+}
+
+// WhatsAppContact is the prepared "contact customer" action for a ready
+// order: the deep link opens WhatsApp with the message prefilled, the
+// staff member reviews and presses send — the app never auto-sends.
+type WhatsAppContact struct {
+	OrderID    int64  `json:"orderId"`
+	Phone      string `json:"phone"`
+	Message    string `json:"message"`
+	URL        string `json:"url"`
+	OrderRef   string `json:"orderRef"`
+	NotifiedAt string `json:"notifiedAt"`
+}
+
+// OrderEvent is one line of the per-order activity timeline (job moves,
+// WhatsApp contacts, status changes, notes).
+type OrderEvent struct {
+        ID        int64  `json:"id"`
+        OrderID   int64  `json:"orderId"`
+        Kind      string `json:"kind"`
+        Message   string `json:"message"`
+        UserID    int64  `json:"userId"`
+        Username  string `json:"username"`
+        CreatedAt string `json:"createdAt"`
 }
 
 // PaidAtOrCreated is the display timestamp for receipts and lists.
@@ -242,6 +287,8 @@ type Customer struct {
         ID               int64  `json:"id"`
         Name             string `json:"name"`
         Phone            string `json:"phone"`
+        Email            string `json:"email"`
+        Notes            string `json:"notes"`
         CreditLimitCents int64  `json:"creditLimitCents"`  // 0 = no tab allowed
         LoyaltyPoints    int64  `json:"loyaltyPoints"`
         BalanceCents     int64  `json:"balanceCents"`      // >0 means the customer owes the shop
@@ -405,6 +452,14 @@ type DesignJob struct {
         CreatedBy    string `json:"createdBy"`
         CreatedAt    string `json:"createdAt"`
         UpdatedAt    string `json:"updatedAt"`
+        // Connected job lifecycle (P3): the sale that requested this work,
+        // the deadline promised to the customer, and the stage timestamps.
+        OrderID     int64  `json:"orderId"`
+        Deadline    string `json:"deadline"`
+        Priority    string `json:"priority"`
+        AssignedAt  string `json:"assignedAt"`
+        ReadyAt     string `json:"readyAt"`
+        CollectedAt string `json:"collectedAt"`
 }
 
 // ---- Held (parked) sales ----

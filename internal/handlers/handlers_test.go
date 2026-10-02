@@ -28,10 +28,19 @@ import (
         "posapp/internal/ws"
 )
 
-// newTestServer boots the full app on a temp SQLite file with the mock
+// newTestEngine boots the full app on a temp SQLite file with the mock
 // M-Pesa provider configured fast (200ms) and returns (engine, adminToken,
 // cashierToken, designerToken).
 func newTestEngine(t *testing.T) *gin.Engine {
+        t.Helper()
+        engine, _, _ := wireTestEngine(t, true, []string{"admin", "cashier", "designer"})
+        return engine
+}
+
+// wireTestEngine is the shared test wiring: full router + shop pool over a
+// temp SQLite DB. seed controls demo data (true = seeded admin/cashier/
+// designer); registerUsers lists usernames wired into the tenant registry.
+func wireTestEngine(t *testing.T, seed bool, registerUsers []string) (*gin.Engine, *database.DB, string) {
         t.Helper()
         gin.SetMode(gin.TestMode)
         dir := t.TempDir()
@@ -45,7 +54,7 @@ func newTestEngine(t *testing.T) *gin.Engine {
         if err := db.Migrate(); err != nil {
                 t.Fatalf("migrate: %v", err)
         }
-        if err := db.Seed(true); err != nil {
+        if err := db.Seed(seed); err != nil {
                 t.Fatalf("seed: %v", err)
         }
         st, err := settings.New(db)
@@ -69,7 +78,7 @@ func newTestEngine(t *testing.T) *gin.Engine {
         if err != nil {
                 t.Fatalf("shop: %v", err)
         }
-        for _, u := range []string{"admin", "cashier", "designer"} {
+        for _, u := range registerUsers {
                 if err := reg.RegisterUser(u, shop.ID); err != nil {
                         t.Fatalf("register %s: %v", u, err)
                 }
@@ -91,7 +100,7 @@ func newTestEngine(t *testing.T) *gin.Engine {
         h.MasterSecret = []byte(secret)
         t.Cleanup(func() { shopPool.CloseAll() })
         engine := router.New(h, nil)
-        return engine
+        return engine, db, dir
 }
 
 // newTestServer boots the engine and rotates all seeded credentials through
@@ -875,10 +884,13 @@ func TestCSVImportUpsert(t *testing.T) {
 }
 
 func TestDesignBoardCrud(t *testing.T) {
-        engine, _, _, designer := newTestServer(t)
-        w := do(t, engine, "POST", "/api/v1/design", designer, map[string]any{
+        engine, admin, _, designer := newTestServer(t)
+        // The manager creates and assigns the job (orders.assign is required);
+        // the designer then works it through the board.
+        w := do(t, engine, "POST", "/api/v1/design", admin, map[string]any{
                 "title": "Team jersey artwork", "productName": "Premium Heavyweight Tee",
                 "customerName": "Acme FC", "notes": "Two-color print", "status": "queue",
+                "assigneeId": designerUserID(t, engine, designer),
         })
         if w.Code != 201 {
                 t.Fatalf("create design: %d %s", w.Code, w.Body.String())
@@ -1126,3 +1138,14 @@ var (
         _ = models.OrderPaid
         _ = fmt.Sprintf
 )
+
+// designerUserID resolves the user id behind a token (for assignment
+// fixtures in role-scoped tests).
+func designerUserID(t *testing.T, engine *gin.Engine, token string) int64 {
+	t.Helper()
+	me := do(t, engine, "GET", "/api/v1/me", token, nil)
+	if me.Code != 200 {
+		t.Fatalf("me: %d", me.Code)
+	}
+	return int64(dataMap(t, me)["id"].(float64))
+}

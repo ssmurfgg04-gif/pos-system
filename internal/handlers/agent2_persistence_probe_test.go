@@ -641,8 +641,8 @@ INSERT INTO order_items (order_id, product_id, name, qty, unit_price_cents, line
                 t.Errorf("v2 tables missing after migration: %v", err)
         }
         // Migration ran exactly once.
-        if v := agent2SchemaVersion(t, path); v != 12 {
-                t.Errorf("schema version after migrate = %d, want 12", v)
+        if v := agent2SchemaVersion(t, path); v != 14 {
+                t.Errorf("schema version after migrate = %d, want 14", v)
         }
         if err := db.Migrate(); err != nil {
                 t.Errorf("re-migrate on old DB: %v", err)

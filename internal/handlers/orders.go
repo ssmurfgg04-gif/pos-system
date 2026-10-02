@@ -59,6 +59,9 @@ func (h *H) GetOrder(c *gin.Context) {
                 h.mapErr(c, err)
                 return
         }
+        // Detail view rides the connected lifecycle: fulfilment jobs for
+        // this sale (scoped like the board) + the activity timeline.
+        order.Jobs = h.svc(c).ListDesignJobs(h.principal(c), "", id)
         h.ok(c, order)
 }
 

@@ -66,7 +66,7 @@ describe('typing repro', () => {
   test('typing a username on Login does not crash', async () => {
     const root = createRoot(document.getElementById('root')!)
     await act(async () => { root.render(<Login />) })
-    const box = document.querySelector('input[placeholder="e.g. admin"]') as HTMLInputElement
+    const box = document.querySelector('input[placeholder="your username"]') as HTMLInputElement
     expect(box).toBeTruthy()
     typeText(box, 'admin')
     expect(box.value).toBe('admin')
@@ -138,7 +138,7 @@ describe('typing repro', () => {
   test('full App boots and accepts typing without unmounting', async () => {
     const root = createRoot(document.getElementById('root')!)
     await act(async () => { root.render(<App />) })
-    const box = document.querySelector('input[placeholder="e.g. admin"]') as HTMLInputElement
+    const box = document.querySelector('input[placeholder="your username"]') as HTMLInputElement
     expect(box).toBeTruthy()
     typeText(box, 'cashier')
     expect(box.value).toBe('cashier')

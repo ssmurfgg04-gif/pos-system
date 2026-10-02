@@ -80,8 +80,8 @@ func (h *H) CreateUser(c *gin.Context) {
         }
         pinHash := ""
         if body.PIN != "" {
-                if len(body.PIN) != 4 {
-                        h.fail(c, 400, "PIN must be exactly 4 digits")
+                if !auth.ValidPIN(body.PIN) {
+                        h.fail(c, 400, "PIN must be exactly 4 digits and not an obvious pattern")
                         return
                 }
                 pinHash, err = auth.HashPassword(body.PIN)
@@ -143,6 +143,9 @@ func (h *H) UpdateUser(c *gin.Context) {
         } else {
                 active = 1
         }
+        if !h.lastOwnerGuard(c, id, body.RoleID, active) {
+                return
+        }
         res, err := h.db(c).Exec(h.db(c).Rebind(`
                 UPDATE users SET full_name = ?, role_id = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?`), body.FullName, body.RoleID, active, id)
@@ -156,6 +159,76 @@ func (h *H) UpdateUser(c *gin.Context) {
         }
         h.svc(c).Audit(p.ID, p.Username, "USER_UPDATED", "user", itoa64(id), body.Username)
         h.ok(c, gin.H{"updated": true})
+}
+
+// lastOwnerGuard refuses a change that would leave the shop without any
+// active owner-level user (both settings.manage + users.manage). Deactiva-
+// tion, demotion and self-deactivation of the final owner are all blocked
+// here — the box can never lock its own owner out by edit.
+func (h *H) lastOwnerGuard(c *gin.Context, targetID int64, newRoleID int64, setActive int) bool {
+        if setActive == 0 && targetID == h.principal(c).ID {
+                h.fail(c, 409, "you cannot deactivate yourself")
+                return false
+        }
+        ownerLevel := func(roleID int64) bool {
+                var permsJSON string
+                if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, roleID).Scan(&permsJSON); err != nil {
+                        return false
+                }
+                return permsIncludeBoth(permsJSON, "settings.manage", "users.manage")
+        }
+        if setActive == 0 {
+                var roleID int64
+                h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID)
+                if !ownerLevel(roleID) {
+                        return true // deactivating a non-owner: fine
+                }
+        } else {
+                if ownerLevel(newRoleID) {
+                        return true // reassigning to/demoting within owner-level roles keeps an owner
+                }
+                var roleID int64
+                h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID)
+                if !ownerLevel(roleID) {
+                        return true // target was not an owner: fine
+                }
+        }
+        // Count OTHER active owner-level users.
+        rows, err := h.db(c).Query(`
+                SELECT u.id, COALESCE(r.permissions, '[]') FROM users u JOIN roles r ON r.id = u.role_id
+                WHERE u.is_active = 1 AND u.id != ?`, targetID)
+        if err != nil {
+                return true // fail open — the per-endpoint permission checks still apply
+        }
+        defer rows.Close()
+        for rows.Next() {
+                var otherID int64
+                var permsJSON string
+                if err := rows.Scan(&otherID, &permsJSON); err == nil {
+                        if permsIncludeBoth(permsJSON, "settings.manage", "users.manage") {
+                                return true // another owner exists
+                        }
+                }
+        }
+        h.fail(c, 409, "this is the last owner account — promote another owner first")
+        return false
+}
+
+func permsIncludeBoth(permsJSON, a, b string) bool {
+        var perms []string
+        if err := json.Unmarshal([]byte(permsJSON), &perms); err != nil {
+                return false
+        }
+        hasA, hasB := false, false
+        for _, p := range perms {
+                if p == a {
+                        hasA = true
+                }
+                if p == b {
+                        hasB = true
+                }
+        }
+        return hasA && hasB
 }
 
 type passwordBody struct {
@@ -200,6 +273,14 @@ func (h *H) SetPassword(c *gin.Context) {
         // owner can log into the public website and watch performance.
         if username, ok := h.ownerLevelUsername(c, id); ok {
                 go h.svc(c).PortalPublishCredentials(username, body.Password)
+        }
+        // Self-service password changes rotate the recovery code so the old
+        // paper copy can never be replayed against the new password.
+        if id == p.ID {
+                if _, err := h.svc(c).IssueRecoveryCode(id); err != nil {
+                        h.fail(c, 500, "password saved but recovery code rotation failed: "+err.Error())
+                        return
+                }
         }
         h.ok(c, gin.H{"updated": true})
 }
@@ -253,8 +334,8 @@ func (h *H) SetPIN(c *gin.Context) {
                 h.fail(c, 400, "PIN must be exactly 4 digits")
                 return
         }
-        if auth.IsDefaultPassword(body.PIN) {
-                h.fail(c, 400, "choose a stronger PIN — that one is well-known")
+        if !auth.ValidPIN(body.PIN) {
+                h.fail(c, 400, "PIN must be exactly 4 digits and not an obvious pattern")
                 return
         }
         hash, err := auth.HashPassword(body.PIN)
@@ -285,6 +366,9 @@ func (h *H) DeactivateUser(c *gin.Context) {
         }
         if id == p.ID {
                 h.fail(c, 409, "you cannot deactivate yourself")
+                return
+        }
+        if !h.lastOwnerGuard(c, id, 0, 0) {
                 return
         }
         res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), id)

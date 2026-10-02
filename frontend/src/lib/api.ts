@@ -126,6 +126,15 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   let json: any = null
   try { json = text ? JSON.parse(text) : null } catch { /* non-JSON */ }
   if (!res.ok) {
+    // Expired/invalidated session (12h JWT, password change, deactivation):
+    // clear the dead token once and return to login instead of leaving the
+    // user staring at scattered failures.
+    if (res.status === 401 && token() && !path.startsWith('/auth/')) {
+      localStorage.removeItem('pos_token')
+      if (!location.pathname.startsWith('/login') && !location.pathname.startsWith('/pin')) {
+        location.href = '/login'
+      }
+    }
     throw new ApiError(res.status, json?.error || `Request failed (${res.status})`)
   }
   return (json?.data !== undefined ? json.data : json) as T
@@ -270,6 +279,10 @@ export interface Order {
   voidReason: string
   items: OrderItem[]
   payments: Payment[]
+  /** Connected lifecycle: fulfilment jobs for this sale (detail view). */
+  jobs?: DesignJob[]
+  assignedToId?: number
+  notifiedAt?: string
 }
 
 export interface Branding {
@@ -357,6 +370,13 @@ export interface DesignJob {
   createdBy: string
   createdAt: string
   updatedAt: string
+  /** Connected lifecycle: the sale this job fulfils + stage timestamps. */
+  orderId?: number
+  deadline?: string
+  priority?: 'low' | 'normal' | 'high'
+  assignedAt?: string
+  readyAt?: string
+  collectedAt?: string
 }
 
 export interface DailySummary {
@@ -373,6 +393,9 @@ export interface DailySummary {
   discrepancies: number
   topProducts: { productId: number; name: string; qty: number; salesCents: number }[]
   series: { date: string; salesCents: number; orders: number }[]
+  /** P5: who sold what today + how many new customers were captured. */
+  perStaff?: { userId: number; name: string; orders: number; salesCents: number }[]
+  newCustomers?: number
 }
 
 export interface MonthlySummary {
@@ -426,12 +449,45 @@ export interface Customer {
   id: number
   name: string
   phone: string
+  email?: string
+  notes?: string
   creditLimitCents: number
   loyaltyPoints: number
   balanceCents: number
   active: boolean
   createdAt: string
   updatedAt: string
+}
+
+/** One line of an order's activity timeline (job moves, WhatsApp, notes). */
+export interface OrderEvent {
+  id: number
+  orderId: number
+  kind: 'job' | 'whatsapp' | 'note' | 'status' | string
+  message: string
+  userId: number
+  username: string
+  createdAt: string
+}
+
+/** One row of a customer's shared purchase history (P5). */
+export interface OrderSummary {
+  id: number
+  number: string
+  status: string
+  totalCents: number
+  createdAt: string
+  paidAt: string
+}
+
+/** Prepared "contact customer on WhatsApp" action (P4). */
+export interface WhatsAppContact {
+  orderId: number
+  phone: string
+  message: string
+  url: string
+  orderRef: string
+  notifiedAt: string
 }
 
 export interface Supplier {

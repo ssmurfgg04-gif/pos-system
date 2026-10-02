@@ -121,6 +121,30 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                 }
         }
 
+        // CRM auto-capture (shared customer history): a sale carrying a
+        // phone with no explicit customer picks up the CRM record for that
+        // phone — or creates a lightweight one. This is what makes the
+        // customer book fill itself during normal trading.
+        if req.CustomerID == 0 && s.settings.GetBool("crm_auto_capture", true) {
+                phone := strings.TrimSpace(req.CustomerPhone)
+                if phone == "" && req.CustomerName != "" {
+                        // No phone at all: nothing to key history on.
+                        phone = ""
+                }
+                if phone != "" {
+                        if existing := s.FindCustomerByPhone(phone); existing != nil {
+                                req.CustomerID = existing.ID
+                                if req.CustomerName == "" {
+                                        req.CustomerName = existing.Name
+                                }
+                        } else if name := strings.TrimSpace(req.CustomerName); name != "" {
+                                if c, err := s.CreateCustomer(name, phone, "", "auto-captured at checkout", 0, p); err == nil {
+                                        req.CustomerID = c.ID
+                                }
+                        }
+                }
+        }
+
         // Validate lines with server-side price re-read (never trust client
         // prices). Duplicate product ids merge quantities. Hard ceilings
         // keep price*qty below int64 range (overflow would flip totals
