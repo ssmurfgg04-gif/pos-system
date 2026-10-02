@@ -571,7 +571,18 @@ function ProductModal({
       onSaved()
       onClose()
     } catch (e: any) {
-      setError(e?.message || 'Save failed')
+      // Raw backend validator dumps ("Key: 'x' Error:Field validation…") mean
+      // nothing to a shop attendant — translate the common cases.
+      const raw = e?.message || 'Save failed'
+      const friendly = /Field validation.*'(\w+)'/.exec(raw)
+      const field = friendly?.[1] || ''
+      const known: Record<string, string> = {
+        Name: 'Product name is required.',
+        CategoryID: 'Please pick a category.',
+        PriceCents: 'Price must be zero or more.',
+        CostCents: 'Cost must be zero or more.',
+      }
+      setError(known[field] || raw)
     } finally {
       setBusy(false)
     }
@@ -729,6 +740,7 @@ function ProductModal({
         </Field>
         <Field label="Category">
           <Select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: Number(e.target.value) })}>
+            {categories.length === 0 && <option value={0}>Uncategorised</option>}
             {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
         </Field>
