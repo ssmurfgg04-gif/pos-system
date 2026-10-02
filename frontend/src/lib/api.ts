@@ -283,6 +283,11 @@ export interface Order {
   jobs?: DesignJob[]
   assignedToId?: number
   notifiedAt?: string
+  /** ERP depth (P6): eTIMS-ready invoice identity — buyerPin present
+   *  means this is a tax invoice; invoiceNumber defaults to the order
+   *  number and can be reassigned by an eTIMS bridge. */
+  buyerPin?: string
+  invoiceNumber?: string
 }
 
 export interface Branding {
@@ -298,6 +303,9 @@ export interface Branding {
   till_number: string
   paybill_number: string
   mpesa_env: string
+  /** eTIMS (P6): the shop's KRA PIN — when set, checkout offers a buyer
+   *  PIN field and receipts can print the tax-invoice header. */
+  kra_pin?: string
 }
 
 /** One tender in a split/mixed payment. Account tabs cannot be split and
@@ -317,6 +325,8 @@ export interface CheckoutRequest {
   customerEmail?: string
   customerName?: string
   customerId?: number
+  /** eTIMS: customer's KRA PIN — present turns the receipt into a tax invoice. */
+  buyerPin?: string
   note?: string
   clientUuid?: string
   discountCents?: number
@@ -358,6 +368,41 @@ export interface Shift {
   closedAt: string
 }
 
+/** X/Z cash-session report (P6): X = live for an open shift, Z = frozen at
+ *  close with the counted drawer and signed-off variance. */
+export interface ShiftReport {
+  shift: Shift
+  open: boolean
+  ordersCount: number
+  voidsCount: number
+  grossCents: number
+  cashCents: number
+  mpesaCents: number
+  paystackCents: number
+  creditCents: number
+  otherCents: number
+  expectedCashCents: number
+  countedCents: number
+  varianceCents: number
+}
+
+/** One shop row in a consolidated (multi-store) daily report. */
+export interface ConsolidatedDaily {
+  date: string
+  consolidated?: boolean
+  salesCents: number
+  ordersPaid: number
+  ordersOpen?: number
+  ordersVoided?: number
+  avgOrderCents: number
+  cashCents: number
+  mpesaCents: number
+  paystackCents: number
+  creditCents: number
+  discrepancies?: number
+  shops?: { id: string; name: string; salesCents: number; ordersPaid: number; cashCents: number; mpesaCents: number; paystackCents: number; creditCents: number; ordersVoided?: number; discrepancies?: number }[]
+}
+
 export interface DesignJob {
   id: number
   title: string
@@ -396,6 +441,9 @@ export interface DailySummary {
   /** P5: who sold what today + how many new customers were captured. */
   perStaff?: { userId: number; name: string; orders: number; salesCents: number }[]
   newCustomers?: number
+  /** P6 multi-store: present (with per-shop rows) on the ?shop=all consolidated view. */
+  consolidated?: boolean
+  shops?: { id: string; name: string; salesCents: number; ordersPaid: number; cashCents: number; mpesaCents: number; paystackCents: number; creditCents: number; ordersVoided?: number; discrepancies?: number }[]
 }
 
 export interface MonthlySummary {

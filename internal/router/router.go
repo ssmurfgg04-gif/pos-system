@@ -96,6 +96,11 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         // Team join link redemption (public: the single-use token IS the
         // credential — minted by the cloud, expiring, shown once).
         api.POST("/auth/team-join", h.TeamJoin)
+        // Owner cloud sign-in (public: the cloud verifies the portal
+        // credential and approves the device server-side) — for an owner
+        // reinstalling the app or setting up a new till for an existing
+        // business, so first-run never forces "create a new store".
+        api.POST("/auth/owner-signin", h.OwnerSignin)
         api.POST("/auth/signup", h.Signup)
         api.GET("/branding", h.Branding)
         api.GET("/settings/logo", h.GetLogo)
@@ -161,14 +166,19 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         vr.POST("/void-reasons", h.CreateVoidReason)
         vr.PUT("/void-reasons/:id", h.UpdateVoidReason)
 
-        // Reports / shifts.
-        authd.GET("/reports/daily", perm("reports.view"), h.DailyReport)
+        // Reports / shifts. DailyReport doubles as the multi-store
+        // consolidated summary (?shop=all sums every shop the user
+        // belongs to, with per-shop rows).
+        authd.GET("/reports/daily", perm("reports.view"), h.ConsolidatedDailyReport)
         authd.GET("/reports/monthly", perm("reports.view"), h.MonthlyReport)
         authd.GET("/reports/monthly.csv", perm("reports.view"), h.MonthlyReportCSV)
         authd.POST("/shifts/open", perm("shifts.manage"), h.OpenShift)
         authd.POST("/shifts/close", perm("shifts.manage"), h.CloseShift)
         authd.GET("/shifts/current", perm("shifts.manage"), h.CurrentShift)
         authd.GET("/shifts", perm("shifts.manage"), h.ListShifts)
+        // X/Z cash-session report (X = live for the caller's open shift,
+        // Z = any closed shift via ?shift=id).
+        authd.GET("/shifts/report", perm("shifts.manage"), h.ShiftReportXZ)
 
         // Design board.
         authd.GET("/design", perm("design.view"), h.ListDesignJobs)

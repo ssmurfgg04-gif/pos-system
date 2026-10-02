@@ -25,8 +25,8 @@ export function ProductMonogram({ name }: { name: string }) {
       .join('')
       .toUpperCase() || '·'
   return (
-    <div className="w-full h-full flex items-center justify-center bg-surface-muted text-ink-subtle/60" aria-hidden>
-      <span className="font-bold text-[11px] tracking-wide text-ink-subtle/70 select-none" title={name}>
+    <div className="w-full h-full flex items-center justify-center bg-surface-muted text-ink-muted" aria-hidden>
+      <span className="font-bold text-[11px] tracking-wide text-ink-muted select-none" title={name}>
         {initials}
       </span>
     </div>

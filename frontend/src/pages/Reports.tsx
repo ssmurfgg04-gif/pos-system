@@ -34,24 +34,46 @@ function Daily() {
   const [date, setDate] = useState(today())
   const [data, setData] = useState<DailySummary | null>(null)
   const [loading, setLoading] = useState(false)
+  // Multi-store (P6): when the account belongs to more than one shop,
+  // offer the consolidated all-shops view with per-shop rows.
+  const [shops, setShops] = useState<{ id: string; name: string }[] | null>(null)
+  const [allShops, setAllShops] = useState(false)
+
+  useEffect(() => {
+    api.get<{ id: string; name: string }[]>('/api/v1/shops').then((rows) => {
+      if (rows && rows.length > 1) setShops(rows)
+    }).catch(() => undefined)
+  }, [])
 
   const load = async (d: string) => {
     setLoading(true)
     try {
-      setData(await api.get<DailySummary>(`/api/v1/reports/daily?date=${d}`))
+      setData(await api.get<DailySummary>(`/api/v1/reports/daily?date=${d}${allShops ? '&shop=all' : ''}`))
     } finally {
       setLoading(false)
     }
   }
-  useEffect(() => { load(date) }, [date])
+  useEffect(() => { load(date) }, [date, allShops])
 
   const max = Math.max(1, ...(data?.series.map((s) => s.salesCents) ?? [1]))
 
   return (
     <Card
       title="Daily report"
+      sub={data?.consolidated ? 'All shops combined' : undefined}
       actions={
         <div className="flex gap-2 items-center">
+          {shops && shops.length > 1 && (
+            <label className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={allShops}
+                onChange={(e) => setAllShops(e.target.checked)}
+                className="w-4 h-4 accent-[#0047AB]"
+              />
+              All shops
+            </label>
+          )}
           <Input type="date" value={date} max={today()} onChange={(e) => setDate(e.target.value)} className="w-40" />
           <Button size="sm" variant="secondary" onClick={() => setDate(today())}>Today</Button>
         </div>
@@ -69,6 +91,34 @@ function Daily() {
             <Stat label="Average order" value={formatMoney(data.avgOrderCents)} />
             <Stat label="Discrepancies" value={String(data.discrepancies)} warn={data.discrepancies > 0} />
           </div>
+
+          {data.consolidated && data.shops && data.shops.length > 0 && (
+            <div className="mt-4">
+              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">By shop</p>
+              <div className="border-2 border-line rounded-input overflow-hidden">
+                <table className="w-full text-[13px]">
+                  <thead>
+                    <tr className="bg-surface-muted text-left">
+                      <th className="px-3 py-2 font-bold text-ink-muted">Shop</th>
+                      <th className="px-3 py-2 font-bold text-ink-muted text-right">Sales</th>
+                      <th className="px-3 py-2 font-bold text-ink-muted text-right">Paid</th>
+                      <th className="px-3 py-2 font-bold text-ink-muted text-right">Voids</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.shops.map((sh) => (
+                      <tr key={sh.id}>
+                        <td className="px-3 py-2 font-semibold text-ink">{sh.name}</td>
+                        <td className="px-3 py-2 text-right tabular text-ink">{formatMoney(sh.salesCents)}</td>
+                        <td className="px-3 py-2 text-right tabular text-ink-muted">{sh.ordersPaid}</td>
+                        <td className="px-3 py-2 text-right tabular text-ink-muted">{sh.ordersVoided ?? 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Payment split */}
           <div className="mt-4">
@@ -92,7 +142,7 @@ function Daily() {
                   </div>
                 )}
                 {data.paystackCents > 0 && (
-                  <div className="bg-brand/15 text-ink flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.paystackCents, data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents) }}>
+                  <div className="bg-brand/30 text-ink flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.paystackCents, data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents) }}>
                     <CreditCard size={13} strokeWidth={2.5} aria-hidden />
                     {centsToAmount(data.paystackCents)}
                   </div>
@@ -226,7 +276,7 @@ function Monthly() {
               {data.series.map((s) => (
                 <div
                   key={s.date}
-                  className="flex-1 min-w-[3px] rounded-t-[2px] bg-brand/85 border-t-2 border-line-strong transition-[height]"
+                  className="flex-1 min-w-[3px] rounded-t-[2px] bg-brand border-t-2 border-line-strong transition-[height]"
                   style={{ height: `${Math.max(2, (s.salesCents / max) * 100)}%` }}
                   title={`${s.date}: ${centsToAmount(s.salesCents)} (${s.orders} orders)`}
                 />

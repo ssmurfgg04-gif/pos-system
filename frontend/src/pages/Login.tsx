@@ -6,7 +6,7 @@ import { navigate, homeFor } from '../lib/router'
 import { reconnectWs } from '../ws/client'
 import { toast } from '../stores/toasts'
 import { api, backendMode } from '../lib/api'
-import { ShieldCheck, User, Palette, KeyRound, LifeBuoy } from 'lucide-react'
+import { ShieldCheck, User, Palette, KeyRound, LifeBuoy, LogIn, Store, Users } from 'lucide-react'
 
 const DEMO_ACCOUNTS = [
   { username: 'admin', password: '0000', label: 'Admin', hint: 'Full control — settings, stock, KRA reports', icon: ShieldCheck },
@@ -14,7 +14,7 @@ const DEMO_ACCOUNTS = [
   { username: 'designer', password: '0000', label: 'Designer', hint: 'Design board, production queue', icon: Palette },
 ]
 
-type Mode = 'login' | 'setup' | 'forgot'
+type Mode = 'welcome' | 'login' | 'owner' | 'setup' | 'forgot'
 
 export function Login() {
   const { login } = useAuth()
@@ -25,10 +25,11 @@ export function Login() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [demo, setDemo] = useState(false)
-  const [needsSetup, setNeedsSetup] = useState(false)
 
-  // First run with zero accounts (demo accounts no longer ship): the
-  // database is fresh — the very first thing it needs is its owner.
+  // First run with zero accounts (demo accounts no longer ship): NEVER
+  // force "create your store" — an owner reinstalling the app or unwrapping
+  // a new till already HAS a business in the cloud. Show the welcome
+  // choice: sign in / register a new business / join as a teammate.
   useEffect(() => {
     let alive = true
     backendMode().then(async (m) => {
@@ -37,7 +38,7 @@ export function Login() {
       if (m === 'demo') return
       try {
         const r = await api.get<{ hasUsers: boolean }>('/api/v1/auth/has-users')
-        if (alive && !r.hasUsers) setNeedsSetup(true)
+        if (alive) setMode(r.hasUsers ? 'login' : 'welcome')
       } catch {
         /* the login attempt below will surface real errors */
       }
@@ -45,9 +46,10 @@ export function Login() {
     return () => { alive = false }
   }, [])
 
-  useEffect(() => {
-    if (needsSetup) setMode('setup')
-  }, [needsSetup])
+  const backToWelcome = () => {
+    setMode('welcome')
+    setError('')
+  }
 
   const land = () => {
     reconnectWs()
@@ -102,7 +104,14 @@ export function Login() {
           <p className="text-ink-subtle text-sm mt-0.5">{branding.app_name}</p>
         </div>
 
-        {mode === 'setup' && <SetupOwner onDone={land} />}
+        {mode === 'welcome' && <WelcomeChoice onSignIn={() => { setMode('owner'); setError('') }} onRegister={() => { setMode('setup'); setError('') }} />}
+        {mode === 'setup' && <SetupOwner onDone={land} onCancel={backToWelcome} />}
+        {mode === 'owner' && (
+          <OwnerCloudSignin
+            onDone={land}
+            onBack={backToWelcome}
+          />
+        )}
         {mode === 'login' && (
           <form
             onSubmit={submit}
@@ -208,9 +217,115 @@ export function Login() {
   )
 }
 
+// ---- First-run welcome choice: the website pattern — sign in, register,
+// or join as a teammate. Reinstalling the app or setting up a second till
+// never forces "create your store". ----
+
+function WelcomeChoice({ onSignIn, onRegister }: { onSignIn: () => void; onRegister: () => void }) {
+  return (
+    <div className="bg-surface border border-line rounded-card shadow-brutal p-5 space-y-3">
+      <div className="text-center">
+        <h2 className="text-ink font-bold">Welcome</h2>
+        <p className="text-[12.5px] text-ink-muted mt-0.5">
+          Sign in to your business, start a new one, or join your team.
+        </p>
+      </div>
+      <Button variant="primary" size="lg" className="w-full" onClick={onSignIn}>
+        <span className="inline-flex items-center gap-2"><LogIn size={16} strokeWidth={2.5} aria-hidden />Sign in</span>
+      </Button>
+      <Button variant="secondary" size="lg" className="w-full" onClick={onRegister}>
+        <span className="inline-flex items-center gap-2"><Store size={16} strokeWidth={2.5} aria-hidden />Register a new business</span>
+      </Button>
+      <button
+        type="button"
+        onClick={() => navigate('/join')}
+        className="w-full min-h-11 flex items-center justify-center text-center text-sm font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
+      >
+        <span className="inline-flex items-center gap-1.5"><Users size={14} strokeWidth={2.25} aria-hidden />Adding a teammate? Use a join link →</span>
+      </button>
+      <p className="text-[11.5px] text-ink-subtle text-center pt-1">
+        Signing in brings your whole shop down from the cloud — products,
+        customers, history. Nothing is created until you choose to.
+      </p>
+    </div>
+  )
+}
+
+// ---- Owner cloud sign-in (fresh till for an EXISTING business) ----
+
+function OwnerCloudSignin({ onDone, onBack }: { onDone: () => void; onBack: () => void }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const res = await api.post<{ token: string; user: any; teamCode: string; storeName: string }>(
+        '/api/v1/auth/owner-signin',
+        { username: username.trim(), password, deviceName: 'till' },
+      )
+      localStorage.setItem('pos_token', res.token)
+      await useAuth.getState().refresh()
+      await useBranding.getState().load()
+      toast.success(`Welcome back, ${username.trim()}`,
+        res.storeName ? `Your ${res.storeName} shop is syncing down now.` : undefined)
+      onDone()
+    } catch (err: any) {
+      setError(err?.message || 'Sign-in failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="bg-surface border border-line rounded-card shadow-brutal p-5 space-y-4">
+      <div className="flex items-center gap-2.5">
+        <span className="w-9 h-9 rounded-input bg-brand flex items-center justify-center text-white shrink-0" aria-hidden>
+          <LogIn size={17} strokeWidth={2.25} />
+        </span>
+        <div>
+          <h2 className="text-ink font-bold leading-tight">Sign in to your business</h2>
+          <p className="text-[12px] text-ink-subtle">Your shop syncs down from the cloud — no setup, nothing to create.</p>
+        </div>
+      </div>
+      <Field label="Username">
+        <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required autoFocus placeholder="your username" />
+      </Field>
+      <Field label="Password">
+        <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required placeholder="••••••••" />
+      </Field>
+      {error && (
+        <p role="alert" className="text-danger-text text-sm font-semibold bg-danger-bg border border-danger-text/30 rounded-input px-3 py-2">
+          {error}
+        </p>
+      )}
+      <Button type="submit" variant="primary" size="lg" className="w-full" disabled={busy}>
+        {busy ? <Spinner className="border-t-white" /> : 'Sign in & sync my shop'}
+      </Button>
+      <p className="text-[11.5px] text-ink-subtle">
+        These are your owner credentials (the same ones as the owner web
+        portal). Cloud sign-in needs to be activated once from
+        Settings → Team on any till of the business — otherwise use a join link.
+      </p>
+      <button
+        type="button"
+        onClick={onBack}
+        className="w-full text-center text-sm font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
+      >
+        ← Back
+      </button>
+    </form>
+  )
+}
+
 // ---- First-run owner setup (replaces the old seeded demo accounts) ----
 
-function SetupOwner({ onDone }: { onDone: () => void }) {
+function SetupOwner({ onDone, onCancel }: { onDone: () => void; onCancel?: () => void }) {
   const [fullName, setFullName] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -320,6 +435,15 @@ function SetupOwner({ onDone }: { onDone: () => void }) {
       <Button type="submit" variant="primary" size="lg" className="w-full" disabled={busy}>
         {busy ? <Spinner className="border-t-white" /> : 'Create owner account'}
       </Button>
+      {onCancel && (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="w-full text-center text-sm font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
+        >
+          ← Back
+        </button>
+      )}
     </form>
   )
 }

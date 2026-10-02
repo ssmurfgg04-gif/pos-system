@@ -46,6 +46,16 @@ export function ReceiptModal({ order, branding, open, onClose }: {
           {branding.app_name && branding.app_name !== store && (
             <p className="text-[10px] text-ink-muted">{branding.app_name}</p>
           )}
+          {/* eTIMS (P6): a buyer KRA PIN on the order makes this a tax
+              invoice — print the header plus both PINs so the document is
+              ready for the KRA electronic tax invoice rules. */}
+          {order.buyerPin && (
+            <p className="font-bold text-[12px] tracking-widest uppercase mt-1">TAX INVOICE</p>
+          )}
+          {branding.kra_pin && (
+            <p className="text-[10px] text-ink-muted">KRA PIN: {branding.kra_pin}</p>
+          )}
+          {order.buyerPin && <p className="text-[10px] text-ink-muted">Buyer PIN: {order.buyerPin}</p>}
           <p className="text-[10px] text-ink-muted mt-0.5">{new Date(order.createdAt).toLocaleString()}</p>
           <p className="text-[10px] text-ink-muted">Order {order.number}</p>
         </div>

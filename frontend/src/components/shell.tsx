@@ -254,7 +254,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
                 className={`min-h-11 lg:min-h-12 px-3 lg:px-3.5 rounded-input text-[13.5px] font-semibold whitespace-nowrap transition-colors inline-flex items-center gap-2.5 relative ${
                   isActive
                     ? 'bg-sidebar-raised text-sidebar-ink'
-                    : 'text-sidebar-muted hover:text-sidebar-ink hover:bg-sidebar-raised/60'
+                    : 'text-sidebar-muted hover:text-sidebar-ink hover:bg-sidebar-raised'
                 }`}
               >
                 {isActive && <span className="absolute left-0 top-1/2 -translate-y-1/2 hidden lg:block w-1 h-6 rounded-pill bg-brand" aria-hidden />}

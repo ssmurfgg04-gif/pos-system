@@ -16,7 +16,7 @@ type ButtonSize = 'sm' | 'md' | 'lg'
 const buttonBase =
   'inline-flex items-center justify-center gap-2 font-semibold select-none ' +
   'border transition-colors duration-100 ' +
-  'disabled:opacity-40 disabled:pointer-events-none rounded-input'
+  'disabled:opacity-55 disabled:pointer-events-none rounded-input'
 
 const buttonVariants: Record<ButtonVariant, string> = {
   primary: 'bg-brand border-brand text-white shadow-brutal-brand hover:bg-brand-strong active:bg-brand-strong',
@@ -142,7 +142,7 @@ export function Modal({
           </header>
         )}
         <div className="px-5 py-4 overflow-y-auto">{children}</div>
-        {footer && <footer className="px-5 py-4 border-t border-line flex flex-wrap justify-end gap-3 bg-surface-muted/50">{footer}</footer>}
+        {footer && <footer className="px-5 py-4 border-t border-line flex flex-wrap justify-end gap-3 bg-surface-muted">{footer}</footer>}
       </div>
     </div>
   )

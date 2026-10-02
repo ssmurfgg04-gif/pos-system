@@ -187,6 +187,14 @@ export function Settings() {
             <Field label="Receipt footer" hint="Printed at the bottom of every receipt">
               <Textarea value={values.receipt_footer ?? ''} onChange={(e) => set('receipt_footer', e.target.value)} />
             </Field>
+            <Field label="KRA PIN (eTIMS)" hint="Your business KRA PIN — when set, receipts print it and checkout offers a buyer PIN for tax invoices.">
+              <Input
+                value={values.kra_pin ?? ''}
+                onChange={(e) => set('kra_pin', e.target.value.toUpperCase())}
+                placeholder="P051234567X"
+                className="font-mono"
+              />
+            </Field>
             <Field label="Brand logo" hint="PNG or JPEG, 2 MB max. Shown on login and the topbar.">
               <BrandLogoField />
             </Field>
@@ -1131,7 +1139,7 @@ function TeamSyncPanel() {
               <p className="text-[12px] font-bold text-danger-text">Last error: {status.lastError}</p>
             )}
             {!!status.failed && status.failed.length > 0 && (
-              <div className="rounded-input border border-danger-text/30 bg-danger-bg/60 p-3 space-y-2">
+              <div className="rounded-input border border-danger-text/30 bg-danger-bg p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[12.5px] font-bold text-danger-text">
                     {status.failedEvents} sync event{status.failedEvents === 1 ? '' : 's'} could not be applied or pushed — they are
@@ -1155,7 +1163,7 @@ function TeamSyncPanel() {
             {status.devices.length > 0 && (
               <Table head={['Device', 'Version', 'Last seen', 'Approval', '']}>
                 {status.devices.map((d) => (
-                  <tr key={d.deviceId} className={d.thisDevice ? 'bg-brand/5' : ''}>
+                  <tr key={d.deviceId} className={d.thisDevice ? 'bg-brand-soft' : ''}>
                     <td className="px-3 py-2">
                       <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-ink">
                         <MonitorSmartphone size={14} strokeWidth={2.25} aria-hidden />
@@ -1210,7 +1218,7 @@ function TeamSyncPanel() {
                 </p>
                 <Table head={['Store', 'Team code', 'Tills', '']}>
                   {status.stores!.map((st) => (
-                    <tr key={st.teamCode} className={st.teamCode === status.teamCode ? 'bg-brand/5' : ''}>
+                    <tr key={st.teamCode} className={st.teamCode === status.teamCode ? 'bg-brand-soft' : ''}>
                       <td className="px-3 py-2 text-[13px] font-semibold text-ink">
                         {st.name}
                         {st.teamCode === status.teamCode && (

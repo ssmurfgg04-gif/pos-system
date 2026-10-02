@@ -60,6 +60,9 @@ export function CheckoutRail({
   const [customerName, setCustomerName] = useState('')
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
+  // eTIMS (P6): the customer's KRA PIN — captured only when the shop has
+  // its own KRA PIN on file (tax invoices are then available per sale).
+  const [buyerPin, setBuyerPin] = useState('')
   const [received, setReceived] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -108,6 +111,7 @@ export function CheckoutRail({
     setInlineStage('init')
     setActiveOrder(null)
     setLastRef('')
+    setBuyerPin('')
     setElapsed(0)
     setPayError('')
   }
@@ -393,6 +397,7 @@ export function CheckoutRail({
       customerPhone: (normalizedPhone || phone.trim()) || undefined,
       customerEmail: email.trim() || undefined,
       customerId: tabCustomer ? tabCustomer.id : undefined,
+      buyerPin: buyerPin.trim() ? buyerPin.trim().toUpperCase() : undefined,
       clientUuid,
       discountCents: canDiscount && discountCents > 0 ? discountCents : undefined,
       discountLabel: canDiscount && discountCents > 0 && discountLabel.trim() ? discountLabel.trim() : undefined,
@@ -557,18 +562,19 @@ export function CheckoutRail({
         </div>
       </header>
 
-      {/* Items */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-2">
+      {/* Items — compact rows (photo, name, inline stepper) so multi-item
+          carts fit without scrolling the rail into a sliver */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-2.5 space-y-1.5">
         {cart.lines.length === 0 ? (
           <EmptyState icon={<ShoppingCart size={24} strokeWidth={2.25} />} title="Cart is empty" body="Tap products or scan a barcode to add them." />
         ) : (
           cart.lines.map((l) => {
             return (
-              <div key={l.productId} className="flex gap-2.5 p-2 rounded-input border border-line bg-surface">
+              <div key={l.productId} className="flex gap-2 p-1.5 rounded-input border border-line bg-surface">
                 <Thumb p={productById.get(l.productId)} name={l.name} />
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-[13px] font-semibold text-ink leading-snug line-clamp-1">{l.name}</p>
+                  <div className="flex items-start justify-between gap-1.5">
+                    <p className="text-[12.5px] font-semibold text-ink leading-snug line-clamp-1">{l.name}</p>
                     <button
                       onClick={() => cart.remove(l.productId)}
                       aria-label={`Remove ${l.name} from cart`}
@@ -577,34 +583,34 @@ export function CheckoutRail({
                       <X size={14} strokeWidth={2.5} aria-hidden />
                     </button>
                   </div>
-                  <p className="text-[11px] text-ink-subtle">{l.sku || '\u00a0'}</p>
-                  <div className="flex items-center justify-between gap-2 mt-1.5">
-                    <div className="flex items-center border border-line-strong rounded-input overflow-hidden h-8">
+                  <p className="text-[10.5px] text-ink-subtle leading-tight">{l.sku || '\u00a0'}</p>
+                  <div className="flex items-center justify-between gap-2 mt-1">
+                    <div className="flex items-center border border-line-strong rounded-input overflow-hidden h-7">
                       <button
                         onClick={() => cart.setQty(l.productId, l.qty - 1)}
                         aria-label={l.qty === 1 ? `Remove ${l.name}` : 'Decrease quantity'}
-                        className="w-8 h-full bg-surface-muted font-bold text-ink hover:bg-line flex items-center justify-center"
+                        className="w-7 h-full bg-surface-muted font-bold text-ink hover:bg-line flex items-center justify-center"
                       >
                         {/* ALWAYS a − glyph: at quantity 1 it removes the line,
                             but the control must look identical at every count
                             (the ✕-swap made the cashier think it was a delete
                             affordance and made the stepper shape unstable). */}
-                        <Minus size={13} strokeWidth={2.75} aria-hidden />
+                        <Minus size={12} strokeWidth={2.75} aria-hidden />
                       </button>
-                      <span className="w-8 text-center font-bold tabular text-ink text-[13px]">{l.qty}</span>
+                      <span className="w-7 text-center font-bold tabular text-ink text-[12.5px]">{l.qty}</span>
                       <button
                         onClick={() => cart.setQty(l.productId, Math.min(999, l.qty + 1))}
                         aria-label="Increase quantity"
-                        className="w-8 h-full bg-surface-muted font-bold text-ink hover:bg-line flex items-center justify-center"
+                        className="w-7 h-full bg-surface-muted font-bold text-ink hover:bg-line flex items-center justify-center"
                       >
-                        <Plus size={13} strokeWidth={2.75} aria-hidden />
+                        <Plus size={12} strokeWidth={2.75} aria-hidden />
                       </button>
                     </div>
                     <div className="text-right">
-                      <p className="font-bold text-[14px] text-ink tabular leading-none">{formatMoneyCompact(l.qty * l.unitPriceCents)}</p>
+                      <p className="font-bold text-[13px] text-ink tabular leading-none">{formatMoneyCompact(l.qty * l.unitPriceCents)}</p>
                       <button
                         onClick={() => { if (canOverride) { setEditing(l.productId); setOverrideVal(l.unitPriceCents) } else toast.error('Price override needs permission') }}
-                        className={`text-[11px] font-semibold mt-0.5 ${canOverride ? 'text-ink-subtle hover:text-ink underline' : 'text-ink-subtle/50'}`}
+                        className={`text-[11px] font-semibold mt-0.5 ${canOverride ? 'text-ink-subtle hover:text-ink underline' : 'text-ink-subtle'}`}
                       >
                         @ {formatMoneyCompact(l.unitPriceCents)}
                       </button>
@@ -629,18 +635,17 @@ export function CheckoutRail({
         )}
       </div>
 
-      {/* Totals + payment — the payment form is the tallest section of the
-          rail; WITHOUT an internal scroll it squeezes the cart-items area
-          down to a sliver on normal screens (the cashier literally could
-          not see what they were selling). The footer now scrolls itself,
-          and the items list always keeps its share of the rail. */}
-      <footer className="border-t border-line bg-shell-edge rounded-b-card px-4 pt-3 pb-4 space-y-3 max-h-[58%] overflow-y-auto overscroll-contain shrink-0">
+      {/* Totals + payment — compact by design (smaller tiles, tight customer
+          grid) so the footer needs no internal scroll on a normal till and
+          the items list keeps the rail's height. The max-h is a safety net
+          for split-tender/discount mode on short screens. */}
+      <footer className="border-t border-line bg-shell-edge rounded-b-card px-3.5 pt-2.5 pb-3 space-y-2.5 max-h-[62%] overflow-y-auto overscroll-contain shrink-0">
         <div className="space-y-1">
           <Row label="Subtotal" value={formatMoney(totals.subtotal)} />
           <Row label={`${branding.tax_percent}% ${branding.tax_included ? 'VAT (incl.)' : 'VAT'}`} value={formatMoney(totals.tax)} />
-          <div className="flex items-baseline justify-between border-t border-line-strong pt-2 mt-2">
+          <div className="flex items-baseline justify-between border-t border-line-strong pt-1.5 mt-1.5">
             <span className="font-bold text-ink">TOTAL</span>
-            <span className="font-extrabold text-[30px] leading-none text-ink tabular tracking-tight">{formatMoney(totals.total)}</span>
+            <span className="font-extrabold text-[25px] leading-none text-ink tabular tracking-tight">{formatMoney(totals.total)}</span>
           </div>
         </div>
 
@@ -653,6 +658,7 @@ export function CheckoutRail({
             {...{
               method, setMethod, paystackReady, creditEnabled, manualMode, online,
               phone, setPhone, phoneOk, normalizedPhone, email, setEmail, customerName, setCustomerName,
+              buyerPin, setBuyerPin,
               received, setReceived, quick, change, canCash,
               tabQuery, setTabQuery, tabOptions, tabCustomer, setTabCustomer,
               discountCents, setDiscountCents, discountLabel, setDiscountLabel, redeem, setRedeem,
@@ -688,12 +694,12 @@ function Row({ label, value }: { label: string; value: string }) {
   )
 }
 
-// ---- Cart thumbnail: 64px photo in the shared fallback chain — the
+// ---- Cart thumbnail: 44px photo in the shared fallback chain — the
 // cashier should SEE what they're selling from the cart ("images on the
-// right"), including starter-catalog products that have no upload yet.
+// right"), while the row stays compact enough for a multi-item cart.
 function Thumb({ p, name }: { p?: Product; name: string }) {
   return (
-    <div className="w-16 h-16 rounded-input overflow-hidden bg-surface-muted border border-line p-0.5 shrink-0" aria-hidden>
+    <div className="w-11 h-11 rounded-input overflow-hidden bg-surface-muted border border-line p-0.5 shrink-0 self-center" aria-hidden>
       <ProductPhoto p={p} name={name} />
     </div>
   )
@@ -709,6 +715,7 @@ function PaymentForm(props: {
   method: Method; setMethod: (m: Method) => void
   paystackReady: boolean; creditEnabled: boolean; manualMode: boolean; online: boolean
   phone: string; setPhone: (v: string) => void; phoneOk: boolean; normalizedPhone: string | null
+  buyerPin: string; setBuyerPin: (v: string) => void
   email: string; setEmail: (v: string) => void
   customerName: string; setCustomerName: (v: string) => void
   received: number | null; setReceived: (n: number | null) => void; quick: number[]; change: number | null; canCash: boolean
@@ -726,6 +733,7 @@ function PaymentForm(props: {
   const {
     method, setMethod, paystackReady, creditEnabled, manualMode, online,
     phone, setPhone, phoneOk, normalizedPhone, email, setEmail, customerName, setCustomerName,
+    buyerPin, setBuyerPin,
     received, setReceived, quick, change, canCash,
     tabQuery, setTabQuery, tabOptions, tabCustomer, setTabCustomer,
     discountCents, setDiscountCents, discountLabel, setDiscountLabel, redeem, setRedeem,
@@ -777,7 +785,7 @@ function PaymentForm(props: {
             disabled={!t.enabled}
             onClick={() => setMethod(t.key)}
             aria-pressed={method === t.key}
-            className={`min-h-[62px] rounded-input border text-left px-3 py-2 transition-colors ${
+            className={`min-h-[50px] rounded-input border text-left px-2.5 py-1.5 transition-colors ${
               method === t.key
                 ? 'border-brand bg-brand-soft'
                 : 'border-line-strong bg-surface hover:bg-surface-muted'
@@ -834,35 +842,52 @@ function PaymentForm(props: {
         </label>
       </div>
 
-      {/* Customer — phone is the primary M-Pesa identifier */}
+      {/* Customer — compact two-row grid (phone is the primary M-Pesa
+          identifier; the in-rail "valid" check replaces the permanent hint) */}
       <div className="grid grid-cols-2 gap-2">
-        <Field label="Customer phone" hint={method === 'mpesa' && !manualMode ? 'Required for M-Pesa' : 'Optional — for M-Pesa or delivery'}>
+        <label className="block">
+          <span className="block text-[12px] font-semibold text-ink-muted mb-0.5">Customer phone {method === 'mpesa' && !manualMode ? <em className="not-italic text-danger-text">(required)</em> : ''}</span>
           <Input
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             inputMode="tel"
             placeholder="07XX XXX XXX"
+            className="min-h-9"
             aria-invalid={method === 'mpesa' && !manualMode && !phoneOk}
           />
-          {method === 'mpesa' && !manualMode && normalizedPhone && (
-            <span className="flex items-center gap-1 text-[11px] font-bold text-paid-text mt-1">
-              <Check size={12} strokeWidth={3} aria-hidden /> Valid — STK will be sent to {phone}
-            </span>
-          )}
-        </Field>
-        <Field label="Customer email" hint="Optional for receipt">
+        </label>
+        <label className="block">
+          <span className="block text-[12px] font-semibold text-ink-muted mb-0.5">Name</span>
+          <Input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Walk-in" className="min-h-9" />
+        </label>
+        <label className="block col-span-2 -mt-1">
+          <span className="block text-[12px] font-semibold text-ink-muted mb-0.5">Email <span className="font-normal text-ink-subtle">(optional, for the receipt)</span></span>
           <Input
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             inputMode="email"
             placeholder="optional@email.com"
+            className="min-h-9"
           />
-        </Field>
+        </label>
+        {branding.kra_pin ? (
+          <label className="block col-span-2 -mt-1">
+            <span className="block text-[12px] font-semibold text-ink-muted mb-0.5">Buyer KRA PIN <span className="font-normal text-ink-subtle">(optional — makes it a tax invoice)</span></span>
+            <Input
+              value={buyerPin}
+              onChange={(e) => setBuyerPin(e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase())}
+              placeholder="P051234567X"
+              className="min-h-9 font-mono"
+            />
+          </label>
+        ) : null}
+        {method === 'mpesa' && !manualMode && normalizedPhone && (
+          <span className="col-span-2 flex items-center gap-1 text-[11px] font-bold text-paid-text -mt-1">
+            <Check size={12} strokeWidth={3} aria-hidden /> Valid — STK will be sent to {phone}
+          </span>
+        )}
       </div>
-      <Field label="Customer name" hint="Optional — shown on the order">
-        <Input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Walk-in" />
-      </Field>
 
       {/* Per-method inputs */}
       {splitMode ? (
@@ -1258,7 +1283,7 @@ function StkPanel({
                 {label}
               </span>
             </div>
-            {i < steps.length - 1 && <span className={`flex-1 h-0.5 mx-1 mb-4 rounded-pill ${i < step ? 'bg-paid-text/60' : 'bg-line'}`} aria-hidden />}
+            {i < steps.length - 1 && <span className={`flex-1 h-0.5 mx-1 mb-4 rounded-pill ${i < step ? 'bg-paid-text' : 'bg-line'}`} aria-hidden />}
           </li>
         )
       })}

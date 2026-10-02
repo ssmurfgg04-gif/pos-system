@@ -48,6 +48,10 @@ var DefaultSettings = map[string]string{
         "printer_width":         "80",
         "auto_print_receipts":   "true",
         "receipt_logo":            "true", // print brand-logo.png atop receipts when present
+        // eTIMS-ready invoice identity (P6): the business's own KRA PIN
+        // prints on tax invoices; a per-order buyer PIN (customer's KRA PIN)
+        // is captured at checkout when this is on file.
+        "kra_pin":               "",
         "low_stock_threshold":   "5",
         "backup_auto":           "true", // daily 02:00 VACUUM INTO snapshot
         "backup_keep":           "7",    // snapshots retained

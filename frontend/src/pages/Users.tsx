@@ -246,7 +246,7 @@ export function Users() {
                   </td>
                 </tr>
                 {dashFor === r.id && (
-                  <tr className="bg-surface-muted/60">
+                  <tr className="bg-surface-muted">
                     <td colSpan={4} className="px-3 py-3">
                       <DashboardEditor roleId={r.id} roleName={r.name} />
                     </td>

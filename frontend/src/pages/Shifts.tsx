@@ -1,13 +1,15 @@
-// Shifts — open with float, close counting the drawer, variance coloring.
+// Shifts — open with float, close counting the drawer, variance coloring,
+// and the X/Z cash-session report (X = live totals for the open shift,
+// Z = the frozen close-out with counted cash and signed-off variance).
 
 import { useEffect, useState } from 'react'
-import { api, Shift } from '../lib/api'
+import { api, Shift, ShiftReport } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, MoneyInput, Modal, Spinner, StatusPill, Table, Tabs } from '../components/ui'
 import { centsToAmount, formatMoney } from '../lib/money'
 import { toast } from '../stores/toasts'
 import { onWsEvent } from '../ws/client'
-import { Coins } from 'lucide-react'
+import { Coins, FileText } from 'lucide-react'
 
 export function Shifts() {
   const { user } = useAuth()
@@ -16,6 +18,7 @@ export function Shifts() {
   const [history, setHistory] = useState<Shift[] | null>(null)
   const [closing, setClosing] = useState<Shift | null>(null)
   const [opening, setOpening] = useState(false)
+  const [report, setReport] = useState<{ rep: ShiftReport | null; loading: boolean } | null>(null)
 
   const load = async () => {
     try {
@@ -32,6 +35,18 @@ export function Shifts() {
     return onWsEvent('SHIFT_UPDATED', () => load())
   }, [])
 
+  const openReport = async (shiftId?: number) => {
+    setReport({ rep: null, loading: true })
+    try {
+      const q = shiftId ? `?shift=${shiftId}` : ''
+      const rep = await api.get<ShiftReport>(`/api/v1/shifts/report${q}`)
+      setReport({ rep, loading: false })
+    } catch (e: any) {
+      setReport(null)
+      toast.error('Report failed', e?.message)
+    }
+  }
+
   const shown = history ?? []
 
   return (
@@ -40,11 +55,18 @@ export function Shifts() {
         title="Cash drawer shift"
         sub={current ? `Opened ${new Date(current.openedAt).toLocaleTimeString()}` : 'No open shift'}
         actions={
-          current ? (
-            <Button variant="danger" size="sm" onClick={() => setClosing(current)}>Close shift</Button>
-          ) : (
-            <Button variant="primary" size="sm" onClick={() => setOpening(true)}>Open shift</Button>
-          )
+          <div className="flex items-center gap-2">
+            {current && (
+              <Button variant="ghost" size="sm" onClick={() => openReport()} title="X report — live totals so far">
+                <FileText size={14} strokeWidth={2.5} aria-hidden /> X report
+              </Button>
+            )}
+            {current ? (
+              <Button variant="danger" size="sm" onClick={() => setClosing(current)}>Close shift</Button>
+            ) : (
+              <Button variant="primary" size="sm" onClick={() => setOpening(true)}>Open shift</Button>
+            )}
+          </div>
         }
       >
         {current ? (
@@ -75,7 +97,7 @@ export function Shifts() {
         {!history ? (
           <div className="py-12 flex justify-center"><Spinner /></div>
         ) : (
-          <Table head={['When', 'Who', 'Float', 'Expected', 'Counted', 'Variance', 'Status']}>
+          <Table head={['When', 'Who', 'Float', 'Expected', 'Counted', 'Variance', 'Status', 'Z']}>
             {(tab === 'mine' ? shown.filter((s) => s.userId === user?.id) : shown).map((s) => (
               <tr key={s.id}>
                 <td className="px-3 py-2.5 text-[13px] text-ink-muted">
@@ -101,6 +123,15 @@ export function Shifts() {
                 <td className="px-3 py-2.5">
                   {s.closedAt ? <StatusPill status="void" label="Closed" /> : <StatusPill status="pending" label="Open" />}
                 </td>
+                <td className="px-3 py-2.5">
+                  <button
+                    onClick={() => openReport(s.id)}
+                    className="text-[12px] font-bold text-brand hover:underline"
+                    title={s.closedAt ? 'Z report — frozen close-out' : 'X report — live totals'}
+                  >
+                    {s.closedAt ? 'Z' : 'X'}
+                  </button>
+                </td>
               </tr>
             ))}
           </Table>
@@ -113,6 +144,13 @@ export function Shifts() {
       {closing && (
         <CloseModal shift={closing} onClose={() => setClosing(null)} onDone={() => { setClosing(null); load() }} />
       )}
+      {report && (
+        <ShiftReportModal
+          report={report.rep}
+          loading={report.loading}
+          onClose={() => setReport(null)}
+        />
+      )}
     </div>
   )
 }
@@ -122,6 +160,69 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div className="bg-surface-muted border-2 border-line rounded-input p-3 text-center">
       <p className="text-[11px] uppercase font-bold text-ink-muted">{label}</p>
       <p className="font-black text-ink tabular text-lg mt-0.5">{value}</p>
+    </div>
+  )
+}
+
+// ---- X/Z cash-session report (P6): sales by tender, drawer expectation,
+// counted cash and variance. The title says X while the shift is open
+// (nothing is final) and Z once it's closed (the signed-off close-out).
+function ShiftReportModal({ report, loading, onClose }: { report: ShiftReport | null; loading: boolean; onClose: () => void }) {
+  return (
+    <Modal open onClose={onClose} title={report && !report.open ? 'Z report — shift close-out' : 'X report — shift so far'} size="sm">
+      {loading || !report ? (
+        <div className="py-10 flex justify-center"><Spinner /></div>
+      ) : (
+        <div className="space-y-3 text-[13px]">
+          <div className="flex items-center justify-between text-ink-muted">
+            <span className="font-semibold">{report.shift.userName}</span>
+            <span className="text-[12px]">
+              {new Date(report.shift.openedAt).toLocaleString()}
+              {report.shift.closedAt && <> → {new Date(report.shift.closedAt).toLocaleTimeString()}</>}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <Stat label="Orders" value={String(report.ordersCount)} />
+            <Stat label="Voids" value={String(report.voidsCount)} />
+            <Stat label="Gross" value={formatMoney(report.grossCents)} />
+          </div>
+          <div className="border border-line rounded-input divide-y divide-line bg-surface">
+            <Row2 label="Cash" value={formatMoney(report.cashCents)} />
+            <Row2 label="M-Pesa" value={formatMoney(report.mpesaCents)} />
+            <Row2 label="Card / Paystack" value={formatMoney(report.paystackCents)} />
+            <Row2 label="Store credit" value={formatMoney(report.creditCents)} />
+            {report.otherCents > 0 && <Row2 label="Other tenders" value={formatMoney(report.otherCents)} />}
+          </div>
+          <div className="border border-line rounded-input divide-y divide-line bg-surface-muted">
+            <Row2 label="Opening float" value={formatMoney(report.shift.openingFloatCents)} />
+            <Row2 label={report.open ? 'Cash expected NOW' : 'Cash expected'} value={formatMoney(report.expectedCashCents)} bold />
+            {!report.open && <Row2 label="Counted" value={formatMoney(report.countedCents)} bold />}
+            {!report.open && (
+              <Row2
+                label="Variance"
+                value={`${report.varianceCents > 0 ? '+' : ''}${formatMoney(report.varianceCents)}`}
+                bold
+                tone={report.varianceCents === 0 ? 'paid' : Math.abs(report.varianceCents) > 10000 ? 'danger' : 'pending'}
+              />
+            )}
+          </div>
+          {report.open && (
+            <p className="text-[11.5px] text-ink-subtle">
+              X report — nothing is final yet. Count the drawer when you close; the Z report freezes these numbers.
+            </p>
+          )}
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+function Row2({ label, value, bold, tone }: { label: string; value: string; bold?: boolean; tone?: 'paid' | 'danger' | 'pending' }) {
+  const color = tone === 'paid' ? 'text-paid-text' : tone === 'danger' ? 'text-danger-text' : tone === 'pending' ? 'text-pending-text' : 'text-ink'
+  return (
+    <div className="flex justify-between px-3 py-1.5">
+      <span className="text-ink-muted">{label}</span>
+      <span className={`tabular ${bold ? 'font-bold' : 'font-semibold'} ${color}`}>{value}</span>
     </div>
   )
 }
