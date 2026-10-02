@@ -17,13 +17,40 @@ type productBody struct {
         SKU         string `json:"sku"`
         Barcode     string `json:"barcode"`
         Name        string `json:"name" binding:"required"`
-        CategoryID  int64  `json:"categoryId" binding:"required"`
+        CategoryID  int64  `json:"categoryId"` // 0 = Uncategorised (resolved below)
         PriceCents  int64  `json:"priceCents" binding:"min=0"`
         CostCents   int64  `json:"costCents" binding:"min=0"`
         StockQty    *int   `json:"stockQty"`
         TrackStock  *bool  `json:"trackStock"`
         Active      *bool  `json:"active"`
         IsGiftCard  *bool  `json:"isGiftCard"`
+}
+
+// ensureProductCategory maps a missing category to the shared "Uncategorised"
+// bucket (find-or-create). A fresh shop has zero categories, and the schema is
+// NOT NULL on products.category_id — without this, the very first product on a
+// new till fails with a raw gin validator error.
+func (h *H) ensureProductCategory(c *gin.Context, id int64) int64 {
+        if id != 0 {
+                return id
+        }
+        const name, slug = "Uncategorised", "uncategorised"
+        var catID int64
+        err := h.db(c).QueryRow(`SELECT id FROM categories WHERE slug = ?`, slug).Scan(&catID)
+        if err == nil {
+                return catID
+        }
+        res, err := h.db(c).Exec(h.db(c).Rebind(
+                `INSERT INTO categories (name, slug, sort_order) VALUES (?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM categories))`),
+                name, slug)
+        if err != nil {
+                // Lost a race with a sibling till — re-read.
+                _ = h.db(c).QueryRow(`SELECT id FROM categories WHERE slug = ?`, slug).Scan(&catID)
+                return catID
+        }
+        catID, _ = res.LastInsertId()
+        h.svc(c).EmitCategory(name, slug, false)
+        return catID
 }
 
 func (h *H) scanProducts(rows *sql.Rows) []models.Product {
@@ -126,7 +153,7 @@ func (h *H) CreateProduct(c *gin.Context) {
         res, err := h.db(c).Exec(h.db(c).Rebind(`
                 INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-                uniqueSKU(h.db(c), body.SKU), body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active, gift)
+                uniqueSKU(h.db(c), body.SKU), body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift)
         if err != nil {
                 h.fail(c, 500, err.Error())
                 return
@@ -199,7 +226,7 @@ func (h *H) UpdateProduct(c *gin.Context) {
         res, err := h.db(c).Exec(h.db(c).Rebind(`
                 UPDATE products SET sku = ?, barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
                         stock_qty = ?, track_stock = ?, is_active = ?, is_gift_card = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?`), sku, body.Barcode, body.Name, body.CategoryID, body.PriceCents, body.CostCents, stock, track, active, gift, id)
+                WHERE id = ?`), sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift, id)
         if err != nil {
                 h.fail(c, 500, err.Error())
                 return
