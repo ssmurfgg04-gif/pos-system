@@ -894,6 +894,23 @@ function TeamSyncPanel() {
     }
   }
 
+  const retryFailed = async () => {
+    setSyncing(true)
+    try {
+      const res = await api.post<{ recovered: number }>('/api/v1/team-sync/retry-failed')
+      if (res.recovered > 0) {
+        toast.success('Recovered', `${res.recovered} quarantined sync event${res.recovered === 1 ? '' : 's'} applied.`)
+      } else {
+        toast.info('Nothing recovered yet', 'Quarantined events are retried automatically every sync cycle.')
+      }
+      await load()
+    } catch (e: any) {
+      toast.error('Retry failed', e?.message)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   // Revert a hand-configured till to the automatic cloud identity
   // (no project URL / service key / team code needed on this device).
   const switchToCloud = async () => {
@@ -1062,6 +1079,9 @@ function TeamSyncPanel() {
               {status.pending > 0 && (
                 <StatusPill status="info" label={`${status.pending} change${status.pending === 1 ? '' : 's'} waiting to push`} />
               )}
+              {!!status.failedEvents && status.failedEvents > 0 && (
+                <StatusPill status="pending" label={`${status.failedEvents} event${status.failedEvents === 1 ? '' : 's'} quarantined (retrying)`} />
+              )}
               {status.source === 'cloud' && (
                 <span className="inline-flex flex-col gap-1">
                   <StatusPill status="paid" label="LedgerPOS Cloud — automatic" />
@@ -1109,6 +1129,28 @@ function TeamSyncPanel() {
             </div>
             {status.lastError && (
               <p className="text-[12px] font-bold text-danger-text">Last error: {status.lastError}</p>
+            )}
+            {!!status.failed && status.failed.length > 0 && (
+              <div className="rounded-input border border-danger-text/30 bg-danger-bg/60 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[12.5px] font-bold text-danger-text">
+                    {status.failedEvents} sync event{status.failedEvents === 1 ? '' : 's'} could not be applied or pushed — they are
+                    kept and retried automatically, nothing is lost.
+                  </p>
+                  <Button size="sm" variant="secondary" onClick={retryFailed} disabled={syncing}>
+                    {syncing ? <Spinner /> : <RefreshCw size={14} strokeWidth={2.5} aria-hidden />}
+                    Retry now
+                  </Button>
+                </div>
+                <ul className="text-[12px] text-ink-muted space-y-1">
+                  {status.failed.map((f, i) => (
+                    <li key={i} className="truncate">
+                      <span className="font-bold text-ink">{f.direction === 'push' ? 'Outgoing' : 'Incoming'} {f.entity}/{f.op}</span>
+                      {' — '}{f.error} <span className="text-ink-subtle">({f.attempts} attempt{f.attempts === 1 ? '' : 's'})</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
             {status.devices.length > 0 && (
               <Table head={['Device', 'Version', 'Last seen', 'Approval', '']}>

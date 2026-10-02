@@ -673,6 +673,9 @@ export interface TeamSyncStatus {
   pendingDevices?: TeamDevice[]
   /** Recent join links minted by this team's owner. */
   invites?: TeamInvite[]
+  /** Hardened sync: events quarantined after repeated apply/push failures. */
+  failedEvents?: number
+  failed?: { direction: string; entity: string; op: string; error: string; attempts: number; updatedAt: string }[]
 }
 
 export interface PaymentConfig {
