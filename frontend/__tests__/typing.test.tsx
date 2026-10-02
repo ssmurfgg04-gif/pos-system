@@ -6,7 +6,7 @@ import { describe, expect, test, vi, beforeEach } from 'vitest'
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
-vi.mock('../src/ws/client', () => ({ reconnectWs: vi.fn(), connectWs: () => () => undefined, disconnectWs: vi.fn(), onWsEvent: () => () => undefined }))
+vi.mock('../src/ws/client', () => ({ reconnectWs: vi.fn(), connectWs: () => () => undefined, disconnectWs: vi.fn(), onWsEvent: () => () => undefined, onWsReconnect: () => () => undefined }))
 
 import { Login } from '../src/pages/Login'
 import { App } from '../src/App'

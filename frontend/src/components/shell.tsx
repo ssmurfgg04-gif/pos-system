@@ -5,13 +5,13 @@ import { usePosSearch } from '../stores/search'
 import { navigate } from '../lib/router'
 import { Spinner, OfflineBanner } from './ui'
 import { startHeartbeat, flushQueue } from '../offline/heartbeat'
-import { connectWs, disconnectWs, onWsEvent } from '../ws/client'
+import { connectWs, disconnectWs, onWsEvent, onWsReconnect } from '../ws/client'
 import { toast } from '../stores/toasts'
 import { useNet } from '../offline/heartbeat'
 import { backendMode, isDemoSync, getDesktopStatus, api, type DesktopStatus } from '../lib/api'
 import {
   ShoppingCart, ReceiptText, Palette, Package, Coins, BarChart3, Users, Settings,
-  LogOut, RefreshCw, FlaskConical, Power, PowerOff, BookUser, Truck, Search,
+  LogOut, RefreshCw, FlaskConical, Power, PowerOff, BookUser, Truck, Search, AlertTriangle,
 } from 'lucide-react'
 
 // Nav items: shown strictly by permission (server enforces regardless).
@@ -77,11 +77,18 @@ export function AppShell({ current, children }: { current: string; children: Rea
       toast.success(`Order ${o?.number} paid`)
     })
     const offOffline = onWsEvent('ORDER_CREATED', () => undefined)
+    // Socket back after a gap: pages may have missed broadcasts — tell them
+    // to reload their data, and refresh the offline-queue badge.
+    const offReconnect = onWsReconnect(() => {
+      useNet.getState().refreshPending()
+      window.dispatchEvent(new CustomEvent('ws-reconnected'))
+    })
     return () => {
       mounted = false
       off()
       offPaid()
       offOffline()
+      offReconnect()
       disconnectWs()
     }
   }, [])
@@ -187,11 +194,20 @@ export function AppShell({ current, children }: { current: string; children: Rea
           {net.pending > 0 && (
             <button
               onClick={() => flushQueue()}
-              title="Sync queued offline sales"
-              className="min-h-9 px-2.5 rounded-input bg-pending-bg text-pending-text text-[12px] font-bold border border-pending-text/40 inline-flex items-center gap-1.5"
+              title={
+                net.failed > 0
+                  ? `${net.pending} offline sale(s) queued — ${net.failed} hit errors and will keep retrying. Click to sync now.`
+                  : 'Sync queued offline sales'
+              }
+              className={`min-h-9 px-2.5 rounded-input text-[12px] font-bold border inline-flex items-center gap-1.5 ${
+                net.failed > 0
+                  ? 'bg-danger-bg text-danger-text border-danger-text/40'
+                  : 'bg-pending-bg text-pending-text border-pending-text/40'
+              }`}
             >
               <RefreshCw size={13} aria-hidden />
               {net.pending}
+              {net.failed > 0 && <AlertTriangle size={12} aria-label="Some queued sales hit errors" />}
             </button>
           )}
           <div className="hidden md:flex flex-col items-end leading-tight mr-1">

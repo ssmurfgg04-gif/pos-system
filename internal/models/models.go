@@ -483,6 +483,21 @@ type TeamSyncStatus struct {
         Stores         []TeamStore  `json:"stores"`
         PendingDevices []TeamDevice `json:"pendingDevices"`
         Invites        []TeamInvite `json:"invites"`
+        // Hardened-sync surface: events that could not be applied or pushed
+        // (quarantined to the dead-letter table) — visible, retryable, never
+        // silently dropped.
+        FailedEvents int64             `json:"failedEvents"`
+        Failed       []SyncFailedEvent `json:"failed"`
+}
+
+// SyncFailedEvent is one quarantined sync event shown in the Team panel.
+type SyncFailedEvent struct {
+        Direction string `json:"direction"` // "apply" | "push"
+        Entity    string `json:"entity"`
+        Op        string `json:"op"`
+        Error     string `json:"error"`
+        Attempts  int    `json:"attempts"`
+        UpdatedAt string `json:"updatedAt"`
 }
 
 // TeamStore is one store under the owner's cloud project. TeamCode is the

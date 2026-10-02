@@ -254,6 +254,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         ts.PUT("/team-sync", h.TeamSyncConfigure)
         ts.POST("/team-sync/create", h.TeamSyncCreate)
         ts.POST("/team-sync/now", h.TeamSyncNow)
+        ts.POST("/team-sync/retry-failed", h.TeamSyncRetryFailed)
         ts.POST("/team-sync/use-cloud", h.TeamSyncUseCloud)
         // Multi-store: stores under one owner cloud + device assignment.
         ts.POST("/team-sync/stores", h.TeamStoreCreate)

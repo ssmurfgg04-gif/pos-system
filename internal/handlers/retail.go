@@ -516,6 +516,16 @@ func (h *H) TeamSyncNow(c *gin.Context) {
         h.ok(c, gin.H{"pushed": pushed, "applied": applied})
 }
 
+// TeamSyncRetryFailed (settings.manage) — re-run events quarantined by the
+// sync hardening layer (apply failures and poison pushes).
+func (h *H) TeamSyncRetryFailed(c *gin.Context) {
+        recovered := h.svc(c).RetryFailedSync()
+        p := h.principal(c)
+        h.svc(c).Audit(p.ID, p.Username, "TEAM_SYNC_RETRY_FAILED", "settings", "",
+                fmt.Sprintf("recovered=%d", recovered))
+        h.ok(c, gin.H{"recovered": recovered})
+}
+
 // TeamDeviceApprove (settings.manage) — approve a pending device from the
 // roster (auto-approve is off; this is the Approve button).
 func (h *H) TeamDeviceApprove(c *gin.Context) {

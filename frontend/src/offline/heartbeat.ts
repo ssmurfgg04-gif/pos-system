@@ -1,36 +1,70 @@
 // Connectivity heartbeat + queue flush. Pings /health every 10s (cheap,
-// public); on reconnect, replays the queued checkouts through /sync.
+// public); on reconnect — and once at startup when the queue is non-empty —
+// replays the queued checkouts through /sync.
+//
+// Hardening rules (no lost / no duplicated sales):
+//  - flush works in small batches, one bad payload can't block the rest;
+//  - a per-item BUSINESS rejection (4xx with an error string) is dropped
+//    after surfacing — the server saw and refused the sale for good reason
+//    (e.g. insufficient stock before the catalog caught up);
+//  - a per-item SERVER failure (5xx / malformed response) keeps the sale
+//    queued with attempts+1 — retried with backoff on later flushes;
+//  - a whole-request network failure keeps everything queued untouched;
+//  - after MAX_FLUSH_ATTEMPTS a stubborn sale is parked as failed (kept in
+//    the queue, flagged red in the UI) instead of vanishing.
 // In demo mode the in-browser backend is always "online" — the loop is a
 // no-op so the offline banner never shows on a static deploy.
 
 import { api, Order, demoForced } from '../lib/api'
 import { create } from 'zustand'
-import { drainQueue, queueSize, removeFromQueue } from './queue'
+import {
+  drainQueue, queueSize, failedQueueSize, removeFromQueue, markQueueAttempt,
+  QueuedCheckout,
+} from './queue'
 import { toast } from '../stores/toasts'
 
 interface NetState {
   online: boolean
   pending: number
+  failed: number
   setOnline: (v: boolean) => void
   setPending: (n: number) => void
+  setFailed: (n: number) => void
   refreshPending: () => Promise<void>
 }
 
 export const useNet = create<NetState>((set) => ({
   online: navigator.onLine,
   pending: 0,
+  failed: 0,
   setOnline: (v) => set({ online: v }),
   setPending: (n) => set({ pending: n }),
+  setFailed: (n) => set({ failed: n }),
   refreshPending: async () => {
     try {
-      set({ pending: await queueSize() })
+      const [pending, failed] = await Promise.all([queueSize(), failedQueueSize()])
+      set({ pending, failed })
     } catch {
-      /* IndexedDB unavailable (private mode) — queue is inert */
+      /* storage unavailable — queue is inert */
     }
   },
 }))
 
 let flushing = false
+const FLUSH_BATCH = 10
+const MAX_FLUSH_ATTEMPTS = 8
+
+interface SyncResult {
+  clientUuid: string
+  orderId: number
+  error?: string
+}
+
+function flushOnce(queued: QueuedCheckout[]): Promise<SyncResult[]> {
+  return api.post<SyncResult[]>('/api/v1/sync', {
+    transactions: queued.map((q) => q.request),
+  })
+}
 
 export async function flushQueue(): Promise<Order[]> {
   if (flushing) return []
@@ -38,48 +72,89 @@ export async function flushQueue(): Promise<Order[]> {
   const created: Order[] = []
   try {
     const queued = await drainQueue()
-    if (queued.length > 0) {
-      const results = await api.post<{ clientUuid: string; orderId: number; error?: string }[]>(
-        '/api/v1/sync',
-        { transactions: queued.map((q) => q.request) },
-      )
+    for (let i = 0; i < queued.length; i += FLUSH_BATCH) {
+      const batch = queued.slice(i, i + FLUSH_BATCH)
+      let results: SyncResult[]
+      try {
+        results = await flushOnce(batch)
+      } catch {
+        // Whole request failed — network/server down. Keep every sale
+        // queued untouched; the next healthy heartbeat retries.
+        break
+      }
+      // A 2xx with a per-item error list means the server processed the
+      // batch. Distinguish business rejections from server trouble.
       for (const r of results) {
         if (!r.error) {
           await removeFromQueue(r.clientUuid)
+          continue
         }
-      }
-      const ok = results.filter((r) => !r.error).length
-      if (ok > 0) {
-        toast.success(`Synced ${ok} offline sale${ok > 1 ? 's' : ''}`)
-      }
-      const failed = results.filter((r) => r.error)
-      for (const f of failed) {
-        toast.error('Offline sale rejected', f.error)
-        await removeFromQueue(f.clientUuid) // server rejected it for good reason
+        if (isBusinessRejection(r.error)) {
+          toast.error('Offline sale rejected', r.error)
+          await removeFromQueue(r.clientUuid)
+        } else {
+          await markQueueAttempt(r.clientUuid, r.error)
+          const q = batch.find((b) => b.clientUuid === r.clientUuid)
+          if (q && (q.attempts || 0) + 1 >= MAX_FLUSH_ATTEMPTS) {
+            toast.error(
+              `Offline sale parked after ${MAX_FLUSH_ATTEMPTS} tries`,
+              'Show it to the owner — check Reports → Orders for duplicates before re-entering it.',
+            )
+            // Kept in the queue (flagged failed) — never auto-deleted.
+          }
+        }
       }
     }
     await useNet.getState().refreshPending()
-  } catch {
-    // still offline — keep the queue
+    const left = useNet.getState().pending
+    const synced = queued.length - left
+    if (synced > 0) {
+      toast.success(`Synced ${synced} offline sale${synced > 1 ? 's' : ''}`)
+    }
   } finally {
     flushing = false
   }
   return created
 }
 
+// Business rejections are definitive (the server understood the sale and
+// refused it). Everything else — 5xx text, HTML error pages, empty strings
+// — is treated as transient.
+function isBusinessRejection(err: string): boolean {
+  const e = (err || '').toLowerCase()
+  return (
+    e.includes('insufficient stock') ||
+    e.includes('not found') ||
+    e.includes('invalid') ||
+    e.includes('duplicate') ||
+    e.includes('already') ||
+    e.includes('closed') ||
+    e.includes('forbidden') ||
+    e.includes('permission') ||
+    e.includes('required')
+  )
+}
+
+let started = false
+
 export function startHeartbeat() {
   if (demoForced()) {
     useNet.getState().setOnline(true)
     return
   }
+  if (started) return
+  started = true
   useNet.getState().refreshPending()
 
   const check = async () => {
     try {
       await fetch('/api/v1/health', { cache: 'no-store' })
       const was = useNet.getState().online
-      if (!was) {
-        useNet.getState().setOnline(true)
+      useNet.getState().setOnline(true)
+      // Flush on reconnect AND at startup — a sale queued before an app
+      // restart must not wait for a network flap to sync.
+      const pending = useNet.getState().pending
+      if (!was || pending > 0) {
         await flushQueue()
       }
     } catch {
@@ -89,5 +164,7 @@ export function startHeartbeat() {
   setInterval(check, 10000)
   window.addEventListener('online', check)
   window.addEventListener('offline', () => useNet.getState().setOnline(false))
+  // Give the SPA a moment to mount, then clear anything left over.
+  setTimeout(check, 1500)
   check()
 }

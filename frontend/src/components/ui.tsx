@@ -384,8 +384,9 @@ export function ToastHost() {
 // ---- Offline banner (app shell top, under the topbar) ----
 
 export function OfflineBanner() {
-  const { online, pending } = useNet()
+  const { online, pending, failed } = useNet()
   if (online && pending === 0) return null
+  const failedNote = failed > 0 ? ` — ${failed} retrying after errors` : ''
   return (
     <div
       role="status"
@@ -397,8 +398,8 @@ export function OfflineBanner() {
     >
       <span className={`w-2 h-2 rounded-full ${online ? 'bg-pending-text anim-pulse-dot' : 'bg-danger anim-pulse-dot'}`} aria-hidden />
       {online
-        ? `Back online — ${pending} sale${pending === 1 ? '' : 's'} queued for sync…`
-        : `Offline mode — sales are saved locally${pending > 0 ? ` (${pending} queued)` : ''}`}
+        ? `Back online — ${pending} sale${pending === 1 ? '' : 's'} queued for sync${failedNote}…`
+        : `Offline mode — sales are saved locally${pending > 0 ? ` (${pending} queued${failedNote})` : ''}`}
     </div>
   )
 }

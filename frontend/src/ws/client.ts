@@ -11,10 +11,15 @@ export type WsEvent =
   | 'DESIGN_JOB_UPDATED'
   | 'SHIFT_UPDATED'
   | 'SETTINGS_UPDATED'
+  | 'HELD_SALES_UPDATED'
+  | 'TEAM_SYNC_UPDATED'
+  | 'JOB_UPDATED'
+  | 'ORDER_NOTIFIED'
 
 type Handler = (data: any) => void
 
 const handlers = new Map<WsEvent, Set<Handler>>()
+const reconnectHandlers = new Set<() => void>()
 let ws: WebSocket | null = null
 let retry = 0
 let closed = false
@@ -23,6 +28,14 @@ export function onWsEvent(event: WsEvent, handler: Handler): () => void {
   if (!handlers.has(event)) handlers.set(event, new Set())
   handlers.get(event)!.add(handler)
   return () => handlers.get(event)?.delete(handler)
+}
+
+/** Fires once after every reconnection: pages reload their data to catch
+ *  anything broadcast while the socket was down (no event replay in the
+ *  hub, so a refresh-on-reconnect closes the gap). */
+export function onWsReconnect(handler: () => void): () => void {
+  reconnectHandlers.add(handler)
+  return () => reconnectHandlers.delete(handler)
 }
 
 function dispatch(event: WsEvent, data: any) {
@@ -57,8 +70,18 @@ function openSocket() {
   }
 
   ws.onopen = () => {
+    const wasReconnect = retry > 0
     retry = 0
     ws?.send(JSON.stringify({ token: token() }))
+    if (wasReconnect) {
+      reconnectHandlers.forEach((h) => {
+        try {
+          h()
+        } catch (e) {
+          console.error('ws reconnect handler error', e)
+        }
+      })
+    }
   }
 
   ws.onmessage = (ev) => {

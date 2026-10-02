@@ -1,26 +1,26 @@
 package database
 
 import (
-	"database/sql"
-	"fmt"
-	"regexp"
-	"strings"
+        "database/sql"
+        "fmt"
+        "regexp"
+        "strings"
 )
 
 // Migration is one schema step. SQL is split per dialect when needed; Go
 // covers data backfills that SQL can't express portably (JSON permission
 // merges). A migration may carry SQL, a Go hook, or both.
 type Migration struct {
-	Version int
-	SQLite  string
-	Pg      string // falls back to SQLite body when empty
-	Go      func(d *DB, tx *sql.Tx) error
+        Version int
+        SQLite  string
+        Pg      string // falls back to SQLite body when empty
+        Go      func(d *DB, tx *sql.Tx) error
 }
 
 var migrations = []Migration{
-	{
-		Version: 1,
-		SQLite: `
+        {
+                Version: 1,
+                SQLite: `
 CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL DEFAULT ''
@@ -169,7 +169,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 `,
-		Pg: `
+                Pg: `
 CREATE TABLE IF NOT EXISTS settings (
         key VARCHAR(128) PRIMARY KEY,
         value TEXT NOT NULL DEFAULT ''
@@ -318,10 +318,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 `,
-	},
-	{
-		Version: 2,
-		SQLite: `
+        },
+        {
+                Version: 2,
+                SQLite: `
 CREATE TABLE IF NOT EXISTS customers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -349,7 +349,7 @@ CREATE TABLE IF NOT EXISTS customer_ledger (
 CREATE INDEX IF NOT EXISTS idx_ledger_customer ON customer_ledger(customer_id);
 ALTER TABLE orders ADD COLUMN customer_id INTEGER NOT NULL DEFAULT 0;
 `,
-		Pg: `
+                Pg: `
 CREATE TABLE IF NOT EXISTS customers (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -377,37 +377,37 @@ CREATE TABLE IF NOT EXISTS customer_ledger (
 CREATE INDEX IF NOT EXISTS idx_ledger_customer ON customer_ledger(customer_id);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_id INTEGER NOT NULL DEFAULT 0;
 `,
-	},
-	{
-		// v3: shops created before tabs existed have system roles without
-		// the customers.* permissions — union the seeded set in so
-		// cashiers keep working after upgrade. Runs once (admin edits
-		// made afterwards are never touched).
-		Version: 3,
-		Go:      backfillRolePerms,
-	},
-	{
-		// v4: forced credential rotation — seeded defaults stop working
-		// until changed. Existing rows are flagged so every current user
-		// rotates once on next login.
-		Version: 4,
-		SQLite: `
+        },
+        {
+                // v3: shops created before tabs existed have system roles without
+                // the customers.* permissions — union the seeded set in so
+                // cashiers keep working after upgrade. Runs once (admin edits
+                // made afterwards are never touched).
+                Version: 3,
+                Go:      backfillRolePerms,
+        },
+        {
+                // v4: forced credential rotation — seeded defaults stop working
+                // until changed. Existing rows are flagged so every current user
+                // rotates once on next login.
+                Version: 4,
+                SQLite: `
 ALTER TABLE users ADD COLUMN must_rotate INTEGER NOT NULL DEFAULT 0;
 UPDATE users SET must_rotate = 1;
 `,
-		Pg: `
+                Pg: `
 ALTER TABLE users ADD COLUMN IF NOT EXISTS must_rotate INTEGER NOT NULL DEFAULT 0;
 UPDATE users SET must_rotate = 1;
 `,
-	},
-	{
-		// v5: suppliers & stock-in — supplier records, purchase orders
-		// (receive posts stock + weighted-average cost), stock takes.
-		// Also re-runs the role backfill so upgraded Admins gain the new
-		// suppliers.* permissions (same once-only union semantics as v3).
-		Version: 5,
-		Go:      backfillRolePerms,
-		SQLite: `
+        },
+        {
+                // v5: suppliers & stock-in — supplier records, purchase orders
+                // (receive posts stock + weighted-average cost), stock takes.
+                // Also re-runs the role backfill so upgraded Admins gain the new
+                // suppliers.* permissions (same once-only union semantics as v3).
+                Version: 5,
+                Go:      backfillRolePerms,
+                SQLite: `
 CREATE TABLE IF NOT EXISTS suppliers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -460,7 +460,7 @@ CREATE TABLE IF NOT EXISTS stock_take_items (
         counted_qty INTEGER NOT NULL DEFAULT 0
 );
 `,
-		Pg: `
+                Pg: `
 CREATE TABLE IF NOT EXISTS suppliers (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -513,45 +513,45 @@ CREATE TABLE IF NOT EXISTS stock_take_items (
                 counted_qty INTEGER NOT NULL DEFAULT 0
 );
 `,
-	},
-	{
-		// v6: token invalidation on credential change — sessions issued
-		// before the last password/PIN change stop working. Empty means
-		// pre-feature (existing sessions survive the upgrade once).
-		Version: 6,
-		SQLite: `
+        },
+        {
+                // v6: token invalidation on credential change — sessions issued
+                // before the last password/PIN change stop working. Empty means
+                // pre-feature (existing sessions survive the upgrade once).
+                Version: 6,
+                SQLite: `
 ALTER TABLE users ADD COLUMN password_changed_at TEXT NOT NULL DEFAULT '';
 `,
-		Pg: `
+                Pg: `
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TEXT NOT NULL DEFAULT '';
 `,
-	},
-	{
-		// v7: VAT historization — store tax percent + inclusive flag per order
-		// so reports never recalculate with current settings (per DBA best
-		// practice: store calculated values at posting time).
-		Version: 7,
-		SQLite: `
+        },
+        {
+                // v7: VAT historization — store tax percent + inclusive flag per order
+                // so reports never recalculate with current settings (per DBA best
+                // practice: store calculated values at posting time).
+                Version: 7,
+                SQLite: `
 ALTER TABLE orders ADD COLUMN tax_percent REAL NOT NULL DEFAULT 16;
 ALTER TABLE orders ADD COLUMN tax_included INTEGER NOT NULL DEFAULT 1;
 UPDATE orders SET tax_percent = 16 WHERE tax_percent = 16;
 `,
-		Pg: `
+                Pg: `
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_percent DOUBLE PRECISION NOT NULL DEFAULT 16;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_included INTEGER NOT NULL DEFAULT 1;
 `,
-	},
-	{
-		// v8: retail expansion pack —
-		//   product photos (image_url), order discounts + loyalty
-		//   redemption audit fields, store credit (prepaid money the
-		//   shop owes the customer), parked/held sales, a void-reason
-		//   catalog, design-job file attachments, per-role dashboard
-		//   config (landing page + visible nav), and the team-sync
-		//   outbox/state tables that link standalone tills through
-		//   the shop's Supabase project.
-		Version: 8,
-		SQLite: `
+        },
+        {
+                // v8: retail expansion pack —
+                //   product photos (image_url), order discounts + loyalty
+                //   redemption audit fields, store credit (prepaid money the
+                //   shop owes the customer), parked/held sales, a void-reason
+                //   catalog, design-job file attachments, per-role dashboard
+                //   config (landing page + visible nav), and the team-sync
+                //   outbox/state tables that link standalone tills through
+                //   the shop's Supabase project.
+                Version: 8,
+                SQLite: `
 ALTER TABLE products ADD COLUMN image_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE orders ADD COLUMN discount_cents INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE orders ADD COLUMN points_redeemed INTEGER NOT NULL DEFAULT 0;
@@ -611,7 +611,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
         value TEXT NOT NULL DEFAULT ''
 );
 `,
-		Pg: `
+                Pg: `
 ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_cents BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS points_redeemed BIGINT NOT NULL DEFAULT 0;
@@ -668,22 +668,22 @@ CREATE TABLE IF NOT EXISTS sync_state (
         value TEXT NOT NULL DEFAULT ''
 );
 `,
-	},
-	{
-		// v9: union the new retail permissions into existing roles'
-		// saved sets (Admin gains everything new; Cashier gains
-		// discount + loyalty redemption + credit as befits a till).
-		// Same once-only semantics as v3/v5: admin edits after this
-		// run are never touched.
-		Version: 9,
-		Go:      backfillRolePermsV9,
-	},
-	{
-		// v10: stocktake (count sessions with variance report) and
-		// gift cards (sellable products that mint redeemable codes
-		// loading prepaid store credit on a customer account).
-		Version: 10,
-		SQLite: `
+        },
+        {
+                // v9: union the new retail permissions into existing roles'
+                // saved sets (Admin gains everything new; Cashier gains
+                // discount + loyalty redemption + credit as befits a till).
+                // Same once-only semantics as v3/v5: admin edits after this
+                // run are never touched.
+                Version: 9,
+                Go:      backfillRolePermsV9,
+        },
+        {
+                // v10: stocktake (count sessions with variance report) and
+                // gift cards (sellable products that mint redeemable codes
+                // loading prepaid store credit on a customer account).
+                Version: 10,
+                SQLite: `
 CREATE TABLE IF NOT EXISTS stock_counts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         number TEXT NOT NULL UNIQUE,
@@ -725,7 +725,7 @@ CREATE TABLE IF NOT EXISTS gift_cards (
 );
 CREATE INDEX IF NOT EXISTS idx_gift_cards_code ON gift_cards(code);
 `,
-		Pg: `
+                Pg: `
 CREATE TABLE IF NOT EXISTS stock_counts (
         id SERIAL PRIMARY KEY,
         number TEXT NOT NULL UNIQUE,
@@ -767,93 +767,151 @@ CREATE TABLE IF NOT EXISTS gift_cards (
 );
 CREATE INDEX IF NOT EXISTS idx_gift_cards_code ON gift_cards(code);
 `,
-	},
-	{
-		// v11: performance indexes (composite cashier/status filters,
-		// SKU lookups, NOCASE name ordering) + the fake-money guard:
-		// tills upgraded from releases that defaulted mpesa_env to
-		// "mock" move to "manual" so no payment can auto-complete
-		// without a real provider (Paystack or Daraja credentials).
-		Version: 11,
-		SQLite: `
+        },
+        {
+                // v11: performance indexes (composite cashier/status filters,
+                // SKU lookups, NOCASE name ordering) + the fake-money guard:
+                // tills upgraded from releases that defaulted mpesa_env to
+                // "mock" move to "manual" so no payment can auto-complete
+                // without a real provider (Paystack or Daraja credentials).
+                Version: 11,
+                SQLite: `
 CREATE INDEX IF NOT EXISTS idx_orders_cashier_created ON orders(cashier_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
 CREATE INDEX IF NOT EXISTS idx_products_name_nocase ON products(name COLLATE NOCASE);
 UPDATE settings SET value = 'manual' WHERE key = 'mpesa_env' AND value = 'mock';
 `,
-		Pg: `
+                Pg: `
 CREATE INDEX IF NOT EXISTS idx_orders_cashier_created ON orders(cashier_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
 CREATE INDEX IF NOT EXISTS idx_products_name_nocase ON products(name);
 UPDATE settings SET value = 'manual' WHERE key = 'mpesa_env' AND value = 'mock';
 `,
-	},
+        },
+        {
+                // v12: sync hardening. Receiver-side exactly-once via
+                // sync_applied (cursor regression / backup restore can no
+                // longer double-apply stock deltas or ledger rows); a
+                // dead-letter table quarantines events that cannot apply
+                // (unknown product, unknown customer…) and outgoing poison
+                // rows that wedge the push batch, so they surface in the
+                // Team panel and can be retried instead of being lost.
+                // sync_outbox gains attempts/last_error for quarantine book-
+                // keeping (ADD COLUMN guarded for databases created pre-v12).
+                Version: 12,
+                SQLite: `
+CREATE TABLE IF NOT EXISTS sync_applied (
+        event_id INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sync_applied_time ON sync_applied(applied_at);
+CREATE TABLE IF NOT EXISTS sync_dead_letter (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        direction TEXT NOT NULL DEFAULT 'apply',
+        event_id INTEGER NOT NULL DEFAULT 0,
+        entity TEXT NOT NULL DEFAULT '',
+        op TEXT NOT NULL DEFAULT '',
+        client_uuid TEXT NOT NULL DEFAULT '',
+        payload TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_dead_letter_direction ON sync_dead_letter(direction);
+ALTER TABLE sync_outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sync_outbox ADD COLUMN last_error TEXT NOT NULL DEFAULT '';
+`,
+                Pg: `
+CREATE TABLE IF NOT EXISTS sync_applied (
+        event_id BIGINT PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sync_applied_time ON sync_applied(applied_at);
+CREATE TABLE IF NOT EXISTS sync_dead_letter (
+        id SERIAL PRIMARY KEY,
+        direction TEXT NOT NULL DEFAULT 'apply',
+        event_id BIGINT NOT NULL DEFAULT 0,
+        entity TEXT NOT NULL DEFAULT '',
+        op TEXT NOT NULL DEFAULT '',
+        client_uuid TEXT NOT NULL DEFAULT '',
+        payload TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        attempts BIGINT NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_dead_letter_direction ON sync_dead_letter(direction);
+ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS attempts BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT '';
+`,
+        },
 }
 
 // backfillRolePermsV9 unions the v8 permission additions into seeded roles:
 // Admin gets all, Cashier gets the till-side additions (discount, loyalty
 // redemption, store credit), Designer is unchanged.
 func backfillRolePermsV9(d *DB, tx *sql.Tx) error {
-	extra := map[string][]string{
-		"Admin":   {"payments.apply_discount", "loyalty.redeem", "credit.manage"},
-		"Cashier": {"payments.apply_discount", "loyalty.redeem", "credit.manage"},
-	}
-	return unionRolePerms(d, tx, extra)
+        extra := map[string][]string{
+                "Admin":   {"payments.apply_discount", "loyalty.redeem", "credit.manage"},
+                "Cashier": {"payments.apply_discount", "loyalty.redeem", "credit.manage"},
+        }
+        return unionRolePerms(d, tx, extra)
 }
 
 // Migrate applies pending migrations in order.
 func (d *DB) Migrate() error {
-	if _, err := d.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+        if _, err := d.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT (datetime('now'))
         )`); err != nil {
-		return fmt.Errorf("create schema_migrations: %w", err)
-	}
-	var current int
-	if err := d.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
-		return fmt.Errorf("read migration version: %w", err)
-	}
-	for _, m := range migrations {
-		if m.Version <= current {
-			continue
-		}
-		body := m.SQLite
-		if !d.IsSQLite() && m.Pg != "" {
-			body = m.Pg
-		}
-		tx, err := d.Begin()
-		if err != nil {
-			return err
-		}
-		for _, stmt := range splitSQLStatements(body) {
-			if d.IsSQLite() && isAddColumnStmt(stmt) && addColumnAlreadyApplied(d, stmt) {
-				// SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS. A
-				// database created by a pre-migration-tracking build already
-				// carries the column; skipping beats aborting the boot.
-				continue
-			}
-			if _, err := tx.Exec(stmt); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("migration %d: %w", m.Version, err)
-			}
-		}
-		if m.Go != nil {
-			if err := m.Go(d, tx); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("migration %d: %w", m.Version, err)
-			}
-		}
-		if _, err := tx.Exec(d.Rebind(`INSERT INTO schema_migrations (version) VALUES (?)`), m.Version); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("record migration %d: %w", m.Version, err)
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	}
-	return nil
+                return fmt.Errorf("create schema_migrations: %w", err)
+        }
+        var current int
+        if err := d.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
+                return fmt.Errorf("read migration version: %w", err)
+        }
+        for _, m := range migrations {
+                if m.Version <= current {
+                        continue
+                }
+                body := m.SQLite
+                if !d.IsSQLite() && m.Pg != "" {
+                        body = m.Pg
+                }
+                tx, err := d.Begin()
+                if err != nil {
+                        return err
+                }
+                for _, stmt := range splitSQLStatements(body) {
+                        if d.IsSQLite() && isAddColumnStmt(stmt) && addColumnAlreadyApplied(d, stmt) {
+                                // SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS. A
+                                // database created by a pre-migration-tracking build already
+                                // carries the column; skipping beats aborting the boot.
+                                continue
+                        }
+                        if _, err := tx.Exec(stmt); err != nil {
+                                tx.Rollback()
+                                return fmt.Errorf("migration %d: %w", m.Version, err)
+                        }
+                }
+                if m.Go != nil {
+                        if err := m.Go(d, tx); err != nil {
+                                tx.Rollback()
+                                return fmt.Errorf("migration %d: %w", m.Version, err)
+                        }
+                }
+                if _, err := tx.Exec(d.Rebind(`INSERT INTO schema_migrations (version) VALUES (?)`), m.Version); err != nil {
+                        tx.Rollback()
+                        return fmt.Errorf("record migration %d: %w", m.Version, err)
+                }
+                if err := tx.Commit(); err != nil {
+                        return err
+                }
+        }
+        return nil
 }
 
 // splitSQLStatements splits a migration body into individual statements,
@@ -862,58 +920,58 @@ func (d *DB) Migrate() error {
 // when quotes contain semicolons — our migrations never do, but quoted
 // literals are respected anyway).
 func splitSQLStatements(body string) []string {
-	var out []string
-	var cur strings.Builder
-	inQuote := false
-	for _, r := range body {
-		switch {
-		case r == '\'':
-			inQuote = !inQuote
-			cur.WriteRune(r)
-		case r == ';' && !inQuote:
-			if s := strings.TrimSpace(cur.String()); s != "" {
-				out = append(out, s)
-			}
-			cur.Reset()
-		default:
-			cur.WriteRune(r)
-		}
-	}
-	if s := strings.TrimSpace(cur.String()); s != "" {
-		out = append(out, s)
-	}
-	return out
+        var out []string
+        var cur strings.Builder
+        inQuote := false
+        for _, r := range body {
+                switch {
+                case r == '\'':
+                        inQuote = !inQuote
+                        cur.WriteRune(r)
+                case r == ';' && !inQuote:
+                        if s := strings.TrimSpace(cur.String()); s != "" {
+                                out = append(out, s)
+                        }
+                        cur.Reset()
+                default:
+                        cur.WriteRune(r)
+                }
+        }
+        if s := strings.TrimSpace(cur.String()); s != "" {
+                out = append(out, s)
+        }
+        return out
 }
 
 // isAddColumnStmt reports whether stmt is `ALTER TABLE <t> ADD COLUMN …`.
 var addColumnRe = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)\b`)
 
 func isAddColumnStmt(stmt string) bool {
-	return addColumnRe.MatchString(stmt)
+        return addColumnRe.MatchString(stmt)
 }
 
 // addColumnAlreadyApplied checks pragma table_info for the target column.
 func addColumnAlreadyApplied(d *DB, stmt string) bool {
-	m := addColumnRe.FindStringSubmatch(stmt)
-	if m == nil {
-		return false
-	}
-	rows, err := d.Query("PRAGMA table_info(" + m[1] + ")")
-	if err != nil {
-		return false // let the ALTER run and surface the real error
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notNull, pk int
-		var dflt any
-		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
-			continue
-		}
-		if strings.EqualFold(name, m[2]) {
-			return true
-		}
-	}
-	return false
+        m := addColumnRe.FindStringSubmatch(stmt)
+        if m == nil {
+                return false
+        }
+        rows, err := d.Query("PRAGMA table_info(" + m[1] + ")")
+        if err != nil {
+                return false // let the ALTER run and surface the real error
+        }
+        defer rows.Close()
+        for rows.Next() {
+                var cid int
+                var name, ctype string
+                var notNull, pk int
+                var dflt any
+                if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+                        continue
+                }
+                if strings.EqualFold(name, m[2]) {
+                        return true
+                }
+        }
+        return false
 }
