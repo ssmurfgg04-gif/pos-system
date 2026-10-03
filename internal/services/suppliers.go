@@ -362,9 +362,17 @@ func (s *Service) ReceivePO(poID int64, p *auth.Principal) (*models.PurchaseOrde
         }
         // Cross-till propagation: every received line is a stock delta event,
         // so tills that share this team see the new stock without a manual
-        // adjust (same event vocabulary as sales and stock takes).
+        // adjust (same event vocabulary as sales and stock takes). The
+        // receive also moved the weighted-average COST — a product event per
+        // line (stockSet=false: the delta above already carries quantity)
+        // keeps every till's COGS/margin reports identical.
         for _, it := range po.Items {
                 s.EmitStockDelta(it.SKU, it.Qty)
+                var pid int64
+                s.db.QueryRow(s.db.Rebind(`SELECT id FROM products WHERE sku = ?`), it.SKU).Scan(&pid)
+                if pid != 0 {
+                        s.EmitProduct(pid, false)
+                }
         }
         s.Audit(p.ID, p.Username, "PO_RECEIVED", "purchase_order", po.Number, fmt.Sprintf("total %d", po.SubtotalCents))
         return s.GetPO(poID)
@@ -581,6 +589,12 @@ func (s *Service) ApplyTake(takeID int64, p *auth.Principal) (*models.StockTake,
                 return nil, err
         }
         s.Audit(p.ID, p.Username, "TAKE_APPLIED", "stock_take", number, fmt.Sprintf("%d lines", len(items)))
+        // Counted quantities are absolute stock changes — they follow the
+        // team like every other admin write (the legacy take silently forked
+        // stock across tills before).
+        for _, it := range items {
+                s.EmitProduct(it.ProductID, true)
+        }
         return s.GetTake(takeID)
 }
 

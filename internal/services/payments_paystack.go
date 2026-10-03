@@ -21,6 +21,7 @@ package services
 
 import (
         "context"
+        "database/sql"
         "errors"
         "fmt"
         "log"
@@ -175,37 +176,56 @@ func (s *Service) PaystackInit(orderID int64, email, phone string, p *auth.Princ
         }
         wirePhone := paystackWirePhoneKe(phone)
 
-        // Supersede previous pending paystack attempts (fresh reference each time).
-        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new checkout' WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID)
-
-        // Find or create the PENDING payment row for the REMAINING balance —
-        // minting a full-total leg on a partially paid (split) order would
-        // overcharge the customer on the next checkout attempt.
-        var pay *models.Payment
-        for i := range order.Payments {
-                if order.Payments[i].Status == models.PaymentPending && order.Payments[i].Method == models.MethodPaystack {
-                        pay = &order.Payments[i]
-                }
+        // Supersede previous pending paystack attempts (fresh reference each time),
+        // re-read the remaining balance and create/find the pending leg ATOMICALLY:
+        // these used to be four autocommit statements, so two concurrent inits
+        // (double-click / slow popup + retry) could both see "no pending leg" and
+        // both mint a full-balance reference — a double STK charge.
+        tx, err := s.db.Begin()
+        if err != nil {
+                return nil, nil, err
         }
-        if pay == nil {
-                var paid int64
-                for _, pm := range order.Payments {
-                        if pm.Status == models.PaymentCompleted {
-                                paid += pm.AmountCents
-                        }
-                }
-                remaining := order.TotalCents - paid
+        defer tx.Rollback()
+        if _, err := tx.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new checkout' WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID); err != nil {
+                return nil, nil, err
+        }
+        var paid int64
+        if err := tx.QueryRow(s.db.Rebind(`SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE order_id = ? AND status = 'COMPLETED'`), orderID).Scan(&paid); err != nil {
+                return nil, nil, err
+        }
+        remaining := order.TotalCents - paid
+        var payID, payAmount int64
+        err = tx.QueryRow(s.db.Rebind(`SELECT id, amount_cents FROM payments WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID).Scan(&payID, &payAmount)
+        if err == sql.ErrNoRows {
                 if remaining <= 0 {
                         return nil, nil, ErrOrderAlreadyPaid
                 }
-                res, err := s.db.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, created_at)
-                        VALUES (?, 'paystack', 'popup', ?, 'PENDING', ?)`), orderID, remaining, nowStamp())
+                // Guarded insert: even under a future non-SQLite backend (READ
+                // COMMITTED), at most ONE full-balance leg can ever exist.
+                res, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, created_at)
+                        SELECT ?, 'paystack', 'popup', ?, 'PENDING', ? WHERE NOT EXISTS
+                                (SELECT 1 FROM payments WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING')`),
+                        orderID, remaining, nowStamp(), orderID)
                 if err != nil {
                         return nil, nil, err
                 }
-                id, _ := res.LastInsertId()
-                pay = &models.Payment{ID: id, AmountCents: remaining}
+                if n, _ := res.RowsAffected(); n != 1 {
+                        // Lost an interleave — the winner's leg is the pending one.
+                        err = tx.QueryRow(s.db.Rebind(`SELECT id, amount_cents FROM payments WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID).Scan(&payID, &payAmount)
+                        if err != nil {
+                                return nil, nil, err
+                        }
+                } else {
+                        payID, _ = res.LastInsertId()
+                        payAmount = remaining
+                }
+        } else if err != nil {
+                return nil, nil, err
         }
+        if err := tx.Commit(); err != nil {
+                return nil, nil, err
+        }
+        pay := &models.Payment{ID: payID, AmountCents: payAmount}
 
         reference := fmt.Sprintf("LP-%s-%s", order.Number, randToken(4))
         amount := pay.AmountCents
@@ -428,6 +448,7 @@ func (s *Service) HandlePaystackWebhook(raw []byte, signature string) error {
                                                 return cerr // transient — Paystack retries
                                         }
                                         log.Printf("[paystack] webhook recovered superseded reference %s onto order %s", ev.Data.Reference, orderNum)
+                                        s.settleSiblings(orderID, legID) // stop verifying stale legs now the order is paid
                                         return nil
                                 }
                         }

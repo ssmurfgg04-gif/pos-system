@@ -2195,6 +2195,47 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       .map((s) => ({ ...s, userName: (d.users.find((u) => u.id === s.userId)?.fullName) || '' })) as T
   }
 
+  // X/Z report (P6) — previously 404'd in demo mode, so the download page's
+  // headline feature showed "Report failed — not found" to every prospect.
+  if (m === 'GET' && p === '/shifts/report') {
+    const q = url.searchParams
+    const shiftId = Number(q.get('shift') || 0)
+    const shift = shiftId ? d.shifts.find((s) => s.id === shiftId) : d.shifts.find((s) => s.userId === user.id && !s.closedAt)
+    if (!shift) throw new ApiError(404, 'no shift to report on — open a session first')
+    const [from, to] = shift.closedAt ? [shift.openedAt, shift.closedAt] : [shift.openedAt, new Date().toISOString()]
+    const inShift = d.orders.filter((o) => o.createdAt >= from && o.createdAt <= to)
+    const paid = inShift.filter((o) => o.status === 'PAID')
+    const completedPays = inShift.flatMap((o) => o.payments).filter((p) => p.status === 'COMPLETED')
+    const by = (method: string) => completedPays.filter((p) => p.method === method).reduce((s, p) => s + p.amountCents, 0)
+    const cash = by('cash')
+    const open = !shift.closedAt
+    return {
+      shift,
+      open,
+      ordersCount: paid.length,
+      voidsCount: inShift.filter((o) => o.status === 'VOIDED').length,
+      grossCents: paid.reduce((s, o) => s + o.totalCents, 0),
+      cashCents: cash,
+      mpesaCents: by('mpesa'),
+      paystackCents: by('paystack'),
+      creditCents: by('credit'),
+      otherCents: by('account'),
+      expectedCashCents: open ? shift.openingFloatCents + cash : shift.expectedCents,
+      countedCents: shift.countedCents,
+      varianceCents: shift.varianceCents,
+    } as T
+  }
+
+  // Recheck (P6) — demo orders settle instantly, so a recheck always
+  // resolves to the current truth with a friendly message instead of 404.
+  if (m === 'POST' && /^\/orders\/\d+\/recheck$/.test(p)) {
+    const id = Number(p.split('/')[2])
+    const o = d.orders.find((x) => x.id === id)
+    if (!o) throw new ApiError(404, 'order not found')
+    const msg = o.status === 'PAID' ? 'Payment already confirmed.' : o.status === 'VOIDED' ? 'Order was voided.' : 'No provider payment found yet — the sale is still pending.'
+    return { order: orderDTO(o), message: msg } as T
+  }
+
   // design board
   if (m === 'GET' && p === '/design') {
     requirePerm(perms, 'design.view')

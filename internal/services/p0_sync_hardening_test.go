@@ -159,8 +159,10 @@ func p0Checkout(t *testing.T, f *p0Fixture, uuid string) *models.Order {
 }
 
 // TestP0DeadLetterRetryRecoversLedger — an out-of-order ledger event (its
-// customer has not synced yet) is quarantined, then recovers on a later
-// retry once the customer event lands. No money movement is ever dropped.
+// customer has not synced yet) must NEVER dead-letter or drop the money:
+// applyLedger creates the identity stub from the event's phone and applies
+// the movement immediately; the customer upsert event that follows fills in
+// name/details. Balance ends exactly where the origin put it, applied once.
 func TestP0DeadLetterRetryRecoversLedger(t *testing.T) {
         fake := newAgent3Cloud(t)
         agent3Link(t, fake.srv.URL)
@@ -175,15 +177,23 @@ func TestP0DeadLetterRetryRecoversLedger(t *testing.T) {
                 "amountCents": 1200, "pointsDelta": 0, "note": "tab charge", "createdAt": nowStamp(),
         })
         c1.push(s1)
-        if applied, err := c2.pull(s2); err != nil || applied != 0 {
+        // Applies immediately: an unknown customer is created as a stub —
+        // the old dead-letter-forever behavior silently hid tab charges
+        // whenever the customer row was still in flight.
+        if applied, err := c2.pull(s2); err != nil || applied != 1 {
                 t.Fatalf("out-of-order ledger pull: applied=%d err=%v", applied, err)
         }
         var dl int
         s2.db.QueryRow(`SELECT COUNT(*) FROM sync_dead_letter WHERE direction='apply'`).Scan(&dl)
-        if dl != 1 {
-                t.Fatalf("ledger event not quarantined (rows=%d)", dl)
+        if dl != 0 {
+                t.Fatalf("ledger event quarantined (rows=%d) — money must apply, not wait", dl)
         }
-        // The customer event lands on a later cycle.
+        var balance int64
+        s2.db.QueryRow(`SELECT balance_cents FROM customers WHERE phone='0700000009'`).Scan(&balance)
+        if balance != 1200 {
+                t.Fatalf("balance = %d, want 1200 (charge applied exactly once)", balance)
+        }
+        // The customer event lands on a later cycle and enriches the stub.
         s1.Emit("customer", "upsert", map[string]any{
                 "phone": "0700000009", "name": "Late Customer", "active": true, "updatedAt": nowStamp(),
         })
@@ -191,30 +201,19 @@ func TestP0DeadLetterRetryRecoversLedger(t *testing.T) {
         if applied, err := c2.pull(s2); err != nil || applied != 1 {
                 t.Fatalf("customer pull: applied=%d err=%v", applied, err)
         }
-        // The auto-retry inside the sync cycle (or the manual retry button)
-        // recovers the quarantined ledger row.
-        if recovered := s2.retryFailedApplies(); recovered != 1 {
-                t.Fatalf("recovered %d, want 1", recovered)
+        var name string
+        s2.db.QueryRow(`SELECT name FROM customers WHERE phone='0700000009'`).Scan(&name)
+        if name != "Late Customer" {
+                t.Fatalf("customer name after upsert = %q, want Late Customer", name)
         }
-        var balance int64
+        // The enrichment must NOT double-apply the earlier charge.
         s2.db.QueryRow(`SELECT balance_cents FROM customers WHERE phone='0700000009'`).Scan(&balance)
         if balance != 1200 {
-                t.Fatalf("balance = %d, want 1200 (ledger recovered exactly once)", balance)
+                t.Fatalf("balance after customer upsert = %d, want 1200", balance)
         }
         s2.db.QueryRow(`SELECT COUNT(*) FROM sync_dead_letter`).Scan(&dl)
         if dl != 0 {
-                t.Fatalf("dead letter after recovery = %d, want 0", dl)
-        }
-        // Retrying again moves nothing (already recovered + marked applied).
-        if recovered := s2.retryFailedApplies(); recovered != 0 {
-                t.Fatalf("second retry recovered %d, want 0", recovered)
-        }
-        if balance2 := func() int64 {
-                var b int64
-                s2.db.QueryRow(`SELECT balance_cents FROM customers WHERE phone='0700000009'`).Scan(&b)
-                return b
-        }(); balance2 != 1200 {
-                t.Fatalf("balance after double retry = %d, want 1200", balance2)
+                t.Fatalf("dead letter = %d, want 0", dl)
         }
 }
 

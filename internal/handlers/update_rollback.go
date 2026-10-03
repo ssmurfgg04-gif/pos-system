@@ -264,17 +264,25 @@ func RestorePending(dataDir string) string {
                 _ = os.Remove(restoreManifestPath(dataDir))
                 return ""
         }
+        failed := false
         for dst, src := range m.Files {
                 // Remove SQLite sidecars so the restored file is authoritative.
                 _ = os.Remove(dst + "-wal")
                 _ = os.Remove(dst + "-shm")
                 if err := copyFileExclusive(src, dst); err != nil {
                         log.Printf("restore: %s → %s failed (%v) — manifest kept for retry on next boot", src, dst, err)
-                        return m.Reason + " (partial — retry scheduled)"
+                        failed = true
+                        continue
                 }
         }
-        // Only a fully successful copy run consumes the manifest; any failure
-        // above returned early, so what remains is retried on the next boot.
+        // Only a fully successful copy run consumes the manifest; a partial
+        // one keeps it so the failed copies retry on the next boot. Every
+        // copyable file is restored THIS boot (map order must not decide
+        // which files a multi-store restore gets — re-copying an
+        // already-restored file is idempotent).
+        if failed {
+                return m.Reason + " (partial — retry scheduled)"
+        }
         _ = os.Remove(restoreManifestPath(dataDir))
         return m.Reason
 }

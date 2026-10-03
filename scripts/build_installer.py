@@ -83,6 +83,9 @@ SectionEnd
 
 
 def find_makensis():
+    env_hint = os.environ.get("MAKENSIS")
+    if env_hint and os.path.isfile(env_hint):
+        return env_hint
     found = shutil.which("makensis")
     if found:
         return found

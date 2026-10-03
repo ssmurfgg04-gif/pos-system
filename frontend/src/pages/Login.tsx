@@ -40,7 +40,11 @@ export function Login() {
         const r = await api.get<{ hasUsers: boolean }>('/api/v1/auth/has-users')
         if (alive) setMode(r.hasUsers ? 'login' : 'welcome')
       } catch {
-        /* the login attempt below will surface real errors */
+        // Probe failed (fresh till + flaky network at first boot). Falling
+        // back to the login form dead-ends: it has no "first time here?"
+        // escape, so the first owner could never create an account without
+        // a lucky refresh. The welcome choice covers both cases.
+        if (alive) setMode('welcome')
       }
     }).catch(() => undefined)
     return () => { alive = false }

@@ -17,7 +17,6 @@ export function ReceiptModal({ order, branding, open, onClose }: {
   if (!open) return null
   // Older orders (or a partial payload) may omit items/payments — the
   // receipt must render, never crash the POS after money has moved.
-  const pay = order.payments?.[order.payments.length - 1] ?? null
   const items = order.items ?? []
   const store = branding.store_name || 'Store'
 
@@ -80,6 +79,10 @@ export function ReceiptModal({ order, branding, open, onClose }: {
 
         <div className="space-y-0.5">
           <Row label="Subtotal" value={centsToAmount(order.subtotalCents)} />
+          {!!order.discountCents && (
+            <Row label={`Discount${order.discountLabel ? ` (${order.discountLabel})` : ''}`} value={`-${centsToAmount(order.discountCents)}`} />
+          )}
+          {!!order.pointsRedeemed && <Row label="Points redeemed" value={`${order.pointsRedeemed} pts`} />}
           <Row label={`VAT (${order.taxPercent || branding.tax_percent}%)`} value={centsToAmount(order.taxCents)} />
           <div className="flex justify-between font-bold text-[14px] border-t-2 border-line mt-1 pt-1">
             <span>TOTAL</span>
@@ -90,10 +93,18 @@ export function ReceiptModal({ order, branding, open, onClose }: {
         <div className="border-t-2 border-dashed border-line my-2.5" />
 
         <div className="space-y-0.5">
-          <Row label={pay?.method === 'cash' ? 'Paid (cash)' : pay?.method === 'account' ? 'Tab' : 'Paid (M-Pesa)'} value={pay ? centsToAmount(pay.amountCents) : '—'} />
-          {pay?.method === 'account' && <p className="text-center text-[11px] font-semibold text-ink-muted">On tab — balance on Customers → Ledger</p>}
-          {pay?.mpesaReceipt && <Row label="M-Pesa receipt" value={pay.mpesaReceipt} />}
-          {pay?.phone && <Row label="Phone" value={pay.phone} />}
+          {/* EVERY payment leg prints (split tender cash 300 + M-Pesa 700 must
+              reconcile against the TOTAL) with the method named correctly —
+              the old last-leg-only render showed "Paid (M-Pesa) 300.00" and
+              labelled a card charge as M-Pesa. */}
+          {(order.payments ?? []).filter((p) => p.status !== 'FAILED').map((p, i) => (
+            <div key={p.id ?? i}>
+              <Row label={paymentLabel(p)} value={centsToAmount(p.amountCents)} />
+              {p.method === 'account' && <p className="text-center text-[11px] font-semibold text-ink-muted">On tab — balance on Customers → Ledger</p>}
+              {p.mpesaReceipt && <Row label="M-Pesa receipt" value={p.mpesaReceipt} />}
+              {p.method === 'credit' && <p className="text-center text-[11px] font-semibold text-ink-muted">Paid from store credit</p>}
+            </div>
+          ))}
           {order.customerName && <Row label="Customer" value={order.customerName} />}
           <Row label="Served by" value={order.cashierName} />
           {order.status === 'VOIDED' && <p className="text-center font-bold mt-1">** VOIDED **</p>}
@@ -115,6 +126,19 @@ function settingFooter(_b: Branding): string {
   // carry it, so keep the generic line (receipts print the real footer
   // via the server renderer when a printer target is configured).
   return 'Goods remain the property of the store until fully paid.'
+}
+
+/** Human label per payment method — a Paystack CARD charge must never
+ *  print as "M-Pesa". */
+function paymentLabel(p: { method: string; status: string }): string {
+  switch (p.method) {
+    case 'cash': return 'Paid (cash)'
+    case 'account': return 'Tab'
+    case 'credit': return 'Store credit'
+    case 'paystack': return p.status === 'COMPLETED' ? 'Paid (card/mobile — Paystack)' : 'Card/mobile (Paystack)'
+    case 'mpesa': return p.status === 'COMPLETED' ? 'Paid (M-Pesa)' : 'M-Pesa (pending)'
+    default: return `Paid (${p.method})`
+  }
 }
 
 function Row({ label, value }: { label: string; value: string }) {

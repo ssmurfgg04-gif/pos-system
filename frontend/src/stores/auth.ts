@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { api, User } from '../lib/api'
+import { cartResetForUser } from './cart'
 
 interface AuthState {
   user: User | null
@@ -20,15 +21,18 @@ export const useAuth = create<AuthState>((set, get) => ({
       password,
     })
     localStorage.setItem('pos_token', res.token)
+    cartResetForUser(res.user.id) // a different staff member never inherits a basket
     set({ user: res.user, ready: true })
   },
   pinLogin: async (userId, pin) => {
     const res = await api.post<{ token: string; user: User }>('/api/v1/auth/pin', { userId, pin })
     localStorage.setItem('pos_token', res.token)
+    cartResetForUser(res.user.id)
     set({ user: res.user, ready: true })
   },
   logout: () => {
     localStorage.removeItem('pos_token')
+    cartResetForUser(null) // shift handoff starts a clean basket
     set({ user: null, ready: true })
   },
   refresh: async () => {

@@ -9,6 +9,7 @@ import (
         "github.com/gin-gonic/gin"
 
         "posapp/internal/models"
+        "posapp/internal/services"
 )
 
 // csvHeader is the canonical import/export column order.
@@ -180,6 +181,7 @@ func (h *H) ProductsImport(c *gin.Context) {
         _ = tx.QueryRow(`SELECT id FROM categories ORDER BY id LIMIT 1`).Scan(&catID) // fallback bucket
 
         created, updated := 0, 0
+        var touchedIDs []int64
         for _, r := range rows {
                 cid := catID
                 if id, ok := catIDs[strings.ToLower(r.category)]; ok && r.category != "" {
@@ -190,11 +192,14 @@ func (h *H) ProductsImport(c *gin.Context) {
                         if err := tx.QueryRow(`SELECT COUNT(*) FROM products WHERE sku = ?`, r.sku).Scan(&exists); err == nil && exists > 0 {
                                 if _, err := tx.Exec(h.db(c).Rebind(`
                                         UPDATE products SET barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
-                                                stock_qty = ?, track_stock = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
-                                        WHERE sku = ?`), r.barcode, r.name, cid, r.price, r.cost, r.stock, r.track, r.active, r.sku); err != nil {
+                                                stock_qty = ?, track_stock = ?, is_active = ?, updated_at = ?
+                                        WHERE sku = ?`), r.barcode, r.name, cid, r.price, r.cost, r.stock, r.track, r.active, services.NowStamp(), r.sku); err != nil {
                                         h.fail(c, 500, fmt.Sprintf("row sku %s: %v", r.sku, err))
                                         return
                                 }
+                                var pid int64
+                                tx.QueryRow(`SELECT id FROM products WHERE sku = ?`, r.sku).Scan(&pid)
+                                touchedIDs = append(touchedIDs, pid)
                                 updated++
                                 continue
                         }
@@ -203,11 +208,15 @@ func (h *H) ProductsImport(c *gin.Context) {
                 if sku == "" {
                         sku = uniqueSKUTx(tx, r.name)
                 }
-                if _, err := tx.Exec(h.db(c).Rebind(`
+                res, err := tx.Exec(h.db(c).Rebind(`
                         INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`), sku, r.barcode, r.name, cid, r.price, r.cost, r.stock, r.track, r.active); err != nil {
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`), sku, r.barcode, r.name, cid, r.price, r.cost, r.stock, r.track, r.active)
+                if err != nil {
                         h.fail(c, 500, fmt.Sprintf("row %s: %v", r.name, err))
                         return
+                }
+                if pid, err := res.LastInsertId(); err == nil {
+                        touchedIDs = append(touchedIDs, pid)
                 }
                 created++
         }
@@ -216,6 +225,14 @@ func (h *H) ProductsImport(c *gin.Context) {
                 return
         }
         h.svc(c).Audit(p.ID, p.Username, "PRODUCTS_IMPORTED", "product", "", fmt.Sprintf("created %d, updated %d", created, updated))
+        // The import IS a catalog change — every touched row follows the team
+        // (stock included: the CSV carries absolute counts). Skipping this
+        // made bulk price/stock updates silently fork across tills.
+        for _, pid := range touchedIDs {
+                if pid != 0 {
+                        h.svc(c).EmitProduct(pid, true)
+                }
+        }
         h.ok(c, gin.H{"created": created, "updated": updated})
 }
 

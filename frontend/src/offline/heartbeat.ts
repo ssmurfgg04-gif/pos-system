@@ -55,6 +55,7 @@ const FLUSH_BATCH = 10
 const MAX_FLUSH_ATTEMPTS = 8
 
 interface SyncResult {
+  rejected?: boolean
   clientUuid: string
   orderId: number
   error?: string
@@ -89,7 +90,13 @@ export async function flushQueue(): Promise<Order[]> {
           await removeFromQueue(r.clientUuid)
           continue
         }
-        if (isBusinessRejection(r.error)) {
+        // The server flags DEFINITIVE refusals with `rejected: true`
+        // (sentinel-matched — stock, credit limit, duplicate receipt…).
+        // For older servers that lack the flag, fall back to exact
+        // sentinel texts. An unknown/5xx error is NEVER deletion-worthy:
+        // the old contains() matching ate real sales whenever an
+        // unfamiliar message merely contained a word like "invalid".
+        if (r.rejected === true || isBusinessRejection(r.error)) {
           toast.error('Offline sale rejected', r.error)
           await removeFromQueue(r.clientUuid)
         } else {
@@ -117,22 +124,24 @@ export async function flushQueue(): Promise<Order[]> {
   return created
 }
 
-// Business rejections are definitive (the server understood the sale and
-// refused it). Everything else — 5xx text, HTML error pages, empty strings
-// — is treated as transient.
+// Legacy fallback for servers older than the `rejected` flag: match the
+// EXACT sentinel texts the backend can produce (services/orders.go), never
+// substrings like "invalid" — proxy pages and new error strings must stay
+// transient so a sale is retried instead of silently deleted.
+const BUSINESS_REJECTION_TEXTS = [
+  'insufficient stock',
+  'invalid state transition',
+  'order already paid',
+  'receipt code already recorded',
+  'payment exceeds balance',
+  'tab would exceed customer credit limit',
+  'not enough store credit',
+  'not enough loyalty points',
+  'not found',
+]
 function isBusinessRejection(err: string): boolean {
   const e = (err || '').toLowerCase()
-  return (
-    e.includes('insufficient stock') ||
-    e.includes('not found') ||
-    e.includes('invalid') ||
-    e.includes('duplicate') ||
-    e.includes('already') ||
-    e.includes('closed') ||
-    e.includes('forbidden') ||
-    e.includes('permission') ||
-    e.includes('required')
-  )
+  return BUSINESS_REJECTION_TEXTS.some((t) => e.includes(t))
 }
 
 let started = false

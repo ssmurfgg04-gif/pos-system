@@ -395,6 +395,7 @@ func (h *H) UploadProductImage(c *gin.Context) {
         h.db(c).QueryRow(`SELECT updated_at FROM products WHERE id = ?`, id).Scan(&updatedAt)
         h.svc(c).Audit(p.ID, p.Username, "PRODUCT_IMAGE_SET", "product", itoa64(id), fmt.Sprintf("%d bytes", len(data)))
         h.svc(c).EmitProduct(id, false)
+        h.svc(c).EmitProductImage(id) // compact synced copy — the photo follows the team
         h.ok(c, gin.H{"imageUrl": fmt.Sprintf("/api/v1/products/%d/image?v=%d", id, time.Now().Unix())})
 }
 
@@ -412,6 +413,7 @@ func (h *H) DeleteProductImage(c *gin.Context) {
         }
         h.svc(c).Audit(p.ID, p.Username, "PRODUCT_IMAGE_CLEARED", "product", itoa64(id), "")
         h.svc(c).EmitProduct(id, false)
+        h.svc(c).EmitProductImage(id) // empty-image event clears the photo fleet-wide
         h.ok(c, gin.H{"deleted": true})
 }
 

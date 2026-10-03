@@ -986,6 +986,26 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number TEXT NOT NULL DEFAULT
 CREATE INDEX IF NOT EXISTS idx_orders_invoice ON orders(invoice_number);
 `,
         },
+        {
+                // v16 — cross-machine photo sync bookkeeping. image_synced_at
+                // marks the rows whose CURRENT photo bytes are already in the
+                // sync outbox: the backfill only picks up rows where it is
+                // still '', and applying a REMOTE image stamps it so received
+                // photos are never echoed back (A → B → A ping-pong).
+                // customer_ledger.synced_at marks ledger rows already pushed
+                // as sync events (checkout charges/redeems + completion earns
+                // emit exactly once — a second emission would double-apply
+                // money on every receiving till).
+                Version: 16,
+                SQLite: `
+ALTER TABLE products ADD COLUMN image_synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE customer_ledger ADD COLUMN synced_at TEXT NOT NULL DEFAULT '';
+`,
+                Pg: `
+ALTER TABLE products ADD COLUMN IF NOT EXISTS image_synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE customer_ledger ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+`,
+        },
 }
 
 // backfillRolePermsV9 unions the v8 permission additions into seeded roles:

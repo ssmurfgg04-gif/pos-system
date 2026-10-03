@@ -41,6 +41,7 @@ export function CheckoutRail({
   canHold,
   heldCount,
   onOpenHeld,
+  onBusyChange,
 }: {
   products: Product[] | null
   payConfig: PaymentConfig | null
@@ -49,6 +50,11 @@ export function CheckoutRail({
   canHold?: boolean
   heldCount?: number
   onOpenHeld?: () => void
+  /** Fires whenever a payment is in flight (STK/inline) or a receipt/park
+   *  modal is open. The mobile sheet host uses this to REFUSE closing the
+   *  rail mid-payment — dismissing the poll timer used to let a second
+   *  charge start for the same basket. */
+  onBusyChange?: (busy: boolean) => void
 }) {
   const cart = useCart()
   const branding = useBranding((s) => s.branding)
@@ -88,6 +94,13 @@ export function CheckoutRail({
   const [payError, setPayError] = useState('')
   const [receiptOpen, setReceiptOpen] = useState(false)
   const [parkOpen, setParkOpen] = useState(false)
+  // F2 guard: the mobile sheet must not unmount a rail with a payment in
+  // flight (poll timers die, cart stays, second charge becomes possible).
+  const paymentBusy = mode !== 'idle' || receiptOpen || parkOpen
+  useEffect(() => {
+    onBusyChange?.(paymentBusy)
+  }, [paymentBusy, onBusyChange])
+
   // Paystack fires onClose after the success callback on some flows —
   // once settled, late cancel events must be ignored.
   const settledRef = useRef(false)
@@ -598,13 +611,20 @@ export function CheckoutRail({
                         <Minus size={12} strokeWidth={2.75} aria-hidden />
                       </button>
                       <span className="w-7 text-center font-bold tabular text-ink text-[12.5px]">{l.qty}</span>
-                      <button
-                        onClick={() => cart.setQty(l.productId, Math.min(999, l.qty + 1))}
-                        aria-label="Increase quantity"
-                        className="w-7 h-full bg-surface-muted font-bold text-ink hover:bg-line flex items-center justify-center"
-                      >
-                        <Plus size={12} strokeWidth={2.75} aria-hidden />
-                      </button>
+                      {(() => {
+                        const atCap = l.trackStock && l.qty >= l.stockQty
+                        return (
+                          <button
+                            onClick={() => cart.setQty(l.productId, Math.min(999, l.qty + 1))}
+                            disabled={atCap}
+                            aria-label={atCap ? 'No more stock' : 'Increase quantity'}
+                            title={atCap ? `Only ${l.stockQty} in stock` : undefined}
+                            className={`w-7 h-full bg-surface-muted font-bold flex items-center justify-center ${atCap ? 'text-ink-subtle/60 cursor-not-allowed' : 'text-ink hover:bg-line'}`}
+                          >
+                            <Plus size={12} strokeWidth={2.75} aria-hidden />
+                          </button>
+                        )
+                      })()}
                     </div>
                     <div className="text-right">
                       <p className="font-bold text-[13px] text-ink tabular leading-none">{formatMoneyCompact(l.qty * l.unitPriceCents)}</p>

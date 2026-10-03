@@ -2,6 +2,7 @@ package services
 
 import (
         "context"
+        "errors"
         "fmt"
         "strings"
 
@@ -230,6 +231,7 @@ func (s *Service) Sync(ctx context.Context, p *auth.Principal, reqs []models.Che
                 order, err := s.Checkout(ctx, p, r)
                 if err != nil {
                         res.Error = err.Error()
+                        res.Rejected = isSyncRejection(err)
                 } else if order != nil {
                         res.OrderID = order.ID
                         res.OrderNumber = order.Number
@@ -238,4 +240,26 @@ func (s *Service) Sync(ctx context.Context, p *auth.Principal, reqs []models.Che
                 results = append(results, res)
         }
         return results
+}
+
+// isSyncRejection classifies offline-sync failures: true = the server
+// understood the sale and definitively refused it (the queue may drop it
+// after showing staff); false = transient/unknown — retry, never delete.
+// Sentinel matching (errors.Is) can't be fooled by a message that merely
+// CONTAINS a keyword — the string-sniffing it replaces deleted real sales
+// whenever an unfamiliar error contained "invalid" or "not found".
+func isSyncRejection(err error) bool {
+        switch {
+        case errors.Is(err, ErrInsufficientStock),
+                errors.Is(err, ErrInvalidState),
+                errors.Is(err, ErrOrderAlreadyPaid),
+                errors.Is(err, ErrDuplicateReceipt),
+                errors.Is(err, ErrOverpayment),
+                errors.Is(err, ErrCreditLimit),
+                errors.Is(err, ErrNoStoreCredit),
+                errors.Is(err, ErrLoyaltyPoints),
+                errors.Is(err, ErrNotFound):
+                return true
+        }
+        return false
 }

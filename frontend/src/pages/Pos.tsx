@@ -25,7 +25,7 @@ import { CheckoutRail } from '../components/CheckoutRail'
 import { HeldSalesDrawer } from '../components/HeldSalesDrawer'
 import { ReceiptModal } from '../components/Receipt'
 import { toast } from '../stores/toasts'
-import { onWsEvent } from '../ws/client'
+import { onWsEvent, onWsReconnect } from '../ws/client'
 import type { WsEvent } from '../ws/client'
 import { Order } from '../lib/api'
 import {
@@ -49,6 +49,10 @@ export function Pos() {
   const [receiptFor, setReceiptFor] = useState<Order | null>(null)
   const [payConfig, setPayConfig] = useState<import('../lib/api').PaymentConfig | null>(null)
   const [heldOpen, setHeldOpen] = useState(false)
+  // A payment in flight (or an open receipt/park modal inside the rail) must
+  // keep the mobile sheet mounted: closing it kills the poll timers while
+  // the cart survives — the cashier would re-charge the same basket.
+  const [railBusy, setRailBusy] = useState(false)
   const [heldCount, setHeldCount] = useState(0)
   const searchRef = useRef<HTMLInputElement>(null)
 
@@ -80,6 +84,11 @@ export function Pos() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // The socket reconnecting means we were cut off — other tills may have
+  // changed prices/stock during the gap. Refetch once (cheap; this page
+  // previously sold at stale prices after every reconnect).
+  useEffect(() => onWsReconnect(load), [])
 
   // Tender capabilities (Paystack switch, credit & loyalty programs).
   useEffect(() => {
@@ -192,6 +201,27 @@ export function Pos() {
   // customer + note. The drawer deletes the hold only after this succeeds.
   const resumeHeld = async (sale: import('../lib/api').HeldSale) => {
     if (!products) throw new Error('Products are still loading — try again in a second')
+    // A hold IS a sale: resuming replaces whatever is in the cart instead of
+    // merging (two merged baskets under one customer is a money bug, not a
+    // convenience). The replaced basket is auto-held so nothing is lost.
+    if (useCart.getState().lines.length > 0) {
+      const replaced = useCart.getState().lines.map((l) => ({ productId: l.productId, qty: l.qty }))
+      const name = useCart.getState().customerName || 'Replaced basket'
+      try {
+        await api.post('/api/v1/held-sales', {
+          refName: name,
+          cart: {
+            items: replaced,
+            paymentMethod: 'cash' as const,
+          },
+        })
+        toast.info('Previous cart held', 'It moved to Held sales — resume or discard it there')
+      } catch {
+        toast.error('Cart not empty', 'Clear or hold the current cart before resuming a held sale')
+        return
+      }
+    }
+    useCart.getState().clear()
     let missing = 0
     for (const it of sale.items) {
       const p = products.find((x) => x.id === it.productId)
@@ -235,6 +265,7 @@ export function Pos() {
         canHold={canHold}
         heldCount={heldCount}
         onOpenHeld={() => setHeldOpen(true)}
+        onBusyChange={setRailBusy}
       />
     </ErrorBoundary>
   )
@@ -349,7 +380,13 @@ export function Pos() {
       {/* Mobile checkout sheet — the same rail in a modal */}
       <Modal
         open={sheetOpen}
-        onClose={() => setSheetOpen(false)}
+        onClose={() => {
+          if (railBusy) {
+            toast.info('Payment in progress', 'Wait for the payment to finish or cancel it first')
+            return
+          }
+          setSheetOpen(false)
+        }}
         title={`Cart — ${formatMoney(totals.total)}`}
         size="md"
       >
