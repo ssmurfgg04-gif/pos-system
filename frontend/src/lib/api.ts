@@ -128,8 +128,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (!res.ok) {
     // Expired/invalidated session (12h JWT, password change, deactivation):
     // clear the dead token once and return to login instead of leaving the
-    // user staring at scattered failures.
-    if (res.status === 401 && token() && !path.startsWith('/auth/')) {
+    // user staring at scattered failures. Auth endpoints are exempt — a
+    // wrong password on the login FORM must not wipe a still-valid session
+    // token (the guard previously checked '/auth/', which never matches the
+    // '/api/v1/auth/…' paths and so was dead code).
+    if (res.status === 401 && token() && !path.startsWith('/api/v1/auth/')) {
       localStorage.removeItem('pos_token')
       if (!location.pathname.startsWith('/login') && !location.pathname.startsWith('/pin')) {
         location.href = '/login'
@@ -264,6 +267,13 @@ export interface Order {
   subtotalCents: number
   taxCents: number
   totalCents: number
+  /** Discount applied at checkout (cents off the subtotal, before VAT)
+   *  and its label — receipt + order detail render them so the math adds
+   *  up for the customer. */
+  discountCents?: number
+  discountLabel?: string
+  /** Loyalty points spent on this sale (refunded on void). */
+  pointsRedeemed?: number
   taxPercent: number
   taxIncluded: boolean
   cashierId: number

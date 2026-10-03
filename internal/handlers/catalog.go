@@ -9,6 +9,7 @@ import (
         "github.com/gin-gonic/gin"
 
         "posapp/internal/models"
+        "posapp/internal/services"
 )
 
 // ---- Products ----
@@ -225,8 +226,8 @@ func (h *H) UpdateProduct(c *gin.Context) {
         }
         res, err := h.db(c).Exec(h.db(c).Rebind(`
                 UPDATE products SET sku = ?, barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
-                        stock_qty = ?, track_stock = ?, is_active = ?, is_gift_card = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?`), sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift, id)
+                        stock_qty = ?, track_stock = ?, is_active = ?, is_gift_card = ?, updated_at = ?
+                WHERE id = ?`), sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift, services.NowStamp(), id)
         if err != nil {
                 h.fail(c, 500, err.Error())
                 return
@@ -259,7 +260,7 @@ func (h *H) AdjustStock(c *gin.Context) {
                 return
         }
         res, err := h.db(c).Exec(h.db(c).Rebind(
-                `UPDATE products SET stock_qty = MAX(0, stock_qty + ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`),
+                `UPDATE products SET stock_qty = MAX(0, stock_qty + ?) WHERE id = ?`),
                 body.Delta, id)
         if err != nil || n(res) != 1 {
                 h.fail(c, 404, "product not found")
@@ -279,7 +280,7 @@ func (h *H) DeactivateProduct(c *gin.Context) {
         if !ok {
                 return
         }
-        res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE products SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), id)
+        res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE products SET is_active = 0, updated_at = ? WHERE id = ?`), services.NowStamp(), id)
         if err != nil || n(res) != 1 {
                 h.fail(c, 404, "product not found")
                 return

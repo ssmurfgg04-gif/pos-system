@@ -88,6 +88,12 @@ type syncClient struct {
 // that finds its team in the sync_bootstrap row is linked — no settings
 // screen, no join codes. Explicit manual configuration still wins.
 func (s *Service) syncConfig() (*syncClient, bool) {
+        // An owner's explicit OFF must win over everything: the zero-config
+        // bootstrap used to fall through and keep syncing (with the Team
+        // panel claiming sync was disabled) — a silent data leak.
+        if s.settings.Get("sync_disabled") == "1" {
+                return nil, false
+        }
         if !s.settings.GetBool("sync_enabled", false) {
                 if s.ensureCloudBootstrap() == nil {
                         return nil, false
@@ -936,8 +942,13 @@ func (s *Service) TeamSyncConfigure(req models.TeamSyncConfigRequest) error {
         }
         if !*req.Enabled {
                 _ = s.settings.Set("sync_enabled", "false")
+                // Distinct marker so the zero-config bootstrap cannot silently
+                // re-enable itself (sync_enabled doubles as "not configured yet"
+                // on fresh tills — it can't carry the explicit-OFF meaning).
+                _ = s.settings.Set("sync_disabled", "1")
                 return nil
         }
+        _ = s.settings.Set("sync_disabled", "")
         if s.ensureCloudBootstrap() != nil {
                 _ = s.settings.Set("sync_enabled", "true")
                 return nil
@@ -998,6 +1009,9 @@ func (s *Service) TeamSyncLoop(ctx context.Context, version string) {
                         if _, _, err := s.TeamSyncNow(version); err != nil {
                                 // logged in syncError; keep ticking
                         }
+                        // Photos uploaded before image-sync shipped (or while a
+                        // backfill is mid-flight) drain at a rate-limited pace.
+                        s.backfillProductImages()
                         ticks++
                         if ticks%30 == 0 { // ~every 10 minutes
                                 s.pruneSyncTables()
@@ -1043,6 +1057,9 @@ func (s *Service) applyEvent(entity, op string, payload json.RawMessage) error {
                 }
                 return s.applyCategory(payload)
         case "product":
+                if op == "image" {
+                        return s.applyProductImage(payload)
+                }
                 return s.applyProduct(payload)
         case "stock":
                 return s.applyStockDelta(payload)
@@ -1088,6 +1105,7 @@ var configSyncWhitelist = map[string]bool{
         "credit_enabled": true, "low_stock_threshold": true,
         "paystack_enabled": true, "paystack_public_key": true,
         "paystack_currency": true, "paystack_callback_url": true,
+        brandLogoDataKey: true, // synced logo — applyBrandLogoData materialises the file
 }
 
 // EmitConfig queues a config delta (called from the settings API with the
@@ -1129,6 +1147,9 @@ func (s *Service) applyConfig(payload json.RawMessage) error {
                 }
                 if err := s.settings.Set(k, v); err != nil {
                         return err
+                }
+                if k == brandLogoDataKey {
+                        s.applyBrandLogoData(v) // write file + flag so /settings/logo serves it
                 }
         }
         s.broadcast(EventSettingsUpdate, s.settings.Branding())
@@ -1237,6 +1258,7 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
                 StockSet     bool   `json:"stockSet"`
                 TrackStock   bool   `json:"trackStock"`
                 Active       bool   `json:"active"`
+                IsGiftCard   bool   `json:"isGiftCard"`
                 UpdatedAt    string `json:"updatedAt"`
         }
         if err := json.Unmarshal(payload, &pr); err != nil {
@@ -1273,9 +1295,9 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
                 }
                 if _, err := s.db.Exec(s.db.Rebind(`
                         UPDATE products SET barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
-                                track_stock = ?, is_active = ?, updated_at = ?
+                                track_stock = ?, is_active = ?, is_gift_card = ?, updated_at = ?
                         WHERE id = ?`),
-                        pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, btoi(pr.TrackStock), btoi(pr.Active), pr.UpdatedAt, localID); err != nil {
+                        pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.UpdatedAt, localID); err != nil {
                         return err
                 }
                 if pr.StockSet {
@@ -1291,9 +1313,9 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
                 sku = "SKU-SYNC-" + randToken(4)
         }
         _, err = s.db.Exec(s.db.Rebind(`
-                INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-                sku, pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, pr.StockQty, btoi(pr.TrackStock), btoi(pr.Active), pr.UpdatedAt)
+                INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                sku, pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, pr.StockQty, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.UpdatedAt)
         return err
 }
 
@@ -1308,16 +1330,31 @@ func (s *Service) applyStockDelta(payload json.RawMessage) error {
         if d.SKU == "" || d.Delta == 0 {
                 return nil
         }
-        _, err := s.db.Exec(s.db.Rebind(`
-                UPDATE products SET stock_qty = MAX(0, stock_qty + ?), updated_at = ? WHERE sku = ?`),
-                d.Delta, nowStamp(), d.SKU)
-        return err
+        // Zero rows MUST be an error, not a silent success: a delta that
+        // matches nothing (the SKU was renamed on another till while this one
+        // was offline) has to land in dead-letter and retry until the rename
+        // arrives — consuming it here would silently lose the movement.
+        // updated_at is deliberately NOT stamped: the LWW clock belongs to
+        // catalog edits only (an apply-time stamp made every remote sale
+        // beat later local price edits on this device).
+        res, err := s.db.Exec(s.db.Rebind(`
+                UPDATE products SET stock_qty = MAX(0, stock_qty + ?) WHERE sku = ?`),
+                d.Delta, d.SKU)
+        if err != nil {
+                return err
+        }
+        if n, _ := res.RowsAffected(); n == 0 {
+                return fmt.Errorf("stock delta for unknown product %q (catalog not synced yet?)", d.SKU)
+        }
+        return nil
 }
 
 func (s *Service) applyCustomer(payload json.RawMessage) error {
         var cu struct {
                 Phone       string `json:"phone"`
                 Name        string `json:"name"`
+                Email       string `json:"email"`
+                Notes       string `json:"notes"`
                 CreditLimit int64  `json:"creditLimitCents"`
                 Active      bool   `json:"active"`
                 UpdatedAt   string `json:"updatedAt"`
@@ -1341,16 +1378,16 @@ func (s *Service) applyCustomer(payload json.RawMessage) error {
                         return nil // stale
                 }
                 _, err = s.db.Exec(s.db.Rebind(`
-                        UPDATE customers SET name = ?, credit_limit_cents = ?, is_active = ?, updated_at = ? WHERE id = ?`),
-                        cu.Name, cu.CreditLimit, btoi(cu.Active), cu.UpdatedAt, id)
+                        UPDATE customers SET name = ?, email = ?, notes = ?, credit_limit_cents = ?, is_active = ?, updated_at = ? WHERE id = ?`),
+                        cu.Name, cu.Email, cu.Notes, cu.CreditLimit, btoi(cu.Active), cu.UpdatedAt, id)
                 return err
         }
         if err != sql.ErrNoRows {
                 return err
         }
         _, err = s.db.Exec(s.db.Rebind(`
-                INSERT INTO customers (name, phone, credit_limit_cents, is_active, updated_at) VALUES (?, ?, ?, ?, ?)`),
-                cu.Name, cu.Phone, cu.CreditLimit, btoi(cu.Active), cu.UpdatedAt)
+                INSERT INTO customers (name, phone, email, notes, credit_limit_cents, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`),
+                cu.Name, cu.Phone, cu.Email, cu.Notes, cu.CreditLimit, btoi(cu.Active), cu.UpdatedAt)
         return err
 }
 
@@ -1376,8 +1413,23 @@ func (s *Service) applyLedger(payload json.RawMessage) error {
         } else {
                 return fmt.Errorf("ledger event has no customer key")
         }
-        if err != nil {
-                return fmt.Errorf("ledger customer unknown: %w", err)
+        if err == sql.ErrNoRows {
+                // Customer row hasn't landed yet (or was captured on a device whose
+                // customer event is still behind this one). Create the identity now —
+                // an unknown customer must NOT dead-letter the money movement; the
+                // customer upsert event arrives behind it and fills in the rest.
+                name := le.Name
+                if name == "" {
+                        name = "Customer " + le.Phone
+                }
+                ins, ierr := s.db.Exec(s.db.Rebind(`INSERT INTO customers (name, phone, balance_cents, loyalty_points, updated_at) VALUES (?, ?, 0, 0, ?)`),
+                        name, le.Phone, nowStamp())
+                if ierr != nil {
+                        return ierr
+                }
+                custID, _ = ins.LastInsertId()
+        } else if err != nil {
+                return err
         }
         _, err = s.db.Exec(s.db.Rebind(`
                 INSERT INTO customer_ledger (customer_id, order_id, kind, amount_cents, points_delta, note, created_by, created_at)
@@ -1412,6 +1464,9 @@ type orderEvent struct {
         CashierName    string  `json:"cashierName"`
         CustomerName   string  `json:"customerName"`
         CustomerPhone  string  `json:"customerPhone"`
+        Note           string  `json:"note"`
+        BuyerPin       string  `json:"buyerPin"`
+        InvoiceNumber  string  `json:"invoiceNumber"`
         CreatedAt      string  `json:"createdAt"`
         PaidAt         string  `json:"paidAt"`
         Items          []struct {
@@ -1502,10 +1557,10 @@ func (s *Service) applyOrder(payload json.RawMessage) error {
         cashierID := s.resolveLocalCashierID(tx, oe.CashierName)
         res, err := tx.Exec(s.db.Rebind(`
                 INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent, tax_included,
-                        discount_cents, discount_label, points_redeemed, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)`),
+                        discount_cents, discount_label, points_redeemed, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id, buyer_pin, invoice_number)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
                 number, status, oe.SubtotalCents, oe.TaxCents, oe.TotalCents, oe.TaxPercent, taxInc,
-                oe.DiscountCents, oe.DiscountLabel, oe.PointsRedeemed, cashierID, oe.CustomerName, oe.ClientUUID, oe.CreatedAt, paidAt, custID)
+                oe.DiscountCents, oe.DiscountLabel, oe.PointsRedeemed, cashierID, oe.CustomerName, oe.Note, oe.ClientUUID, oe.CreatedAt, paidAt, custID, oe.BuyerPin, oe.InvoiceNumber)
         if err != nil {
                 return err
         }
@@ -1618,21 +1673,33 @@ func (s *Service) applyVoid(payload json.RawMessage) error {
         if err != nil {
                 return err
         }
-        if status == models.OrderPaid {
-                for _, it := range items {
-                        var track int
-                        tx.QueryRow(`SELECT COALESCE(track_stock,1) FROM products WHERE id = ?`, it.ProductID).Scan(&track)
-                        if track != 1 {
-                                continue
-                        }
-                        if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty + ? WHERE id = ?`), it.Qty, it.ProductID); err != nil {
-                                return err
-                        }
+        // Restore stock for EVERY non-voided status, PENDING included: this
+        // device (a receiver) applied the checkout's per-line stock deltas
+        // regardless of when the money landed — the ORIGIN, which deducts
+        // async orders only at completion, keeps its own PAID-only restore.
+        // Restoring only PAID here would strand the deltas of a voided
+        // pending tab/M-Pesa order (stock vanishing fleet-wide).
+        for _, it := range items {
+                var track int
+                tx.QueryRow(`SELECT COALESCE(track_stock,1) FROM products WHERE id = ?`, it.ProductID).Scan(&track)
+                if track != 1 {
+                        continue
+                }
+                if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty + ? WHERE id = ?`), it.Qty, it.ProductID); err != nil {
+                        return err
                 }
         }
         if _, err := tx.Exec(`UPDATE payments SET status = 'VOIDED', result_desc = ? WHERE order_id = ? AND status IN ('PENDING','COMPLETED')`,
                 "synced void: "+truncStr(v.Reason, 160), orderID); err != nil {
                 return err
+        }
+        // Gift cards minted by this sale die with it (same rule as the local
+        // Void — an ACTIVE code behind a vanished sale is free money).
+        if status == models.OrderPaid {
+                if _, err := tx.Exec(`UPDATE gift_cards SET status = 'VOID', remaining_cents = 0, redeemed_at = ? WHERE order_id = ? AND status = 'ACTIVE'`,
+                        nowStamp(), orderID); err != nil {
+                        return err
+                }
         }
         // Reverse tab charges + refund points/credit (mirrors local Void).
         var custID, tabTotal int64
@@ -1655,8 +1722,13 @@ func (s *Service) applyVoid(payload json.RawMessage) error {
                                 return err
                         }
                 }
+                // Refund the store credit this sale spent. The flip above set
+                // every PENDING/COMPLETED leg to VOIDED but left amount_cents
+                // intact — sum the VOIDED credit legs (the old PENDING/COMPLETED
+                // filter always read 0 after the flip, silently confiscating
+                // the customer's prepaid credit on every synced void).
                 var creditUsed int64
-                tx.QueryRow(`SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE order_id = ? AND method = 'credit' AND status IN ('PENDING','COMPLETED')`, orderID).Scan(&creditUsed)
+                tx.QueryRow(`SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE order_id = ? AND method = 'credit' AND status = 'VOIDED'`, orderID).Scan(&creditUsed)
                 if creditUsed > 0 {
                         if err := recordLedgerTx(tx, s.db.Rebind, custID, orderID, models.LedgerCreditTopup, creditUsed, 0, "store credit refund (synced void)", 0); err != nil {
                                 return err
@@ -1725,7 +1797,9 @@ func (s *Service) EmitOrder(orderID int64) {
                 TaxCents: order.TaxCents, TotalCents: order.TotalCents,
                 TaxPercent: order.TaxPercent, TaxIncluded: order.TaxIncluded,
                 CashierName: order.CashierName, CustomerName: order.CustomerName,
-                CustomerPhone: phone, CreatedAt: order.CreatedAt, PaidAt: order.PaidAt,
+                CustomerPhone: phone, Note: order.Note, BuyerPin: order.BuyerPIN,
+                InvoiceNumber: order.InvoiceNumber,
+                CreatedAt: order.CreatedAt, PaidAt: order.PaidAt,
                 Items: []struct {
                         SKU       string `json:"sku"`
                         Name      string `json:"name"`
@@ -1791,12 +1865,13 @@ func (s *Service) EmitProduct(productID int64, stockSet bool) {
                 Stock   int
                 Track   int
                 Active  int
+                Gift    int
         }
         err := s.db.QueryRow(s.db.Rebind(`
                 SELECT COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, COALESCE(c.slug,''),
-                        p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1)
+                        p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), COALESCE(p.is_gift_card,0)
                 FROM products p LEFT JOIN categories c ON c.id = p.category_id WHERE p.id = ?`), productID).
-                Scan(&pr.SKU, &pr.Barcode, &pr.Name, &pr.Slug, &pr.Price, &pr.Cost, &pr.Stock, &pr.Track, &pr.Active)
+                Scan(&pr.SKU, &pr.Barcode, &pr.Name, &pr.Slug, &pr.Price, &pr.Cost, &pr.Stock, &pr.Track, &pr.Active, &pr.Gift)
         if err != nil {
                 return
         }
@@ -1804,7 +1879,7 @@ func (s *Service) EmitProduct(productID int64, stockSet bool) {
                 "sku": pr.SKU, "barcode": pr.Barcode, "name": pr.Name, "categorySlug": pr.Slug,
                 "priceCents": pr.Price, "costCents": pr.Cost, "stockQty": pr.Stock,
                 "stockSet": stockSet, "trackStock": pr.Track == 1, "active": pr.Active == 1,
-                "updatedAt": nowStamp(),
+                "isGiftCard": pr.Gift == 1, "updatedAt": nowStamp(),
         })
 }
 
@@ -1819,17 +1894,52 @@ func (s *Service) EmitStockDelta(sku string, delta int) {
 
 // EmitCustomer queues the identity row (balances ride on ledger events).
 func (s *Service) EmitCustomer(customerID int64) {
-        var name, phone string
+        var name, phone, email, notes string
         var limit int64
         var active int
-        err := s.db.QueryRow(s.db.Rebind(`SELECT name, COALESCE(phone,''), credit_limit_cents, COALESCE(is_active,1) FROM customers WHERE id = ?`), customerID).
-                Scan(&name, &phone, &limit, &active)
+        err := s.db.QueryRow(s.db.Rebind(`SELECT name, COALESCE(phone,''), COALESCE(email,''), COALESCE(notes,''), credit_limit_cents, COALESCE(is_active,1) FROM customers WHERE id = ?`), customerID).
+                Scan(&name, &phone, &email, &notes, &limit, &active)
         if err != nil {
                 return
         }
         s.Emit("customer", "upsert", map[string]any{
-                "name": name, "phone": phone, "creditLimitCents": limit, "active": active == 1, "updatedAt": nowStamp(),
+                "name": name, "phone": phone, "email": email, "notes": notes,
+                "creditLimitCents": limit, "active": active == 1, "updatedAt": nowStamp(),
         })
+}
+
+// emitLedgerForOrder pushes every not-yet-synced ledger movement recorded
+// for an order (checkout tab charges, credit/loyalty redemptions, the
+// completion earn). customer_ledger.synced_at makes each row emit exactly
+// once — a duplicate would double-apply money on every receiving till.
+// Void reversals are deliberately NOT emitted: applyVoid recomputes them
+// on the receiver (emitting them too would double-reverse).
+func (s *Service) emitLedgerForOrder(orderID int64) {
+        rows, err := s.db.Query(s.db.Rebind(`SELECT id, customer_id, kind, amount_cents, points_delta, COALESCE(note,'')
+                FROM customer_ledger WHERE order_id = ? AND COALESCE(synced_at,'') = ''`), orderID)
+        if err != nil {
+                return
+        }
+        type lr struct {
+                custID           int64
+                kind, note       string
+                amount, points   int64
+        }
+        var pending []lr
+        var ids []int64
+        for rows.Next() {
+                var r lr
+                var id int64
+                if rows.Scan(&id, &r.custID, &r.kind, &r.amount, &r.points, &r.note) == nil {
+                        pending = append(pending, r)
+                        ids = append(ids, id)
+                }
+        }
+        rows.Close()
+        for i, r := range pending {
+                s.EmitLedger(r.custID, r.kind, r.amount, r.points, r.note)
+                s.db.Exec(s.db.Rebind(`UPDATE customer_ledger SET synced_at = ? WHERE id = ?`), nowStamp(), ids[i])
+        }
 }
 
 // EmitLedger queues a balance-moving ledger row.

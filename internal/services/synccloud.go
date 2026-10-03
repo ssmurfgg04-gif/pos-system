@@ -10,44 +10,44 @@ package services
 // No join codes. No keys to ship or type. Revocation is a SQL UPDATE.
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"flag"
-	"fmt"
-	"io"
-	"net/http"
-	"net/url"
-	"strings"
-	"time"
+        "bytes"
+        "crypto/sha256"
+        "encoding/hex"
+        "encoding/json"
+        "flag"
+        "fmt"
+        "io"
+        "net/http"
+        "net/url"
+        "strings"
+        "time"
 
-	"posapp/internal/cloudmeta"
+        "posapp/internal/cloudmeta"
 )
 
 // Public, non-secret constants. The anon key is designed to ship in
 // clients; it grants nothing beyond what RLS policies allow (which is:
 // read the bootstrap row, call the device-authenticated RPCs).
 const (
-	cloudProjectURL = cloudmeta.ProjectURL
-	cloudAnonKey    = cloudmeta.AnonKey
+        cloudProjectURL = cloudmeta.ProjectURL
+        cloudAnonKey    = cloudmeta.AnonKey
 
-	bootstrapRefresh = 6 * time.Hour
+        bootstrapRefresh = 6 * time.Hour
 )
 
 type cloudBootstrap struct {
-	ProjectURL  string `json:"project_url"`
-	TeamCode    string `json:"team_code"`
-	AutoApprove bool   `json:"auto_approve"`
+        ProjectURL  string `json:"project_url"`
+        TeamCode    string `json:"team_code"`
+        AutoApprove bool   `json:"auto_approve"`
 }
 
 // cloudStore is one row of the sync_stores registry — the multi-store
 // umbrella. Each store owns exactly one team_code (the sync partition).
 type cloudStore struct {
-	Slug        string `json:"slug"`
-	Name        string `json:"name"`
-	TeamCode    string `json:"team_code"`
-	AutoApprove bool   `json:"auto_approve"`
+        Slug        string `json:"slug"`
+        Name        string `json:"name"`
+        TeamCode    string `json:"team_code"`
+        AutoApprove bool   `json:"auto_approve"`
 }
 
 // ensureCloudBootstrap resolves the cloud link (project URL, team code,
@@ -55,40 +55,42 @@ type cloudStore struct {
 // bootstrapRefresh so a temporarily unreachable cloud never blocks a till.
 // Returns nil when the cloud is not usable yet (never fetched + unreachable).
 func (s *Service) ensureCloudBootstrap() *cloudBootstrap {
-	if s.settings.Get("sync_source") == "manual" {
-		return nil // owner configured this till by hand; manual wins
-	}
-	// A cache is only valid if it came from a real fetch (sync_source was
-	// set to "cloud" then) — never reuse a manual endpoint as team state.
-	if s.settings.Get("sync_source") == "cloud" && time.Since(s.bootstrapAt()) < bootstrapRefresh {
-		if bs := s.cachedBootstrap(); bs != nil {
-			return bs
-		}
-	}
-	bs := s.resolveCloudStore()
-	if bs == nil {
-		if cached := s.cachedBootstrap(); cached != nil {
-			return cached // offline tolerance: keep last known team
-		}
-		return nil
-	}
-	_ = s.settings.Set("sync_endpoint", strings.TrimRight(bs.ProjectURL, "/"))
-	_ = s.settings.Set("sync_bootstrap_at", nowStamp())
-	_ = s.settings.Set("sync_source", "cloud")
-	if bs.TeamCode != "" {
-		_ = s.settings.Set("sync_team_code", bs.TeamCode)
-		_ = s.settings.Set("sync_auto_approve", boolStr(bs.AutoApprove))
-		_ = s.settings.Set("sync_store_pending", "false")
-		if !s.settings.GetBool("sync_enabled", false) {
-			_ = s.settings.Set("sync_enabled", "true")
-		}
-	} else {
-		// Multi-store cloud and this till has no store yet: it registers
-		// as pending and the owner assigns it from an approved till.
-		_ = s.settings.Set("sync_store_pending", "true")
-		_ = s.settings.Set("sync_enabled", "true")
-	}
-	return bs
+        if s.settings.Get("sync_source") == "manual" {
+                return nil // owner configured this till by hand; manual wins
+        }
+        // A cache is only valid if it came from a real fetch (sync_source was
+        // set to "cloud" then) — never reuse a manual endpoint as team state.
+        if s.settings.Get("sync_source") == "cloud" && time.Since(s.bootstrapAt()) < bootstrapRefresh {
+                if bs := s.cachedBootstrap(); bs != nil {
+                        return bs
+                }
+        }
+        bs := s.resolveCloudStore()
+        if bs == nil {
+                if cached := s.cachedBootstrap(); cached != nil {
+                        return cached // offline tolerance: keep last known team
+                }
+                return nil
+        }
+        _ = s.settings.Set("sync_endpoint", strings.TrimRight(bs.ProjectURL, "/"))
+        _ = s.settings.Set("sync_bootstrap_at", nowStamp())
+        _ = s.settings.Set("sync_source", "cloud")
+        if bs.TeamCode != "" {
+                _ = s.settings.Set("sync_team_code", bs.TeamCode)
+                _ = s.settings.Set("sync_auto_approve", boolStr(bs.AutoApprove))
+                _ = s.settings.Set("sync_store_pending", "false")
+                if !s.settings.GetBool("sync_enabled", false) && s.settings.Get("sync_disabled") != "1" {
+                        _ = s.settings.Set("sync_enabled", "true")
+                }
+        } else {
+                // Multi-store cloud and this till has no store yet: it registers
+                // as pending and the owner assigns it from an approved till.
+                _ = s.settings.Set("sync_store_pending", "true")
+                if s.settings.Get("sync_disabled") != "1" {
+                        _ = s.settings.Set("sync_enabled", "true")
+                }
+        }
+        return bs
 }
 
 // resolveCloudStore decides which team this till belongs to, from the
@@ -104,52 +106,52 @@ func (s *Service) ensureCloudBootstrap() *cloudBootstrap {
 // row carries its project_url; the registry is read from the constant) so
 // tests can point the client at a fake cloud.
 func (s *Service) resolveCloudStore() *cloudBootstrap {
-	stores, serr := fetchStores()
-	// cloudBaseURL is the host the registry was read from (the constant in
-	// production, the fake server in tests) — never point the sync client
-	// anywhere else when the registry answered.
-	projectURL := strings.TrimRight(cloudBaseURL, "/")
-	if serr != nil || len(stores) == 0 {
-		if bs, err2 := fetchBootstrap(); err2 == nil {
-			projectURL = bs.ProjectURL
-			stores = []cloudStore{{Slug: "main", Name: "Main Store",
-				TeamCode: bs.TeamCode, AutoApprove: bs.AutoApprove}}
-		}
-	}
-	if len(stores) == 0 {
-		return nil
-	}
-	if len(stores) == 1 {
-		return &cloudBootstrap{ProjectURL: projectURL,
-			TeamCode: stores[0].TeamCode, AutoApprove: stores[0].AutoApprove}
-	}
-	// Several stores: a previously assigned till keeps its team; everyone
-	// else registers pending and is assigned by the owner.
-	team := s.settings.Get("sync_team_code")
-	for _, st := range stores {
-		if team != "" && st.TeamCode == team {
-			return &cloudBootstrap{ProjectURL: projectURL, TeamCode: team, AutoApprove: st.AutoApprove}
-		}
-	}
-	return &cloudBootstrap{ProjectURL: projectURL, TeamCode: "", AutoApprove: false}
+        stores, serr := fetchStores()
+        // cloudBaseURL is the host the registry was read from (the constant in
+        // production, the fake server in tests) — never point the sync client
+        // anywhere else when the registry answered.
+        projectURL := strings.TrimRight(cloudBaseURL, "/")
+        if serr != nil || len(stores) == 0 {
+                if bs, err2 := fetchBootstrap(); err2 == nil {
+                        projectURL = bs.ProjectURL
+                        stores = []cloudStore{{Slug: "main", Name: "Main Store",
+                                TeamCode: bs.TeamCode, AutoApprove: bs.AutoApprove}}
+                }
+        }
+        if len(stores) == 0 {
+                return nil
+        }
+        if len(stores) == 1 {
+                return &cloudBootstrap{ProjectURL: projectURL,
+                        TeamCode: stores[0].TeamCode, AutoApprove: stores[0].AutoApprove}
+        }
+        // Several stores: a previously assigned till keeps its team; everyone
+        // else registers pending and is assigned by the owner.
+        team := s.settings.Get("sync_team_code")
+        for _, st := range stores {
+                if team != "" && st.TeamCode == team {
+                        return &cloudBootstrap{ProjectURL: projectURL, TeamCode: team, AutoApprove: st.AutoApprove}
+                }
+        }
+        return &cloudBootstrap{ProjectURL: projectURL, TeamCode: "", AutoApprove: false}
 }
 
 func (s *Service) cachedBootstrap() *cloudBootstrap {
-	endpoint := strings.TrimRight(s.settings.Get("sync_endpoint"), "/")
-	team := s.settings.Get("sync_team_code")
-	if endpoint == "" || team == "" {
-		return nil
-	}
-	auto := s.settings.GetBool("sync_auto_approve", true)
-	return &cloudBootstrap{ProjectURL: endpoint, TeamCode: team, AutoApprove: auto}
+        endpoint := strings.TrimRight(s.settings.Get("sync_endpoint"), "/")
+        team := s.settings.Get("sync_team_code")
+        if endpoint == "" || team == "" {
+                return nil
+        }
+        auto := s.settings.GetBool("sync_auto_approve", true)
+        return &cloudBootstrap{ProjectURL: endpoint, TeamCode: team, AutoApprove: auto}
 }
 
 func (s *Service) bootstrapAt() time.Time {
-	t, err := time.Parse(time.RFC3339, s.settings.Get("sync_bootstrap_at"))
-	if err != nil {
-		return time.Time{}
-	}
-	return t
+        t, err := time.Parse(time.RFC3339, s.settings.Get("sync_bootstrap_at"))
+        if err != nil {
+                return time.Time{}
+        }
+        return t
 }
 
 // cloudBaseURL is a var so tests can point it at a fake Supabase.
@@ -163,127 +165,127 @@ var cloudBaseURL = cloudmeta.BaseURL
 const cloudProjectRef = "ixxiqrobcwkvyjtxdkvh"
 
 func underGoTest() bool {
-	return flag.Lookup("test.v") != nil
+        return flag.Lookup("test.v") != nil
 }
 
 func guardProduction(host string) error {
-	if underGoTest() && strings.Contains(host, cloudProjectRef) {
-		return fmt.Errorf("test refused to touch the production cloud — point cloudBaseURL at a fake server")
-	}
-	return nil
+        if underGoTest() && strings.Contains(host, cloudProjectRef) {
+                return fmt.Errorf("test refused to touch the production cloud — point cloudBaseURL at a fake server")
+        }
+        return nil
 }
 
 func fetchBootstrap() (*cloudBootstrap, error) {
-	if err := guardProduction(cloudBaseURL); err != nil {
-		return nil, err
-	}
-	q := url.Values{}
-	q.Set("id", "eq.1")
-	q.Set("select", "project_url,team_code,auto_approve")
-	base := strings.TrimRight(cloudBaseURL, "/")
-	req, err := http.NewRequest("GET", base+"/rest/v1/sync_bootstrap?"+q.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("apikey", cloudAnonKey)
-	req.Header.Set("Authorization", "Bearer "+cloudAnonKey)
-	hc := &http.Client{Timeout: syncHTTPTimeout}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("bootstrap: status %d", resp.StatusCode)
-	}
-	var rows []cloudBootstrap
-	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return nil, fmt.Errorf("bootstrap: no row")
-	}
-	return &rows[0], nil
+        if err := guardProduction(cloudBaseURL); err != nil {
+                return nil, err
+        }
+        q := url.Values{}
+        q.Set("id", "eq.1")
+        q.Set("select", "project_url,team_code,auto_approve")
+        base := strings.TrimRight(cloudBaseURL, "/")
+        req, err := http.NewRequest("GET", base+"/rest/v1/sync_bootstrap?"+q.Encode(), nil)
+        if err != nil {
+                return nil, err
+        }
+        req.Header.Set("apikey", cloudAnonKey)
+        req.Header.Set("Authorization", "Bearer "+cloudAnonKey)
+        hc := &http.Client{Timeout: syncHTTPTimeout}
+        resp, err := hc.Do(req)
+        if err != nil {
+                return nil, err
+        }
+        defer resp.Body.Close()
+        if resp.StatusCode != 200 {
+                io.Copy(io.Discard, resp.Body)
+                return nil, fmt.Errorf("bootstrap: status %d", resp.StatusCode)
+        }
+        var rows []cloudBootstrap
+        if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+                return nil, err
+        }
+        if len(rows) == 0 {
+                return nil, fmt.Errorf("bootstrap: no row")
+        }
+        return &rows[0], nil
 }
 
 // fetchStores reads the cloud's active store registry with the public anon
 // key (RLS exposes exactly the active rows — no secrets, no device data).
 func fetchStores() ([]cloudStore, error) {
-	if err := guardProduction(cloudBaseURL); err != nil {
-		return nil, err
-	}
-	q := url.Values{}
-	q.Set("active", "eq.true")
-	q.Set("select", "slug,name,team_code,auto_approve")
-	q.Set("order", "id")
-	base := strings.TrimRight(cloudBaseURL, "/")
-	req, err := http.NewRequest("GET", base+"/rest/v1/sync_stores?"+q.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("apikey", cloudAnonKey)
-	req.Header.Set("Authorization", "Bearer "+cloudAnonKey)
-	hc := &http.Client{Timeout: syncHTTPTimeout}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("stores: status %d", resp.StatusCode)
-	}
-	var rows []cloudStore
-	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
-		return nil, err
-	}
-	return rows, nil
+        if err := guardProduction(cloudBaseURL); err != nil {
+                return nil, err
+        }
+        q := url.Values{}
+        q.Set("active", "eq.true")
+        q.Set("select", "slug,name,team_code,auto_approve")
+        q.Set("order", "id")
+        base := strings.TrimRight(cloudBaseURL, "/")
+        req, err := http.NewRequest("GET", base+"/rest/v1/sync_stores?"+q.Encode(), nil)
+        if err != nil {
+                return nil, err
+        }
+        req.Header.Set("apikey", cloudAnonKey)
+        req.Header.Set("Authorization", "Bearer "+cloudAnonKey)
+        hc := &http.Client{Timeout: syncHTTPTimeout}
+        resp, err := hc.Do(req)
+        if err != nil {
+                return nil, err
+        }
+        defer resp.Body.Close()
+        if resp.StatusCode != 200 {
+                io.Copy(io.Discard, resp.Body)
+                return nil, fmt.Errorf("stores: status %d", resp.StatusCode)
+        }
+        var rows []cloudStore
+        if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+                return nil, err
+        }
+        return rows, nil
 }
 
 // deviceSecret returns this till's stable random secret (generated once,
 // stored locally, never synced). Only its SHA-256 hash is ever transmitted.
 func (s *Service) deviceSecret() string {
-	if sec := s.settings.Get("sync_device_secret"); sec != "" {
-		return sec
-	}
-	sec := randToken(32)
-	_ = s.settings.Set("sync_device_secret", sec)
-	return sec
+        if sec := s.settings.Get("sync_device_secret"); sec != "" {
+                return sec
+        }
+        sec := randToken(32)
+        _ = s.settings.Set("sync_device_secret", sec)
+        return sec
 }
 
 func secretHash(sec string) string {
-	sum := sha256.Sum256([]byte(sec))
-	return hex.EncodeToString(sum[:])
+        sum := sha256.Sum256([]byte(sec))
+        return hex.EncodeToString(sum[:])
 }
 
 // rpcCall invokes a sync_* Postgres RPC with the public anon key. Identity
 // comes from the arguments (device id + secret hash), validated by the
 // database on every call.
 func rpcCall(base, fn string, args map[string]any, out any) error {
-	if err := guardProduction(base); err != nil {
-		return err
-	}
-	body, _ := json.Marshal(args)
-	req, err := http.NewRequest("POST", strings.TrimRight(base, "/")+"/rest/v1/rpc/"+fn, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("apikey", cloudAnonKey)
-	req.Header.Set("Authorization", "Bearer "+cloudAnonKey)
-	req.Header.Set("Content-Type", "application/json")
-	hc := &http.Client{Timeout: syncHTTPTimeout}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("rpc %s: status %d", fn, resp.StatusCode)
-	}
-	if out == nil {
-		return nil
-	}
-	return json.Unmarshal(raw, out)
+        if err := guardProduction(base); err != nil {
+                return err
+        }
+        body, _ := json.Marshal(args)
+        req, err := http.NewRequest("POST", strings.TrimRight(base, "/")+"/rest/v1/rpc/"+fn, bytes.NewReader(body))
+        if err != nil {
+                return err
+        }
+        req.Header.Set("apikey", cloudAnonKey)
+        req.Header.Set("Authorization", "Bearer "+cloudAnonKey)
+        req.Header.Set("Content-Type", "application/json")
+        hc := &http.Client{Timeout: syncHTTPTimeout}
+        resp, err := hc.Do(req)
+        if err != nil {
+                return err
+        }
+        defer resp.Body.Close()
+        raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+        if resp.StatusCode != 200 {
+                return fmt.Errorf("rpc %s: status %d", fn, resp.StatusCode)
+        }
+        if out == nil {
+                return nil
+        }
+        return json.Unmarshal(raw, out)
 }

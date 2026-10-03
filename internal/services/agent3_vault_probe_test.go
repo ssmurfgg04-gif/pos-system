@@ -997,14 +997,21 @@ func TestAgent3SyncVoidReplayAndDrops(t *testing.T) {
                 t.Fatalf("unexpected extra voided orders: %d", voided)
         }
 
-        // 4. Stock delta for an unknown SKU: silently dropped (UPDATE matches
-        //    0 rows, no error, no queueing) — a sale for a product this till
-        //    never received just vanishes from stock accounting.
+        // 4. Stock delta for an unknown SKU: QUARANTINED, not consumed. The
+        //    old behavior matched 0 rows and reported success — a sale whose
+        //    product hadn't synced yet vanished from stock accounting
+        //    forever. Now the delta dead-letters and retries (the catalog
+        //    rename/creation that precedes it lands on a later cycle).
         before := agent3Stock(s2, "SKU-V")
         s1.Emit("stock", "upsert", map[string]any{"sku": "SKU-GHOST", "delta": -5})
         c1.push(s1)
-        if applied, err := c2.pull(s2); err != nil || applied != 1 {
-                t.Fatalf("ghost stock pull: applied=%d err=%v", applied, err)
+        if applied, err := c2.pull(s2); err != nil || applied != 0 {
+                t.Fatalf("ghost stock pull: applied=%d err=%v (want 0: event must quarantine)", applied, err)
+        }
+        var dl int
+        s2.db.QueryRow(`SELECT COUNT(*) FROM sync_dead_letter WHERE direction='apply'`).Scan(&dl)
+        if dl != 1 {
+                t.Fatalf("ghost delta not quarantined (rows=%d)", dl)
         }
         if got := agent3Stock(s2, "SKU-V"); got != before {
                 t.Fatalf("unrelated stock moved: %d -> %d", before, got)
@@ -1013,6 +1020,25 @@ func TestAgent3SyncVoidReplayAndDrops(t *testing.T) {
         s2.db.QueryRow(`SELECT COUNT(*) FROM products WHERE sku='SKU-GHOST'`).Scan(&ghost)
         if ghost != 0 {
                 t.Fatal("ghost product should not exist")
+        }
+        // The quarantined delta RECOVERS once the product arrives (the
+        // out-of-order story heals instead of losing the movement).
+        s1.Emit("product", "upsert", map[string]any{
+                "sku": "SKU-GHOST", "name": "Ghost", "priceCents": 100,
+                "stockQty": 50, "stockSet": true, "trackStock": true, "active": true,
+                "updatedAt": nowStamp(),
+        })
+        c1.push(s1)
+        if applied, err := c2.pull(s2); err != nil || applied != 1 {
+                t.Fatalf("ghost product pull: applied=%d err=%v", applied, err)
+        }
+        if recovered := s2.retryFailedApplies(); recovered != 1 {
+                t.Fatalf("ghost delta recovered %d, want 1", recovered)
+        }
+        var ghostStock int
+        s2.db.QueryRow(`SELECT stock_qty FROM products WHERE sku='SKU-GHOST'`).Scan(&ghostStock)
+        if ghostStock != 45 {
+                t.Fatalf("ghost stock after recovery = %d, want 45 (50 - 5)", ghostStock)
         }
 }
 

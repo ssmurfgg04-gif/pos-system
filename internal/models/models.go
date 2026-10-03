@@ -677,6 +677,13 @@ type SyncResult struct {
         OrderNumber string `json:"orderNumber"`
         Status     string `json:"status"`
         Error      string `json:"error,omitempty"`
+        // Rejected=true means the server UNDERSTOOD the sale and definitively
+        // refused it (stock, credit limit, duplicate receipt…) — the offline
+        // queue may drop it after telling staff. Anything else (5xx text, HTML
+        // error pages, empty strings, unknown errors) must be retried, never
+        // deleted — the old string-matching frontend deleted real sales when an
+        // unfamiliar error merely CONTAINED a word like "invalid".
+        Rejected bool `json:"rejected,omitempty"`
 }
 
 type ManualEntryRequest struct {

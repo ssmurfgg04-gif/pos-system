@@ -640,9 +640,9 @@ INSERT INTO order_items (order_id, product_id, name, qty, unit_price_cents, line
         if err := db.QueryRow(`SELECT COUNT(*) FROM customers`).Scan(&customers); err != nil {
                 t.Errorf("v2 tables missing after migration: %v", err)
         }
-        // Migration ran exactly once (current head: v15 — ERP depth).
-        if v := agent2SchemaVersion(t, path); v != 15 {
-                t.Errorf("schema version after migrate = %d, want 15", v)
+        // Migration ran exactly once (current head: v16 — image sync).
+        if v := agent2SchemaVersion(t, path); v != 16 {
+                t.Errorf("schema version after migrate = %d, want 16", v)
         }
         if err := db.Migrate(); err != nil {
                 t.Errorf("re-migrate on old DB: %v", err)

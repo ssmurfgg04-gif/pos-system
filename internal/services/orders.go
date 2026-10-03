@@ -35,6 +35,13 @@ func nowStamp() string {
         return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
+// NowStamp is the exported form for handlers: product/customer writes MUST
+// use the same fixed-width format as sync events, or the cross-device LWW
+// comparison (a byte-wise string compare) breaks — SQLite's default
+// CURRENT_TIMESTAMP ('2026-10-03 18:00:00') loses every same-day compare
+// against the sync format ('2026-10-03T18:00:00.000Z').
+func NowStamp() string { return nowStamp() }
+
 // checkoutLine is a validated cart line with server-side pricing.
 type checkoutLine struct {
         productID      int64
@@ -651,7 +658,20 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                                 tx.Rollback()
                                 return nil, fmt.Errorf("customer has no credit — cash only")
                         }
-                        if tabCustomer.BalanceCents+payable > tabCustomer.CreditLimitCents {
+                        // Limit enforced ATOMICALLY against the in-tx balance:
+                        // tabCustomer above was read before BEGIN, so two
+                        // concurrent checkouts could both pass a stale check.
+                        // The guarded UPDATE inside the same immediate
+                        // transaction serializes the decision (balance can
+                        // never jump past the limit, whatever the interleaving).
+                        gres, err := tx.Exec(s.db.Rebind(`UPDATE customers SET balance_cents = balance_cents + ?, updated_at = ?
+                                WHERE id = ? AND balance_cents + ? <= credit_limit_cents`),
+                                payable, now, tabCustomer.ID, payable)
+                        if err != nil {
+                                tx.Rollback()
+                                return nil, err
+                        }
+                        if n, _ := gres.RowsAffected(); n != 1 {
                                 tx.Rollback()
                                 return nil, fmt.Errorf("%w (%s)", ErrCreditLimit, tabCustomer.Name)
                         }
@@ -676,7 +696,7 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                                 tx.Rollback()
                                 return nil, err
                         }
-                        if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerCharge,
+                        if err := recordLedgerTxNoBalance(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerCharge,
                                 payable, 0, "tab charge "+number, p.ID); err != nil {
                                 tx.Rollback()
                                 return nil, err
@@ -777,6 +797,25 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                 return nil, fmt.Errorf("could not allocate a free order number after 6 attempts (last candidate %s; the day sequence may be behind the orders table)", lastNumber)
         }
 
+        // Team sync: broadcast the order + its stock movements (best-effort).
+        // This MUST run before the STK attempt below: an InitiateSTK failure
+        // returns early, and an order+its deltas that never reach the cloud
+        // would make every other till keep stock it doesn't have (the origin
+        // deducts at completion). Deltas are keyed by SKU and applied exactly
+        // once, so emitting them here — regardless of when the money lands —
+        // is the canonical move; a later void restores them (see applyVoid).
+        s.EmitOrder(orderID)
+        for _, l := range lines {
+                if l.trackStock {
+                        s.EmitStockDelta(l.sku, -l.qty)
+                }
+        }
+        // Money movements recorded at checkout (tab charge, credit/loyalty
+        // redemptions) follow the team as ledger events — without this, a
+        // customer's tab/credit balance existed only on the till that made
+        // the sale (emit-once guarded by customer_ledger.synced_at).
+        s.emitLedgerForOrder(orderID)
+
         // Post-commit side effects (network + broadcasts never inside the tx).
         if method == models.MethodAccount {
                 // Tab charged, not paid: audit only. No receipt print and no
@@ -820,17 +859,11 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
         } else if !isManual {
                 if _, err := s.InitiateSTK(ctx, orderID, p); err != nil {
                         // Order stays PENDING — cashier sees failure, can retry or void.
+                        // (Order + stock deltas already synced above.)
                         return s.GetOrder(orderID)
                 }
         } else {
                 s.Audit(p.ID, p.Username, "CHECKOUT_MPESA_MANUAL", "order", orderNumber, fmt.Sprintf("awaiting receipt code, total %d", payable))
-        }
-        // Team sync: broadcast the order + its stock movements (best-effort).
-        s.EmitOrder(orderID)
-        for _, l := range lines {
-                if l.trackStock {
-                        s.EmitStockDelta(l.sku, -l.qty)
-                }
         }
         return s.GetOrder(orderID)
 }
@@ -1159,9 +1192,14 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
                 tx.Exec(`UPDATE orders SET discrepancy = 1 WHERE id = ?`, orderID)
         }
         // Gift-card products mint one redeemable code per unit (async pay
-        // paths: tab settle, M-Pesa, Paystack, split with an async leg).
-        if err := issueGiftCardsTx(tx, s.db.Rebind, orderID); err != nil {
-                return nil, err
+        // paths: tab settle, M-Pesa, Paystack, split with an async leg) —
+        // WINNER ONLY: a completing leg that lost the PENDING→PAID race (the
+        // order was already completed by another leg) must not mint a second
+        // set of spendable codes for the same basket.
+        if won == 1 {
+                if err := issueGiftCardsTx(tx, s.db.Rebind, orderID); err != nil {
+                        return nil, err
+                }
         }
         if err := tx.Commit(); err != nil {
                 return nil, err
@@ -1181,6 +1219,7 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
         s.broadcast(EventOrderPaid, order)
         s.Audit(0, payMethod, "PAYMENT_COMPLETED", "order", order.Number, fmt.Sprintf("payment %d, receipt %s, amount %d", paymentID, receipt, payAmount))
         s.EmitOrder(orderID)
+        s.emitLedgerForOrder(orderID) // the loyalty earn (and any other movement) follows the team
         return order, nil
 }
 
@@ -1227,13 +1266,26 @@ func (s *Service) ManualConfirm(orderID int64, rawCode string, p *auth.Principal
                 }
         }
         if pay == nil {
+                // No pending leg: collect the REMAINING balance, not the order
+                // total — a partially-paid split (cash done, async leg failed)
+                // would otherwise insert a full-total manual leg and the tender
+                // sums would overshoot the sale (KES 700 collected for KES 500).
+                amount := order.TotalCents
+                for i := range order.Payments {
+                        if order.Payments[i].Status == models.PaymentCompleted {
+                                amount -= order.Payments[i].AmountCents
+                        }
+                }
+                if amount <= 0 {
+                        return nil, fmt.Errorf("%w: order has nothing left to collect", ErrInvalidState)
+                }
                 res, err := s.db.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, created_at)
-                        VALUES (?, 'mpesa', 'manual', ?, 'PENDING', ?)`), orderID, order.TotalCents, nowStamp())
+                        VALUES (?, 'mpesa', 'manual', ?, 'PENDING', ?)`), orderID, amount, nowStamp())
                 if err != nil {
                         return nil, err
                 }
                 id, _ := res.LastInsertId()
-                pay = &models.Payment{ID: id, AmountCents: order.TotalCents}
+                pay = &models.Payment{ID: id, AmountCents: amount}
         }
         result, err := s.completePayment(pay.ID, code, pay.AmountCents, "Manual receipt entry")
         if err != nil {
@@ -1277,9 +1329,48 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
                         }
                 }
         }
+        // Collect the void-with-money signal BEFORE flipping the legs: a PAID
+        // order whose online leg (Paystack/M-Pesa) already COMPLETED means real
+        // money landed and is now being reversed — settlement still arrives at
+        // the provider, so staff must see the refund obligation in reports
+        // (discrepancy flag), not dig through audit_log.
+        collectedOnline := 0
+        if status == models.OrderPaid {
+                tx.QueryRow(`SELECT COUNT(*) FROM payments WHERE order_id = ? AND status = 'COMPLETED'
+                        AND method IN ('paystack','mpesa') AND amount_cents > 0`, orderID).Scan(&collectedOnline)
+        }
         if _, err := tx.Exec(`UPDATE payments SET status = 'VOIDED', result_desc = ? WHERE order_id = ? AND status IN ('PENDING','COMPLETED')`,
                 "voided: "+truncStr(reason, 180), orderID); err != nil {
                 return nil, err
+        }
+        if collectedOnline > 0 {
+                tx.Exec(`UPDATE orders SET discrepancy = 1 WHERE id = ?`, orderID)
+                tx.Exec(s.db.Rebind(`UPDATE payments SET result_desc = result_desc || ' — refund owed via provider' WHERE order_id = ? AND status = 'VOIDED' AND method IN ('paystack','mpesa')`), orderID)
+        }
+        // Gift cards minted by this sale stop being shop liability the moment
+        // the sale is voided — an ACTIVE code redeemable after its sale
+        // vanished would mint store credit out of thin air.
+        if status == models.OrderPaid {
+                rowsGC, err := tx.Query(`SELECT code FROM gift_cards WHERE order_id = ? AND status = 'ACTIVE'`, orderID)
+                if err != nil {
+                        return nil, err
+                }
+                var voidedCodes []string
+                for rowsGC.Next() {
+                        var code string
+                        if rowsGC.Scan(&code) == nil {
+                                voidedCodes = append(voidedCodes, code)
+                        }
+                }
+                rowsGC.Close()
+                if len(voidedCodes) > 0 {
+                        if _, err := tx.Exec(`UPDATE gift_cards SET status = 'VOID', remaining_cents = 0, redeemed_at = ? WHERE order_id = ? AND status = 'ACTIVE'`,
+                                nowStamp(), orderID); err != nil {
+                                return nil, err
+                        }
+                        s.Audit(p.ID, p.Username, "GIFT_CARDS_VOIDED", "order", fmt.Sprint(orderID),
+                                fmt.Sprintf("%d code(s): %s", len(voidedCodes), truncStr(strings.Join(voidedCodes, ","), 160)))
+                }
         }
         // Tab void: reverse the ledger charge so a cancelled sale leaves no
         // debt on the customer's balance. (Stock needs no restore: PENDING
@@ -1291,6 +1382,23 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
                 return nil, err
         }
         if tabCustomer != 0 {
+                // Refund the store credit this sale spent. The flip above set
+                // every PENDING/COMPLETED leg to VOIDED but left amount_cents
+                // intact — so sum the VOIDED credit legs. (Summing with a
+                // PENDING/COMPLETED filter here would always read 0 and the
+                // customer's prepaid credit would silently vanish.)
+                var creditUsed int64
+                if err := tx.QueryRow(`SELECT COALESCE(SUM(amount_cents),0) FROM payments
+                        WHERE order_id = ? AND method = 'credit' AND status = 'VOIDED'`, orderID).
+                        Scan(&creditUsed); err != nil {
+                        return nil, err
+                }
+                if creditUsed > 0 {
+                        if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer, orderID, models.LedgerCreditTopup,
+                                creditUsed, 0, "store credit refund (void)", p.ID); err != nil {
+                                return nil, err
+                        }
+                }
                 if err := tx.QueryRow(`SELECT COUNT(*) FROM payments WHERE order_id = ? AND method = 'account'`,
                         orderID).Scan(&tabCount); err != nil {
                         return nil, err
@@ -1331,20 +1439,9 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
                                 return nil, err
                         }
                 }
-                // Refund store credit spent on this order (credit payments
-                // return to the prepaid balance).
-                var creditUsed int64
-                if err := tx.QueryRow(`SELECT COALESCE(SUM(amount_cents),0) FROM payments
-                        WHERE order_id = ? AND method = 'credit' AND status IN ('PENDING','COMPLETED')`, orderID).
-                        Scan(&creditUsed); err != nil {
-                        return nil, err
-                }
-                if creditUsed > 0 {
-                        if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer, orderID, models.LedgerCreditTopup,
-                                creditUsed, 0, "store credit refund (void)", p.ID); err != nil {
-                                return nil, err
-                        }
-                }
+                // (Store-credit refund is handled above, right after the
+                // payment flip — summing PENDING/COMPLETED legs there read 0
+                // and silently confiscated the customer's prepaid credit.)
         }
         if err := tx.Commit(); err != nil {
                 return nil, err

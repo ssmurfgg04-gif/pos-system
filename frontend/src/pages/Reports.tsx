@@ -45,10 +45,17 @@ function Daily() {
     }).catch(() => undefined)
   }, [])
 
+  const [loadError, setLoadError] = useState('')
   const load = async (d: string) => {
     setLoading(true)
+    setLoadError('')
     try {
       setData(await api.get<DailySummary>(`/api/v1/reports/daily?date=${d}${allShops ? '&shop=all' : ''}`))
+    } catch (e: any) {
+      // A failed request must never masquerade as "No sales on <date>" —
+      // an owner reading that during an outage panics. Keep the last good
+      // data on screen and say what actually happened.
+      setLoadError(e?.message || 'Could not load the report — check the connection and retry')
     } finally {
       setLoading(false)
     }
@@ -81,6 +88,8 @@ function Daily() {
     >
       {loading && !data ? (
         <div className="py-12 flex justify-center"><Spinner /></div>
+      ) : loadError ? (
+        <EmptyState icon={<BarChart3 size={24} strokeWidth={2.25} />} title="Report could not load" body={loadError} />
       ) : !data || data.ordersPaid + data.ordersOpen + data.ordersVoided === 0 ? (
         <EmptyState icon={<BarChart3 size={24} strokeWidth={2.25} />} title={`No sales on ${date}`} body="Pick another day or start selling." />
       ) : (
@@ -212,10 +221,14 @@ function Monthly() {
   const [loading, setLoading] = useState(false)
   const [downloading, setDownloading] = useState(false)
 
+  const [loadError, setLoadError] = useState('')
   const load = async (m: string) => {
     setLoading(true)
+    setLoadError('')
     try {
       setData(await api.get<MonthlySummary>(`/api/v1/reports/monthly?month=${m}`))
+    } catch (e: any) {
+      setLoadError(e?.message || 'Could not load the report — check the connection and retry')
     } finally {
       setLoading(false)
     }
@@ -252,6 +265,8 @@ function Monthly() {
     >
       {loading && !data ? (
         <div className="py-12 flex justify-center"><Spinner /></div>
+      ) : loadError ? (
+        <EmptyState icon={<FileSpreadsheet size={24} strokeWidth={2.25} />} title="Report could not load" body={loadError} />
       ) : !data || data.ordersPaid + data.ordersVoided === 0 ? (
         <EmptyState icon={<FileSpreadsheet size={24} strokeWidth={2.25} />} title={`No sales in ${month}`} body="Pick another month or start selling." />
       ) : (
