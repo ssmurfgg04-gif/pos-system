@@ -1035,6 +1035,65 @@ func (s *Service) RetryFailedSync() int {
         return s.retryFailedApplies()
 }
 
+// QuarantineOutboxForTeamChange moves every not-yet-pushed outbox event
+// into the dead-letter table. Called when a till joins (or re-joins) a
+// DIFFERENT team: pending events were created under the OLD team, but the
+// push path stamps events with the device's CURRENT team — letting them
+// ride would book the previous shop's orders/customers/ledger into the
+// new shop's event log (a real cross-tenant leak, and newly reachable now
+// that v1.3.0 lets revoked tills rejoin via a fresh invite). Quarantined
+// rows keep their payloads for inspection and retry only by explicit
+// action — they are never auto-pushed to the wrong team.
+func (s *Service) QuarantineOutboxForTeamChange(oldTeam, newTeam string) {
+        rows, err := s.db.Query(`SELECT seq, entity, op, client_uuid, payload, COALESCE(attempts,0) FROM sync_outbox ORDER BY seq`)
+        if err != nil {
+                log.Printf("[sync] team-change quarantine read: %v", err)
+                return
+        }
+        type ev struct {
+                seq                      int64
+                entity, op, uuid, payload string
+                attempts                 int64
+        }
+        var pending []ev
+        for rows.Next() {
+                var e ev
+                if rows.Scan(&e.seq, &e.entity, &e.op, &e.uuid, &e.payload, &e.attempts) == nil {
+                        pending = append(pending, e)
+                }
+        }
+        rows.Close()
+        if len(pending) == 0 {
+                return
+        }
+        cause := fmt.Sprintf("till moved from team %s to %s — events belong to the old team", truncStr(oldTeam, 40), truncStr(newTeam, 40))
+        tx, err := s.db.Begin()
+        if err != nil {
+                return
+        }
+        defer tx.Rollback()
+        moved := 0
+        for _, e := range pending {
+                if _, err := tx.Exec(s.db.Rebind(`
+                        INSERT INTO sync_dead_letter (direction, event_id, entity, op, client_uuid, payload, error, attempts, created_at, updated_at)
+                        VALUES ('push', 0, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                        e.entity, e.op, e.uuid, e.payload, truncStr(cause, 300), e.attempts, nowStamp(), nowStamp()); err != nil {
+                        log.Printf("[sync] team-change quarantine write: %v", err)
+                        return
+                }
+                if _, err := tx.Exec(s.db.Rebind(`DELETE FROM sync_outbox WHERE seq = ?`), e.seq); err != nil {
+                        log.Printf("[sync] team-change quarantine delete: %v", err)
+                        return
+                }
+                moved++
+        }
+        if err := tx.Commit(); err != nil {
+                log.Printf("[sync] team-change quarantine commit: %v", err)
+                return
+        }
+        log.Printf("[sync] team change %s→%s: quarantined %d pending event(s) — review Settings → Team before re-pushing", oldTeam, newTeam, moved)
+}
+
 // syncGetInt / syncSetInt — integer values in sync_state.
 func (s *Service) syncGetInt(key string) int64 {
         v := s.settings.Get("syncstate_" + key)
@@ -1143,7 +1202,10 @@ func (s *Service) applyConfig(payload json.RawMessage) error {
                 }
                 if k == "tax_percent" {
                         var f float64
-                        if _, err := fmt.Sscanf(v, "%g", &f); err != nil || f < 0 || f > 100 {
+                        // Affirmative range test only: NaN slips through
+                        // `f < 0 || f > 100` (every NaN compare is false)
+                        // and then poisons tax math on every checkout.
+                        if _, err := fmt.Sscanf(v, "%g", &f); err != nil || !(f >= 0 && f <= 100) {
                                 continue
                         }
                 }
@@ -1734,6 +1796,23 @@ func (s *Service) applyVoid(payload json.RawMessage) error {
                 if creditUsed > 0 {
                         if err := recordLedgerTx(tx, s.db.Rebind, custID, orderID, models.LedgerCreditTopup, creditUsed, 0, "store credit refund (synced void)", 0); err != nil {
                                 return err
+                        }
+                }
+                // Reverse the loyalty points EARNED on this PAID order — the
+                // local Void() does this (orders.go) but applyVoid never did,
+                // so every synced void of a paid sale minted phantom points
+                // fleet-wide (the earn row arrives via emitLedgerForOrder,
+                // the reversal was simply missing here). Only positive earn
+                // entries are reversed; redemptions are refunded above.
+                if status == models.OrderPaid {
+                        var ptsEarned int64
+                        tx.QueryRow(s.db.Rebind(`SELECT COALESCE(SUM(points_delta),0) FROM customer_ledger
+                                WHERE order_id = ? AND kind = ? AND points_delta > 0`), orderID, models.LedgerLoyalty).Scan(&ptsEarned)
+                        if ptsEarned > 0 {
+                                if err := recordLedgerTx(tx, s.db.Rebind, custID, orderID, models.LedgerLoyalty,
+                                        0, -ptsEarned, "loyalty reversal (synced void)", 0); err != nil {
+                                        return err
+                                }
                         }
                 }
         }

@@ -61,7 +61,7 @@ func (s *Service) quoteTotals(items []models.QuoteItem, discountCents int64) (su
         }
         discounted := sub - discount
         pct := s.settings.GetFloat("tax_percent", 16)
-        if pct < 0 || pct > models.MaxTaxPercent {
+        if !(pct >= 0 && pct <= models.MaxTaxPercent) { // NaN-proof: NaN fails every compare
                 return 0, 0, 0, 0, fmt.Errorf("tax_percent misconfigured (0-%d)", models.MaxTaxPercent)
         }
         if s.settings.GetBool("tax_included", true) {
@@ -214,8 +214,15 @@ func (s *Service) nextQuoteNumber(tx *sql.Tx) (string, int64, error) {
         return fmt.Sprintf("QT-%06d", n), n, nil
 }
 
-// CreateQuote validates, stores and emits a new quote.
+// CreateQuote validates, stores and emits a new quote. Money-shaping
+// permissions mirror checkout exactly: a non-zero discount needs
+// payments.apply_discount and an off-catalog line price needs
+// payments.override_price — otherwise a custom role could quote prices its
+// bearer could never ring up at checkout (the convert would dead-end).
 func (s *Service) CreateQuote(in models.QuoteInput, p *auth.Principal) (*models.Quote, error) {
+        if err := s.checkQuoteMoneyPerms(in, p); err != nil {
+                return nil, err
+        }
         if err := s.normalizeQuoteInput(&in); err != nil {
                 return nil, err
         }
@@ -269,6 +276,9 @@ func (s *Service) CreateQuote(in models.QuoteInput, p *auth.Principal) (*models.
 // UpdateQuote edits a draft or sent quote (status unchanged). Accepted,
 // declined and converted quotes are historical records — not editable.
 func (s *Service) UpdateQuote(id int64, in models.QuoteInput, p *auth.Principal) (*models.Quote, error) {
+        if err := s.checkQuoteMoneyPerms(in, p); err != nil {
+                return nil, err
+        }
         cur, err := s.GetQuote(id)
         if err != nil {
                 return nil, err
@@ -311,9 +321,35 @@ func (s *Service) UpdateQuote(id int64, in models.QuoteInput, p *auth.Principal)
         return qy, nil
 }
 
+// checkQuoteMoneyPerms enforces the same permission gates checkout does,
+// so a quote is always ring-up-able by its creator's role.
+func (s *Service) checkQuoteMoneyPerms(in models.QuoteInput, p *auth.Principal) error {
+        if p == nil {
+                return nil // system path (tests); handlers always pass a principal
+        }
+        if in.DiscountCents > 0 && !p.Can("payments.apply_discount") {
+                return fmt.Errorf("quoting a discount requires payments.apply_discount permission")
+        }
+        if !p.Can("payments.override_price") {
+                for _, it := range in.Items {
+                        if it.ProductID != 0 {
+                                var catalog int64
+                                if err := s.db.QueryRow(s.db.Rebind(`SELECT price_cents FROM products WHERE id = ?`), it.ProductID).Scan(&catalog); err == nil {
+                                        if it.UnitPriceCents != catalog {
+                                                return fmt.Errorf("a line priced off the catalog requires payments.override_price permission")
+                                        }
+                                }
+                        }
+                }
+        }
+        return nil
+}
+
 // SetQuoteStatus moves a quote through its pipeline. Legal moves:
-// draft→sent, sent→accepted/declined, draft→accepted/declined (walk-in
-// accept straight from the draft), anything→converted (only via Convert).
+// draft→sent; draft/sent→accepted/declined; declined→accepted (the
+// "customer changed their mind back" path). Anything else is refused —
+// in particular an accepted quote cannot quietly become declined after
+// money started moving.
 func (s *Service) SetQuoteStatus(id int64, status string, p *auth.Principal) (*models.Quote, error) {
         cur, err := s.GetQuote(id)
         if err != nil {
@@ -324,14 +360,21 @@ func (s *Service) SetQuoteStatus(id int64, status string, p *auth.Principal) (*m
                 if cur.Status != models.QuoteDraft {
                         return nil, fmt.Errorf("only a draft can be marked sent")
                 }
-        case models.QuoteAccepted, models.QuoteDeclined:
-                if cur.Status == models.QuoteConverted {
-                        return nil, fmt.Errorf("this quote was already converted to a sale")
+        case models.QuoteAccepted:
+                if cur.Status != models.QuoteDraft && cur.Status != models.QuoteSent && cur.Status != models.QuoteDeclined {
+                        return nil, fmt.Errorf("this quote is already %s", cur.Status)
+                }
+        case models.QuoteDeclined:
+                if cur.Status != models.QuoteDraft && cur.Status != models.QuoteSent {
+                        return nil, fmt.Errorf("this quote is already %s", cur.Status)
                 }
         case models.QuoteConverted:
                 return nil, fmt.Errorf("conversion happens when the sale is parked on a till")
         default:
                 return nil, fmt.Errorf("unknown status %q", status)
+        }
+        if cur.Status == status {
+                return cur, nil // same-state no-op: do not re-emit
         }
         if _, err := s.db.Exec(s.db.Rebind(`UPDATE quotes SET status = ?, updated_at = ? WHERE id = ?`),
                 status, nowStamp(), id); err != nil {
@@ -368,20 +411,41 @@ func (s *Service) ConvertQuote(id int64, p *auth.Principal) (*models.HeldSale, e
                 return nil, fmt.Errorf("this quote was declined — set it back or create a new one")
         }
         // Catalog lines only: held sales freeze productId/qty/price triples.
+        // Lines are resolved by SKU FIRST (stable across tills), with the
+        // product id as fallback — a synced quote carries the ORIGIN till's
+        // local ids, and AUTOINCREMENT ids mean id 42 can be "Banner" on the
+        // till that made the quote and "A4 paper" on the till converting it.
+        // Resolving by id alone could park the WRONG product (and the wrong
+        // price) into the cart.
         req := models.CheckoutRequest{
-                Items:        make([]models.CheckoutItem, 0, len(qy.Items)),
-                CustomerID:   qy.CustomerID,
-                CustomerName: qy.CustomerName,
-                Note:         fmt.Sprintf("From quote %s", qy.QuoteNo),
+                Items:         make([]models.CheckoutItem, 0, len(qy.Items)),
+                CustomerID:    qy.CustomerID,
+                CustomerName:  qy.CustomerName,
+                Note:          fmt.Sprintf("From quote %s", qy.QuoteNo),
+                DiscountCents: qy.DiscountCents, // the quoted discount survives the move
+                DiscountLabel: qy.DiscountLabel,
         }
         var skipped []string
         for _, it := range qy.Items {
-                if it.ProductID == 0 {
+                var pid int64
+                if it.SKU != "" {
+                        s.db.QueryRow(s.db.Rebind(`SELECT id FROM products WHERE sku = ? AND is_active = 1`), it.SKU).Scan(&pid)
+                }
+                if pid == 0 && it.ProductID != 0 {
+                        // id fallback guarded by SKU match where possible: accept the
+                        // id only when the local product's SKU is unknown-or-equal.
+                        var localSKU string
+                        s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(sku,'') FROM products WHERE id = ? AND is_active = 1`), it.ProductID).Scan(&localSKU)
+                        if it.SKU == "" || localSKU == it.SKU {
+                                pid = it.ProductID
+                        }
+                }
+                if pid == 0 {
                         skipped = append(skipped, lineName(it))
                         continue
                 }
                 req.Items = append(req.Items, models.CheckoutItem{
-                        ProductID: it.ProductID, Qty: it.Qty, UnitPriceCents: it.UnitPriceCents,
+                        ProductID: pid, Qty: it.Qty, UnitPriceCents: it.UnitPriceCents,
                 })
         }
         if len(req.Items) == 0 {
@@ -394,10 +458,19 @@ func (s *Service) ConvertQuote(id int64, p *auth.Principal) (*models.HeldSale, e
         if err != nil {
                 return nil, err
         }
-        if _, err := s.db.Exec(s.db.Rebind(`
-                UPDATE quotes SET status = ?, converted_held_sale_id = ?, updated_at = ? WHERE id = ?`),
-                models.QuoteConverted, held.ID, nowStamp(), id); err != nil {
+        // Compare-and-set the converted stamp: a double-click (or two clerks)
+        // must not park TWO held sales for one quote — the loser deletes the
+        // held sale it just created.
+        res, err := s.db.Exec(s.db.Rebind(`
+                UPDATE quotes SET status = ?, converted_held_sale_id = ?, updated_at = ?
+                WHERE id = ? AND status <> ?`),
+                models.QuoteConverted, held.ID, nowStamp(), id, models.QuoteConverted)
+        if err != nil {
                 return nil, err
+        }
+        if n, _ := res.RowsAffected(); n == 0 {
+                _, _ = s.db.Exec(s.db.Rebind(`DELETE FROM held_sales WHERE id = ?`), held.ID)
+                return nil, fmt.Errorf("this quote was already moved to a till")
         }
         s.EmitQuote(id)
         who := "system"

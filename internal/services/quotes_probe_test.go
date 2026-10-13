@@ -36,7 +36,14 @@ func quoteTestService(t *testing.T) *Service {
 }
 
 func quoteTestPrincipal() *auth.Principal {
-        return &auth.Principal{ID: 1, Username: "frontdesk", RoleName: "Front Desk", Active: true}
+        return &auth.Principal{
+                ID: 1, Username: "frontdesk", RoleName: "Front Desk", Active: true,
+                Permissions: map[string]bool{
+                        "quotes.manage":            true,
+                        "payments.apply_discount":  true,
+                        "payments.override_price": true,
+                },
+        }
 }
 
 func quoteTestItems() []models.QuoteItem {
@@ -132,14 +139,22 @@ func TestQuoteConvertParksHeldSaleAndStampsConverted(t *testing.T) {
         s := quoteTestService(t)
         p := quoteTestPrincipal()
         // The catalog rows ConvertQuote needs (held sales freeze product ids).
+        // SKUs match quoteTestItems on purpose — SKU-first resolution is the
+        // cross-till-safe path (ids alone can point at different products).
         s.db.Exec(`INSERT INTO categories (name, slug) VALUES ('C','c')`)
         var catID int64
         s.db.QueryRow(`SELECT id FROM categories LIMIT 1`).Scan(&catID)
-        for _, pid := range []int64{11, 12} {
+        seed := []struct {
+                id  int64
+                sku string
+        }{
+                {11, "BRAND-KIT"}, {12, "FLYERS-500"},
+        }
+        for _, p := range seed {
                 if _, err := s.db.Exec(s.db.Rebind(
                         `INSERT INTO products (id, sku, name, category_id, price_cents, stock_qty, track_stock, is_active)
                          VALUES (?, ?, ?, ?, ?, 0, 0, 1)`),
-                        pid, "SKU"+string(rune('A'+pid)), "Prod", catID, 1000); err != nil {
+                        p.id, p.sku, "Prod", catID, 1000); err != nil {
                         t.Fatalf("seed product: %v", err)
                 }
         }
@@ -247,5 +262,38 @@ func TestApplyQuoteInsertOnceLWWAndRenumber(t *testing.T) {
         }
         if len(qno2) <= len("QT-000001") {
                 t.Errorf("renumbered quote %q lacks a suffix", qno2)
+        }
+}
+
+func TestQuoteMoneyPermissionsMirrorCheckout(t *testing.T) {
+        s := quoteTestService(t)
+        // A clerk with quotes.manage but NO discount/override permissions.
+        clerk := &auth.Principal{ID: 2, Username: "clerk", RoleName: "Custom", Active: true,
+                Permissions: map[string]bool{"quotes.manage": true}}
+
+        // Discount without payments.apply_discount is refused.
+        if _, err := s.CreateQuote(models.QuoteInput{
+                CustomerName: "C", Items: quoteTestItems(), DiscountCents: 10000,
+        }, clerk); err == nil {
+                t.Fatal("discount accepted without payments.apply_discount")
+        }
+        // Off-catalog line price without payments.override_price is refused.
+        s.db.Exec(`INSERT INTO categories (name, slug) VALUES ('C','c')`)
+        var catID int64
+        s.db.QueryRow(`SELECT id FROM categories LIMIT 1`).Scan(&catID)
+        s.db.Exec(s.db.Rebind(`INSERT INTO products (id, sku, name, category_id, price_cents, stock_qty, track_stock, is_active)
+                VALUES (21, 'MUG-1', 'Mug', ?, 50000, 0, 0, 1)`), catID)
+        if _, err := s.CreateQuote(models.QuoteInput{
+                CustomerName: "C",
+                Items:        []models.QuoteItem{{ProductID: 21, SKU: "MUG-1", Name: "Mug", Qty: 1, UnitPriceCents: 99000}},
+        }, clerk); err == nil {
+                t.Fatal("off-catalog price accepted without payments.override_price")
+        }
+        // At-catalog pricing is fine for the same clerk.
+        if _, err := s.CreateQuote(models.QuoteInput{
+                CustomerName: "C",
+                Items:        []models.QuoteItem{{ProductID: 21, SKU: "MUG-1", Name: "Mug", Qty: 2, UnitPriceCents: 50000}},
+        }, clerk); err != nil {
+                t.Fatalf("catalog-priced quote should pass: %v", err)
         }
 }

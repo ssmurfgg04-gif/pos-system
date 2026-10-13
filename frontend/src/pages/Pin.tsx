@@ -230,7 +230,12 @@ export function Pin() {
                   ← Pick someone else
                 </button>
                 <button
-                  onClick={() => { setError(''); setRecover({ step: 'request', requestId: 0, username: selected?.fullName || '' }) }}
+                  onClick={() => {
+                    setError('')
+                    // Send the LOGIN NAME, not the display name — the reset
+                    // binds to users.username (the review caught this).
+                    setRecover({ step: 'request', requestId: 0, username: selected?.username || '' })
+                  }}
                   className="w-full min-h-11 flex items-center justify-center gap-1.5 text-center text-sm font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
                 >
                   <LifeBuoy size={14} strokeWidth={2.25} aria-hidden />Forgot PIN?
@@ -294,7 +299,9 @@ function ForgotPinPanel({
     setError('')
     try {
       const r = await api.post<{ requestId: number; username: string; reused: boolean }>('/api/v1/auth/forgot-pin', {
-        username: username.trim(), deviceName: 'this till',
+        username: username.trim(),
+        // deviceName deliberately omitted — the cloud already knows this
+        // till's real name; sending a literal overwrote it in the roster.
       })
       setState({ step: 'code', requestId: r.requestId, username: r.username })
     } catch (err: any) {
@@ -337,16 +344,16 @@ function ForgotPinPanel({
     return (
       <div className="bg-surface border-2 border-line-strong rounded-card shadow-brutal p-5 space-y-4">
         <p className="text-[13px] text-ink-muted">
-          Type your name the way it appears on your sign-in button, then send a reset request. The
-          owner approves it from any other till and reads you a short code.
+          Check the login name shown above your PIN pad ({state.username ? <span className="font-bold text-ink">{state.username}</span> : 'pick your name first'}),
+          then send a reset request. The owner approves it from any other till and reads you a short code.
         </p>
         <label className="block">
-          <span className="block text-[12px] font-bold text-ink-muted uppercase tracking-wide mb-1">Your name</span>
+          <span className="block text-[12px] font-bold text-ink-muted uppercase tracking-wide mb-1">Your login name</span>
           <input
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             autoFocus
-            placeholder="e.g. Salma"
+            placeholder="e.g. salma-pc"
             className="w-full min-h-11 rounded-input border-2 border-line bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
           />
         </label>
@@ -379,8 +386,8 @@ function ForgotPinPanel({
     <div className="bg-surface border-2 border-line-strong rounded-card shadow-brutal p-5 space-y-4">
       <div className="bg-brand-soft border border-brand/30 rounded-input px-3 py-2.5 text-[12.5px] text-brand font-semibold">
         Request sent. Now call or message the owner — on their till they open{' '}
-        <span className="font-bold">Settings → Team → PIN reset requests</span>, tap{' '}
-        <span className="font-bold">Approve</span> next to "{state.username}" and read you the 8-digit code.
+        <span className="font-bold">Settings → Team → PIN reset requests</span>, tap{' '}<span className="font-bold">Approve</span>{' '}
+        (or <span className="font-bold">New code</span> if one expired) next to "{state.username}" and read you the 8-digit code.
       </div>
       <label className="block">
         <span className="block text-[12px] font-bold text-ink-muted uppercase tracking-wide mb-1">The 8-digit code</span>
@@ -430,7 +437,8 @@ function ForgotPinPanel({
         {busy ? <Spinner className="border-t-brand-ink" /> : 'Set my new PIN'}
       </button>
       <p className="text-[11.5px] text-ink-subtle">
-        The code works for 15 minutes, on this till only. If it expired, just ask the owner to tap Approve again.
+        The code works for 15 minutes, on this till only. Expired or mistyped past the retries? Ask the
+        owner to tap Approve again — they'll get a fresh code for the same request.
       </p>
       <button
         onClick={onCancel}

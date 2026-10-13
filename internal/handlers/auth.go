@@ -213,7 +213,7 @@ func (h *H) PinUsers(c *gin.Context) {
                 return
         }
         rows, err := db.Query(`
-                SELECT u.id, COALESCE(u.full_name, u.username), COALESCE(r.name,'')
+                SELECT u.id, u.username, COALESCE(u.full_name, u.username), COALESCE(r.name,'')
                 FROM users u JOIN roles r ON r.id = u.role_id
                 WHERE u.is_active = 1 AND u.pin_hash != ''
                 ORDER BY u.id`)
@@ -225,7 +225,7 @@ func (h *H) PinUsers(c *gin.Context) {
         out := []models.PinUser{}
         for rows.Next() {
                 var u models.PinUser
-                if err := rows.Scan(&u.ID, &u.FullName, &u.RoleName); err != nil {
+                if err := rows.Scan(&u.ID, &u.Username, &u.FullName, &u.RoleName); err != nil {
                         break
                 }
                 out = append(out, u)

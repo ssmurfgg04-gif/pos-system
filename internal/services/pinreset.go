@@ -26,6 +26,7 @@ package services
 //   - every step is audited locally.
 
 import (
+        "database/sql"
         "fmt"
         "log"
         "strings"
@@ -212,6 +213,20 @@ func (s *Service) RedeemPinReset(requestID int64, code, newPin string) (models.P
         }
         // Cloud says yes — apply it locally. The username comes from the cloud
         // record (bound at request time), not from the client payload.
+        // Pre-check BEFORE trusting anything: the cloud burns the code the
+        // moment we redeem it, so a till that can't actually apply the reset
+        // (account renamed/deactivated meanwhile) must find out FIRST —
+        // otherwise the code is consumed and the flow dead-ends.
+        var userID int64
+        var uname string
+        err = s.db.QueryRow(s.db.Rebind(`SELECT id, username FROM users WHERE LOWER(username) = LOWER(?) AND is_active = 1`), res.Username).Scan(&userID, &uname)
+        if err == sql.ErrNoRows {
+                s.clearPendingPinReset()
+                return out, fmt.Errorf("no active account named %s on this till anymore — send a fresh request or ask the owner to add you back", res.Username)
+        }
+        if err != nil {
+                return out, fmt.Errorf("could not look up the account: %v", err)
+        }
         pinHash, err := hash.Password(newPin)
         if err != nil {
                 return out, err
@@ -219,17 +234,16 @@ func (s *Service) RedeemPinReset(requestID int64, code, newPin string) (models.P
         res2, err := s.db.Exec(s.db.Rebind(`
                 UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '',
                         must_rotate = 0, updated_at = CURRENT_TIMESTAMP
-                WHERE LOWER(username) = LOWER(?) AND is_active = 1`), pinHash, res.Username)
+                WHERE id = ? AND is_active = 1`), pinHash, userID)
         if err != nil {
                 return out, fmt.Errorf("could not update the account: %v", err)
         }
         if n, _ := res2.RowsAffected(); n == 0 {
-                return out, fmt.Errorf("no active account named %s on this till — check the spelling", res.Username)
+                // Lost a race with a deactivation between check and update.
+                s.clearPendingPinReset()
+                return out, fmt.Errorf("no active account named %s on this till — ask the owner", res.Username)
         }
         s.clearPendingPinReset()
-        var userID int64
-        var uname string
-        _ = s.db.QueryRow(s.db.Rebind(`SELECT id, username FROM users WHERE LOWER(username) = LOWER(?)`), res.Username).Scan(&userID, &uname)
         s.Audit(userID, uname, "PIN_RESET_REDEEMED", "user", uname, fmt.Sprintf("request %d", requestID))
         log.Printf("[auth] PIN reset redeemed for %s (request %d)", uname, requestID)
         out.Username = uname

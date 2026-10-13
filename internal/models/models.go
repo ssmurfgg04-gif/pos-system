@@ -84,6 +84,7 @@ type PinLoginRequest struct {
 
 type PinUser struct {
         ID       int64  `json:"id"`
+        Username string `json:"username"`
         FullName string `json:"fullName"`
         RoleName string `json:"roleName"`
 }

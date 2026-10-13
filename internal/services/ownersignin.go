@@ -62,7 +62,13 @@ func (s *Service) OwnerCloudSignin(username, password, deviceName string) (model
         }
 
         // 2. This till is now a fully-approved member of that team (the RPC
-        // approved it server-side). Point sync at the cloud team.
+        // approved it server-side). Point sync at the cloud team. A team
+        // change first quarantines pending outbox events created under the
+        // previous team — they must never ride into the new team's log.
+        prevTeam := s.settings.Get("sync_team_code")
+        if prevTeam != "" && prevTeam != res.TeamCode {
+                s.QuarantineOutboxForTeamChange(prevTeam, res.TeamCode)
+        }
         _ = s.settings.Set("sync_endpoint", strings.TrimRight(cloudProjectURL, "/"))
         _ = s.settings.Set("sync_source", "cloud")
         _ = s.settings.Set("sync_team_code", res.TeamCode)

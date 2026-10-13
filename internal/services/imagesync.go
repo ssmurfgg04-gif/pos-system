@@ -258,8 +258,12 @@ func (s *Service) applyProductImage(payload json.RawMessage) error {
         if pr.Image != "" {
                 // Defence in depth: a poisoned/malformed payload must not smuggle
                 // non-image bytes into a row that an <img> tag will render.
+                // SVG is blocked by PREFIX only — a plain strings.Contains("svg")
+                // false-positived on ~half of real base64 photo bodies (three
+                // random chars in a megabyte-scale payload) and permanently
+                // dead-lettered legitimate photos.
                 if !strings.HasPrefix(pr.Image, "data:image/") ||
-                        strings.Contains(pr.Image, "svg") ||
+                        strings.HasPrefix(pr.Image, "data:image/svg") ||
                         sniffImageMime(dataURLRawBytes(pr.Image)) == "" {
                         return fmt.Errorf("product image event payload is not a recognised image")
                 }

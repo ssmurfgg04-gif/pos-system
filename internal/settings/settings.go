@@ -207,7 +207,10 @@ func (s *Store) Update(kv map[string]string) ([]string, error) {
                 }
                 if k == "tax_percent" {
                         f, ferr := strconv.ParseFloat(v, 64)
-                        if ferr != nil || f < 0 || f > 100 {
+                        // NaN defeats every comparison (NaN < 0 is false) and
+                        // would poison tax math fleet-wide — the only safe
+                        // check is the affirmative range test.
+                        if ferr != nil || !(f >= 0 && f <= 100) {
                                 return changed, fmt.Errorf("tax_percent must be 0-100")
                         }
                 }

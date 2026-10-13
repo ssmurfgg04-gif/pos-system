@@ -52,6 +52,7 @@ const money = (c: number) => (c / 100).toLocaleString(undefined, { minimumFracti
 export function Quotes() {
   const { user } = useAuth()
   const canManage = user?.permissions.includes('quotes.manage') ?? false
+  const canDiscount = user?.permissions.includes('payments.apply_discount') ?? false
   const [quotes, setQuotes] = useState<Quote[] | null>(null)
   const [status, setStatus] = useState('all')
   const [q, setQ] = useState('')
@@ -60,46 +61,62 @@ export function Quotes() {
   const [creating, setCreating] = useState(false)
   const [detail, setDetail] = useState<Quote | null>(null)
   const [printing, setPrinting] = useState<Quote | null>(null)
+  const [rowBusy, setRowBusy] = useState(0)
 
-  const load = async () => {
+  // ONE debounced loader over both filters, with a request-sequence guard so
+  // a slow earlier response can never overwrite a newer one (the review
+  // caught status-chip clicks racing the search debounce).
+  const loadSeq = useRef(0)
+  const load = async (statusArg: string, qArg: string) => {
+    const seq = ++loadSeq.current
     try {
       const params = new URLSearchParams()
-      if (status !== 'all') params.set('status', status)
-      if (q.trim()) params.set('q', q.trim())
-      setQuotes(await api.get<Quote[]>(`/api/v1/quotes?${params.toString()}`))
-      setError('')
+      if (statusArg !== 'all') params.set('status', statusArg)
+      if (qArg.trim()) params.set('q', qArg.trim())
+      const rows = await api.get<Quote[]>(`/api/v1/quotes?${params.toString()}`)
+      if (seq === loadSeq.current) {
+        setQuotes(rows)
+        setError('')
+      }
     } catch (e: any) {
-      setQuotes([])
-      setError(e?.message || 'Could not load quotations')
+      if (seq === loadSeq.current) {
+        setQuotes([])
+        setError(e?.message || 'Could not load quotations')
+      }
     }
   }
-  useEffect(() => { load() }, [status])
   useEffect(() => {
-    const t = setTimeout(() => { if (q !== undefined) load() }, 250)
+    const t = setTimeout(() => load(status, q), 220)
     return () => clearTimeout(t)
-  }, [q])
+  }, [status, q])
 
   const setStatusOf = async (id: number, next: QuoteStatus) => {
+    setRowBusy(id)
     try {
       const updated = await api.post<Quote>(`/api/v1/quotes/${id}/status`, { status: next })
       toast.success(`Quote ${updated.quoteNo} ${next === 'sent' ? 'marked sent' : next}`)
       setDetail((d) => (d?.id === id ? updated : d))
-      await load()
+      await load(status, q)
     } catch (e: any) {
       toast.error('Could not update the quote', e?.message)
+    } finally {
+      setRowBusy(0)
     }
   }
 
   const convert = async (id: number) => {
+    setRowBusy(id)
     try {
       const held = await api.post<{ id: number }>(`/api/v1/quotes/${id}/convert`)
       toast.success('Parked on this till', 'Open the POS → Held sales → resume, then check out as usual.')
       setDetail(null)
-      await load()
+      await load(status, q)
       return held
     } catch (e: any) {
       toast.error('Could not move the quote to a till', e?.message)
       return null
+    } finally {
+      setRowBusy(0)
     }
   }
 
@@ -206,11 +223,15 @@ export function Quotes() {
         <QuoteEditor
           quote={creating ? null : editing}
           canOverridePrice={user?.permissions.includes('payments.override_price') ?? false}
+          canDiscount={canDiscount}
           onClose={() => { setCreating(false); setEditing(null) }}
           onSaved={(saved) => {
             setCreating(false); setEditing(null)
             toast.success(`Quote ${saved.quoteNo} saved`)
-            load()
+            // Keep the detail modal in sync when the edit came from it
+            // (stale totals behind the editor confused clerks).
+            setDetail((d) => (d?.id === saved.id ? saved : d))
+            load(status, q)
           }}
         />
       )}
@@ -219,6 +240,7 @@ export function Quotes() {
         <QuoteDetail
           quote={detail}
           canManage={canManage}
+          rowBusy={rowBusy}
           onStatus={(s) => setStatusOf(detail.id, s)}
           onConvert={() => convert(detail.id)}
           onEdit={() => { setEditing(detail); setCreating(false) }}
@@ -236,11 +258,13 @@ export function Quotes() {
 function QuoteEditor({
   quote,
   canOverridePrice,
+  canDiscount,
   onClose,
   onSaved,
 }: {
   quote: Quote | null
   canOverridePrice: boolean
+  canDiscount: boolean
   onClose: () => void
   onSaved: (q: Quote) => void
 }) {
@@ -466,8 +490,10 @@ function QuoteEditor({
         </div>
 
         <div className="grid sm:grid-cols-3 gap-3">
-          <Field label="Discount">
-            <MoneyInput value={discountCents} onCents={setDiscountCents} />
+          <Field label="Discount" hint={canDiscount ? undefined : 'Needs the apply-discount permission'}>
+            <MoneyInput value={discountCents} onCents={setDiscountCents} readOnly={!canDiscount}
+              className={canDiscount ? '' : 'opacity-60'}
+              title={canDiscount ? 'Order-level discount' : 'Applying a discount needs payments.apply_discount'} />
           </Field>
           <Field label="Discount label">
             <Input value={discountLabel} onChange={(e) => setDiscountLabel(e.target.value)} placeholder="e.g. negotiated" />
@@ -500,10 +526,11 @@ function defaultValidUntil(): string {
 // ---- Detail drawer ----
 
 function QuoteDetail({
-  quote, canManage, onStatus, onConvert, onEdit, onClose,
+  quote, canManage, rowBusy, onStatus, onConvert, onEdit, onClose,
 }: {
   quote: Quote
   canManage: boolean
+  rowBusy: number
   onStatus: (s: QuoteStatus) => void
   onConvert: () => void
   onEdit: () => void
@@ -572,23 +599,27 @@ function QuoteDetail({
         {canManage && (
           <div className="flex flex-wrap gap-2 border-t-2 border-line pt-3">
             {quote.status === 'draft' && (
-              <Button variant="secondary" size="sm" onClick={() => onStatus('sent')}>
-                <Send size={14} strokeWidth={2.5} aria-hidden /> Mark sent
+              <Button variant="secondary" size="sm" onClick={() => onStatus('sent')} disabled={rowBusy === quote.id}>
+                {rowBusy === quote.id ? <Spinner className="border-t-brand-ink" /> : <Send size={14} strokeWidth={2.5} aria-hidden />}
+                Mark sent
               </Button>
             )}
             {(quote.status === 'draft' || quote.status === 'sent') && (
               <>
-                <Button variant="secondary" size="sm" onClick={() => onStatus('accepted')}>
-                  <CircleCheck size={14} strokeWidth={2.5} aria-hidden /> Accepted
+                <Button variant="secondary" size="sm" onClick={() => onStatus('accepted')} disabled={rowBusy === quote.id}>
+                  {rowBusy === quote.id ? <Spinner className="border-t-brand-ink" /> : <CircleCheck size={14} strokeWidth={2.5} aria-hidden />}
+                  Accepted
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => onStatus('declined')}>
+                <Button variant="ghost" size="sm" onClick={() => onStatus('declined')} disabled={rowBusy === quote.id}>
                   <CircleX size={14} strokeWidth={2.5} aria-hidden /> Declined
                 </Button>
               </>
             )}
             {(quote.status === 'draft' || quote.status === 'sent' || quote.status === 'accepted') && (
-              <Button variant="primary" size="sm" onClick={onConvert} title="Parks the lines in this till's Held sales">
-                <ShoppingCart size={14} strokeWidth={2.5} aria-hidden /> Move to till
+              <Button variant="primary" size="sm" onClick={onConvert} disabled={rowBusy === quote.id}
+                title="Parks the lines in this till's Held sales">
+                {rowBusy === quote.id ? <Spinner className="border-t-brand-ink" /> : <ShoppingCart size={14} strokeWidth={2.5} aria-hidden />}
+                Move to till
               </Button>
             )}
             {editable && (
@@ -614,12 +645,25 @@ function QuotePrint({ quote, onClose }: { quote: Quote; onClose: () => void }) {
     document.title = `${quote.quoteNo} — ${quote.customerName}`
     return () => { document.title = prev }
   }, [quote])
+  // Toggle the isolation class the print stylesheet targets; without it,
+  // window.print() output the whole app (the review's H-1).
+  const doPrint = () => {
+    document.body.classList.add('printing-quote')
+    const cleanup = () => {
+      document.body.classList.remove('printing-quote')
+      window.removeEventListener('afterprint', cleanup)
+    }
+    window.addEventListener('afterprint', cleanup)
+    window.print()
+    // Safety net for browsers that skip afterprint on cancel.
+    window.setTimeout(cleanup, 2000)
+  }
   return (
     <Modal open onClose={onClose} size="md" title={`Print ${quote.quoteNo}`}
       footer={
         <div className="flex gap-2 w-full justify-end">
           <Button variant="ghost" onClick={onClose}>Close</Button>
-          <Button variant="primary" onClick={() => window.print()}>
+          <Button variant="primary" onClick={doPrint}>
             <Printer size={15} strokeWidth={2.5} aria-hidden /> Print / Save PDF
           </Button>
         </div>

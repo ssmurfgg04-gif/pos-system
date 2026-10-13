@@ -204,7 +204,13 @@ export interface User {
   createdAt: string
 }
 
-export interface PinUser { id: number; fullName: string; roleName: string }
+export interface PinUser {
+  id: number
+  /** Login name — the PIN-reset flow sends THIS (display names don't match accounts). */
+  username: string
+  fullName: string
+  roleName: string
+}
 
 export interface Category { id: number; name: string; slug: string; productCount?: number }
 
@@ -768,6 +774,8 @@ export interface PinResetRow {
   deviceId: string
   deviceName: string
   username: string
+  /** 'pending' = awaiting approval, 'approved' = a code was issued (can re-mint). */
+  status: 'pending' | 'approved'
   createdAt: string
 }
 
