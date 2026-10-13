@@ -41,6 +41,9 @@ type H struct {
         LoginRL    *auth.RateLimiter
         PinRL      *auth.RateLimiter
         CallbackRL *auth.RateLimiter
+        // IPRL blunts credential SPRAY (many usernames from one source),
+        // complementing the per-account limits in LoginRL/PinRL.
+        IPRL *auth.RateLimiter
 
         // Desktop (single-machine) mode. Set by main after New(); when
         // Desktop.Desktop is true the SPA shows an admin "Quit" affordance.
@@ -67,6 +70,10 @@ func New(db *database.DB, st *settings.Store, svc *services.Service, hub *ws.Hub
                 Updater: update.NewChecker("dev", update.Repo, st),
                 LoginRL: auth.NewRateLimiter(60*time.Second, 10),
                 PinRL:   auth.NewRateLimiter(60*time.Second, 15),
+                // Per-source budget: generous enough for a busy till (each
+                // LAN client has its own IP), tight enough to make spraying
+                // hundreds of usernames useless.
+                IPRL: auth.NewRateLimiter(60*time.Second, 30),
                 // Callbacks are rare (one per STK push); throttling kills
                 // blind checkout_request_id guessing without touching Daraja
                 // retries (minutes apart).

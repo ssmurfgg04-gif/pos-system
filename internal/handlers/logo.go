@@ -94,7 +94,7 @@ func (h *H) UploadLogo(c *gin.Context) {
                 return
         }
         h.svc(c).Audit(p.ID, p.Username, "BRAND_LOGO_UPDATED", "settings", "", "brand_logo")
-        h.Hub.BroadcastJSON(services.EventSettingsUpdate, h.settings(c).Branding())
+        h.Hub.BroadcastJSONForShop(services.EventSettingsUpdate, h.settings(c).Branding(), h.shopID(c))
         // The logo follows the team: a compact data-URL copy rides the config
         // whitelist (brand_logo_data); other tills materialise it into their
         // own logo file on apply. Previously the logo lived only on this
@@ -116,7 +116,7 @@ func (h *H) DeleteLogo(c *gin.Context) {
                 return
         }
         h.svc(c).Audit(p.ID, p.Username, "BRAND_LOGO_REMOVED", "settings", "", "brand_logo")
-        h.Hub.BroadcastJSON(services.EventSettingsUpdate, h.settings(c).Branding())
+        h.Hub.BroadcastJSONForShop(services.EventSettingsUpdate, h.settings(c).Branding(), h.shopID(c))
         h.svc(c).EmitBrandLogo("") // clear fleet-wide
         h.ok(c, gin.H{"brand_logo_url": ""})
 }

@@ -86,7 +86,7 @@ func lineName(it models.QuoteItem) string {
 func (s *Service) normalizeQuoteInput(in *models.QuoteInput) error {
         in.CustomerName = strings.TrimSpace(in.CustomerName)
         in.CustomerPhone = strings.TrimSpace(in.CustomerPhone)
-        in.CustomerID = in.CustomerID // explicit zero is fine — walk-in quote
+        // CustomerID 0 is a walk-in quote — nothing to resolve.
         if in.CustomerID != 0 {
                 c, err := s.GetCustomer(in.CustomerID)
                 if err != nil {

@@ -29,7 +29,7 @@ func (h *H) Login(c *gin.Context) {
                 return
         }
         key := "login:" + strings.ToLower(body.Username)
-        if !h.LoginRL.Allow(key) {
+        if !h.LoginRL.Allow(key) || !h.IPRL.Allow("login-ip:"+c.ClientIP()) {
                 h.fail(c, 429, "too many attempts — wait a minute")
                 return
         }
@@ -246,7 +246,7 @@ func (h *H) PinLogin(c *gin.Context) {
                 h.fail(c, 400, "userId and 4-digit pin required")
                 return
         }
-        if !h.PinRL.Allow("pin:" + itoa64(body.UserID)) {
+        if !h.PinRL.Allow("pin:"+itoa64(body.UserID)) || !h.IPRL.Allow("pin-ip:"+c.ClientIP()) {
                 h.fail(c, 429, "too many attempts — wait a minute")
                 return
         }
@@ -387,7 +387,7 @@ func (h *H) OwnerSignin(c *gin.Context) {
                 return
         }
         key := "ownersignin:" + strings.ToLower(body.Username)
-        if !h.LoginRL.Allow(key) {
+        if !h.LoginRL.Allow(key) || !h.IPRL.Allow("owner-ip:"+c.ClientIP()) {
                 h.fail(c, 429, "too many attempts — wait a minute")
                 return
         }
