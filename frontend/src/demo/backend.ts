@@ -2617,7 +2617,14 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const changed: string[] = []
     for (const [k, v] of Object.entries(values)) {
       if (!ALLOWED_KEYS.has(k)) continue
-      if (isSecretKey(k) && v === MASK) continue
+      if (isSecretKey(k)) {
+        if (v === MASK || v === '') continue // untouched echo or cleared-by-accident — keep stored secret
+        if (v === '__CLEAR__') {
+          if (d.settings[k]) changed.push(k)
+          d.settings[k] = ''
+          continue
+        }
+      }
       if (d.settings[k] !== String(v)) changed.push(k)
       d.settings[k] = String(v)
     }

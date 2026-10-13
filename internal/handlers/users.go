@@ -3,6 +3,7 @@ package handlers
 import (
         "database/sql"
         "encoding/json"
+        "errors"
         "time"
 
         "github.com/gin-gonic/gin"
@@ -71,6 +72,14 @@ func (h *H) CreateUser(c *gin.Context) {
         var roleExists int
         if err := h.db(c).QueryRow(`SELECT COUNT(*) FROM roles WHERE id = ?`, body.RoleID).Scan(&roleExists); err != nil || roleExists == 0 {
                 h.fail(c, 400, "role not found")
+                return
+        }
+        var newRolePerms string
+        if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, body.RoleID).Scan(&newRolePerms); err != nil {
+                h.fail(c, 400, "role not found")
+                return
+        }
+        if !h.guardGrantElevation(c, newRolePerms) {
                 return
         }
         pwHash, err := auth.HashPassword(body.Password)
@@ -146,6 +155,16 @@ func (h *H) UpdateUser(c *gin.Context) {
         if !h.lastOwnerGuard(c, id, body.RoleID, active) {
                 return
         }
+        // Assignment escalation: putting someone into a role with authority
+        // keys requires the caller to hold those keys themselves.
+        var newRolePerms string
+        if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, body.RoleID).Scan(&newRolePerms); err != nil {
+                h.fail(c, 409, "cannot verify the role right now — the change was refused. Try again.")
+                return
+        }
+        if !h.guardGrantElevation(c, newRolePerms) {
+                return
+        }
         res, err := h.db(c).Exec(h.db(c).Rebind(`
                 UPDATE users SET full_name = ?, role_id = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?`), body.FullName, body.RoleID, active, id)
@@ -165,31 +184,63 @@ func (h *H) UpdateUser(c *gin.Context) {
 // active owner-level user (both settings.manage + users.manage). Deactiva-
 // tion, demotion and self-deactivation of the final owner are all blocked
 // here — the box can never lock its own owner out by edit.
+// Fail-CLOSED: if the database cannot prove another owner exists, the risky
+// change is refused (a transient DB error must never enable owner lockout).
 func (h *H) lastOwnerGuard(c *gin.Context, targetID int64, newRoleID int64, setActive int) bool {
         if setActive == 0 && targetID == h.principal(c).ID {
                 h.fail(c, 409, "you cannot deactivate yourself")
                 return false
         }
-        ownerLevel := func(roleID int64) bool {
+        // noRow reports whether err is sql.ErrNoRows — the target simply does
+        // not exist in THIS shop. That is not a database failure: let the
+        // request continue so the outer handler answers 404 (and a delete of a
+        // user that is not here can never lock out an owner that is not here).
+        noRow := func(err error) bool { return errors.Is(err, sql.ErrNoRows) }
+        ownerLevel := func(roleID int64) (bool, error) {
                 var permsJSON string
                 if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, roleID).Scan(&permsJSON); err != nil {
-                        return false
+                        return false, err
                 }
-                return permsIncludeBoth(permsJSON, "settings.manage", "users.manage")
+                return permsIncludeBoth(permsJSON, "settings.manage", "users.manage"), nil
         }
         if setActive == 0 {
                 var roleID int64
-                h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID)
-                if !ownerLevel(roleID) {
+                if err := h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID); err != nil && !noRow(err) {
+                        h.fail(c, 409, "cannot verify the account's role right now — the last owner would be at risk, so the change was refused. Try again.")
+                        return false
+                } else if noRow(err) {
+                        return true
+                }
+                ok, err := ownerLevel(roleID)
+                if err != nil {
+                        h.fail(c, 409, "cannot verify owner accounts right now — the last owner would be at risk, so the change was refused. Try again.")
+                        return false
+                }
+                if !ok {
                         return true // deactivating a non-owner: fine
                 }
         } else {
-                if ownerLevel(newRoleID) {
+                ok, err := ownerLevel(newRoleID)
+                if err != nil {
+                        h.fail(c, 409, "cannot verify owner accounts right now — the last owner would be at risk, so the change was refused. Try again.")
+                        return false
+                }
+                if ok {
                         return true // reassigning to/demoting within owner-level roles keeps an owner
                 }
                 var roleID int64
-                h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID)
-                if !ownerLevel(roleID) {
+                if err := h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID); err != nil && !noRow(err) {
+                        h.fail(c, 409, "cannot verify the account's role right now — the last owner would be at risk, so the change was refused. Try again.")
+                        return false
+                } else if noRow(err) {
+                        return true
+                }
+                wasOwner, err := ownerLevel(roleID)
+                if err != nil {
+                        h.fail(c, 409, "cannot verify owner accounts right now — the last owner would be at risk, so the change was refused. Try again.")
+                        return false
+                }
+                if !wasOwner {
                         return true // target was not an owner: fine
                 }
         }
@@ -198,7 +249,8 @@ func (h *H) lastOwnerGuard(c *gin.Context, targetID int64, newRoleID int64, setA
                 SELECT u.id, COALESCE(r.permissions, '[]') FROM users u JOIN roles r ON r.id = u.role_id
                 WHERE u.is_active = 1 AND u.id != ?`, targetID)
         if err != nil {
-                return true // fail open — the per-endpoint permission checks still apply
+                h.fail(c, 409, "cannot verify owner accounts right now — the last owner would be at risk, so the change was refused. Try again.")
+                return false // fail CLOSED — never allow when safety cannot be proven
         }
         defer rows.Close()
         for rows.Next() {
