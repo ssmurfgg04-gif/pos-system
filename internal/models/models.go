@@ -626,6 +626,78 @@ type TeamJoinInfo struct {
         UserID    int64
 }
 
+// ---- Forgot-PIN cloud recovery ----
+
+// PinResetRequested is the ack after a locked till files a reset request.
+type PinResetRequested struct {
+        RequestID int64  `json:"requestId"`
+        Username  string `json:"username"`
+        CreatedAt string `json:"createdAt"`
+        Reused    bool   `json:"reused"`
+}
+
+// PinResetRedeemed is the ack after the owner's code set a new PIN. UserID
+// lets the till sign the person straight in (nobody retypes a fresh PIN).
+type PinResetRedeemed struct {
+        Username string `json:"username"`
+        UserID   int64  `json:"userId"`
+}
+
+// ---- Quotations ----
+
+// Quote statuses: draft → sent → accepted/declined; converted is stamped
+// automatically when the quote's lines move to a till as a parked sale.
+const (
+        QuoteDraft     = "draft"
+        QuoteSent      = "sent"
+        QuoteAccepted  = "accepted"
+        QuoteDeclined  = "declined"
+        QuoteConverted = "converted"
+)
+
+type QuoteItem struct {
+        ProductID     int64  `json:"productId"`
+        SKU           string `json:"sku"`
+        Name          string `json:"name"`
+        Qty           int    `json:"qty"`
+        UnitPriceCents int64 `json:"unitPriceCents"`
+        LineTotalCents int64 `json:"lineTotalCents"`
+}
+
+type Quote struct {
+        ID                  int64       `json:"id"`
+        QuoteNo             string      `json:"quoteNo"`
+        ClientUUID          string      `json:"clientUuid"`
+        CustomerID          int64       `json:"customerId"`
+        CustomerName        string      `json:"customerName"`
+        CustomerPhone       string      `json:"customerPhone"`
+        Status              string      `json:"status"`
+        Items               []QuoteItem `json:"items"`
+        SubtotalCents       int64       `json:"subtotalCents"`
+        DiscountCents       int64       `json:"discountCents"`
+        DiscountLabel       string      `json:"discountLabel"`
+        TaxCents            int64       `json:"taxCents"`
+        TotalCents          int64       `json:"totalCents"`
+        Notes               string      `json:"notes"`
+        ValidUntil          string      `json:"validUntil"`
+        CreatedBy           int64       `json:"createdBy"`
+        CreatedByName       string      `json:"createdByName"`
+        ConvertedHeldSaleID int64       `json:"convertedHeldSaleId"`
+        CreatedAt           string      `json:"createdAt"`
+        UpdatedAt           string      `json:"updatedAt"`
+}
+
+type QuoteInput struct {
+        CustomerID    int64       `json:"customerId"`
+        CustomerName  string      `json:"customerName"`
+        CustomerPhone string      `json:"customerPhone"`
+        Items         []QuoteItem `json:"items"`
+        DiscountCents int64       `json:"discountCents"`
+        DiscountLabel string      `json:"discountLabel"`
+        Notes         string      `json:"notes"`
+        ValidUntil    string      `json:"validUntil"`
+}
+
 type TeamDevice struct {
         DeviceID   string `json:"deviceId"`
         DeviceName string `json:"deviceName"`

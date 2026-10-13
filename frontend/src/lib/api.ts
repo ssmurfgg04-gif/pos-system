@@ -762,6 +762,62 @@ export interface TeamJoinResult {
   roleName: string
 }
 
+/** Open forgot-PIN request from a locked till (owner view). */
+export interface PinResetRow {
+  id: number
+  deviceId: string
+  deviceName: string
+  username: string
+  createdAt: string
+}
+
+/** One priced line on a quotation. */
+export interface QuoteItem {
+  productId: number
+  sku: string
+  name: string
+  qty: number
+  unitPriceCents: number
+  lineTotalCents: number
+}
+
+export type QuoteStatus = 'draft' | 'sent' | 'accepted' | 'declined' | 'converted'
+
+/** A quotation: a priced offer sent to a customer before any sale exists. */
+export interface Quote {
+  id: number
+  quoteNo: string
+  clientUuid: string
+  customerId: number
+  customerName: string
+  customerPhone: string
+  status: QuoteStatus
+  items: QuoteItem[]
+  subtotalCents: number
+  discountCents: number
+  discountLabel: string
+  taxCents: number
+  totalCents: number
+  notes: string
+  validUntil: string
+  createdBy: number
+  createdByName: string
+  convertedHeldSaleId: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface QuoteInput {
+  customerId: number
+  customerName: string
+  customerPhone: string
+  items: QuoteItem[]
+  discountCents: number
+  discountLabel: string
+  notes: string
+  validUntil: string
+}
+
 export interface TeamSyncStatus {
   enabled: boolean
   /** Legacy join code — empty/absent for zero-config cloud-identity tills. */

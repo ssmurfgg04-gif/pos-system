@@ -96,6 +96,12 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         // Team join link redemption (public: the single-use token IS the
         // credential — minted by the cloud, expiring, shown once).
         api.POST("/auth/team-join", h.TeamJoin)
+        // Forgot-PIN recovery (public: the requester is locked out by
+        // definition). The cloud gates every step on device identity; the
+        // owner till approves and reads out a single-use code.
+        api.POST("/auth/forgot-pin", h.ForgotPinRequest)
+        api.GET("/auth/forgot-pin/status", h.ForgotPinStatus)
+        api.POST("/auth/forgot-pin/redeem", h.ForgotPinRedeem)
         // Owner cloud sign-in (public: the cloud verifies the portal
         // credential and approves the device server-side) — for an owner
         // reinstalling the app or setting up a new till for an existing
@@ -281,6 +287,9 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         // Team join links (owner mints; workers redeem from a new machine).
         ts.POST("/team-sync/invites", h.TeamInviteCreate)
         ts.POST("/team-sync/invites/revoke", h.TeamInviteRevoke)
+        // Forgot-PIN recovery: open requests from locked tills + approve.
+        ts.GET("/team-sync/pin-resets", h.PinResetList)
+        ts.POST("/team-sync/pin-resets/approve", h.PinResetApprove)
 
         // Stocktake + gift cards (count sessions, code redemption).
         ct := authd.Group("", perm("suppliers.manage"))
@@ -293,6 +302,14 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         authd.GET("/gift-cards", perm("credit.manage"), h.ListGiftCards)
 
         authd.POST("/orders/:id/notify", perm("orders.notify"), h.NotifyOrderReady)
+        // Quotations: view for the till floor, manage to edit the pipeline.
+        authd.GET("/quotes", perm("quotes.view"), h.ListQuotes)
+        authd.GET("/quotes/:id", perm("quotes.view"), h.GetQuote)
+        qm := authd.Group("", perm("quotes.manage"))
+        qm.POST("/quotes", h.CreateQuote)
+        qm.PUT("/quotes/:id", h.UpdateQuote)
+        qm.POST("/quotes/:id/status", h.SetQuoteStatus)
+        qm.POST("/quotes/:id/convert", h.ConvertQuote)
         authd.POST("/design-jobs/:id/notify", perm("orders.notify"), h.NotifyJobReady)
         authd.GET("/orders/:id/events", perm("orders.view"), h.GetOrderEvents)
         authd.POST("/orders/:id/notes", perm("orders.view"), h.AddOrderNote)

@@ -14,6 +14,8 @@ var PermissionCatalog = []PermissionDef{
         {Key: "pos.void", Group: "Selling", Label: "Void / cancel orders"},
         {Key: "pos.hold", Group: "Selling", Label: "Park and resume sales"},
         {Key: "orders.view", Group: "Selling", Label: "View order history"},
+        {Key: "quotes.view", Group: "Selling", Label: "View quotations"},
+        {Key: "quotes.manage", Group: "Selling", Label: "Create and manage quotations"},
         {Key: "orders.assign", Group: "Selling", Label: "Assign and delegate jobs to staff"},
         {Key: "orders.perform", Group: "Selling", Label: "Work on jobs assigned to you"},
         {Key: "orders.notify", Group: "Selling", Label: "Contact customers (WhatsApp, ready pickups)"},
@@ -85,6 +87,7 @@ var SeededRolePermissions = map[string][]string{
         "Front Desk": {
                 "pos.sell", "pos.void", "pos.hold", "orders.view",
                 "orders.assign", "orders.perform", "orders.notify",
+                "quotes.view", "quotes.manage",
                 "customers.view", "customers.manage",
                 "payments.manual", "payments.apply_discount", "loyalty.redeem", "credit.manage",
                 "products.view", "reports.view", "shifts.manage",
@@ -92,6 +95,7 @@ var SeededRolePermissions = map[string][]string{
         },
         "Branding": {
                 "pos.sell", "pos.hold", "orders.view", "orders.perform", "orders.notify",
+                "quotes.view", "quotes.manage",
                 "customers.view", "customers.manage",
                 "payments.manual", "payments.apply_discount", "loyalty.redeem",
                 "products.view", "shifts.manage",
@@ -99,6 +103,7 @@ var SeededRolePermissions = map[string][]string{
         },
         "Cyber": {
                 "pos.sell", "pos.hold", "orders.view", "orders.perform", "orders.notify",
+                "quotes.view", "quotes.manage",
                 "customers.view", "customers.manage",
                 "payments.manual", "payments.apply_discount", "loyalty.redeem",
                 "products.view", "shifts.manage",
@@ -106,10 +111,10 @@ var SeededRolePermissions = map[string][]string{
         },
         "Designer": {
                 "design.view", "design.manage", "orders.perform",
-                "products.view", "orders.view",
+                "products.view", "orders.view", "quotes.view",
         },
         "Cashier": {
                 "pos.sell", "pos.void", "orders.view", "payments.manual",
-                "shifts.manage", "customers.view",
+                "shifts.manage", "customers.view", "quotes.view",
         },
 }

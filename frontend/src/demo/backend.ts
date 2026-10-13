@@ -51,6 +51,29 @@ interface DemoHeldSale {
   createdAt: string
 }
 
+interface DemoQuote {
+  id: number
+  quoteNo: string
+  clientUuid: string
+  customerId: number
+  customerName: string
+  customerPhone: string
+  status: 'draft' | 'sent' | 'accepted' | 'declined' | 'converted'
+  items: { productId: number; sku: string; name: string; qty: number; unitPriceCents: number; lineTotalCents: number }[]
+  subtotalCents: number
+  discountCents: number
+  discountLabel: string
+  taxCents: number
+  totalCents: number
+  notes: string
+  validUntil: string
+  createdBy: number
+  createdByName: string
+  convertedHeldSaleId: number
+  createdAt: string
+  updatedAt: string
+}
+
 interface DemoVoidReason {
   id: number
   label: string
@@ -65,6 +88,7 @@ type DemoDBX = DemoDB & {
   productImages?: Record<string, string>
   stockCounts?: DemoStockCount[]
   giftCards?: DemoGiftCard[]
+  quotes?: DemoQuote[]
 }
 
 // ---- Stocktake (count sessions) & gift cards (v10 server parity) ----
@@ -228,6 +252,15 @@ function migrateDemo(d: DemoDB) {
   }
   if ((d.seq as any).held === undefined) {
     ;(d.seq as any).held = 1
+    dirty = true
+  }
+  // Quotations (v1.3.0): priced offers with a draft → sent pipeline.
+  if (!Array.isArray(x.quotes)) {
+    x.quotes = []
+    dirty = true
+  }
+  if ((d.seq as any).quote === undefined) {
+    ;(d.seq as any).quote = 1
     dirty = true
   }
   // v10: stock-count sessions, gift cards, gift-card flag on old products.
@@ -1555,6 +1588,159 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (x.heldSales.length === before) throw new ApiError(404, 'held sale not found')
     persist()
     return { deleted: true } as T
+  }
+
+  // ---- quotations (v1.3.0 parity with the real server) ----
+  // GET lists (status/q filters), POST creates, PUT edits draft/sent,
+  // /status moves the pipeline, /convert parks the lines as a held sale.
+  if (m === 'GET' && p === '/quotes') {
+    requirePerm(perms, 'quotes.view')
+    const x = d as DemoDBX
+    const status = (q.get('status') || 'all').trim()
+    const needle = (q.get('q') || '').trim().toLowerCase()
+    let out = [...(x.quotes || [])].sort((a, b) => b.id - a.id)
+    if (status !== 'all') {
+      const allow = new Set(status.split(',').map((s) => s.trim()).filter(Boolean))
+      out = out.filter((qy) => allow.has(qy.status))
+    }
+    if (needle) {
+      out = out.filter((qy) =>
+        qy.quoteNo.toLowerCase().includes(needle) ||
+        qy.customerName.toLowerCase().includes(needle) ||
+        qy.customerPhone.toLowerCase().includes(needle))
+    }
+    return out.slice(0, Number(q.get('limit')) || 100) as T
+  }
+  const quoteDemoTotals = (items: DemoQuote['items'], discountCents: number) => {
+    const subtotal = items.reduce((a, it) => a + it.lineTotalCents, 0)
+    const discount = Math.min(Math.max(0, discountCents), Math.max(0, subtotal - 1))
+    const discounted = subtotal - discount
+    const pct = Number(d.settings.tax_percent) || 16
+    const included = (d.settings.tax_included ?? 'true') === 'true'
+    const tax = included
+      ? Math.round(discounted * pct / (100 + pct))
+      : Math.round(discounted * pct / 100)
+    const total = included ? discounted : discounted + tax
+    return { subtotal, discount, tax, total }
+  }
+  const demoQuoteInput = () => {
+    const inItems = Array.isArray(body?.items) ? body.items : []
+    const items: DemoQuote['items'] = inItems.map((it: any) => {
+      const qty = Math.max(1, Math.round(Number(it?.qty) || 1))
+      const unitPriceCents = Math.max(0, Math.round(Number(it?.unitPriceCents) || 0))
+      return {
+        productId: Math.round(Number(it?.productId) || 0),
+        sku: String(it?.sku || ''),
+        name: String(it?.name || 'Item'),
+        qty, unitPriceCents,
+        lineTotalCents: qty * unitPriceCents,
+      }
+    }).filter((it: any) => it.qty > 0)
+    if (items.length === 0) throw new ApiError(422, 'add at least one line item')
+    const customerId = Math.round(Number(body?.customerId) || 0)
+    const customerName = String(body?.customerName || '').trim()
+    if (!customerId && !customerName) throw new ApiError(422, 'pick a customer or type a name for the quote')
+    return {
+      items, customerId, customerName,
+      customerPhone: String(body?.customerPhone || '').trim(),
+      discountCents: Math.max(0, Math.round(Number(body?.discountCents) || 0)),
+      discountLabel: String(body?.discountLabel || '').trim().slice(0, 120),
+      notes: String(body?.notes || '').slice(0, 2000),
+      validUntil: String(body?.validUntil || '').slice(0, 10),
+    }
+  }
+  if (m === 'POST' && p === '/quotes') {
+    requirePerm(perms, 'quotes.manage')
+    const x = d as DemoDBX
+    const inp = demoQuoteInput()
+    const t = quoteDemoTotals(inp.items, inp.discountCents)
+    const id = (d.seq as any).quote++
+    const now = nowIso()
+    const qy: DemoQuote = {
+      id, quoteNo: `QT-${String(id).padStart(6, '0')}`, clientUuid: `demo-${id}-${Date.now()}`,
+      ...inp,
+      status: 'draft',
+      subtotalCents: t.subtotal, discountCents: t.discount, taxCents: t.tax, totalCents: t.total,
+      createdBy: user.id, createdByName: user.fullName || user.username,
+      convertedHeldSaleId: 0, createdAt: now, updatedAt: now,
+    }
+    x.quotes = [...(x.quotes || []), qy]
+    audit(user.id, user.username, 'QUOTE_CREATED', 'quote', qy.quoteNo, qy.customerName)
+    persist()
+    return qy as T
+  }
+  const qIdMatch = p.match(/^\/quotes\/(\d+)$/)
+  if (m === 'GET' && qIdMatch) {
+    requirePerm(perms, 'quotes.view')
+    const x = d as DemoDBX
+    const qy = (x.quotes || []).find((z) => z.id === Number(qIdMatch[1]))
+    if (!qy) throw new ApiError(404, 'quote not found')
+    return qy as T
+  }
+  if (m === 'PUT' && qIdMatch) {
+    requirePerm(perms, 'quotes.manage')
+    const x = d as DemoDBX
+    const qy = (x.quotes || []).find((z) => z.id === Number(qIdMatch[1]))
+    if (!qy) throw new ApiError(404, 'quote not found')
+    if (qy.status !== 'draft' && qy.status !== 'sent') throw new ApiError(422, `a ${qy.status} quote can no longer be edited`)
+    const inp = demoQuoteInput()
+    const t = quoteDemoTotals(inp.items, inp.discountCents)
+    Object.assign(qy, inp, {
+      subtotalCents: t.subtotal, discountCents: t.discount, taxCents: t.tax, totalCents: t.total,
+      updatedAt: nowIso(),
+    })
+    audit(user.id, user.username, 'QUOTE_UPDATED', 'quote', qy.quoteNo, '')
+    persist()
+    return qy as T
+  }
+  const qStatusMatch = p.match(/^\/quotes\/(\d+)\/status$/)
+  if (m === 'POST' && qStatusMatch) {
+    requirePerm(perms, 'quotes.manage')
+    const x = d as DemoDBX
+    const qy = (x.quotes || []).find((z) => z.id === Number(qStatusMatch[1]))
+    if (!qy) throw new ApiError(404, 'quote not found')
+    const next = String(body?.status || '')
+    if (next === 'sent') {
+      if (qy.status !== 'draft') throw new ApiError(422, 'only a draft can be marked sent')
+    } else if (next === 'accepted' || next === 'declined') {
+      if (qy.status === 'converted') throw new ApiError(422, 'this quote was already converted to a sale')
+    } else {
+      throw new ApiError(422, 'unknown status')
+    }
+    qy.status = next as DemoQuote['status']
+    qy.updatedAt = nowIso()
+    audit(user.id, user.username, `QUOTE_${next.toUpperCase()}`, 'quote', qy.quoteNo, '')
+    persist()
+    return qy as T
+  }
+  const qConvertMatch = p.match(/^\/quotes\/(\d+)\/convert$/)
+  if (m === 'POST' && qConvertMatch) {
+    requirePerm(perms, 'quotes.manage')
+    const x = d as DemoDBX
+    const qy = (x.quotes || []).find((z) => z.id === Number(qConvertMatch[1]))
+    if (!qy) throw new ApiError(404, 'quote not found')
+    if (qy.status === 'converted') throw new ApiError(422, 'this quote was already moved to a till')
+    if (qy.status === 'declined') throw new ApiError(422, 'this quote was declined')
+    const lines = qy.items.filter((it) => it.productId > 0)
+    if (lines.length === 0) throw new ApiError(422, 'this quote has no catalog products to move to the till')
+    const heldId = (d.seq as any).held++
+    const sale: DemoHeldSale = {
+      id: heldId,
+      refName: `Quote ${qy.quoteNo} — ${qy.customerName}`,
+      items: lines.map((it) => ({ productId: it.productId, qty: it.qty, unitPriceCents: it.unitPriceCents })),
+      customerId: qy.customerId, customerName: qy.customerName,
+      note: `From quote ${qy.quoteNo}`,
+      deviceId: 'demo-device',
+      createdBy: user.id, createdByName: user.fullName || user.username,
+      createdAt: nowIso(),
+    }
+    x.heldSales = [...(x.heldSales || []), sale]
+    qy.status = 'converted'
+    qy.convertedHeldSaleId = heldId
+    qy.updatedAt = nowIso()
+    audit(user.id, user.username, 'QUOTE_CONVERTED', 'quote', qy.quoteNo, `held sale ${heldId}`)
+    persist()
+    return sale as T
   }
 
   // ---- void-reason catalog (GET is any-authed; edits need settings.manage)

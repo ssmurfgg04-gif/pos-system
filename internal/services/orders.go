@@ -32,8 +32,12 @@ var (
 // app-written time columns. Fixed width keeps string comparisons
 // chronologically exact (variable RFC3339Nano trimming would not).
 func nowStamp() string {
-        return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+        return time.Now().UTC().Format(nowStampLayout)
 }
+
+// nowStampLayout is the exact shape of nowStamp — parsing and re-formatting
+// stamps (e.g. shift-report window padding) must round-trip byte-for-byte.
+const nowStampLayout = "2006-01-02T15:04:05.000Z"
 
 // NowStamp is the exported form for handlers: product/customer writes MUST
 // use the same fixed-width format as sync events, or the cross-device LWW
