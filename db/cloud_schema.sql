@@ -58,14 +58,12 @@ begin
      or p_secret_hash is null or length(p_secret_hash) < 32 then
     return json_build_object('ok', false, 'error', 'invalid identity');
   end if;
-  -- Claim the invite atomically FIRST (check-then-act on used_by would let
-  -- two concurrent joins share one single-use token under READ COMMITTED).
-  update sync_invites set used_by = p_device_id, used_at = now()
-    where id = inv.id and used_by = '';
-  if not found then
-    return json_build_object('ok', false, 'error',
-        'this invite is invalid, already used, or expired — ask the owner for a fresh link');
-  end if;
+  -- NOTE: no invite handling here — register is the zero-config / owner-
+  -- assignment path. Invite tokens are claimed exclusively by
+  -- sync_join_team (which takes p_token). An earlier revision of this file
+  -- accidentally copy-pasted the invite-claim UPDATE here referencing an
+  -- undeclared variable, which made every fresh registration fail with
+  -- "column inv.id does not exist" the moment the file was re-applied.
   select * into cur from sync_devices where device_id = p_device_id;
   if cur.device_id is not null then
     if cur.revoked then
@@ -262,6 +260,12 @@ end $function$;
 -- ============================================================
 
 -- ------------------------------------------------------- device config ----
+-- Till-scoped: returns ONLY the keys a till consumes (payment + self-update).
+-- Anything else an owner later stores in app_config (off-site backup keys,
+-- infrastructure credentials, service-role keys) stays in the cloud and is
+-- NOT distributed to every approved till — device approval must not grant
+-- unrelated secrets. Extend the allowlist deliberately when a new key
+-- genuinely belongs on tills.
 create or replace function public.sync_device_config(
   p_device_id text, p_secret_hash text)
 returns json language plpgsql security definer
@@ -277,7 +281,8 @@ begin
   end if;
   update sync_devices set last_seen = now() where device_id = dev.device_id;
   select coalesce(jsonb_object_agg(c.key, c.value), '{}'::jsonb) into rows
-    from app_config c;
+    from app_config c
+    where c.key like 'paystack_%' or c.key like 'update_manifest_%';
   return json_build_object('ok', true, 'config', rows);
 end $function$;
 

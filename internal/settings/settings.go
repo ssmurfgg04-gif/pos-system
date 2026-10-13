@@ -18,9 +18,13 @@ import (
 )
 
 const MaskToken = "__SET__" // echoed for configured secrets; never the value
+const ClearToken = "__CLEAR__" // explicit "remove this credential" from the UI
 
 // IsMaskToken reports whether v is the masked-secret sentinel.
 func IsMaskToken(v string) bool { return v == MaskToken }
+
+// IsClearToken reports whether v is the explicit clear-secret sentinel.
+func IsClearToken(v string) bool { return v == ClearToken }
 
 func isSecretKey(k string) bool {
         k = strings.ToLower(k)
@@ -197,13 +201,29 @@ func (s *Store) Set(key, value string) error {
         return nil
 }
 
-// Update applies a batch. Values equal to MaskToken keep the stored secret.
+// Update applies a batch. For secret-class keys:
+//   - MaskToken keeps the stored secret (the UI echoes it back untouched)
+//   - "" keeps the stored secret too — an accidentally cleared field (a
+//     stray backspace, a browser autofill wipe) must never silently break
+//     Paystack at checkout; removing a credential is explicit
+//   - ClearToken removes the stored secret
 // Returns the keys actually changed.
 func (s *Store) Update(kv map[string]string) ([]string, error) {
         changed := make([]string, 0, len(kv))
         for k, v := range kv {
-                if isSecretKey(k) && v == MaskToken {
-                        continue // masked echo — keep existing secret
+                if isSecretKey(k) {
+                        if v == MaskToken || v == "" {
+                                continue // untouched echo or cleared-by-accident — keep existing secret
+                        }
+                        if v == ClearToken {
+                                if s.Get(k) != "" {
+                                        if err := s.Set(k, ""); err != nil {
+                                                return changed, fmt.Errorf("clear %s: %w", k, err)
+                                        }
+                                        changed = append(changed, k)
+                                }
+                                continue
+                        }
                 }
                 if k == "tax_percent" {
                         f, ferr := strconv.ParseFloat(v, 64)

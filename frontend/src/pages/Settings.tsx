@@ -30,7 +30,62 @@ import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, Credi
 type SettingsMap = Record<string, string>
 
 // Secret values are echoed masked by the API; sending the mask back keeps
-// the stored secret. An empty field never clears a configured secret.
+// the stored secret. An empty field never clears a configured secret —
+// removal is the explicit "Remove saved key" button (sends __CLEAR__).
+
+/**
+ * SecretField — a credential input that never shows (or pre-fills) the
+ * stored value. Configured shows a status pill; typing replaces; blank
+ * keeps; "Remove saved key" clears explicitly with a confirmation.
+ */
+function SecretField({
+  label, hint, storeKey, values, set, placeholder,
+}: {
+  label: string
+  hint?: string
+  storeKey: string
+  values: SettingsMap
+  set: (k: string, v: string) => void
+  placeholder?: string
+}) {
+  const configured = values[storeKey] === '__SET__'
+  return (
+    <Field
+      label={label}
+      hint={configured
+        ? 'Saved securely on this machine. Leave blank to keep it — type a new one to replace it.'
+        : hint}
+    >
+      <div className="space-y-1.5">
+        {configured && (
+          <div className="flex items-center gap-2">
+            <StatusPill status="paid" label="Configured ✓" />
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-danger-text"
+              onClick={() => {
+                if (!confirm(`Remove the saved ${label.toLowerCase()}? Things that depend on it will stop working until a new one is entered.`)) return
+                set(storeKey, '__CLEAR__')
+              }}
+            >
+              <Trash2 size={13} strokeWidth={2.5} aria-hidden />
+              Remove saved key
+            </Button>
+          </div>
+        )}
+        <Input
+          value={configured ? '' : (values[storeKey] ?? '')}
+          onChange={(e) => set(storeKey, e.target.value)}
+          type="password"
+          autoComplete="new-password"
+          placeholder={configured ? 'Leave blank to keep the saved key' : (placeholder || 'Paste the key here')}
+          className="font-mono"
+        />
+      </div>
+    </Field>
+  )
+}
 
 export function Settings() {
   const reloadBranding = useBranding((s) => s.load)
@@ -575,10 +630,10 @@ export function Settings() {
                   <Input value={values.offsite_prefix ?? ''} onChange={(e) => set('offsite_prefix', e.target.value.trim())} placeholder="Defaults to this machine's name" className="font-mono" />
                 </Field>
                 <Field label="Service role key">
-                  <Input value={values.offsite_secret_key ?? ''} onChange={(e) => set('offsite_secret_key', e.target.value)} type="password" className="font-mono" />
+                  <SecretField label="Service role key" storeKey="offsite_secret_key" values={values} set={set} placeholder="eyJhbGciOi... (the service role key)" />
                 </Field>
-                <Field label="Backup passphrase" hint="Encrypts every copy. Shows as __SET__ once saved — write it down now.">
-                  <Input value={values.offsite_passphrase ?? ''} onChange={(e) => set('offsite_passphrase', e.target.value)} type="password" className="font-mono" />
+                <Field label="Backup passphrase" hint="Encrypts every copy. Write it down somewhere safe — without it the backups cannot be opened.">
+                  <SecretField label="Backup passphrase" storeKey="offsite_passphrase" values={values} set={set} placeholder="A long phrase only you know" />
                 </Field>
               </>
             ) : (
