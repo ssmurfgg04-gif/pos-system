@@ -146,3 +146,18 @@ SQL. Tables the tills never see get `revoke all ... from anon, authenticated`.
   with RowsAffected checks — keep it that way.
 - Every public auth endpoint is rate-limited and audited; generic errors
   only (no username enumeration); timing-equalized unknowns.
+
+## Secret save semantics (v1.3.1 — do not "simplify" these)
+
+- Secret-class keys (name contains secret/passkey/passphrase/consumer_key,
+  or jwt_secret) follow: GET → `__SET__` mask; save `__SET__` → keep;
+  save `""` → KEEP (accidental clear must never break Paystack); save
+  `__CLEAR__` → remove; any other value → replace (encrypted at rest).
+- The demo backend (frontend/src/demo/backend.ts) mirrors this exactly.
+- `settings.Update`, `handlers.UpdateSettings`, `SecretField` in
+  Settings.tsx and docs/SETTINGS-AUDIT.md are the sources of truth.
+- Cloud vault (`sync_device_config`) returns ONLY `paystack_*` +
+  `update_manifest_*` — add new till-needed key families there deliberately.
+- Authority keys (`users.manage`, `settings.manage`, `roles.manage`) can
+  only be granted by callers who already hold them (roles.go guards +
+  escalation_test.go). Keep it that way.
