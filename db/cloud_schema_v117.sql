@@ -285,7 +285,7 @@ create or replace function public.sync_list_pin_resets(
   p_device_id text, p_secret_hash text)
 returns json language plpgsql security definer set search_path to 'public'
 as $function$
-declare dev record;
+declare dev record; out_rows json;
 begin
   select * into dev from sync_devices
     where device_id = p_device_id and secret_hash = p_secret_hash
@@ -295,16 +295,16 @@ begin
   end if;
   -- Pending + still-relevant approved requests (an approved code expires in
   -- 15 minutes; the owner must be able to find the row again to re-mint).
-  return json_build_object('ok', true, 'requests', coalesce(json_agg(
-    json_build_object(
+  select coalesce(json_agg(json_build_object(
       'id', r.id, 'deviceId', r.device_id, 'deviceName', r.device_name,
       'username', r.username, 'status', r.status,
-      'createdAt', r.created_at, 'expiresAt', r.expires_at)
-    order by r.id), '[]'::json)
+      'createdAt', r.created_at, 'expiresAt', r.expires_at) order by r.id), '[]'::json)
+    into out_rows
     from sync_pin_resets r
     where r.team_code = dev.team_code
       and r.status in ('pending', 'approved')
-      and r.created_at > now() - interval '7 days');
+      and r.created_at > now() - interval '7 days';
+  return json_build_object('ok', true, 'requests', out_rows);
 end $function$;
 
 -- Owner approves a request: mints a single-use 8-digit code (15 minutes,
