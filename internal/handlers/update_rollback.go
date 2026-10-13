@@ -66,7 +66,7 @@ func (h *H) PreUpdateSnapshot(version string) (string, error) {
         dataDir := filepath.Dir(dbPath)
         stamp := time.Now().UTC().Format("20060102-150405")
         archive := filepath.Join(dataDir, "backups", "pre-update-"+sanitizeLabel(version)+"-"+stamp)
-        if err := os.MkdirAll(archive, 0o755); err != nil {
+        if err := os.MkdirAll(archive, 0o700); err != nil {
                 return "", err
         }
 
@@ -97,6 +97,12 @@ func (h *H) PreUpdateSnapshot(version string) (string, error) {
                         snapErrs = append(snapErrs, rel+": "+err.Error())
                         continue
                 }
+                // Snapshots hold the full shop database — force owner-only
+                // regardless of umask.
+                if err := os.Chmod(dst, 0o600); err != nil {
+                        snapErrs = append(snapErrs, rel+": "+err.Error())
+                        continue
+                }
                 index = append(index, snapIndexEntry{Snap: snapName, Rel: rel})
         }
         if len(snapErrs) > 0 {
@@ -105,8 +111,14 @@ func (h *H) PreUpdateSnapshot(version string) (string, error) {
         // The index is what makes undo path-exact — without it a shops/<id>.db
         // snapshot would restore to <dataDir>/<id>.db and the registry would
         // never see it (the "undo did not bring my stock back" class of bug).
-        if raw, err := json.MarshalIndent(index, "", "  "); err == nil {
-                _ = os.WriteFile(filepath.Join(archive, "snapshots.json"), raw, 0o600)
+        // A failed index write must abort (fail closed): an unindexed archive
+        // must never be published as a rollback candidate.
+        raw, err := json.MarshalIndent(index, "", "  ")
+        if err != nil {
+                return "", fmt.Errorf("marshal snapshot index: %w", err)
+        }
+        if err := os.WriteFile(filepath.Join(archive, "snapshots.json"), raw, 0o600); err != nil {
+                return "", fmt.Errorf("write snapshot index: %w", err)
         }
 
         // 2. Tenants registry + vault key (they live next to the databases).

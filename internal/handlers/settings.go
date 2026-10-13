@@ -79,7 +79,7 @@ func (h *H) UpdateSettings(c *gin.Context) {
         // loyalty, paystack public config, ...) propagate to the rest of
         // the team through the sync log — no reinstall on other tills.
         h.svc(c).EmitConfig(changed)
-        h.Hub.BroadcastJSON(services.EventSettingsUpdate, h.settings(c).Branding())
+        h.Hub.BroadcastJSONForShop(services.EventSettingsUpdate, h.settings(c).Branding(), h.shopID(c))
         h.ok(c, h.settings(c).Snapshot())
 }
 

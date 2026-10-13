@@ -32,9 +32,9 @@ LEGACY = {"ledgerpos-linux-x64.tar.gz"}
 
 NOTES = """LedgerPOS {v} — the point of sale that installs itself.
 
-**New in 1.2.0 — the ERP layer is here, and a fresh till signs in like a website.** Three headlines. **(1) Owner sign-in on any till:** reinstalling the app or setting up a new machine no longer forces you through "create your store" — first run now offers **Sign in / Register a new business / join a team link**, the way websites do it. Owners sign in with their normal username + password (the same credential as the owner web portal), the cloud approves the till server-side, and the whole shop — products, customers, history — syncs down. Teammates still join with a single link. **(2) ERP depth (P6):** cash-drawer sessions now ship X/Z reports — tap **X report** on an open shift for live totals and expected drawer cash, count the drawer, and the Z close-out freezes counted cash and variance forever; purchase-order receiving now pushes the new stock to every till on the team (previously local-only), with weighted-average cost verified; **eTIMS-ready invoices** — set your KRA PIN in Settings and the checkout rail offers a buyer KRA PIN field, turning the receipt into a printed TAX INVOICE (buyer PIN + invoice number stored per order, ready for a KRA Control Unit bridge); multi-store owners get an **All shops** consolidated daily report with per-shop rows. **(3) The counter is easier to run:** the checkout rail now uses compact cart rows (photo, name, inline quantity stepper) with a tight totals + payment block, so a 3-item cart no longer scrolls the screen away; washed-out transparent greys across the app (product monograms, disabled buttons, row tints) were solidified for contrast. Under the hood: exactly-once sync hardening, first-run owner setup with recovery codes, business roles (Front desk / Branding / Cyber / Designer), the connected order→job→WhatsApp→collect lifecycle, and CRM reporting from phases 1–5 all ride along in this release. Full Go suite green, 95/95 frontend tests, migration is additive with a written rollback plan (docs/MIGRATION-v15-ROLLBACK.md).
+**What is new in 1.3.1: a safety sweep. Nothing to relearn — your till looks and works exactly the same.** This release tightens the lock on the door you never see. Staff logins can no longer be quietly upgraded into owner accounts, and role edits can no longer lock the business owner out by accident. Saved payment and backup credentials are protected from peeking and from accidental erasure — they save, they work, and they never print themselves on screen. Before every update the app now takes a full safety snapshot and refuses to continue if that snapshot is not complete, so "Undo update" always really undoes. Local backups are now private to your own user account on the computer. Signing in is protected against someone trying many usernames in a row, not just one name over and over. Paystack payments work exactly as before — nothing changed on the counter. The team sync fixes a rare interruption window so customer balances can never double-count. Shop details, receipts, printers and business settings stay right where they were — Settings → Business.
 
-Download the file for your machine, double-click it, start selling. The whole shop — stock, till, M-Pesa, KRA reports — runs on that machine. No servers to configure, nothing to type into a terminal, works when the internet doesn\'t.
+Download the file for your machine, double-click it, start selling. The whole shop — stock, till, M-Pesa, KRA reports — runs on that machine. No servers to configure, nothing to type into a terminal, works when the internet doesn't.
 
 | File | For |
 |---|---|
@@ -43,11 +43,11 @@ Download the file for your machine, double-click it, start selling. The whole sh
 | `ledgerpos-macos-intel.zip` | macOS 12+ on Intel Macs |
 | `ledgerpos-linux-x64.tar.xz` | Linux x86-64, any distro |
 
-**First login:** on a real box, pick **Sign in** (existing business — cloud syncs down) or **Register a new business**; teammates paste the owner\'s join link. The web demo stays `admin` / `0000`. Your data stays on your machine.
+**First login:** on a real box, pick **Sign in** (existing business — cloud syncs down) or **Register a new business**; teammates paste the owner's join link. The web demo stays `admin` / `0000`. Your data stays on your machine.
 
 - **Windows SmartScreen** may warn (no code-signing certificate yet): *More info → Run anyway*.
 - **macOS Gatekeeper**: right-click the app → *Open → Open* (once; Apple remembers).
-- **Integrity:** SHA-256 of every package is published in the release\'s `checksums.txt` — or verify against `downloads/checksums.txt` in the repo.
+- **Integrity:** SHA-256 of every package is published in the release's `checksums.txt` — or verify against `downloads/checksums.txt` in the repo.
 - **Updates:** the app checks the cloud update manifest (SHA-256 verified) and can install or undo updates from Settings → System.""".replace("{v}", TAG.lstrip("v"))
 
 

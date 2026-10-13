@@ -410,3 +410,17 @@ Work Log:
 
 Stage Summary:
 - v1.3.0 = quotations + un-brick + forgot-PIN + deep-review hardening. All suites green (Go handlers 121s, services, settings; vitest 95; tsc; vite build). Docs: AI-HANDBOOK.md (orientation), MIGRATION-v17-ROLLBACK.md, SAWAPOS-COMPARISON.md.
+
+---
+Task ID: v1.3.1
+Agent: main (Super Z)
+Task: release-engineering diagnosis (site frozen at 1.2.1), security sweep riding the review checklist, v1.3.1 installers + OTA manifest.
+
+Work Log:
+- DIAGNOSED the "site still shows 1.2.1" report with GitHub API evidence: every "Deploy site to Netlify" run since the beginning — including the 10-03 run that coincided with the live 1.2.1 content — actually SKIPPED the deploy step (missing NETLIFY_AUTH_TOKEN/NETLIFY_SITE_ID secrets, logs fetched via API). No Netlify GitHub App check-runs/statuses exist on ANY commit in this repo, so the live site was a one-off deploy of the v1.2.1-era build (landing shows VERSION "1.1.10" — the un-bumped constant at commit b08a1f5 — with 1.2.1 installers). Not a size problem (all four packages 7.9-10.7 MB), not NSIS. Fix: replaced the workflow with .github/workflows/ci.yml — a real tests job (go vet/test + vitest) and a deploy job whose final step FAILS the run when the live site's checksums.txt does not match the repo's, with the exact 3 fix options printed.
+- Review checklist sweep (v1.3.1 hardening, mom-invisible): backup dir 0700 + forced 0600 on VACUUM INTO snapshots (backup.go, update_rollback.go); pre-update archive index write is now fatal on failure (8.14 fail-closed); per-IP rate limiter added alongside per-account (login, owner sign-in, PIN — 8.7); branding/logo WebSocket broadcasts shop-scoped (8.10); TestRolesCrud rewritten to resolve roles by name (IDs come from a random-order seed map — the test was flaky by construction and tripped the new last-owner guard); go vet self-assignment in quotes.go cleaned.
+- All suites green: go vet clean, go test ./... (handlers 124s), vitest 95/95, vite build, netlify_build.py end-to-end (landing v1.3.1, 14/14 links).
+- v1.3.1 release: four installers rebuilt with NSIS solid LZMA (exe 8.3 MB; NSIS via apt-get download + dpkg -x with NSISDIR env override), committed to downloads/, checksums.txt updated.
+
+Stage Summary:
+- v1.3.1 = security sweep + release-engineering honesty. Paystack untouched. OTA manifest → 1.3.1 pushes the sweep to every till via the cloud manifest (SHA-256 verified).

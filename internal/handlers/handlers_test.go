@@ -833,12 +833,13 @@ func TestRolesCrud(t *testing.T) {
                 t.Fatalf("invalid perm should 400, got %d", w.Code)
         }
         // System role delete blocked.
-        w = do(t, engine, "DELETE", "/api/v1/roles/1", admin, nil)
+        w = do(t, engine, "DELETE", fmt.Sprintf("/api/v1/roles/%d", roleIDByName(t, engine, admin, "Admin")), admin, nil)
         if w.Code != 409 {
                 t.Fatalf("system role delete should 409, got %d", w.Code)
         }
-        // Edit cashier permissions (system role editable).
-        w = do(t, engine, "PUT", "/api/v1/roles/2", admin, map[string]any{
+        // Edit cashier permissions (system role editable — it is not owner-level).
+        cashierID := roleIDByName(t, engine, admin, "Cashier")
+        w = do(t, engine, "PUT", fmt.Sprintf("/api/v1/roles/%d", cashierID), admin, map[string]any{
                 "name": "Cashier", "description": "POS scoped",
                 "permissions": []string{"pos.sell", "pos.void", "orders.view", "payments.manual", "shifts.manage", "products.view"},
         })
@@ -1142,10 +1143,10 @@ var (
 // designerUserID resolves the user id behind a token (for assignment
 // fixtures in role-scoped tests).
 func designerUserID(t *testing.T, engine *gin.Engine, token string) int64 {
-	t.Helper()
-	me := do(t, engine, "GET", "/api/v1/me", token, nil)
-	if me.Code != 200 {
-		t.Fatalf("me: %d", me.Code)
-	}
-	return int64(dataMap(t, me)["id"].(float64))
+        t.Helper()
+        me := do(t, engine, "GET", "/api/v1/me", token, nil)
+        if me.Code != 200 {
+                t.Fatalf("me: %d", me.Code)
+        }
+        return int64(dataMap(t, me)["id"].(float64))
 }
