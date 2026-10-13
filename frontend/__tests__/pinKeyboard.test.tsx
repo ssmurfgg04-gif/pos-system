@@ -16,7 +16,7 @@ const pinUsers = [
   { id: 2, fullName: 'Brian Otieno', roleName: 'Manager' },
 ]
 
-const pinLoginMock = vi.fn(async (_userId: number, _code: string) => {})
+const pinLoginMock = vi.fn(async (_userId: number, _code: string, _shopId?: string) => {})
 
 vi.mock('../src/lib/api', () => ({
   api: {
@@ -92,7 +92,7 @@ describe('Pin screen keyboard input', () => {
     for (const d of ['1', '2', '3', '4']) pressKey(d)
     await act(async () => { await sleep(250) }) // 120ms auto-submit + settle
     expect(pinLoginMock).toHaveBeenCalledTimes(1)
-    expect(pinLoginMock).toHaveBeenCalledWith(1, '1234')
+    expect(pinLoginMock).toHaveBeenCalledWith(1, '1234', undefined)
     expect(host.textContent).not.toContain('Who is starting this shift?')
   })
 
@@ -104,7 +104,9 @@ describe('Pin screen keyboard input', () => {
     pressKey('Backspace') // drop the 3
     pressKey('4'); pressKey('5')
     await act(async () => { await sleep(250) })
-    expect(pinLoginMock).toHaveBeenCalledWith(2, '1245')
+    // v1.3.2: the PIN login is shop-bound — the third arg carries the shopId
+    // from the listed user (undefined in this fixture).
+    expect(pinLoginMock).toHaveBeenCalledWith(2, '1245', undefined)
   })
 
   test('Enter right after the 4th digit does not double-login', async () => {

@@ -61,15 +61,30 @@ func (s *Service) Emit(entity, op string, payload any) {
         raw, err := json.Marshal(payload)
         if err != nil {
                 log.Printf("[sync] marshal %s: %v", entity, err)
+                s.noteOutboxFailure("marshal " + entity)
                 return
         }
         _, err = s.db.Exec(s.db.Rebind(`INSERT INTO sync_outbox (entity, op, client_uuid, payload) VALUES (?, ?, ?, ?)`),
                 entity, op, randToken(12), string(raw))
         if err != nil {
-                // Unique collision on client_uuid is astronomically unlikely;
-                // any error here just means one missed event.
+                // Any error here just means one missed event — count it and let the
+                // reconciliation backfill re-emit the row's current state later.
                 log.Printf("[sync] outbox write: %v", err)
+                s.noteOutboxFailure(err.Error())
         }
+}
+
+// noteOutboxFailure persists a persistent-visible counter for the Settings
+// → Team panel: an outbox write that failed must NEVER stay silent (the
+// committed mutation would otherwise be invisible to the cloud until the
+// backfill catches it).
+func (s *Service) noteOutboxFailure(cause string) {
+        var n int64
+        _ = s.db.QueryRow(`SELECT CAST(value AS INTEGER) FROM sync_state WHERE key = 'sync_outbox_failures'`).Scan(&n)
+        _, _ = s.db.Exec(s.db.Rebind(`INSERT INTO sync_state (key, value) VALUES ('sync_outbox_failures', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value`), fmt.Sprintf("%d", n+1))
+        _, _ = s.db.Exec(s.db.Rebind(`INSERT INTO sync_state (key, value) VALUES ('sync_outbox_last_error', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value`), truncStr(cause, 200))
 }
 
 // ---- PostgREST client ----
@@ -601,6 +616,12 @@ func (s *Service) TeamSyncNow(version string) (pushed, applied int, err error) {
         if recovered := s.retryFailedApplies(); recovered > 0 {
                 applied += recovered
         }
+        // Reconciliation backfill: re-emit committed business rows whose outbox
+        // event never landed (Emit is best-effort; this closes the gap without
+        // manual database work). Bounded + idempotent by stable UUID.
+        if n := s.BackfillMissingEvents(); n > 0 {
+                log.Printf("[sync] backfill re-emitted %d missing event(s)", n)
+        }
         s.settings.Set("sync_last_push", nowStamp())
         s.settings.Set("sync_last_pull", nowStamp())
         s.settings.Set("sync_last_error", "")
@@ -639,6 +660,10 @@ func (s *Service) TeamSyncStatus(version string) (*models.TeamSyncStatus, error)
         var failed int64
         s.db.QueryRow(`SELECT COUNT(*) FROM sync_dead_letter`).Scan(&failed)
         st.FailedEvents = failed
+        var outboxFails int64
+        s.db.QueryRow(`SELECT CAST(COALESCE(value,'0') AS INTEGER) FROM sync_state WHERE key = 'sync_outbox_failures'`).Scan(&outboxFails)
+        st.OutboxFailures = outboxFails
+        st.OutboxLastError = s.settings.Get("sync_outbox_last_error")
         if failed > 0 {
                 rows, err := s.db.Query(`SELECT direction, entity, op, error, attempts, updated_at FROM sync_dead_letter ORDER BY id DESC LIMIT 10`)
                 if err == nil {
@@ -783,6 +808,10 @@ func (c *syncClient) fetchPendingRPC(s *Service) ([]models.TeamDevice, error) {
 
 // rpcOwnerCall runs an owner RPC with this till's identity and surfaces the
 // RPC's error string (owner actions must report WHY, not just fail).
+// v1.3.2: cloud owner RPCs additionally verify an owner-level HUMAN via a
+// short-lived capability (minted from the owner's portal credential in the
+// Owner-approval dialog). A cached capability rides along automatically;
+// without one the RPC answers 'owner approval required' and the UI prompts.
 func (c *syncClient) rpcOwnerCall(fn string, args map[string]any) (ok bool, errMsg string, err error) {
         var out struct {
                 OK    bool   `json:"ok"`
@@ -795,10 +824,36 @@ func (c *syncClient) rpcOwnerCall(fn string, args map[string]any) (ok bool, errM
         for k, v := range args {
                 full[k] = v
         }
-        if err := rpcCall(c.base, fn, full, &out); err != nil {
+        return rpcOwnerCallArgs(c, fn, full, &out)
+}
+
+// rpcOwnerCallArgs is the capability-aware core (split out so tests can
+// observe the exact args the RPC receives).
+func rpcOwnerCallArgs(c *syncClient, fn string, full map[string]any, out *struct {
+        OK    bool   `json:"ok"`
+        Error string `json:"error"`
+}) (ok bool, errMsg string, err error) {
+        if tok := ownerCapabilityTokenFor(c); tok != "" {
+                full["p_owner_capability"] = tok
+        }
+        if err := rpcCall(c.base, fn, full, out); err != nil {
                 return false, "", err
         }
         return out.OK, out.Error, nil
+}
+
+// ownerCapabilityTokenFor resolves the cached capability for this client.
+// Package-level indirection keeps the cache test-swappable.
+var ownerCapabilityTokenFor = func(c *syncClient) string {
+        ocMu.Lock()
+        defer ocMu.Unlock()
+        if !oc.valid() {
+                return ""
+        }
+        if c.team != "" && oc.team != "" && oc.team != c.team {
+                return "" // minted for a different team — never reuse
+        }
+        return oc.token
 }
 
 func (s *Service) ownerClient() (*syncClient, error) {
@@ -813,15 +868,25 @@ func (s *Service) ownerClient() (*syncClient, error) {
 }
 
 // TeamCreateStore adds a store under this owner's cloud project. The team
-// code is minted by the database — the client never invents one.
+// code is minted by the database — the client never invents one. The store's
+// business timezone ("sales today" boundary on the owner portal) rides
+// along: explicit setting first, else this till's local zone.
 func (s *Service) TeamCreateStore(name, slug string) (models.TeamStore, error) {
         out := models.TeamStore{Slug: slug, Name: name}
         c, err := s.ownerClient()
         if err != nil {
                 return out, err
         }
+        tz := strings.TrimSpace(s.settings.Get("business_timezone"))
+        if tz == "" {
+                tz = time.Local.String()
+        }
+        _, locErr := time.LoadLocation(tz)
+        if locErr != nil || tz == "Local" {
+                tz = "Africa/Nairobi"
+        }
         ok, errMsg, err := c.rpcOwnerCall("sync_create_store", map[string]any{
-                "p_name": name, "p_slug": slug,
+                "p_name": name, "p_slug": slug, "p_business_tz": tz,
         })
         if err != nil {
                 return out, err

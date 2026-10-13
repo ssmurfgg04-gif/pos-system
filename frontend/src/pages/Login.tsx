@@ -66,11 +66,18 @@ export function Login() {
     setBusy(true)
     setError('')
     try {
-      await login(username.trim(), password)
+      await login(username.trim(), password, shopPick ? shopPick.id : undefined)
       toast.success(`Welcome back, ${username.trim()}`)
       land()
     } catch (err: any) {
-      setError(err?.message || 'Login failed')
+      if (err?.status === 409 && err?.body?.needsShop && Array.isArray(err.body.shops) && err.body.shops.length) {
+        // The same credentials live in several shops on this server — let the
+        // human pick; a session is never bound by a guess.
+        setShopPick({ shops: err.body.shops, id: err.body.shops[0]?.id ?? '' })
+        setError('')
+      } else {
+        setError(err?.message || 'Login failed')
+      }
     } finally {
       setBusy(false)
     }
@@ -90,6 +97,9 @@ export function Login() {
       setBusy(false)
     }
   }
+
+  // multi-shop picker state (409 needsShop from the server)
+  const [shopPick, setShopPick] = useState<{ shops: { id: string; name: string }[]; id: string } | null>(null)
 
   return (
     <div className="min-h-full flex flex-col items-center justify-center bg-shell px-4 py-10 overflow-y-auto">
@@ -125,6 +135,22 @@ export function Login() {
               <h2 className="text-ink font-bold leading-tight">Welcome back</h2>
               <p className="text-[12px] text-ink-subtle">Sign in to start your shift.</p>
             </div>
+            {shopPick && (
+              <Field label="Which shop?">
+                <div className="space-y-1.5">
+                  {shopPick.shops.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setShopPick({ ...shopPick, id: s.id })}
+                      className={`w-full text-left px-3 py-2.5 rounded-input border text-sm font-bold transition-colors ${shopPick.id === s.id ? 'border-brand bg-brand/10 text-ink' : 'border-line bg-surface text-ink-muted hover:border-line-strong'}`}
+                    >
+                      {s.name || s.id}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+            )}
             <Field label="Username">
               <Input
                 value={username}

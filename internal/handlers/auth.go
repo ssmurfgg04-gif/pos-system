@@ -17,6 +17,10 @@ import (
 type loginBody struct {
         Username string `json:"username" binding:"required"`
         Password string `json:"password" binding:"required"`
+        // v1.3.2 shop binding: when a multi-shop server matches the same
+        // credentials in several shops, the login is retried with an EXPLICIT
+        // shopId from the picker — a session is never bound by a heuristic.
+        ShopID string `json:"shopId"`
 }
 
 // Login authenticates with username+password. The registry routes the
@@ -43,21 +47,23 @@ func (h *H) Login(c *gin.Context) {
                 h.fail(c, 401, "invalid credentials")
                 return
         }
-        var matchedShop string
-        var matchedID int64
-        var matchedHash string
-        var matchedPrincipal *auth.Principal
-        // Collect EVERY shop whose credentials match. A username may exist
-        // in more than one shop (re-onboarding, join links, second signup);
-        // picking the first match once landed staff in an EMPTY shop and
-        // their real inventory "disappeared". Prefer the shop that actually
-        // holds data — the one they worked in.
+        if body.ShopID != "" {
+                if _, ok := h.Tenants.Find(body.ShopID); !ok {
+                        h.fail(c, 404, "unknown shop")
+                        return
+                }
+                if !containsID(shopIDs, body.ShopID) {
+                        auth.EqualizeLoginTiming(body.Password)
+                        h.fail(c, 403, "not a member of that shop")
+                        return
+                }
+                shopIDs = []string{body.ShopID}
+        }
         type shopMatch struct {
                 sid   string
                 id    int64
                 hash  string
                 princ *auth.Principal
-                rows  int64
         }
         var matches []shopMatch
         for _, sid := range shopIDs {
@@ -82,28 +88,34 @@ func (h *H) Login(c *gin.Context) {
                         continue
                 }
                 p.ShopID = sid
-                var prod, orders int64
-                _ = db.QueryRow(`SELECT COUNT(*) FROM products`).Scan(&prod)
-                _ = db.QueryRow(`SELECT COUNT(*) FROM orders`).Scan(&orders)
-                matches = append(matches, shopMatch{sid: sid, id: id, hash: pwHash, princ: p, rows: prod + orders})
+                matches = append(matches, shopMatch{sid: sid, id: id, hash: pwHash, princ: p})
         }
-        if len(matches) > 0 {
-                best := matches[0]
-                for _, m := range matches[1:] {
-                        if m.rows > best.rows {
-                                best = m
-                        }
-                }
-                matchedShop, matchedID, matchedHash, matchedPrincipal = best.sid, best.id, best.hash, best.princ
-        }
-        if matchedPrincipal == nil {
+        if len(matches) == 0 {
                 h.fail(c, 401, "invalid credentials")
                 return
         }
+        // Ambiguous multi-shop identity: NEVER guess (the old row-count
+        // heuristic silently landed staff in the wrong store). Ask the login
+        // screen which shop — 409 with a shop picker payload.
+        if len(matches) > 1 && body.ShopID == "" {
+                shops := make([]gin.H, 0, len(matches))
+                for _, m := range matches {
+                        if shop, ok := h.Tenants.Find(m.sid); ok {
+                                shops = append(shops, gin.H{"id": shop.ID, "name": shop.Name})
+                        }
+                }
+                h.failWith(c, 409, gin.H{
+                        "error":     "this account exists in several shops — pick one",
+                        "needsShop": true,
+                        "shops":     shops,
+                })
+                return
+        }
+        best := matches[0]
+        matchedShop := best.sid
+        matchedPrincipal := best.princ
         // Use matched shop's service for audit and token
         svc, _ := h.Shops.Service(matchedShop)
-        _ = matchedID
-        _ = matchedHash
         h.LoginRL.Forget(key)
         token, err := auth.IssueToken(h.MasterSecret, matchedPrincipal.ID, matchedPrincipal.Username, matchedShop)
         if err != nil {
@@ -112,6 +124,15 @@ func (h *H) Login(c *gin.Context) {
         }
         svc.Audit(matchedPrincipal.ID, matchedPrincipal.Username, "LOGIN", "user", matchedPrincipal.Username, "password")
         h.ok(c, gin.H{"token": token, "user": matchedPrincipal.User()})
+}
+
+func containsID(ids []string, want string) bool {
+        for _, id := range ids {
+                if id == want {
+                        return true
+                }
+        }
+        return false
 }
 
 // Signup is public iff ALLOW_SIGNUP=true: provisions a shop (migrate +
@@ -206,12 +227,16 @@ func (h *H) Signup(c *gin.Context) {
 // PinUsers lists staff available for quick PIN switch (name + role only —
 // safe to show on a shared terminal, and it's how shift handoffs work).
 // Scoped by ?shop= (a terminal belongs to one shop); default shop otherwise.
+// Each row carries that shop's id so PIN sign-in can be BOUND to it.
 func (h *H) PinUsers(c *gin.Context) {
         db, err := h.shopDB(c)
         if err != nil {
                 h.fail(c, 404, "unknown shop")
                 return
         }
+        // PUBLIC route (the PIN pad lists users before any login): resolve the
+        // shop from ?shop= (publicShopID), never the auth claim (there is none).
+        shopID := h.publicShopID(c)
         rows, err := db.Query(`
                 SELECT u.id, u.username, COALESCE(u.full_name, u.username), COALESCE(r.name,'')
                 FROM users u JOIN roles r ON r.id = u.role_id
@@ -228,14 +253,19 @@ func (h *H) PinUsers(c *gin.Context) {
                 if err := rows.Scan(&u.ID, &u.Username, &u.FullName, &u.RoleName); err != nil {
                         break
                 }
+                u.ShopID = shopID
                 out = append(out, u)
         }
         h.ok(c, out)
 }
 
+// pinBody v1.3.2: shopId binds the sign-in to the EXACT shop the PIN pad
+// listed users from. Required going forward; the legacy fallback (global
+// resolve) only fires for pre-1.3.2 clients during the OTA window.
 type pinBody struct {
         UserID int64  `json:"userId" binding:"required"`
         PIN    string `json:"pin" binding:"required,len=4"`
+        ShopID string `json:"shopId"`
 }
 
 // PinLogin is the fast shift-switch path (4-digit PIN, bcrypt-hashed at
@@ -246,7 +276,9 @@ func (h *H) PinLogin(c *gin.Context) {
                 h.fail(c, 400, "userId and 4-digit pin required")
                 return
         }
-        if !h.PinRL.Allow("pin:"+itoa64(body.UserID)) || !h.IPRL.Allow("pin-ip:"+c.ClientIP()) {
+        // Rate limit on the composite (shop, user) + source — a spray across
+        // shops or users cannot share one bucket.
+        if !h.PinRL.Allow("pin:"+body.ShopID+":"+itoa64(body.UserID)) || !h.IPRL.Allow("pin-ip:"+c.ClientIP()) {
                 h.fail(c, 429, "too many attempts — wait a minute")
                 return
         }
@@ -254,10 +286,26 @@ func (h *H) PinLogin(c *gin.Context) {
                 h.fail(c, 500, "tenancy not configured")
                 return
         }
-        shopID, ok := h.Shops.FindUserShop(body.UserID)
-        if !ok {
-                h.fail(c, 401, "invalid user")
-                return
+        var shopID string
+        if body.ShopID != "" {
+                // EXPLICIT binding: the shop must exist and hold this user.
+                if h.Tenants == nil {
+                        h.fail(c, 500, "tenancy not configured")
+                        return
+                }
+                if _, ok := h.Tenants.Find(body.ShopID); !ok {
+                        h.fail(c, 404, "unknown shop")
+                        return
+                }
+                shopID = body.ShopID
+        } else {
+                // Legacy clients: global resolve (data-volume heuristic).
+                sid, ok := h.Shops.FindUserShop(body.UserID)
+                if !ok {
+                        h.fail(c, 401, "invalid user")
+                        return
+                }
+                shopID = sid
         }
         db, err := h.Shops.DB(shopID)
         if err != nil {
@@ -272,6 +320,8 @@ func (h *H) PinLogin(c *gin.Context) {
         err = db.QueryRow(db.Rebind(
                 `SELECT COALESCE(pin_hash,'') FROM users WHERE id = ? AND is_active = 1`), body.UserID).Scan(&pinHash)
         if err != nil || pinHash == "" {
+                // The user simply does not exist in the bound shop — 401,
+                // identical wording to a wrong PIN path (no shop enumeration).
                 h.fail(c, 401, "invalid user")
                 return
         }
@@ -291,7 +341,7 @@ func (h *H) PinLogin(c *gin.Context) {
                 return
         }
         p.ShopID = shopID
-        h.PinRL.Forget("pin:" + itoa64(body.UserID))
+        h.PinRL.Forget("pin:" + body.ShopID + ":" + itoa64(body.UserID))
         token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
         if err != nil {
                 h.fail(c, 500, "token error")

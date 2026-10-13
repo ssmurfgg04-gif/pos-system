@@ -93,6 +93,12 @@ func (h *H) fail(c *gin.Context, code int, msg string) {
         c.JSON(code, gin.H{"error": msg})
 }
 
+// failWith answers with a structured error payload (used by the multi-shop
+// login picker: {"error": ..., "needsShop": true, "shops": [...]}).
+func (h *H) failWith(c *gin.Context, code int, body gin.H) {
+        c.JSON(code, body)
+}
+
 func (h *H) principal(c *gin.Context) *auth.Principal { return auth.FromContext(c) }
 
 const ctxShopSvc = "shopSvc"

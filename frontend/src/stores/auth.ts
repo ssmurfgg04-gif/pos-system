@@ -5,8 +5,8 @@ import { cartResetForUser } from './cart'
 interface AuthState {
   user: User | null
   ready: boolean
-  login: (username: string, password: string) => Promise<void>
-  pinLogin: (userId: number, pin: string) => Promise<void>
+  login: (username: string, password: string, shopId?: string) => Promise<void>
+  pinLogin: (userId: number, pin: string, shopId?: string) => Promise<void>
   logout: () => void
   refresh: () => Promise<void>
   can: (perm: string) => boolean
@@ -15,17 +15,18 @@ interface AuthState {
 export const useAuth = create<AuthState>((set, get) => ({
   user: null,
   ready: false,
-  login: async (username, password) => {
+  login: async (username, password, shopId) => {
     const res = await api.post<{ token: string; user: User }>('/api/v1/auth/login', {
       username,
       password,
+      ...(shopId ? { shopId } : {}),
     })
     localStorage.setItem('pos_token', res.token)
     cartResetForUser(res.user.id) // a different staff member never inherits a basket
     set({ user: res.user, ready: true })
   },
-  pinLogin: async (userId, pin) => {
-    const res = await api.post<{ token: string; user: User }>('/api/v1/auth/pin', { userId, pin })
+  pinLogin: async (userId, pin, shopId) => {
+    const res = await api.post<{ token: string; user: User }>('/api/v1/auth/pin', { userId, pin, ...(shopId ? { shopId } : {}) })
     localStorage.setItem('pos_token', res.token)
     cartResetForUser(res.user.id)
     set({ user: res.user, ready: true })

@@ -916,6 +916,13 @@ function TeamSyncPanel() {
   const [pinResetsError, setPinResetsError] = useState('')
   const [workingReset, setWorkingReset] = useState(0)
   const [approvedCode, setApprovedCode] = useState<{ code: string; username: string; deviceName: string } | null>(null)
+  // Owner approval (v1.3.2): cloud owner actions verify a HUMAN — when the
+  // cloud answers 'owner approval required', this dialog collects the owner's
+  // portal credential once and replays the interrupted action.
+  const [pendingOwnerAction, setPendingOwnerAction] = useState<(() => Promise<void>) | null>(null)
+  const [ownerUser, setOwnerUser] = useState('')
+  const [ownerPass, setOwnerPass] = useState('')
+  const [ownerBusy, setOwnerBusy] = useState(false)
 
   const load = async () => {
     try {
@@ -933,6 +940,37 @@ function TeamSyncPanel() {
     api.get<PinResetRow[]>('/api/v1/team-sync/pin-resets')
       .then((r) => { setPinResets(r); setPinResetsError('') })
       .catch((e) => { setPinResets([]); setPinResetsError(e?.message || 'Could not load PIN reset requests') })
+  }
+
+  // ownerGuard: intercepts the capability gate from any owner action. Opens
+  // the Owner-approval dialog and arms a retry of the exact interrupted
+  // action; returns true when the error was consumed.
+  const ownerGuard = (e: any, retry: () => Promise<void>) => {
+    if ((e?.message || '').includes('owner approval required')) {
+      setPendingOwnerAction(() => retry)
+      return true
+    }
+    return false
+  }
+
+  const confirmOwner = async () => {
+    if (ownerBusy) return
+    setOwnerBusy(true)
+    try {
+      const r = await api.post<{ owner: string; expiresInS: number }>('/api/v1/team-sync/owner-approval', {
+        username: ownerUser.trim(),
+        password: ownerPass,
+      })
+      const act = pendingOwnerAction
+      setPendingOwnerAction(null)
+      setOwnerPass('')
+      toast.success('Owner approved', `Thank you, ${r.owner} — approved for about ${Math.max(1, Math.round(r.expiresInS / 60))} minutes.`)
+      if (act) await act()
+    } catch (e: any) {
+      toast.error('Owner approval failed', e?.message || 'Check the username and password.')
+    } finally {
+      setOwnerBusy(false)
+    }
   }
   useEffect(() => {
     load()
@@ -1016,6 +1054,7 @@ function TeamSyncPanel() {
       setNewStoreName('')
       await load()
     } catch (e: any) {
+      if (ownerGuard(e, () => addStore())) return
       toast.error('Could not add the store', e?.message)
     } finally {
       setAddingStore(false)
@@ -1034,6 +1073,7 @@ function TeamSyncPanel() {
       toast.success('Till assigned', `${d.deviceName || d.deviceId.slice(0, 8)} joins ${status?.stores?.find((s) => s.teamCode === teamCode)?.name || 'the store'} on its next heartbeat.`)
       await load()
     } catch (e: any) {
+      if (ownerGuard(e, () => assignDevice(d))) return
       toast.error('Could not assign the till', e?.message)
     } finally {
       setWorkingDevice('')
@@ -1049,6 +1089,7 @@ function TeamSyncPanel() {
       toast.success('Till revoked', `${label} can no longer reach this team's data.`)
       await load()
     } catch (e: any) {
+      if (ownerGuard(e, () => removeDevice(d))) return
       toast.error('Could not revoke the till', e?.message)
     } finally {
       setWorkingDevice('')
@@ -1063,6 +1104,7 @@ function TeamSyncPanel() {
       toast.success('Till approved', `${label} joins the team on its next heartbeat.`)
       await load()
     } catch (e: any) {
+      if (ownerGuard(e, () => approveDevice(d))) return
       toast.error('Could not approve the till', e?.message)
     } finally {
       setWorkingDevice('')
@@ -1090,6 +1132,7 @@ function TeamSyncPanel() {
       setInviteNote('')
       await load()
     } catch (e: any) {
+      if (ownerGuard(e, () => createInvite())) return
       toast.error('Could not create the invite', e?.message)
     } finally {
       setInviteBusy(false)
@@ -1115,6 +1158,7 @@ function TeamSyncPanel() {
       toast.success('Invite revoked')
       await load()
     } catch (e: any) {
+      if (ownerGuard(e, () => revokeInvite(id))) return
       toast.error('Could not revoke the invite', e?.message)
     } finally {
       setWorkingInvite(0)
@@ -1132,6 +1176,7 @@ function TeamSyncPanel() {
       setApprovedCode({ code: r.code, username: r.username, deviceName: r.deviceName })
       await load()
     } catch (e: any) {
+      if (ownerGuard(e, () => approvePinReset(id))) return
       toast.error('Could not approve the reset', e?.message)
     } finally {
       setWorkingReset(0)
@@ -1173,6 +1218,9 @@ function TeamSyncPanel() {
               )}
               {!!status.failedEvents && status.failedEvents > 0 && (
                 <StatusPill status="pending" label={`${status.failedEvents} event${status.failedEvents === 1 ? '' : 's'} quarantined (retrying)`} />
+              )}
+              {!!status.outboxFailures && status.outboxFailures > 0 && (
+                <StatusPill status="pending" label={`${status.outboxFailures} sync write${status.outboxFailures === 1 ? '' : 's'} failed (auto-recovering)`} />
               )}
               {status.source === 'cloud' && (
                 <span className="inline-flex flex-col gap-1">
@@ -1546,6 +1594,37 @@ function TeamSyncPanel() {
           till. Every till finds its team through the cloud database on its own.
         </p>
       </div>
+
+      {pendingOwnerAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+          <form
+            onSubmit={(e) => { e.preventDefault(); confirmOwner() }}
+            className="bg-surface border border-line rounded-card shadow-brutal p-5 space-y-4 w-full max-w-sm"
+          >
+            <div>
+              <h3 className="text-ink font-bold leading-tight">Confirm it's you</h3>
+              <p className="text-[12px] text-ink-muted mt-0.5">
+                This action changes how your whole team syncs. Enter your owner username and password once —
+                you stay approved for about 30 minutes.
+              </p>
+            </div>
+            <Field label="Owner username">
+              <Input value={ownerUser} onChange={(e) => setOwnerUser(e.target.value)} autoComplete="username" autoFocus required placeholder="e.g. jane" />
+            </Field>
+            <Field label="Owner password">
+              <Input type="password" value={ownerPass} onChange={(e) => setOwnerPass(e.target.value)} autoComplete="current-password" required placeholder="••••••••" />
+            </Field>
+            <div className="flex gap-2">
+              <Button type="submit" variant="primary" className="flex-1" disabled={ownerBusy || !ownerUser.trim() || !ownerPass}>
+                {ownerBusy ? <Spinner className="border-t-white" /> : 'Confirm & continue'}
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setPendingOwnerAction(null)} disabled={ownerBusy}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   )
 }
