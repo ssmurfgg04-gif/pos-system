@@ -371,7 +371,7 @@ function QuoteEditor({
         <div className="flex items-center justify-between gap-2 w-full">
           <span className="text-[12px] text-ink-muted">
             {items.length} line{items.length === 1 ? '' : 's'} · Total{' '}
-            <span className="font-bold text-ink tabular">{branding.currency_symbol || ''}{money(total)}</span>
+            <span className="font-bold text-ink tabular">{branding.currency_symbol ? branding.currency_symbol + ' ' : ''}{money(total)}</span>
           </span>
           <span className="flex gap-2">
             <Button variant="ghost" onClick={onClose}>Cancel</Button>
