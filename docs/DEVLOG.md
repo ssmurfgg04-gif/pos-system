@@ -394,3 +394,19 @@ team → portal credentials → portal login (correct/wrong/unknown); VLM design
 pass on the Team panel (screenshots + polish: wider invite inputs, section
 spacing); v1.1.2 release cut (4 installers + checksums), site build green
 with /portal/.
+
+---
+Task ID: v1.3.0
+Agent: main (Super Z)
+Task: quotations page, device un-brick (Salma PC), mom-friendly forgot-PIN, SawaPOS benchmark, codegraph deep review, NSIS-verified release.
+
+Work Log:
+- Field incident root-caused: revoking a till was a PERMANENT brick — sync_join_team refused revoked devices even with a valid owner-minted invite, owner_device_signin refused them, and sync_approve_device refused them as a TARGET (the UI's own advice pointed at an impossible action). %APPDATA% survives reinstall so the identity never resets. Fixed in cloud v117: all three owner-consented acts now heal the device (join token / portal credential / Approve), secret rotated on heal, revocation still gates every non-consented path.
+- Forgot-PIN (cloud one-time code): locked till files sync_request_pin_reset → owner till lists pending requests (Settings → Team) → approve mints a single-use 8-digit code (SHA-256 stored, 15 min, device-bound, 6 tries) → redeem clears lockout + sets PIN + auto sign-in. Review fixes: PinUser carries username (display names don't match accounts — was a flow-killing bug), redeem prologue enforces device identity, approve can re-mint expired codes, list includes code-issued rows with New code action.
+- Quotations (SawaPOS benchmark headline): quotes table (migration v17), draft→sent→accepted/declined/converted, same tax math as checkout, team-synced (client_uuid + LWW + renumber), ConvertQuote = held sale via SKU-first line resolution + discount carry + CAS double-click guard, A4 print with body-class print isolation, demo-mode parity, quotes.view/manage permissions seeded via backfillRolePermsV17.
+- CodeGraph (colbymchenry/codegraph, 73.9k★) installed + indexed (4,689 nodes / 15,050 edges); 3 adversarial review agents ran against sync/auth/money/frontend. ALL findings fixed (see commit 0023b38): forgot-PIN username binding (critical), convert cross-till product-id collision, outbox cross-tenant leak on team change (quarantine), applyVoid loyalty-earn reversal on receivers, imagesync 'svg' Contains false-positive (~50% of photos dead-lettered), NaN tax_percent poisoning, PIN-redeem code-burn-before-validate, quote money-permission parity with checkout, invite single-use race, X/Z clock-skew window (+2s pad after real flake repro).
+- SAWAPOS-COMPARISON.md: offline durability + sync integrity + governance favor LedgerPOS; their public shopfront/online orders is the real gap (documented, not built); quotations parity shipped.
+- Login polish: welcome-back header, secondary actions block (forgot password / PIN pad / join link), welcome-screen password escape hatch, friendlier forgot-password copy.
+
+Stage Summary:
+- v1.3.0 = quotations + un-brick + forgot-PIN + deep-review hardening. All suites green (Go handlers 121s, services, settings; vitest 95; tsc; vite build). Docs: AI-HANDBOOK.md (orientation), MIGRATION-v17-ROLLBACK.md, SAWAPOS-COMPARISON.md.
