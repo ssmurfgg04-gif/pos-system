@@ -15,9 +15,12 @@ import { demoRequest, demoRaw } from '../demo/backend'
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** Raw error body — the multi-shop login picker reads needsShop/shops from it. */
+  body?: any
+  constructor(status: number, message: string, body?: any) {
     super(message)
     this.status = status
+    this.body = body
   }
 }
 
@@ -138,7 +141,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
         location.href = '/login'
       }
     }
-    throw new ApiError(res.status, json?.error || `Request failed (${res.status})`)
+    throw new ApiError(res.status, json?.error || `Request failed (${res.status})`, json)
   }
   return (json?.data !== undefined ? json.data : json) as T
 }
@@ -210,6 +213,8 @@ export interface PinUser {
   username: string
   fullName: string
   roleName: string
+  /** v1.3.2: PIN sign-in is BOUND to the shop this list came from. */
+  shopId?: string
 }
 
 export interface Category { id: number; name: string; slug: string; productCount?: number }
@@ -854,6 +859,9 @@ export interface TeamSyncStatus {
   /** Hardened sync: events quarantined after repeated apply/push failures. */
   failedEvents?: number
   failed?: { direction: string; entity: string; op: string; error: string; attempts: number; updatedAt: string }[]
+  /** v1.3.2 outbox reconciliation: committed rows whose sync event failed to be written locally. */
+  outboxFailures?: number
+  outboxLastError?: string
 }
 
 export interface PaymentConfig {

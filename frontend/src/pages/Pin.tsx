@@ -52,7 +52,10 @@ export function Pin() {
     setError('')
     setLockNote('')
     try {
-      await pinLogin(userId, code)
+      // v1.3.2: bind the sign-in to the shop this user list came from —
+      // per-shop user ids collide, and the shop picker already made the choice.
+      const u = users?.find((x) => x.id === userId)
+      await pinLogin(userId, code, u?.shopId)
       reconnectWs()
       toast.success('Signed in')
       navigate(homeFor(useAuth.getState().user))
@@ -149,7 +152,8 @@ export function Pin() {
               setRecover(null)
               const finish = async () => {
                 try {
-                  await pinLogin(uid, newPin)
+                  const uu = users?.find((x) => x.id === uid)
+                  await pinLogin(uid, newPin, uu?.shopId)
                   reconnectWs()
                   toast.success('Signed in with your new PIN')
                   navigate(homeFor(useAuth.getState().user))

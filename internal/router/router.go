@@ -290,6 +290,10 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         // Forgot-PIN recovery: open requests from locked tills + approve.
         ts.GET("/team-sync/pin-resets", h.PinResetList)
         ts.POST("/team-sync/pin-resets/approve", h.PinResetApprove)
+        // Owner-approval dialog: mint + cache the cloud owner capability
+        // (v1.3.2 — cloud owner RPCs verify a HUMAN, not just a device).
+        ts.POST("/team-sync/owner-approval", h.TeamOwnerApproval)
+        ts.GET("/team-sync/owner-approval", h.TeamOwnerApprovalStatus)
 
         // Stocktake + gift cards (count sessions, code redemption).
         ct := authd.Group("", perm("suppliers.manage"))

@@ -87,6 +87,9 @@ type PinUser struct {
         Username string `json:"username"`
         FullName string `json:"fullName"`
         RoleName string `json:"roleName"`
+        // v1.3.2 shop binding: PIN sign-in must land in the EXACT shop this
+        // list came from (user ids are per-shop autoincrements and collide).
+        ShopID string `json:"shopId"`
 }
 
 type TokenResponse struct {
@@ -549,6 +552,11 @@ type TeamSyncStatus struct {
         // (quarantined to the dead-letter table) — visible, retryable, never
         // silently dropped.
         FailedEvents int64             `json:"failedEvents"`
+        // v1.3.2 outbox reconciliation: local write failures of the outbox
+        // row itself (the mutation committed, the sync event did not). The
+        // backfill re-emits these; the counter stays visible until reset.
+        OutboxFailures  int64  `json:"outboxFailures"`
+        OutboxLastError string `json:"outboxLastError,omitempty"`
         Failed       []SyncFailedEvent `json:"failed"`
 }
 

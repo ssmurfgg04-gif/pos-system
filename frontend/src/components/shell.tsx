@@ -125,8 +125,8 @@ export function AppShell({ current, children }: { current: string; children: Rea
         </button>
       )}
       {/* Header — 72px, logo left, global search centered, status right */}
-      <header className="bg-surface border-b border-line h-[72px] px-4 flex items-center gap-4 shrink-0">
-        <div className="flex items-center gap-2.5 min-w-0 w-52 shrink-0">
+      <header className="bg-surface border-b border-line h-[72px] px-2 sm:px-4 flex items-center gap-2 sm:gap-4 shrink-0 overflow-hidden">
+        <div className="flex items-center gap-2.5 min-w-0 w-auto max-w-52 shrink">
           {branding.brand_logo_url ? (
             <img src={branding.brand_logo_url} alt="" className="w-9 h-9 rounded-input object-contain bg-surface border border-line shrink-0" />
           ) : (
@@ -138,7 +138,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
             <p className="text-ink font-bold text-sm truncate leading-tight">
               {branding.store_name || branding.app_name}
             </p>
-            <p className="text-ink-subtle text-[11px] leading-tight">{branding.app_name}</p>
+            <p className="text-ink-subtle text-[11px] leading-tight truncate">{branding.app_name}</p>
           </div>
         </div>
         {shops && shops.length > 1 && (
@@ -186,10 +186,10 @@ export function AppShell({ current, children }: { current: string; children: Rea
           {demo && (
             <span
               className="min-h-8 px-2.5 rounded-pill bg-info-bg text-info-text border border-info-text/40 text-[11px] font-bold inline-flex items-center gap-1.5 whitespace-nowrap"
-              title="No server behind this build — data lives in your browser only"
+              title="Demo sandbox — a deliberately reduced playground (data lives in your browser only, 3 sample roles). The real app enforces the full role model."
             >
               <FlaskConical size={12} aria-hidden />
-              Demo mode
+              Demo sandbox
             </span>
           )}
           {net.pending > 0 && (

@@ -5,7 +5,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { demoRequest, resetDemo } from '../src/demo/backend'
-import { buildSeed, receiptCode } from '../src/demo/seed'
+import { buildSeed, PERMISSION_CATALOG, receiptCode } from '../src/demo/seed'
 
 type Any = Record<string, any>
 
@@ -28,10 +28,15 @@ describe('seed', () => {
     const admin = db.roles.find((r) => r.name === 'Admin')!
     const cashier = db.roles.find((r) => r.name === 'Cashier')!
     const designer = db.roles.find((r) => r.name === 'Designer')!
-    expect(admin.permissions).toHaveLength(20)
+    // v1.3.2 parity: Admin holds the FULL server catalog (29 permissions),
+    // Cashier/Designer carry the same presets as the Go server's seeds.
+    expect(admin.permissions).toHaveLength(PERMISSION_CATALOG.length)
+    expect(new Set(admin.permissions)).toEqual(new Set(PERMISSION_CATALOG.map((p) => p.key)))
     expect(cashier.permissions).toContain('pos.sell')
+    expect(cashier.permissions).toContain('quotes.view')
     expect(cashier.permissions).not.toContain('settings.manage')
     expect(designer.permissions).toContain('design.manage')
+    expect(designer.permissions).toContain('orders.perform')
     expect(designer.permissions).not.toContain('pos.sell')
   })
 

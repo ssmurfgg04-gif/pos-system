@@ -68,10 +68,10 @@ func (s *Service) PaymentConfig() *models.PaymentConfig {
         cfg.Paystack.PublicKey = s.paystackPublicKey()
         cfg.Paystack.Currency = s.paystackCurrency()
         cfg.Paystack.Callback = s.paystackCallback()
-        cfg.Paystack.Configured = s.GetPaystack() != nil
+        cfg.Paystack.Configured = s.paystackUsable()
         cfg.Paystack.FromEnv = strings.TrimSpace(os.Getenv("PAYSTACK_SECRET_KEY")) != ""
-        // Payment-ready the moment a valid secret exists (env or stored);
-        // admins can still switch the feature off explicitly.
+        // Payment-ready the moment a valid secret exists (env, stored, or the
+        // cloud proxy); admins can still switch the feature off explicitly.
         cfg.Paystack.Enabled = cfg.Paystack.Configured && s.settings.GetBool("paystack_enabled", true)
         cfg.Mpesa.Env = s.settings.GetString("mpesa_env", "manual")
         cfg.Mpesa.Route = s.MpesaRoute()
@@ -139,7 +139,7 @@ func paystackWirePhoneKe(canonical string) string {
 // the mobile-money channel; email stays optional for receipts.
 func (s *Service) PaystackInit(orderID int64, email, phone string, p *auth.Principal) (*models.Order, *models.PaystackInitResult, error) {
         client := s.GetPaystack()
-        if client == nil {
+        if client == nil && !s.paystackUsable() {
                 return nil, nil, fmt.Errorf("%w: paystack secret key missing", ErrNotConfigured)
         }
         if !s.settings.GetBool("paystack_enabled", true) {
@@ -232,27 +232,43 @@ func (s *Service) PaystackInit(orderID int64, email, phone string, p *auth.Princ
         if amount <= 0 {
                 return nil, nil, fmt.Errorf("%w: order has no payable amount", ErrInvalidState)
         }
-        init, err := client.Initialize(paystack.InitializeRequest{
-                Email:       email,
-                Phone:       wirePhone,
-                Amount:      amount,
-                Currency:    s.paystackCurrency(),
-                Reference:   reference,
-                CallbackURL: s.paystackCallback(),
-                Metadata: map[string]any{
-                        "order_number":   order.Number,
-                        "cashier":        p.Username,
-                        "customer_phone": wirePhone,
-                        "custom_fields": []map[string]string{
-                                {"display_name": "Order", "variable_name": "order", "value": order.Number},
+        // Init through the LOCAL key when present; otherwise the cloud proxy
+        // (the Edge Function holds the secret — the till never sees it).
+        var init *paystack.InitializeResult
+        var initErr error
+        if client != nil {
+                init, initErr = client.Initialize(paystack.InitializeRequest{
+                        Email:       email,
+                        Phone:       wirePhone,
+                        Amount:      amount,
+                        Currency:    s.paystackCurrency(),
+                        Reference:   reference,
+                        CallbackURL: s.paystackCallback(),
+                        Metadata: map[string]any{
+                                "order_number":   order.Number,
+                                "cashier":        p.Username,
+                                "customer_phone": wirePhone,
+                                "custom_fields": []map[string]string{
+                                        {"display_name": "Order", "variable_name": "order", "value": order.Number},
+                                },
                         },
-                },
-        })
-        if err != nil {
+                })
+        } else {
+                init, initErr = s.paystackCloudInit(email, amount, s.paystackCurrency(), reference, s.paystackCallback(),
+                        map[string]any{
+                                "order_number":   order.Number,
+                                "cashier":        p.Username,
+                                "customer_phone": wirePhone,
+                                "custom_fields": []map[string]string{
+                                        {"display_name": "Order", "variable_name": "order", "value": order.Number},
+                                },
+                        })
+        }
+        if initErr != nil {
                 s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
-                        truncStr(err.Error(), 200), pay.ID)
-                s.Audit(p.ID, p.Username, "PAYSTACK_INIT_FAILED", "order", order.Number, err.Error())
-                return nil, nil, err
+                        truncStr(initErr.Error(), 200), pay.ID)
+                s.Audit(p.ID, p.Username, "PAYSTACK_INIT_FAILED", "order", order.Number, initErr.Error())
+                return nil, nil, initErr
         }
         s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, email = ?, phone = ?, result_desc = ? WHERE id = ?`),
                 reference, email, phone, "checkout opened "+nowStamp(), pay.ID)
@@ -344,8 +360,7 @@ func mpesaPhoneOK(p string) bool {
 // callback fires. The reference is re-verified against the API — client
 // callbacks are never trusted on their own.
 func (s *Service) PaystackVerify(orderID int64, reference string, p *auth.Principal) (*models.Order, error) {
-        client := s.GetPaystack()
-        if client == nil {
+        if !s.paystackUsable() {
                 return nil, fmt.Errorf("%w: paystack secret key missing", ErrNotConfigured)
         }
         reference = strings.TrimSpace(reference)
@@ -361,7 +376,7 @@ func (s *Service) PaystackVerify(orderID int64, reference string, p *auth.Princi
         if err := s.paystackGuardVoid(paymentID); err != nil {
                 return nil, err
         }
-        v, err := client.Verify(reference)
+        v, err := s.paystackVerifyRef(reference)
         if err != nil {
                 s.Audit(p.ID, p.Username, "PAYSTACK_VERIFY_FAILED", "order", fmt.Sprint(orderID), err.Error())
                 return nil, err
@@ -409,6 +424,10 @@ func (s *Service) paystackGuardVoid(paymentID int64) error {
 func (s *Service) HandlePaystackWebhook(raw []byte, signature string) error {
         client := s.GetPaystack()
         if client == nil {
+                // No local key: the signature cannot be checked here. During the
+                // dual-read window the cloud Edge Function is the verifier — tills
+                // in proxy mode receive relayed events via sweepPaystackRelay
+                // instead of a direct webhook, so refuse quietly.
                 return errors.New("paystack secret key not configured")
         }
         if !client.CheckWebhookSignature(raw, signature) {
@@ -418,56 +437,7 @@ func (s *Service) HandlePaystackWebhook(raw []byte, signature string) error {
         if err != nil {
                 return err
         }
-        if ev.Event != "charge.success" || ev.Data.Status != "success" || ev.Data.Reference == "" {
-                return nil // not a completion event — ack and ignore
-        }
-        var paymentID int64
-        err = s.db.QueryRow(s.db.Rebind(`SELECT id FROM payments WHERE checkout_request_id = ? AND method = 'paystack'`),
-                ev.Data.Reference).Scan(&paymentID)
-        if err != nil {
-                // Unknown reference: most often a popup superseded by a retry whose
-                // old checkout the customer still completed. Money moved — reconcile
-                // it to the order inside the reference (LP-<orderNumber>-<rand>)
-                // instead of silently dropping it on the floor.
-                if orderNum, ok := strings.CutPrefix(ev.Data.Reference, "LP-"); ok {
-                        if i := strings.LastIndex(orderNum, "-"); i > 0 {
-                                orderNum = orderNum[:i]
-                        }
-                        var orderID int64
-                        var orderStatus string
-                        err := s.db.QueryRow(s.db.Rebind(`SELECT id, status FROM orders WHERE number = ?`), orderNum).
-                                Scan(&orderID, &orderStatus)
-                        if err == nil && orderStatus == models.OrderPending {
-                                var legID int64
-                                legErr := s.db.QueryRow(s.db.Rebind(`SELECT id FROM payments WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID).Scan(&legID)
-                                if legErr == nil {
-                                        // Attach the paying reference to the pending leg, then complete.
-                                        s.db.Exec(s.db.Rebind(`UPDATE payments SET checkout_request_id = ? WHERE id = ? AND status = 'PENDING'`), ev.Data.Reference, legID)
-                                        if _, cerr := s.completePayment(legID, ev.Data.Reference, ev.Data.Amount, "Paystack "+ev.Data.Channel+" (webhook, recovered reference)"); cerr != nil {
-                                                log.Printf("[paystack] webhook recovery %s: %v", ev.Data.Reference, cerr)
-                                                return cerr // transient — Paystack retries
-                                        }
-                                        log.Printf("[paystack] webhook recovered superseded reference %s onto order %s", ev.Data.Reference, orderNum)
-                                        s.settleSiblings(orderID, legID) // stop verifying stale legs now the order is paid
-                                        return nil
-                                }
-                        }
-                        s.Audit(0, "system", "PAYSTACK_UNKNOWN_REF", "order", orderNum,
-                                "money arrived for reference "+ev.Data.Reference+" — refund or reconcile in the Paystack dashboard")
-                }
-                log.Printf("[paystack] webhook for unknown reference %s", ev.Data.Reference)
-                return nil
-        }
-        if err := s.paystackGuardVoid(paymentID); err != nil {
-                return nil // ack: Paystack must not retry; the audit trail notes the refund
-        }
-        if _, err := s.completePayment(paymentID, ev.Data.Reference, ev.Data.Amount, "Paystack "+ev.Data.Channel+" (webhook)"); err != nil {
-                // Returning an error (non-200) makes Paystack retry — right answer
-                // for transient failures like DB contention.
-                return err
-        }
-        log.Printf("[paystack] webhook completed reference %s", ev.Data.Reference)
-        return nil
+        return s.completePaystackEvent(ev)
 }
 
 // PaystackTimeout is how long a pending paystack checkout may sit before
@@ -477,10 +447,13 @@ const PaystackTimeout = 15 * time.Minute
 // SweepPaystack polls pending paystack payments via the verify API — the
 // completion path for redirect flows whose callback never reached us.
 func (s *Service) SweepPaystack(ctx context.Context) {
-        client := s.GetPaystack()
-        if client == nil || !s.settings.GetBool("paystack_enabled", true) {
+        if !s.paystackUsable() || !s.settings.GetBool("paystack_enabled", true) {
                 return
         }
+        // Cloud webhook relay: verified events for THIS till's references are
+        // claimed and completed exactly like a direct webhook (best-effort —
+        // the verify path below stays the authority).
+        s.sweepPaystackRelay()
         type pending struct {
                 id        int64
                 reference string
@@ -526,7 +499,7 @@ func (s *Service) SweepPaystack(ctx context.Context) {
                         // (offline till, Paystack 5xx) is NOT an answer: keep the
                         // payment pending and retry on the next sweep — only a
                         // definitive non-success verify may fail the row.
-                        v, err := client.Verify(p.reference)
+                        v, err := s.paystackVerifyRef(p.reference)
                         if err != nil {
                                 log.Printf("[paystack] sweep final verify %s errored (%v) — staying pending", p.reference, err)
                                 continue
@@ -542,7 +515,7 @@ func (s *Service) SweepPaystack(ctx context.Context) {
                         s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paystack checkout timeout (15 min, final verify not success)' WHERE id = ? AND status = 'PENDING'`), p.id)
                         continue
                 }
-                v, err := client.Verify(p.reference)
+                v, err := s.paystackVerifyRef(p.reference)
                 if err != nil {
                         continue // transient — keep waiting
                 }
@@ -646,11 +619,10 @@ func (s *Service) RecheckPayment(orderID int64, p *auth.Principal) (*models.Orde
                 rows.Close()
         }
 
-        client := s.GetPaystack()
         var lastStatus string
-        if client != nil && s.settings.GetBool("paystack_enabled", true) {
+        if s.paystackUsable() && s.settings.GetBool("paystack_enabled", true) {
                 for _, l := range legs {
-                        v, err := client.Verify(l.ref)
+                        v, err := s.paystackVerifyRef(l.ref)
                         if err != nil {
                                 continue // transient — try the next reference
                         }
@@ -693,7 +665,7 @@ func (s *Service) RecheckPayment(orderID int64, p *auth.Principal) (*models.Orde
         }
 
         switch {
-        case client == nil:
+        case !s.paystackUsable():
                 return order, "Paystack is not connected on this till — nothing to re-check against. Enter the M-Pesa receipt code manually instead.", nil
         case len(legs) == 0:
                 return order, "No Paystack or M-Pesa charge on this order to re-check. Enter the M-Pesa receipt code manually if the customer paid.", nil
@@ -716,8 +688,7 @@ const failedSweepLookback = 90 * time.Minute
 // entry and a late STK payment are the SAME money, and re-adding it would
 // double-count revenue.
 func (s *Service) SweepFailedPaystack(ctx context.Context) {
-        client := s.GetPaystack()
-        if client == nil || !s.settings.GetBool("paystack_enabled", true) {
+        if !s.paystackUsable() || !s.settings.GetBool("paystack_enabled", true) {
                 return
         }
         rows, err := s.db.Query(`SELECT p.id, p.checkout_request_id, p.order_id, p.created_at
@@ -757,7 +728,7 @@ func (s *Service) SweepFailedPaystack(ctx context.Context) {
                         return
                 default:
                 }
-                v, err := client.Verify(f.ref)
+                v, err := s.paystackVerifyRef(f.ref)
                 if err != nil {
                         continue // offline / transient — retry next sweep
                 }

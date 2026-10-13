@@ -232,28 +232,15 @@ export interface DemoDB {
   dailyOrderSeq: Record<string, number>
 }
 
-export const PERMISSION_CATALOG: { key: string; group: string; label: string }[] = [
-  { key: 'pos.sell', group: 'Selling', label: 'Checkout and sell' },
-  { key: 'pos.void', group: 'Selling', label: 'Void / cancel orders' },
-  { key: 'orders.view', group: 'Selling', label: 'View order history' },
-  { key: 'customers.view', group: 'Selling', label: 'View customers and tabs' },
-  { key: 'customers.manage', group: 'Selling', label: 'Manage customers, credit and tabs' },
-  { key: 'suppliers.view', group: 'Catalog', label: 'View suppliers and purchase orders' },
-  { key: 'suppliers.manage', group: 'Catalog', label: 'Manage suppliers, receive stock, stock takes' },
-  { key: 'payments.manual', group: 'Payments', label: 'Enter manual M-Pesa receipt codes' },
-  { key: 'payments.override_price', group: 'Payments', label: 'Override line item prices' },
-  { key: 'products.view', group: 'Catalog', label: 'View products and stock' },
-  { key: 'products.manage', group: 'Catalog', label: 'Manage products, categories, CSV import' },
-  { key: 'reports.view', group: 'Insights', label: 'View sales reports' },
-  { key: 'shifts.manage', group: 'Shifts', label: 'Open and close shifts' },
-  { key: 'design.view', group: 'Production', label: 'View design board' },
-  { key: 'design.manage', group: 'Production', label: 'Manage design jobs' },
-  { key: 'users.manage', group: 'Administration', label: 'Manage users' },
-  { key: 'roles.manage', group: 'Administration', label: 'Manage roles' },
-  { key: 'settings.manage', group: 'Administration', label: 'Manage settings' },
-  { key: 'audit.view', group: 'Administration', label: 'View audit log' },
-  { key: 'printer.test', group: 'Administration', label: 'Test receipt printer' },
-]
+// Demo permission catalog — GENERATED from the Go server's catalog
+// (internal/models/permissions.go) into permissions.catalog.json. Both sides
+// are drift-gated: a Go test fails when the server catalog changes without
+// regenerating this file, and a vitest pins the demo to the same JSON. The
+// demo is a deliberately reduced sandbox (3 roles), but its permission
+// VOCABULARY is now exactly the server's.
+import catalogJson from './permissions.catalog.json'
+
+export const PERMISSION_CATALOG: { key: string; group: string; label: string }[] = catalogJson as { key: string; group: string; label: string }[]
 
 const ALL_PERMS = PERMISSION_CATALOG.map((p) => p.key)
 
@@ -358,8 +345,8 @@ export function buildSeed(): DemoDB {
 
   const roles: DemoRole[] = [
     { id: 1, name: 'Admin', description: 'Full access: settings, users, stock, reports, KRA returns — and checkout when fixing problems', permissions: [...ALL_PERMS], system: true },
-    { id: 2, name: 'Cashier', description: 'Point of sale: checkout, manual M-Pesa entry, shifts', permissions: ['pos.sell', 'pos.void', 'orders.view', 'customers.view', 'payments.manual', 'shifts.manage'], system: true },
-    { id: 3, name: 'Designer', description: 'Design & production board, catalog visibility', permissions: ['design.view', 'design.manage', 'products.view', 'orders.view'], system: true },
+    { id: 2, name: 'Cashier', description: 'Point of sale: checkout, manual M-Pesa entry, shifts', permissions: ['pos.sell', 'pos.void', 'orders.view', 'payments.manual', 'shifts.manage', 'customers.view', 'quotes.view'], system: true },
+    { id: 3, name: 'Designer', description: 'Design & production board, catalog visibility', permissions: ['design.view', 'design.manage', 'orders.perform', 'products.view', 'orders.view', 'quotes.view'], system: true },
   ]
 
   const users: DemoUser[] = [
