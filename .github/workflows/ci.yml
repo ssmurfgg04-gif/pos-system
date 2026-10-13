@@ -58,7 +58,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # 24 matches the dev environment where the vitest suite is green
+          # (jsdom+undici break on the runner's older 20.x image).
+          node-version: "24"
 
       # main.go embeds all:frontend/dist — a placeholder keeps vet/test
       # compiling without a full frontend build (the deploy job builds it).
