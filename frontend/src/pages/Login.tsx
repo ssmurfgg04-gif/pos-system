@@ -6,7 +6,7 @@ import { navigate, homeFor } from '../lib/router'
 import { reconnectWs } from '../ws/client'
 import { toast } from '../stores/toasts'
 import { api, backendMode } from '../lib/api'
-import { ShieldCheck, User, Palette, KeyRound, LifeBuoy, LogIn, Store, Users } from 'lucide-react'
+import { ShieldCheck, User, Palette, KeyRound, LifeBuoy, LogIn, Store, Users, Hash } from 'lucide-react'
 
 const DEMO_ACCOUNTS = [
   { username: 'admin', password: '0000', label: 'Admin', hint: 'Full control — settings, stock, KRA reports', icon: ShieldCheck },
@@ -108,7 +108,7 @@ export function Login() {
           <p className="text-ink-subtle text-sm mt-0.5">{branding.app_name}</p>
         </div>
 
-        {mode === 'welcome' && <WelcomeChoice onSignIn={() => { setMode('owner'); setError('') }} onRegister={() => { setMode('setup'); setError('') }} />}
+        {mode === 'welcome' && <WelcomeChoice onSignIn={() => { setMode('owner'); setError('') }} onRegister={() => { setMode('setup'); setError('') }} onPassword={() => { setMode('login'); setError('') }} />}
         {mode === 'setup' && <SetupOwner onDone={land} onCancel={backToWelcome} />}
         {mode === 'owner' && (
           <OwnerCloudSignin
@@ -121,6 +121,10 @@ export function Login() {
             onSubmit={submit}
             className="bg-surface border border-line rounded-card shadow-brutal p-5 space-y-4"
           >
+            <div>
+              <h2 className="text-ink font-bold leading-tight">Welcome back</h2>
+              <p className="text-[12px] text-ink-subtle">Sign in to start your shift.</p>
+            </div>
             <Field label="Username">
               <Input
                 value={username}
@@ -149,30 +153,33 @@ export function Login() {
             <Button type="submit" variant="primary" size="lg" className="w-full" disabled={busy}>
               {busy ? <Spinner className="border-t-white" /> : 'Sign in'}
             </Button>
-            <div className="flex items-center justify-between gap-2">
+            <div className="pt-1 border-t border-line space-y-0.5">
               <button
                 type="button"
                 onClick={() => { setMode('forgot'); setError('') }}
-                className="text-[12.5px] font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
+                className="w-full min-h-11 flex items-center gap-2 text-left text-[13px] font-semibold text-ink-muted hover:text-ink rounded-input px-1"
               >
+                <LifeBuoy size={15} strokeWidth={2.25} aria-hidden />
                 Forgot password?
               </button>
               <button
                 type="button"
                 onClick={() => navigate('/pin')}
-                className="text-[12.5px] font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
+                className="w-full min-h-11 flex items-center gap-2 text-left text-[13px] font-semibold text-ink-muted hover:text-ink rounded-input px-1"
                 title="Shared-terminal PIN pad for shift handoffs"
               >
-                PIN pad →
+                <Hash size={15} strokeWidth={2.25} aria-hidden />
+                Use the PIN pad instead
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/join')}
+                className="w-full min-h-11 flex items-center gap-2 text-left text-[13px] font-semibold text-ink-muted hover:text-ink rounded-input px-1"
+              >
+                <Users size={15} strokeWidth={2.25} aria-hidden />
+                Joining a team? Paste your join link
               </button>
             </div>
-            <button
-              type="button"
-              onClick={() => navigate('/join')}
-              className="w-full min-h-11 flex items-center justify-center text-center text-sm font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
-            >
-              Joining a team? Paste your join link →
-            </button>
           </form>
         )}
         {mode === 'forgot' && (
@@ -225,7 +232,7 @@ export function Login() {
 // or join as a teammate. Reinstalling the app or setting up a second till
 // never forces "create your store". ----
 
-function WelcomeChoice({ onSignIn, onRegister }: { onSignIn: () => void; onRegister: () => void }) {
+function WelcomeChoice({ onSignIn, onRegister, onPassword }: { onSignIn: () => void; onRegister: () => void; onPassword: () => void }) {
   return (
     <div className="bg-surface border border-line rounded-card shadow-brutal p-5 space-y-3">
       <div className="text-center">
@@ -235,7 +242,7 @@ function WelcomeChoice({ onSignIn, onRegister }: { onSignIn: () => void; onRegis
         </p>
       </div>
       <Button variant="primary" size="lg" className="w-full" onClick={onSignIn}>
-        <span className="inline-flex items-center gap-2"><LogIn size={16} strokeWidth={2.5} aria-hidden />Sign in</span>
+        <span className="inline-flex items-center gap-2"><LogIn size={16} strokeWidth={2.5} aria-hidden />Sign in to my business</span>
       </Button>
       <Button variant="secondary" size="lg" className="w-full" onClick={onRegister}>
         <span className="inline-flex items-center gap-2"><Store size={16} strokeWidth={2.5} aria-hidden />Register a new business</span>
@@ -246,6 +253,13 @@ function WelcomeChoice({ onSignIn, onRegister }: { onSignIn: () => void; onRegis
         className="w-full min-h-11 flex items-center justify-center text-center text-sm font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
       >
         <span className="inline-flex items-center gap-1.5"><Users size={14} strokeWidth={2.25} aria-hidden />Adding a teammate? Use a join link →</span>
+      </button>
+      <button
+        type="button"
+        onClick={onPassword}
+        className="w-full min-h-11 flex items-center justify-center text-center text-[13px] font-semibold text-ink-muted hover:text-ink"
+      >
+        I use a username &amp; password on this till →
       </button>
       <p className="text-[11.5px] text-ink-subtle text-center pt-1">
         Signing in brings your whole shop down from the cloud — products,
@@ -523,8 +537,11 @@ function ForgotPassword({ onBack, onDone }: { onBack: () => void; onDone: () => 
         Back to sign in
       </button>
       <p className="text-[11.5px] text-ink-subtle">
-        No recovery code? Run <span className="font-mono font-bold text-ink">ledgerpos reset-owner --username you</span> on
-        the till machine to mint a fresh one, or ask whoever set the store up.
+        No recovery code? You are not stuck: the owner can reset your PIN from
+        another till (you tap <span className="font-bold text-ink">Forgot PIN?</span> on
+        the PIN pad), or whoever set the store up can run{' '}
+        <span className="font-mono font-bold text-ink">ledgerpos reset-owner --username you</span>{' '}
+        on the till machine to mint a fresh code.
       </p>
     </form>
   )

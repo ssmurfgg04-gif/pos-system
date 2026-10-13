@@ -151,6 +151,24 @@ input[inputmode="numeric"], input[inputmode="decimal"] { font-variant-numeric: t
     padding: 6mm 4mm !important;
     font-size: 11pt;
   }
+  /* Quotations print the A4 offer document, not the app chrome (same
+   * visibility-isolation technique as receipts). */
+  body.printing-quote * { visibility: hidden; }
+  body.printing-quote #quote-print-root,
+  body.printing-quote #quote-print-root * { visibility: visible; }
+  body.printing-quote #quote-print-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+    margin: 0 !important;
+    max-width: none !important;
+    width: 100%;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    font-size: 11pt;
+  }
 }
 
 /* Table zebra striping — easier row tracking on wide data tables */

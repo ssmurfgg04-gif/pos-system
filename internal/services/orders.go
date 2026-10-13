@@ -220,7 +220,7 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 
         // Totals with configurable, VAT-inclusive-by-default math (integer cents).
         pct := s.settings.GetFloat("tax_percent", 16)
-        if pct < 0 || pct > models.MaxTaxPercent {
+        if !(pct >= 0 && pct <= models.MaxTaxPercent) { // NaN-proof: NaN fails every compare
                 return nil, fmt.Errorf("tax_percent misconfigured (0-%d)", models.MaxTaxPercent)
         }
         included := s.settings.GetBool("tax_included", true)

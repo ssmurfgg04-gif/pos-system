@@ -58,6 +58,14 @@ begin
      or p_secret_hash is null or length(p_secret_hash) < 32 then
     return json_build_object('ok', false, 'error', 'invalid identity');
   end if;
+  -- Claim the invite atomically FIRST (check-then-act on used_by would let
+  -- two concurrent joins share one single-use token under READ COMMITTED).
+  update sync_invites set used_by = p_device_id, used_at = now()
+    where id = inv.id and used_by = '';
+  if not found then
+    return json_build_object('ok', false, 'error',
+        'this invite is invalid, already used, or expired — ask the owner for a fresh link');
+  end if;
   select * into cur from sync_devices where device_id = p_device_id;
   if cur.device_id is not null then
     if cur.revoked then
@@ -522,6 +530,14 @@ begin
     return json_build_object('ok', false, 'error',
         'this invite is invalid, already used, or expired — ask the owner for a fresh link');
   end if;
+  -- Claim the invite atomically FIRST (check-then-act on used_by would let
+  -- two concurrent joins share one single-use token under READ COMMITTED).
+  update sync_invites set used_by = p_device_id, used_at = now()
+    where id = inv.id and used_by = '';
+  if not found then
+    return json_build_object('ok', false, 'error',
+        'this invite is invalid, already used, or expired — ask the owner for a fresh link');
+  end if;
   select * into cur from sync_devices where device_id = p_device_id;
   if cur.device_id is not null then
     if cur.revoked then
@@ -544,7 +560,6 @@ begin
     insert into sync_devices (device_id, team_code, device_name, app_version, secret_hash, approved, last_seen)
       values (p_device_id, inv.team_code, 'till', '', p_secret_hash, true, now());
   end if;
-  update sync_invites set used_by = p_device_id, used_at = now() where id = inv.id;
   select name into st from sync_stores where team_code = inv.team_code;
   -- typed locals: a JSONB field read straight off an untyped RECORD breaks
   -- json_build_object ("anonymous composite types" — repro'd live)
@@ -719,6 +734,8 @@ begin
   if dev.device_id is null then
     return json_build_object('ok', false, 'error', 'device not recognized');
   end if;
+  -- Pending + still-relevant approved requests (an approved code expires in
+  -- 15 minutes; the owner must be able to find the row again to re-mint).
   return json_build_object('ok', true, 'requests', coalesce(json_agg(
     json_build_object(
       'id', r.id, 'deviceId', r.device_id, 'deviceName', r.device_name,
@@ -727,7 +744,7 @@ begin
     order by r.id), '[]'::json)
     from sync_pin_resets r
     where r.team_code = dev.team_code
-      and r.status = 'pending'
+      and r.status in ('pending', 'approved')
       and r.created_at > now() - interval '7 days');
 end $function$;
 
@@ -750,7 +767,7 @@ begin
   if req.id is null then
     return json_build_object('ok', false, 'error', 'reset request not found');
   end if;
-  if req.status <> 'pending' then
+  if req.status <> 'pending' and req.status <> 'approved' then
     return json_build_object('ok', false, 'error', 'this request was already handled');
   end if;
   if req.created_at < now() - interval '7 days' then
@@ -775,8 +792,14 @@ create or replace function public.sync_redeem_pin_reset(
   p_device_id text, p_secret_hash text, p_request_id bigint, p_code text)
 returns json language plpgsql security definer set search_path to 'public', 'extensions'
 as $function$
-declare req record;
+declare req record; dev record;
 begin
+  select * into dev from sync_devices
+    where device_id = p_device_id and secret_hash = p_secret_hash
+      and approved and not revoked;
+  if dev.device_id is null then
+    return json_build_object('ok', false, 'error', 'device not recognized');
+  end if;
   select * into req from sync_pin_resets
     where id = p_request_id and device_id = p_device_id;
   if req.id is null then

@@ -858,6 +858,7 @@ function TeamSyncPanel() {
   const [workingInvite, setWorkingInvite] = useState(0)
   // Forgot-PIN recovery: open requests from locked tills across the team.
   const [pinResets, setPinResets] = useState<PinResetRow[]>([])
+  const [pinResetsError, setPinResetsError] = useState('')
   const [workingReset, setWorkingReset] = useState(0)
   const [approvedCode, setApprovedCode] = useState<{ code: string; username: string; deviceName: string } | null>(null)
 
@@ -872,8 +873,11 @@ function TeamSyncPanel() {
       setLoadError(e?.message || 'Team sync status unavailable')
     }
     // PIN reset requests are best-effort — an offline cloud shouldn't hide
-    // the rest of the panel.
-    api.get<PinResetRow[]>('/api/v1/team-sync/pin-resets').then(setPinResets).catch(() => setPinResets([]))
+    // the rest of the panel, but a failure must be VISIBLE (a swallowed
+    // error read as "no requests" while a worker sat locked out).
+    api.get<PinResetRow[]>('/api/v1/team-sync/pin-resets')
+      .then((r) => { setPinResets(r); setPinResetsError('') })
+      .catch((e) => { setPinResets([]); setPinResetsError(e?.message || 'Could not load PIN reset requests') })
   }
   useEffect(() => {
     load()
@@ -1336,11 +1340,16 @@ function TeamSyncPanel() {
                       {approvedCode.code}
                     </p>
                     <p className="text-[11px] text-ink-subtle mt-1">
-                      They type it on the PIN screen under “Forgot PIN?” and pick a new PIN. Shown only once — tap Approve again for a fresh code.
+                      They type it on the PIN screen under “Forgot PIN?”. Shown only once — tap New code on the row for a fresh one.
                     </p>
                   </div>
                 )}
-                {pinResets.length === 0 ? (
+                {pinResetsError ? (
+                  <div className="rounded-input border border-danger-text/30 bg-danger-bg p-2.5 flex items-center justify-between gap-2">
+                    <p className="text-[12px] font-semibold text-danger-text">{pinResetsError}</p>
+                    <Button size="sm" variant="secondary" onClick={load}>Retry</Button>
+                  </div>
+                ) : pinResets.length === 0 ? (
                   <p className="text-[12px] text-ink-subtle">
                     None right now. When someone forgets their PIN, they tap “Forgot PIN?” on their till and it shows up here.
                   </p>
@@ -1348,14 +1357,19 @@ function TeamSyncPanel() {
                   <Table head={['Who', 'Till', 'Requested', '']}>
                     {pinResets.map((r) => (
                       <tr key={r.id}>
-                        <td className="px-3 py-2 text-[13px] font-semibold text-ink">{r.username}</td>
+                        <td className="px-3 py-2 text-[13px] font-semibold text-ink">
+                          {r.username}
+                          {r.status === 'approved' && (
+                            <span className="ml-2 text-[11px] font-bold text-pending-text">code issued</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-[12px] text-ink-muted">{r.deviceName || r.deviceId.slice(0, 8)}</td>
                         <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{new Date(r.createdAt).toLocaleString()}</td>
                         <td className="px-3 py-2 text-right">
                           <Button size="sm" variant="secondary" onClick={() => approvePinReset(r.id)} disabled={workingReset === r.id}
-                            title="Mint a single-use 8-digit code and show it to you">
+                            title={r.status === 'approved' ? 'Mint a fresh code (the old one expired or was mistyped)' : 'Mint a single-use 8-digit code and show it to you'}>
                             {workingReset === r.id ? <Spinner /> : <KeyRound size={14} strokeWidth={2.5} aria-hidden />}
-                            Approve
+                            {r.status === 'approved' ? 'New code' : 'Approve'}
                           </Button>
                         </td>
                       </tr>
@@ -1363,7 +1377,7 @@ function TeamSyncPanel() {
                   </Table>
                 )}
                 <p className="text-[12px] text-ink-subtle mt-1.5">
-                  Approving never reveals or changes the old PIN — it hands out a one-time code that sets a new one.
+                  Approving never reveals or changes the old PIN — it hands out a one-time code that sets a new one. Codes expire after 15 minutes; tap New code for a fresh one.
                 </p>
               </div>
             )}

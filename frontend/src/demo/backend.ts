@@ -832,7 +832,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   if (m === 'GET' && p === '/auth/pin-users') {
     return d.users.filter((u) => u.active && u.pin).map((u) => {
       const role = d.roles.find((r) => r.id === u.roleId)
-      return { id: u.id, fullName: u.fullName || u.username, roleName: role ? role.name : '' }
+      return { id: u.id, username: u.username, fullName: u.fullName || u.username, roleName: role ? role.name : '' }
     }) as T
   }
   if (m === 'POST' && p === '/auth/pin') {
@@ -1588,6 +1588,11 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (x.heldSales.length === before) throw new ApiError(404, 'held sale not found')
     persist()
     return { deleted: true } as T
+  }
+
+  // ---- forgot-PIN recovery (needs the real cloud — demo says so plainly) ----
+  if (p === '/auth/forgot-pin' || p === '/auth/forgot-pin/status' || p === '/auth/forgot-pin/redeem') {
+    throw new ApiError(501, 'PIN recovery runs on the live LedgerPOS cloud — try it on a real till')
   }
 
   // ---- quotations (v1.3.0 parity with the real server) ----
