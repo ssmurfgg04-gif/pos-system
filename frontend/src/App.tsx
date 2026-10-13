@@ -17,6 +17,7 @@ import { Customers } from './pages/Customers'
 import { Inventory } from './pages/Inventory'
 import { Suppliers } from './pages/Suppliers'
 import { Orders } from './pages/Orders'
+import { Quotes } from './pages/Quotes'
 import { DesignBoard } from './pages/DesignBoard'
 import { Shifts } from './pages/Shifts'
 import { Reports } from './pages/Reports'
@@ -75,6 +76,8 @@ function GatedApp({ path, user }: { path: string; user: User }) {
         return user.permissions.includes('pos.sell') ? <Pos /> : <NoPerm perm="pos.sell" />
       case path.startsWith('/orders'):
         return user.permissions.includes('orders.view') ? <Orders /> : <NoPerm perm="orders.view" />
+      case path.startsWith('/quotes'):
+        return user.permissions.includes('quotes.view') ? <Quotes /> : <NoPerm perm="quotes.view" />
       case path.startsWith('/customers'):
         return user.permissions.includes('customers.view') ? <Customers /> : <NoPerm perm="customers.view" />
       case path.startsWith('/design'):

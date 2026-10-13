@@ -1006,6 +1006,93 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS image_synced_at TEXT NOT NULL DEFA
 ALTER TABLE customer_ledger ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
 `,
         },
+        {
+                // v17 — quotations. A quote is a priced offer document sent to
+                // a customer BEFORE a sale exists: draft → sent → accepted /
+                // declined, with "converted" stamped when its lines move to a
+                // till as a parked sale (the sale itself stays a normal
+                // checkout — quotes never touch money or stock).
+                //   client_uuid  sync identity (insert-by-uuid exactly once)
+                //   quote_no     per-team display number (QT-000123; remapped
+                //                on collision at apply time, like orders)
+                //   items_json   frozen line items (product id/name/qty/price)
+                //   synced_at    emit-once bookkeeping, same pattern as orders
+                Version: 17,
+                SQLite: `
+CREATE TABLE IF NOT EXISTS quotes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quote_no TEXT NOT NULL DEFAULT '',
+  client_uuid TEXT NOT NULL UNIQUE,
+  customer_id INTEGER NOT NULL DEFAULT 0,
+  customer_name TEXT NOT NULL DEFAULT '',
+  customer_phone TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft',
+  items_json TEXT NOT NULL DEFAULT '[]',
+  subtotal_cents INTEGER NOT NULL DEFAULT 0,
+  discount_cents INTEGER NOT NULL DEFAULT 0,
+  discount_label TEXT NOT NULL DEFAULT '',
+  tax_cents INTEGER NOT NULL DEFAULT 0,
+  total_cents INTEGER NOT NULL DEFAULT 0,
+  notes TEXT NOT NULL DEFAULT '',
+  valid_until TEXT NOT NULL DEFAULT '',
+  created_by INTEGER NOT NULL DEFAULT 0,
+  created_by_name TEXT NOT NULL DEFAULT '',
+  converted_held_sale_id INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
+CREATE INDEX IF NOT EXISTS idx_quotes_customer ON quotes(customer_id);
+CREATE INDEX IF NOT EXISTS idx_quotes_created ON quotes(created_at);
+`,
+                Pg: `
+CREATE TABLE IF NOT EXISTS quotes (
+  id BIGSERIAL PRIMARY KEY,
+  quote_no TEXT NOT NULL DEFAULT '',
+  client_uuid TEXT NOT NULL UNIQUE,
+  customer_id BIGINT NOT NULL DEFAULT 0,
+  customer_name TEXT NOT NULL DEFAULT '',
+  customer_phone TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft',
+  items_json TEXT NOT NULL DEFAULT '[]',
+  subtotal_cents BIGINT NOT NULL DEFAULT 0,
+  discount_cents BIGINT NOT NULL DEFAULT 0,
+  discount_label TEXT NOT NULL DEFAULT '',
+  tax_cents BIGINT NOT NULL DEFAULT 0,
+  total_cents BIGINT NOT NULL DEFAULT 0,
+  notes TEXT NOT NULL DEFAULT '',
+  valid_until TEXT NOT NULL DEFAULT '',
+  created_by BIGINT NOT NULL DEFAULT 0,
+  created_by_name TEXT NOT NULL DEFAULT '',
+  converted_held_sale_id BIGINT NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
+CREATE INDEX IF NOT EXISTS idx_quotes_customer ON quotes(customer_id);
+CREATE INDEX IF NOT EXISTS idx_quotes_created ON quotes(created_at);
+`,
+                Go: backfillRolePermsV17,
+        },
+}
+
+// backfillRolePermsV17 unions the quotation permissions into the seeded
+// roles (union-only, idempotent): Admin/Owner get everything (AllPermissions
+// already includes the new keys), the front-office roles quote all day,
+// Designers see quotes for their jobs, Cashiers can look them up.
+func backfillRolePermsV17(d *DB, tx *sql.Tx) error {
+        extra := map[string][]string{
+                "Admin":       models.SeededRolePermissions["Admin"],
+                "Owner":       models.SeededRolePermissions["Owner"],
+                "Front Desk":  models.SeededRolePermissions["Front Desk"],
+                "Branding":    models.SeededRolePermissions["Branding"],
+                "Cyber":       models.SeededRolePermissions["Cyber"],
+                "Designer":    models.SeededRolePermissions["Designer"],
+                "Cashier":     models.SeededRolePermissions["Cashier"],
+        }
+        return unionRolePerms(d, tx, extra)
 }
 
 // backfillRolePermsV9 unions the v8 permission additions into seeded roles:

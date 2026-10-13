@@ -211,6 +211,16 @@ func (s *Service) GetShiftReport(shiftID int64) (*ShiftReport, error) {
                         endRaw = closedRaw
                 }
         }
+        // Clock-skew tolerance: the window end is padded +2s. A sandboxed VM
+        // (and any NTP-steered box) can step the wall clock BACKWARD between
+        // "payment completed_at = now" and "report end = now" — the strict
+        // string compare then silently EXCLUDED real money from the X/Z
+        // totals (repro'd as a flaky 0/0 X report). Padding is safe: it can
+        // only include payments that already exist and belong to this
+        // cashier's session; the next shift opens hours later, far past 2s.
+        if t, err := time.Parse(nowStampLayout, endRaw); err == nil {
+                endRaw = t.Add(2 * time.Second).Format(nowStampLayout)
+        }
         // Payments in the shift window, scoped to the shift owner (the
         // till's session boundary is per cashier, matching shifts today).
         rows, err := s.db.Query(s.db.Rebind(`

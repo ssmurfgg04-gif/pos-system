@@ -11,6 +11,7 @@ import {
   BackupResult,
   OffsiteStatus,
   PaymentConfig,
+  PinResetRow,
   Role,
   TeamDevice,
   TeamInviteCreated,
@@ -24,7 +25,7 @@ import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
-import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck, Undo2 } from 'lucide-react'
+import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck, Undo2, LifeBuoy, KeyRound } from 'lucide-react'
 
 type SettingsMap = Record<string, string>
 
@@ -855,6 +856,10 @@ function TeamSyncPanel() {
   const [invite, setInvite] = useState<TeamInviteCreated | null>(null)
   const [copied, setCopied] = useState(false)
   const [workingInvite, setWorkingInvite] = useState(0)
+  // Forgot-PIN recovery: open requests from locked tills across the team.
+  const [pinResets, setPinResets] = useState<PinResetRow[]>([])
+  const [workingReset, setWorkingReset] = useState(0)
+  const [approvedCode, setApprovedCode] = useState<{ code: string; username: string; deviceName: string } | null>(null)
 
   const load = async () => {
     try {
@@ -866,6 +871,9 @@ function TeamSyncPanel() {
       setStatus(null)
       setLoadError(e?.message || 'Team sync status unavailable')
     }
+    // PIN reset requests are best-effort — an offline cloud shouldn't hide
+    // the rest of the panel.
+    api.get<PinResetRow[]>('/api/v1/team-sync/pin-resets').then(setPinResets).catch(() => setPinResets([]))
   }
   useEffect(() => {
     load()
@@ -975,7 +983,7 @@ function TeamSyncPanel() {
 
   const removeDevice = async (d: TeamDevice) => {
     const label = d.deviceName || d.deviceId.slice(0, 8)
-    if (!window.confirm(`Revoke ${label}? It is cut off from the cloud immediately and cannot rejoin on its own.`)) return
+    if (!window.confirm(`Revoke ${label}? It is cut off from the cloud immediately. It can only come back with a fresh join link from you (Settings → Team) or your owner sign-in — nothing else on that till can undo this.`)) return
     setWorkingDevice(d.deviceId)
     try {
       await api.post('/api/v1/team-sync/remove', { deviceId: d.deviceId })
@@ -1051,6 +1059,23 @@ function TeamSyncPanel() {
       toast.error('Could not revoke the invite', e?.message)
     } finally {
       setWorkingInvite(0)
+    }
+  }
+
+  // Approve a locked till's PIN reset: the cloud mints a single-use
+  // 8-digit code (15 minutes, that one till only). Shown here exactly once
+  // — read it to the worker over a call or WhatsApp.
+  const approvePinReset = async (id: number) => {
+    setWorkingReset(id)
+    setApprovedCode(null)
+    try {
+      const r = await api.post<{ code: string; username: string; deviceName: string; expiresMins: number }>('/api/v1/team-sync/pin-resets/approve', { requestId: id })
+      setApprovedCode({ code: r.code, username: r.username, deviceName: r.deviceName })
+      await load()
+    } catch (e: any) {
+      toast.error('Could not approve the reset', e?.message)
+    } finally {
+      setWorkingReset(0)
     }
   }
 
@@ -1293,6 +1318,53 @@ function TeamSyncPanel() {
                     </tr>
                   ))}
                 </Table>
+              </div>
+            )}
+            {/* Forgot-PIN recovery: locked tills waiting for an owner code. */}
+            {status.approved && (
+              <div className="pt-4">
+                <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5 flex items-center gap-1.5">
+                  <LifeBuoy size={13} strokeWidth={2.5} aria-hidden /> PIN reset requests
+                </p>
+                {approvedCode && (
+                  <div className="mb-2 rounded-input border-2 border-paid-text/40 bg-paid-bg p-3">
+                    <p className="text-[12px] font-bold text-paid-text mb-1">
+                      Code for <span className="font-bold">{approvedCode.username}</span>
+                      {approvedCode.deviceName ? ` on ${approvedCode.deviceName}` : ''} — read it to them now (works 15 minutes, this till only):
+                    </p>
+                    <p className="text-2xl font-mono font-bold tracking-[0.3em] text-paid-text text-center select-all py-1">
+                      {approvedCode.code}
+                    </p>
+                    <p className="text-[11px] text-ink-subtle mt-1">
+                      They type it on the PIN screen under “Forgot PIN?” and pick a new PIN. Shown only once — tap Approve again for a fresh code.
+                    </p>
+                  </div>
+                )}
+                {pinResets.length === 0 ? (
+                  <p className="text-[12px] text-ink-subtle">
+                    None right now. When someone forgets their PIN, they tap “Forgot PIN?” on their till and it shows up here.
+                  </p>
+                ) : (
+                  <Table head={['Who', 'Till', 'Requested', '']}>
+                    {pinResets.map((r) => (
+                      <tr key={r.id}>
+                        <td className="px-3 py-2 text-[13px] font-semibold text-ink">{r.username}</td>
+                        <td className="px-3 py-2 text-[12px] text-ink-muted">{r.deviceName || r.deviceId.slice(0, 8)}</td>
+                        <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{new Date(r.createdAt).toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">
+                          <Button size="sm" variant="secondary" onClick={() => approvePinReset(r.id)} disabled={workingReset === r.id}
+                            title="Mint a single-use 8-digit code and show it to you">
+                            {workingReset === r.id ? <Spinner /> : <KeyRound size={14} strokeWidth={2.5} aria-hidden />}
+                            Approve
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </Table>
+                )}
+                <p className="text-[12px] text-ink-subtle mt-1.5">
+                  Approving never reveals or changes the old PIN — it hands out a one-time code that sets a new one.
+                </p>
               </div>
             )}
             {/* Join-link invites: the owner mints, the worker pastes on a new machine. */}

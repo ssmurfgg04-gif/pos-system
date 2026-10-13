@@ -49,7 +49,14 @@ export function Join() {
         `You're in as ${res.roleName} — the shop's products and settings are syncing now.`)
       navigate(homeFor(useAuth.getState().user))
     } catch (err: any) {
-      setError(err?.message || 'Could not join with that link')
+      const msg = err?.message || 'Could not join with that link'
+      // A previously-revoked till CAN rejoin with a fresh link — the link is
+      // owner consent. Only surface extra help if something is still off.
+      if (/revoked/i.test(msg)) {
+        setError('This till was removed from the team earlier. A fresh link from the owner still works — ask them to mint a new one (Settings → Team → Invite a worker) and paste it here.')
+      } else {
+        setError(msg)
+      }
     } finally {
       setBusy(false)
     }
