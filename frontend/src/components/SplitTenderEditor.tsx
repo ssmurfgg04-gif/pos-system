@@ -123,7 +123,7 @@ export function SplitTenderEditor({
                 value={leg.email || ''}
                 onChange={(e) => update(i, { email: e.target.value })}
                 inputMode="email"
-                placeholder="Customer email (optional — Paystack receipt)"
+                placeholder="Customer email (optional — receipt)"
                 aria-label="Email for the card payment leg"
               />
             )}

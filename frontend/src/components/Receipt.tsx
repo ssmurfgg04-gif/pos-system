@@ -135,7 +135,7 @@ function paymentLabel(p: { method: string; status: string }): string {
     case 'cash': return 'Paid (cash)'
     case 'account': return 'Tab'
     case 'credit': return 'Store credit'
-    case 'paystack': return p.status === 'COMPLETED' ? 'Paid (card/mobile — Paystack)' : 'Card/mobile (Paystack)'
+    case 'paystack': return p.status === 'COMPLETED' ? 'Paid (card/mobile)' : 'Card/mobile'
     case 'mpesa': return p.status === 'COMPLETED' ? 'Paid (M-Pesa)' : 'M-Pesa (pending)'
     default: return `Paid (${p.method})`
   }

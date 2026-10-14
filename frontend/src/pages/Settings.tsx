@@ -263,8 +263,8 @@ export function Settings() {
           <div className="px-4 pb-4 sm:px-5 grid sm:grid-cols-2 gap-3">
             <div className="sm:col-span-2 flex flex-wrap items-start justify-between gap-2 bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
               <p className="min-w-56 flex-1">
-                <strong className="text-ink inline-flex items-center gap-1.5"><CreditCard size={15} strokeWidth={2.25} aria-hidden />Paystack — cards &amp; M-Pesa.</strong>{' '}
-                Keys are managed centrally and reach every till automatically — no pasting, no per-machine setup.
+                <strong className="text-ink inline-flex items-center gap-1.5"><CreditCard size={15} strokeWidth={2.25} aria-hidden />Card &amp; M-Pesa payments.</strong>{' '}
+                Already set up for you — no pasting, no per-machine setup.
                 Staff only touch the Till / Paybill numbers below.
               </p>
               <div className="flex items-center gap-2">
@@ -273,10 +273,10 @@ export function Settings() {
                     status={payConfig.paystack.configured && payConfig.paystack.enabled ? 'paid' : 'pending'}
                     label={
                       payConfig.paystack.configured && payConfig.paystack.enabled
-                        ? `Connected${payConfig.paystack.fromEnv ? ' (server keys)' : ' (cloud keys)'} — ready at checkout`
+                        ? 'Connected — ready at checkout'
                         : payConfig.paystack.configured
-                          ? 'Keys on file — checkout currently disabled'
-                          : 'Waiting for keys from the cloud — they arrive automatically on boot'
+                          ? 'Connected — checkout currently off'
+                          : 'Setting up — payments turn on automatically'
                     }
                   />
                 ) : (
@@ -288,13 +288,6 @@ export function Settings() {
                 </Button>
               </div>
             </div>
-            {payConfig && (
-              <p className="sm:col-span-2 text-[12px] text-ink-subtle -mt-1">
-                Live from the till: Paystack {payConfig.paystack.enabled ? 'enabled' : 'disabled'} at checkout ·
-                currency <strong className="text-ink-muted">{payConfig.paystack.currency || '—'}</strong> ·
-                callback <span className="font-mono">{payConfig.paystack.callbackUrl || '—'}</span>
-              </p>
-            )}
             <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink sm:col-span-2">
               <input
                 type="checkbox"
@@ -302,28 +295,23 @@ export function Settings() {
                 onChange={(e) => set('paystack_enabled', String(e.target.checked))}
                 className="w-5 h-5 accent-[#10B981]"
               />
-              Accept card &amp; M-Pesa payments via Paystack
+              Accept card &amp; M-Pesa payments
             </label>
-            {payConfig?.paystack.configured && !payConfig?.paystack.fromEnv && (
-              <p className="sm:col-span-2 text-[12px] text-info-text font-semibold -mt-1">
-                Keys delivered from your cloud vault (Supabase) — rotate them there and every till updates itself within minutes.
-              </p>
-            )}
             <div className="sm:col-span-2 flex items-start gap-2 bg-info-bg border-2 border-info-text/30 rounded-input p-3 text-[12px] text-info-text font-semibold">
               <MonitorSmartphone size={15} strokeWidth={2.25} className="shrink-0 mt-0.5" aria-hidden />
               <p>
                 {payConfig?.paystack.configured
-                  ? <>Paystack is connected. Currency <strong className="font-mono">{payConfig.paystack.currency || 'KES'}</strong> · checkout returns to <strong className="font-mono break-all">{payConfig.paystack.callbackUrl || 'the storefront'}</strong>. The secret key never appears on any till screen.</>
-                  : <>No keys yet. This till fetches them from the cloud automatically once it is registered and approved — nothing to paste, nothing to type.</>}
+                  ? <>Card &amp; M-Pesa payments are ready at checkout.</>
+                  : <>This till activates payments automatically once they are enabled for your business — nothing to paste, nothing to type.</>}
               </p>
             </div>
 
             <div className="sm:col-span-2 border-t-2 border-line pt-3 mt-1">
               <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">M-Pesa</p>
               <p className="text-[13px] text-ink-muted">
-                <strong className="text-ink">M-Pesa runs through Paystack.</strong> When Paystack is connected above,
-                the M-Pesa button at checkout pushes a real STK prompt to the customer's phone and the sale completes
-                only after Paystack confirms the money. Manual receipt-code entry always works, even offline.
+                <strong className="text-ink">M-Pesa is connected for you.</strong> When card payments are connected above,
+                the M-Pesa button at checkout sends a real STK prompt to the customer's phone and the sale completes
+                only after the money is confirmed. Manual receipt-code entry always works, even offline.
               </p>
               {payConfig && (
                 <p className="text-[12px] mt-1.5">
@@ -335,7 +323,7 @@ export function Settings() {
                         ? 'text-pending-text'
                         : 'text-ink-muted'
                   }>
-                    {payConfig.mpesa.route === 'paystack' ? 'Paystack STK push (real money)'
+                    {payConfig.mpesa.route === 'paystack' ? 'Automatic STK push (real money)'
                       : payConfig.mpesa.route === 'daraja' ? 'Safaricom Daraja (real money)'
                       : payConfig.mpesa.route === 'mock' ? 'Training mode — no real money (ALLOW_MOCK_PAYMENTS)'
                       : 'Manual receipt code — no STK configured'}
@@ -349,7 +337,7 @@ export function Settings() {
             <Field label="Paybill number">
               <Input value={values.paybill_number ?? ''} onChange={(e) => set('paybill_number', e.target.value)} inputMode="numeric" />
             </Field>
-            <Field label="Default M-Pesa mode at checkout" hint="Used when Paystack is not connected.">
+            <Field label="Default M-Pesa mode at checkout" hint="Used when automatic STK is unavailable.">
               <Select value={values.payment_mode ?? 'auto'} onChange={(e) => set('payment_mode', e.target.value)}>
                 <option value="auto">Auto — STK push with manual fallback</option>
                 <option value="stk">STK push only</option>
@@ -357,9 +345,8 @@ export function Settings() {
               </Select>
             </Field>
             <p className="sm:col-span-2 text-[12px] text-ink-subtle">
-              Keys are delivered from the cloud vault automatically — nothing to paste, nothing to store on this machine.
-              All secrets are encrypted at rest on this machine, and payment provider keys belong in this till's
-              <code className="font-mono"> .env</code> file or here — never in screenshots or shared documents.
+              Payment connections are managed for you — nothing to paste or store on this machine.
+              Till / Paybill numbers here are shown to customers paying by M-Pesa manually.
             </p>
           </div>
         )}

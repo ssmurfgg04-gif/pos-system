@@ -158,7 +158,7 @@ export function Orders() {
                       <span>
                         <PaymentLabel method={pay.method} />
                         {pay.method === 'mpesa' && pay.mpesaReceipt ? <> · <span className="font-mono text-[12px] font-semibold text-ink" title="M-Pesa receipt code">{pay.mpesaReceipt}</span></> : null}
-                        {pay.method === 'paystack' && pay.mpesaReceipt ? <> · <span className="font-mono text-[12px] font-semibold text-ink" title="Paystack reference">{pay.mpesaReceipt}</span></> : null}
+                        {pay.method === 'paystack' && pay.mpesaReceipt ? <> · <span className="font-mono text-[12px] font-semibold text-ink" title="Payment reference">{pay.mpesaReceipt}</span></> : null}
                       </span>
                     ) : '—'}
                   </td>
@@ -171,7 +171,7 @@ export function Orders() {
                           variant="secondary"
                           disabled={checkingId === o.id}
                           onClick={() => recheck(o)}
-                          title="Re-verify the charge with Paystack / M-Pesa — completes the sale if the money arrived"
+                          title="Re-verify the charge — completes the sale if the money arrived"
                         >
                           {checkingId === o.id ? <Spinner /> : 'Check payment'}
                         </Button>
@@ -301,7 +301,7 @@ function OrderDrawer({
       footer={
         <>
           {onRecheck && live.status === 'PENDING' && (
-            <Button variant="secondary" onClick={onRecheck} disabled={checking} title="Re-verify the charge with Paystack / M-Pesa — completes the sale if the money arrived">
+            <Button variant="secondary" onClick={onRecheck} disabled={checking} title="Re-verify the charge — completes the sale if the money arrived">
               {checking ? <Spinner /> : 'Check payment'}
             </Button>
           )}
