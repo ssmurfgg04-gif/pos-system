@@ -189,7 +189,7 @@ function ShiftReportModal({ report, loading, onClose }: { report: ShiftReport | 
           <div className="border border-line rounded-input divide-y divide-line bg-surface">
             <Row2 label="Cash" value={formatMoney(report.cashCents)} />
             <Row2 label="M-Pesa" value={formatMoney(report.mpesaCents)} />
-            <Row2 label="Card / Paystack" value={formatMoney(report.paystackCents)} />
+            <Row2 label="Card / Mobile" value={formatMoney(report.paystackCents)} />
             <Row2 label="Store credit" value={formatMoney(report.creditCents)} />
             {report.otherCents > 0 && <Row2 label="Other tenders" value={formatMoney(report.otherCents)} />}
           </div>

@@ -116,6 +116,46 @@ func (s *Service) paystackCloudInit(email string, amount int64, currency, refere
         }, nil
 }
 
+// paystackCloudCharge opens an M-Pesa STK charge server-side (no local
+// secret). Mirrors paystackCloudInit: the paystack-charge Edge Function
+// holds the key, authenticates the device and returns Paystack's charge
+// answer (reference + display_text). Completion is never proven here — the
+// sweeper verify and the charge.success webhook own it, unchanged.
+func (s *Service) paystackCloudCharge(email string, amount int64, currency, reference, phone string, metadata map[string]any) (*paystack.ChargeResult, error) {
+        c, ok := s.syncConfig()
+        if !ok {
+                return nil, fmt.Errorf("cloud payment proxy unavailable")
+        }
+        out, err := s.paystackEdgeCall("paystack-charge", map[string]any{
+                "p_device_id":   c.device,
+                "p_secret_hash": c.secretHash,
+                "email":         email,
+                "amount":        amount,
+                "currency":      currency,
+                "reference":     reference,
+                "mobile_money":  map[string]any{"phone": phone, "provider": "mpesa"},
+                "metadata":      metadata,
+        })
+        if err != nil {
+                return nil, err
+        }
+        if v, _ := out["ok"].(bool); !v {
+                msg, _ := out["error"].(string)
+                return nil, fmt.Errorf("cloud proxy charge: %s", msg)
+        }
+        ref, _ := out["reference"].(string)
+        if ref == "" {
+                return nil, fmt.Errorf("cloud proxy charge: no reference")
+        }
+        display, _ := out["display_text"].(string)
+        status, _ := out["status"].(string)
+        return &paystack.ChargeResult{
+                Status:      status,
+                Reference:   ref,
+                DisplayText: display,
+        }, nil
+}
+
 // paystackVerifyRef verifies a reference with the local client when present,
 // else through the cloud proxy. Both paths return the same VerifyResult.
 func (s *Service) paystackVerifyRef(reference string) (*paystack.VerifyResult, error) {

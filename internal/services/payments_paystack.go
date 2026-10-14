@@ -54,9 +54,11 @@ func (s *Service) GetPaystack() *paystack.Client {
         return s.paystack
 }
 
-// paystackConfigured reports whether a charge can actually be initialized.
+// paystackConfigured reports whether a charge can actually be initialized —
+// a local key OR the cloud proxy (v1.3.3: keeps MpesaRoute on the STK path
+// for keyless tills after the vault-key cutover).
 func (s *Service) paystackConfigured() bool {
-        return s.GetPaystack() != nil
+        return s.paystackUsable()
 }
 
 // PaymentConfig powers the till's tender buttons (public data only).
@@ -294,7 +296,7 @@ func (s *Service) PaystackInit(orderID int64, email, phone string, p *auth.Princ
 // — the order is marked PAID exclusively after Paystack confirms the money.
 func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay *models.Payment, p *auth.Principal) (*models.Order, error) {
         client := s.GetPaystack()
-        if client == nil || !s.settings.GetBool("paystack_enabled", true) {
+        if !s.paystackUsable() || !s.settings.GetBool("paystack_enabled", true) {
                 return nil, fmt.Errorf("%w: paystack is not connected — M-Pesa STK needs it (or use manual receipt entry)", ErrNotConfigured)
         }
         phone := paystackPhoneKe(pay.Phone)
@@ -310,16 +312,33 @@ func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay
 
         reference := fmt.Sprintf("LP-%s-%s", order.Number, randToken(4))
         email := "customer+" + strings.ToLower(order.Number) + "@ledgerpos.app"
-        init, err := client.ChargeMobileMoney(paystack.ChargeRequest{
-                Email:     email,
-                Amount:    pay.AmountCents,
-                Currency:  s.paystackCurrency(),
-                Reference: reference,
-                MobileMoney: &paystack.MobileMoney{
-                        Phone:    wirePhone,
-                        Provider: "mpesa",
-                },
-                Metadata: map[string]any{
+        // Charge through the LOCAL key when present; otherwise the cloud proxy
+        // (the Edge Function holds the secret — the till never sees it). Both
+        // paths land the same ChargeResult; completion stays verify/webhook.
+        var init *paystack.ChargeResult
+        var initErr error
+        if client != nil {
+                init, initErr = client.ChargeMobileMoney(paystack.ChargeRequest{
+                        Email:     email,
+                        Amount:    pay.AmountCents,
+                        Currency:  s.paystackCurrency(),
+                        Reference: reference,
+                        MobileMoney: &paystack.MobileMoney{
+                                Phone:    wirePhone,
+                                Provider: "mpesa",
+                        },
+                        Metadata: map[string]any{
+                                "order_number":   order.Number,
+                                "cashier":        p.Username,
+                                "method":         "mpesa_stk",
+                                "customer_phone": wirePhone,
+                                "custom_fields": []map[string]string{
+                                        {"display_name": "Order", "variable_name": "order", "value": order.Number},
+                                },
+                        },
+                })
+        } else {
+                init, initErr = s.paystackCloudCharge(email, pay.AmountCents, s.paystackCurrency(), reference, wirePhone, map[string]any{
                         "order_number":   order.Number,
                         "cashier":        p.Username,
                         "method":         "mpesa_stk",
@@ -327,13 +346,13 @@ func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay
                         "custom_fields": []map[string]string{
                                 {"display_name": "Order", "variable_name": "order", "value": order.Number},
                         },
-                },
-        })
-        if err != nil {
+                })
+        }
+        if initErr != nil {
                 s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
-                        truncStr(err.Error(), 200), pay.ID)
-                s.Audit(p.ID, p.Username, "PAYSTACK_MPESA_FAILED", "order", order.Number, err.Error())
-                return nil, err
+                        truncStr(initErr.Error(), 200), pay.ID)
+                s.Audit(p.ID, p.Username, "PAYSTACK_MPESA_FAILED", "order", order.Number, initErr.Error())
+                return nil, initErr
         }
         s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, email = ?, result_desc = ? WHERE id = ?`),
                 reference, email, truncStr(init.DisplayText, 200), pay.ID)

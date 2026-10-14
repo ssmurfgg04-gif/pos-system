@@ -274,7 +274,7 @@ export function CheckoutRail({
     if (elapsed >= 900 && (stkStage === 'waiting' || stkStage === 'slow')) {
       stopTimers()
       setStkStage('failed')
-      setPayError('We stopped auto-watching after 15 minutes. If the customer says they already paid, tap “Check payment status” — it re-verifies the charge with Paystack and completes the sale. Otherwise send the prompt again or key in the M-Pesa code.')
+      setPayError('We stopped auto-watching after 15 minutes. If the customer says they already paid, tap “Check payment status” — it re-verifies the charge and completes the sale. Otherwise send the prompt again or key in the M-Pesa code.')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elapsed, mode, stkStage])
@@ -336,7 +336,7 @@ export function CheckoutRail({
             if (settledRef.current) return
             settledRef.current = true
             setInlineStage('failed')
-            setPayError(message || 'Paystack checkout failed to open — retry to mint a fresh reference.')
+            setPayError(message || 'Checkout failed to open — try again.')
           },
         },
       )
@@ -549,7 +549,7 @@ export function CheckoutRail({
   return (
     <div className="h-full flex flex-col">
       {/* Rail header */}
-      <header className="px-4 pt-4 pb-3 border-b border-line flex items-center justify-between bg-surface rounded-t-card shrink-0">
+      <header className="px-4 pt-4 pb-3 border-b border-line flex items-center justify-between gap-3 bg-surface rounded-t-card shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
           <span className="w-9 h-9 rounded-input bg-brand-soft text-brand flex items-center justify-center shrink-0" aria-hidden>
             <ShoppingCart size={17} strokeWidth={2.25} />
@@ -562,7 +562,7 @@ export function CheckoutRail({
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5 shrink-0">
           {canHold && onOpenHeld && (
             <Button size="sm" variant="ghost" onClick={onOpenHeld} title="Parked sales">
               <Archive size={14} strokeWidth={2.5} aria-hidden />
@@ -655,12 +655,13 @@ export function CheckoutRail({
         )}
       </div>
 
-      {/* Totals + payment — compact by design (smaller tiles, tight customer
-          grid) so the footer needs no internal scroll on a normal till and
-          the items list keeps the rail's height. The max-h is a safety net
-          for split-tender/discount mode on short screens. */}
-      <footer className="border-t border-line bg-shell-edge rounded-b-card px-3.5 pt-2.5 pb-3 space-y-2.5 max-h-[62%] overflow-y-auto overscroll-contain shrink-0">
-        <div className="space-y-1">
+      {/* Totals + payment — the totals stay PINNED (money info never scrolls
+          away) and the interactive payment form scrolls INSIDE the footer
+          when it grows (split tender, M-Pesa panel, discounts): the items
+          list above keeps its flex-1 share and neither region ever clips a
+          button. pb-6 keeps rounded action cards off the window frame. */}
+      <footer className="border-t border-line bg-shell-edge rounded-b-card px-3.5 pt-2.5 pb-6 flex flex-col max-h-[68%] shrink-0">
+        <div className="space-y-1 shrink-0 pb-2">
           <Row label="Subtotal" value={formatMoney(totals.subtotal)} />
           <Row label={`${branding.tax_percent}% ${branding.tax_included ? 'VAT (incl.)' : 'VAT'}`} value={formatMoney(totals.tax)} />
           <div className="flex items-baseline justify-between border-t border-line-strong pt-1.5 mt-1.5">
@@ -670,11 +671,14 @@ export function CheckoutRail({
         </div>
 
         {cart.lines.length === 0 ? (
-          <Button variant="primary" size="lg" className="w-full h-[50px] text-base" disabled>
-            Charge {formatMoney(totals.total)} →
-          </Button>
+          <div className="shrink-0">
+            <Button variant="primary" size="lg" className="w-full h-[50px] text-base" disabled>
+              Charge {formatMoney(totals.total)} →
+            </Button>
+          </div>
         ) : mode === 'idle' ? (
-          <PaymentForm
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain -mx-1 px-1">
+            <PaymentForm
             {...{
               method, setMethod, paystackReady, creditEnabled, manualMode, online,
               phone, setPhone, phoneOk, normalizedPhone, email, setEmail, customerName, setCustomerName,
@@ -689,6 +693,7 @@ export function CheckoutRail({
             }}
             onPark={canHold ? () => setParkOpen(true) : undefined}
           />
+          </div>
         ) : null}
       </footer>
 
@@ -764,7 +769,7 @@ function PaymentForm(props: {
 
   const tiles: { key: Method; label: string; sub: string; icon: React.ReactNode; enabled: boolean }[] = [
     { key: 'mpesa', label: 'M-Pesa', sub: manualMode ? 'Manual code' : 'STK Push', icon: <Smartphone size={17} strokeWidth={2.25} />, enabled: true },
-    { key: 'card', label: 'Card', sub: 'Paystack', icon: <CreditCard size={17} strokeWidth={2.25} />, enabled: paystackReady },
+    { key: 'card', label: 'Card', sub: 'Secure checkout', icon: <CreditCard size={17} strokeWidth={2.25} />, enabled: paystackReady },
     { key: 'cash', label: 'Cash', sub: 'Exact / change', icon: <Banknote size={17} strokeWidth={2.25} />, enabled: true },
   ]
 
@@ -795,7 +800,7 @@ function PaymentForm(props: {
                 : `Charge ${formatMoney(tenderDue)} — Send STK →`
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2.5">
       {/* Payment method tiles */}
       <div className="grid grid-cols-3 gap-2">
         {tiles.map((t) => (
@@ -805,7 +810,7 @@ function PaymentForm(props: {
             disabled={!t.enabled}
             onClick={() => setMethod(t.key)}
             aria-pressed={method === t.key}
-            className={`min-h-[50px] rounded-input border text-left px-2.5 py-1.5 transition-colors ${
+            className={`min-h-[46px] rounded-input border text-left px-2.5 py-1.5 transition-colors ${
               method === t.key
                 ? 'border-brand bg-brand-soft'
                 : 'border-line-strong bg-surface hover:bg-surface-muted'
@@ -929,7 +934,7 @@ function PaymentForm(props: {
               <button
                 key={i}
                 onClick={() => setReceived(q)}
-                className="min-h-11 text-[12px] font-bold bg-surface border border-line rounded-input hover:bg-surface-muted active:bg-surface-muted"
+                className="min-h-10 text-[12px] font-bold bg-surface border border-line rounded-input hover:bg-surface-muted active:bg-surface-muted"
               >
                 {i === 0 ? 'Exact' : formatMoneyCompact(q)}
               </button>
@@ -1002,11 +1007,11 @@ function PaymentForm(props: {
         </>
       ) : method === 'card' ? (
         <div className="bg-surface-muted border border-line rounded-input p-3 text-[13px] text-ink-muted space-y-1">
-          <p>A secure Paystack checkout opens right here in the app — card or mobile money, with the exact amount already set server-side.</p>
+          <p>A secure checkout opens right here in the app — card or mobile money, with the exact amount already set.</p>
           {!online && (
             <p className="text-pending-text font-bold flex items-center gap-1.5">
               <AlertTriangle size={14} strokeWidth={2.5} aria-hidden />
-              You're offline — Paystack needs a connection. Cash sales keep working.
+              You're offline — card payments need a connection. Cash sales keep working.
             </p>
           )}
         </div>
@@ -1229,7 +1234,7 @@ function PaymentPanel({
         )}
       </div>
 
-      <footer className="border-t border-line px-4 py-3 space-y-2 bg-shell-edge rounded-b-card">
+      <footer className="border-t border-line px-4 pt-3 pb-6 space-y-2 bg-shell-edge rounded-b-card">
         {paid ? (
           <>
             <Button variant="primary" size="lg" className="w-full" onClick={onNewSale}>
@@ -1482,7 +1487,7 @@ function InlinePanel({
                 <p className="font-bold text-ink text-lg flex items-center justify-center gap-2">
                   <Spinner className="border-t-info-text" /> Opening secure checkout…
                 </p>
-                <p className="text-ink-muted text-sm mt-1">Minting a Paystack access code server-side.</p>
+                <p className="text-ink-muted text-sm mt-1">Setting the exact amount for this sale…</p>
               </>
             )}
             {stage === 'popup' && (
@@ -1496,7 +1501,7 @@ function InlinePanel({
                 <p className="font-bold text-ink text-lg flex items-center justify-center gap-2">
                   <Spinner className="border-t-pending-text" /> Waiting for payment…
                 </p>
-                <p className="text-ink-muted text-sm mt-1">Confirming reference <span className="tabular">{reference}</span> with Paystack.</p>
+                <p className="text-ink-muted text-sm mt-1">Confirming payment for reference <span className="tabular">{reference}</span>…</p>
               </>
             )}
           </div>
