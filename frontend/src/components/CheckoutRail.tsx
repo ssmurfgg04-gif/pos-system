@@ -575,7 +575,7 @@ export function CheckoutRail({
         </div>
       </header>
 
-      {/* Items — compact rows (photo, name, inline stepper) so multi-item
+      {/* Items, compact rows (photo, name, inline stepper) so multi-item
           carts fit without scrolling the rail into a sliver */}
       <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-2.5 space-y-1.5">
         {cart.lines.length === 0 ? (
@@ -655,7 +655,7 @@ export function CheckoutRail({
         )}
       </div>
 
-      {/* Totals + payment — the totals stay PINNED (money info never scrolls
+      {/* Totals + payment, the totals stay PINNED (money info never scrolls
           away) and the interactive payment form scrolls INSIDE the footer
           when it grows (split tender, M-Pesa panel, discounts): the items
           list above keeps its flex-1 share and neither region ever clips a
@@ -867,7 +867,7 @@ function PaymentForm(props: {
         </label>
       </div>
 
-      {/* Customer — compact two-row grid (phone is the primary M-Pesa
+      {/* Customer, compact two-row grid (phone is the primary M-Pesa
           identifier; the in-rail "valid" check replaces the permanent hint) */}
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
@@ -898,7 +898,7 @@ function PaymentForm(props: {
         </label>
         {branding.kra_pin ? (
           <label className="block col-span-2 -mt-1">
-            <span className="block text-[12px] font-semibold text-ink-muted mb-0.5">Buyer KRA PIN <span className="font-normal text-ink-subtle">(optional — makes it a tax invoice)</span></span>
+            <span className="block text-[12px] font-semibold text-ink-muted mb-0.5">Buyer KRA PIN <span className="font-normal text-ink-subtle">(optional, makes it a tax invoice)</span></span>
             <Input
               value={buyerPin}
               onChange={(e) => setBuyerPin(e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase())}
@@ -909,7 +909,7 @@ function PaymentForm(props: {
         ) : null}
         {method === 'mpesa' && !manualMode && normalizedPhone && (
           <span className="col-span-2 flex items-center gap-1 text-[11px] font-bold text-paid-text -mt-1">
-            <Check size={12} strokeWidth={3} aria-hidden /> Valid — STK will be sent to {phone}
+            <Check size={12} strokeWidth={3} aria-hidden /> Valid, STK will be sent to {phone}
           </span>
         )}
       </div>
@@ -996,10 +996,10 @@ function PaymentForm(props: {
             </div>
           )}
           {method === 'credit' && tabCustomer && creditOf(tabCustomer) <= 0 && (
-            <p className="text-danger-text text-[13px] font-semibold">This customer has no store credit — top up from their profile first.</p>
+            <p className="text-danger-text text-[13px] font-semibold">This customer has no store credit, top up from their profile first.</p>
           )}
           {method === 'tab' && tabCustomer && tabCustomer.creditLimitCents <= 0 && (
-            <p className="text-danger-text text-[13px] font-semibold">This customer is cash-only — pick someone with credit.</p>
+            <p className="text-danger-text text-[13px] font-semibold">This customer is cash-only, pick someone with credit.</p>
           )}
           {!online && (
             <p className="text-pending-text text-[13px] font-bold">You're offline, {method === 'credit' ? 'store credit' : 'tabs'} need the server for checks.</p>
@@ -1011,17 +1011,17 @@ function PaymentForm(props: {
           {!online && (
             <p className="text-pending-text font-bold flex items-center gap-1.5">
               <AlertTriangle size={14} strokeWidth={2.5} aria-hidden />
-              You're offline — card payments need a connection. Cash sales keep working.
+              You're offline, card payments need a connection. Cash sales keep working.
             </p>
           )}
         </div>
       ) : method === 'mpesa' && manualMode ? (
         <div className="bg-surface-muted border border-line rounded-input p-3 text-[13px] text-ink-muted">
-          The customer pays to {branding.paybill_number ? 'Paybill ' + branding.paybill_number : 'Till ' + (branding.till_number || ', ')} (Account: the order number). You'll enter their receipt code next.
+          The customer pays to {branding.paybill_number ? 'Paybill ' + branding.paybill_number : 'Till ' + (branding.till_number || '-')} (Account: the order number). You'll enter their receipt code next.
         </div>
       ) : method === 'mpesa' ? (
         <div className="bg-surface-muted border border-line rounded-input p-3 text-[13px] text-ink-muted space-y-1">
-          <p>An M-Pesa STK prompt is sent to the customer's phone the moment you charge — they just enter their PIN.</p>
+          <p>An M-Pesa STK prompt is sent to the customer's phone the moment you charge, they just enter their PIN.</p>
           {!online && (
             <p className="text-pending-text font-bold flex items-center gap-1.5">
               <AlertTriangle size={14} strokeWidth={2.5} aria-hidden />
@@ -1219,7 +1219,7 @@ function PaymentPanel({
               </p>
             </div>
             <div className="flex justify-center">
-              <StatusPill status={order.discrepancy ? 'danger' : 'paid'} label={order.discrepancy ? 'Amount discrepancy — review' : 'Payment verified'} />
+              <StatusPill status={order.discrepancy ? 'danger' : 'paid'} label={order.discrepancy ? 'Amount discrepancy, review' : 'Payment verified'} />
             </div>
           </div>
         )}
@@ -1392,7 +1392,7 @@ function StkPanel({
           </span>
         </div>
         <div>
-          <p className="font-bold text-ink text-lg">Still waiting — checking every 2s</p>
+          <p className="font-bold text-ink text-lg">Still waiting, checking every 2s</p>
           <p className="text-ink-muted text-sm mt-1 max-w-xs mx-auto">
             Taking longer than usual. If the customer already entered their PIN, this screen
             confirms by itself the moment the money shows up.
@@ -1404,7 +1404,7 @@ function StkPanel({
         <div className="text-left bg-pending-bg border border-pending-text/30 rounded-input p-3">
           <p className="text-[13px] font-bold text-pending-text">While you wait:</p>
           <ul className="text-[13px] text-ink-muted mt-1 space-y-0.5 list-disc pl-4">
-            <li>Ask them to check for the prompt — it can land under “My SIP messages”.</li>
+            <li>Ask them to check for the prompt, it can land under “My SIP messages”.</li>
             <li>They can also pay from their M-Pesa menu, then you key the code below.</li>
             <li>Wrong number? Leave pending and start the sale again.</li>
           </ul>
@@ -1446,7 +1446,7 @@ function StkPanel({
       </Field>
       <Button variant="secondary" size="lg" className="w-full" onClick={onSend} disabled={busy || !phone.trim()}>
         <RotateCcw size={16} strokeWidth={2.5} aria-hidden />
-        Retry — send the STK push again
+        Retry, send the STK push again
       </Button>
       {till && (
         <div className="bg-surface-muted border border-line rounded-input p-3">
@@ -1722,7 +1722,7 @@ function ParkModal({
     }>
       <div className="space-y-3">
         <p className="text-sm text-ink-muted">
-          {totals.count} item{totals.count === 1 ? '' : 's'} · {formatMoney(totals.total)} — nothing is charged until the sale is resumed and completed.
+          {totals.count} item{totals.count === 1 ? '' : 's'} · {formatMoney(totals.total)}, nothing is charged until the sale is resumed and completed.
         </p>
         <Field label="Reference name" hint="Find it again in the Parked drawer.">
           <Input

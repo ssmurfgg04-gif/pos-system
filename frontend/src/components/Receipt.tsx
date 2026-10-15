@@ -46,7 +46,7 @@ export function ReceiptModal({ order, branding, open, onClose }: {
             <p className="text-[10px] text-ink-muted">{branding.app_name}</p>
           )}
           {/* eTIMS (P6): a buyer KRA PIN on the order makes this a tax
-              invoice — print the header plus both PINs so the document is
+              invoice, print the header plus both PINs so the document is
               ready for the KRA electronic tax invoice rules. */}
           {order.buyerPin && (
             <p className="font-bold text-[12px] tracking-widest uppercase mt-1">TAX INVOICE</p>
@@ -94,13 +94,13 @@ export function ReceiptModal({ order, branding, open, onClose }: {
 
         <div className="space-y-0.5">
           {/* EVERY payment leg prints (split tender cash 300 + M-Pesa 700 must
-              reconcile against the TOTAL) with the method named correctly —
+              reconcile against the TOTAL) with the method named correctly
               the old last-leg-only render showed "Paid (M-Pesa) 300.00" and
               labelled a card charge as M-Pesa. */}
           {(order.payments ?? []).filter((p) => p.status !== 'FAILED').map((p, i) => (
             <div key={p.id ?? i}>
               <Row label={paymentLabel(p)} value={centsToAmount(p.amountCents)} />
-              {p.method === 'account' && <p className="text-center text-[11px] font-semibold text-ink-muted">On tab — balance on Customers → Ledger</p>}
+              {p.method === 'account' && <p className="text-center text-[11px] font-semibold text-ink-muted">On tab, balance on Customers → Ledger</p>}
               {p.mpesaReceipt && <Row label="M-Pesa receipt" value={p.mpesaReceipt} />}
               {p.method === 'credit' && <p className="text-center text-[11px] font-semibold text-ink-muted">Paid from store credit</p>}
             </div>
@@ -112,7 +112,7 @@ export function ReceiptModal({ order, branding, open, onClose }: {
 
         <div className="border-t-2 border-dashed border-line my-2.5" />
         <p className="text-center text-[10px] text-ink-muted leading-snug">
-          {branding.store_name || store} — thank you!
+          {branding.store_name || store}, thank you!
           <br />
           {settingFooter(branding)}
         </p>

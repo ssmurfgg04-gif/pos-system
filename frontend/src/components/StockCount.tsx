@@ -65,15 +65,15 @@ export function StockCountPanel({ onChanged }: { onChanged?: () => void }) {
                       label={c.status === 'OPEN' ? 'Open' : c.status === 'DONE' ? 'Closed' : 'Cancelled'}
                     />
                   </td>
-                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.openedAt ? new Date(c.openedAt).toLocaleString() : ', '}</td>
-                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.closedAt ? new Date(c.closedAt).toLocaleString() : ', '}</td>
+                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.openedAt ? new Date(c.openedAt).toLocaleString() : '-'}</td>
+                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.closedAt ? new Date(c.closedAt).toLocaleString() : '-'}</td>
                   <td className="px-3 py-2.5 tabular text-[13px] font-semibold text-ink">{c.linesCounted}/{c.linesTotal}</td>
                   <td className={`px-3 py-2.5 text-[13px] font-bold tabular ${!closed ? 'text-ink-subtle' : shrink ? 'text-danger-text' : surplus ? 'text-paid-text' : 'text-ink-muted'}`}>
                     {closed
                       ? `${c.varianceUnits > 0 ? '+' : ''}${c.varianceUnits} · ${c.varianceValueCents > 0 ? '+' : ''}${centsToAmount(c.varianceValueCents)}`
-                      : ', '}
+                      : '-'}
                   </td>
-                  <td className="px-3 py-2.5 text-[12px] text-ink-muted">{c.countedByName || ', '}</td>
+                  <td className="px-3 py-2.5 text-[12px] text-ink-muted">{c.countedByName || '-'}</td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
                     <Button size="sm" variant="ghost" onClick={() => setOpenId(c.id)}>{closed ? 'View' : 'Count'}</Button>
                   </td>
@@ -139,7 +139,7 @@ function NewCountModal({ open, onClose, onCreated }: { open: boolean; onClose: (
     }>
       <div className="space-y-3">
         <p className="text-[13px] text-ink-muted">
-          Snapshots every stock-tracked product (gift cards excluded — they never track stock). Count at your own pace;
+          Snapshots every stock-tracked product (gift cards excluded, they never track stock). Count at your own pace;
           sales keep working while the count is open.
         </p>
         <Field label="Note (optional)" hint="e.g. “Month-end shelf count, back room”">
@@ -258,7 +258,7 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill status={open ? 'progress' : count.status === 'DONE' ? 'paid' : 'void'} label={open ? 'Open' : count.status === 'DONE' ? 'Closed' : 'Cancelled'} />
           <span className="text-[12px] text-ink-muted">
-            Opened {count.openedAt ? new Date(count.openedAt).toLocaleString() : ', '} by {count.countedByName || ', '}
+            Opened {count.openedAt ? new Date(count.openedAt).toLocaleString() : '-'} by {count.countedByName || '-'}
             {count.closedAt ? ` · closed ${new Date(count.closedAt).toLocaleString()}` : ''}
           </span>
         </div>
@@ -281,7 +281,7 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
               {count.varianceUnits > 0 ? '+' : ''}{count.varianceUnits} units · {count.varianceValueCents > 0 ? '+' : ''}{formatMoney(count.varianceValueCents)} at cost
             </p>
             <p className="text-[12px] text-ink-muted mt-0.5">
-              Negative = shrinkage (counted less than the system believed). Report only — system stock was left untouched.
+              Negative = shrinkage (counted less than the system believed). Report only, system stock was left untouched.
             </p>
           </div>
         )}
@@ -293,7 +293,7 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
             const diff = open && n !== null && !isNaN(n) ? n - l.systemQty : l.countedQty !== null ? l.countedQty - l.systemQty : null
             return (
               <tr key={l.id}>
-                <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{l.sku || ', '}</td>
+                <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{l.sku || '-'}</td>
                 <td className="px-3 py-2 font-semibold text-ink text-[13px]">{l.name}</td>
                 <td className="px-3 py-2 tabular text-[13px] text-ink-muted">{l.expectedQty}</td>
                 <td className="px-3 py-2">
@@ -311,14 +311,14 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
                   {saving === l.productId && <span className="ml-2 inline-block align-middle"><Spinner className="w-4 h-4" /></span>}
                 </td>
                 <td className={`px-3 py-2 tabular text-[13px] font-bold ${diff === null ? 'text-ink-subtle' : diff > 0 ? 'text-paid-text' : diff < 0 ? 'text-danger-text' : 'text-ink-muted'}`}>
-                  {diff === null ? ', ' : `${diff > 0 ? '+' : ''}${diff}`}
+                  {diff === null ? '-' : `${diff > 0 ? '+' : ''}${diff}`}
                 </td>
               </tr>
             )
           })}
         </Table>
-        {open && <p className="text-[11px] text-ink-subtle">Type the physical quantity — it saves when you leave the field or press Enter. Clear a field to un-count that line.</p>}
-        {!open && <p className="text-[11px] text-ink-subtle">This count is closed — the sheet is read-only.</p>}
+        {open && <p className="text-[11px] text-ink-subtle">Type the physical quantity, it saves when you leave the field or press Enter. Clear a field to un-count that line.</p>}
+        {!open && <p className="text-[11px] text-ink-subtle">This count is closed, the sheet is read-only.</p>}
       </div>
 
       {confirmApply && (
@@ -333,7 +333,7 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
           <div className="space-y-3">
             <p className="text-sm text-ink-muted">
               This <strong className="text-ink">overwrites system stock</strong> with the counted quantities for every
-              counted line. Lines you did not count are left alone. This cannot be undone automatically — prefer
+              counted line. Lines you did not count are left alone. This cannot be undone automatically, prefer
               “Close report only” if you just need the paperwork.
             </p>
           </div>

@@ -33,7 +33,7 @@ export function PaymentLabel({ method }: { method?: string }) {
   ) : method === 'credit' ? (
     <span className="inline-flex items-center gap-1.5"><Wallet size={14} strokeWidth={2.25} aria-hidden />Store credit</span>
   ) : (
-    <span>—</span>
+    <span>,</span>
   )
 }
 
@@ -368,7 +368,7 @@ function OrderDrawer({
         return (
           <div key={p.id} className="mt-3 border-2 border-line rounded-input p-3 text-[13px]">
             <div className="flex justify-between">
-              <span className="font-bold"><PaymentLabel method={p.method} /> <span className="text-ink-subtle font-normal">({p.mode || ', '})</span></span>
+              <span className="font-bold"><PaymentLabel method={p.method} /> <span className="text-ink-subtle font-normal">({p.mode || '-'})</span></span>
               <StatusPill status={p.status === 'COMPLETED' ? 'paid' : p.status === 'PENDING' ? 'pending' : p.status === 'VOIDED' ? 'void' : 'danger'} label={p.status} />
             </div>
             <div className="mt-1 grid grid-cols-2 gap-x-3 text-ink-muted">
@@ -415,7 +415,7 @@ function OrderDrawer({
         <div className="mt-3 flex items-start gap-2 text-[13px] font-bold text-void-text bg-void-bg border-2 border-void-text/30 rounded-input p-3">
           <AlertTriangle size={15} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
           <span>
-            Voided{live.voidedAt ? ` ${new Date(live.voidedAt).toLocaleString()}` : ''} — reason: {live.voidReason}
+            Voided{live.voidedAt ? ` ${new Date(live.voidedAt).toLocaleString()}` : ''}, reason: {live.voidReason}
           </span>
         </div>
       )}
@@ -483,7 +483,7 @@ function OrderDrawer({
                 <span className="text-ink-muted flex-1">
                   {e.kind === 'whatsapp' && <MessageCircle size={12} strokeWidth={2.5} className="inline mr-1 text-paid-text" aria-hidden />}
                   {e.message}
-                  {e.username && <span className="text-ink-subtle"> — {e.username}</span>}
+                  {e.username && <span className="text-ink-subtle">, {e.username}</span>}
                 </span>
               </li>
             ))}
@@ -496,13 +496,13 @@ function OrderDrawer({
           footer={<Button variant="primary" onClick={() => setContact(null)}>Close</Button>}>
           <div className="space-y-3">
             <p className="text-[13px] text-ink-muted">
-              Ready for pickup — message to <span className="font-bold text-ink">{contact.phone}</span>:
+              Ready for pickup, message to <span className="font-bold text-ink">{contact.phone}</span>:
             </p>
             <p className="bg-surface-muted border border-line rounded-input px-3 py-2.5 text-[13px] text-ink select-all">
               {contact.message}
             </p>
             <p className="text-[11.5px] text-ink-subtle">
-              WhatsApp opens with this draft prefilled — review it and press send there. The contact attempt is
+              WhatsApp opens with this draft prefilled, review it and press send there. The contact attempt is
               already on the activity timeline; the app never sends automatically.
             </p>
             <Button variant="primary" size="lg" className="w-full"
@@ -553,7 +553,7 @@ function JobFromOrderModal({ order, onClose, onDone }: { order: Order; onClose: 
   useEffect(() => {
     api.get<typeof staff>('/api/v1/assignees')
       .then(setStaff)
-      .catch(() => { /* team list unavailable — unassigned is fine */ })
+      .catch(() => { /* team list unavailable, unassigned is fine */ })
   }, [])
 
   const go = async () => {
@@ -645,7 +645,7 @@ function SettleModal({ order, onClose, onDone }: { order: Order; onClose: () => 
       </>
     }>
       <p className="text-[13px] text-ink-muted mb-3">
-        Owed <strong className="text-danger-text">{formatMoney(order.totalCents)}</strong> — settling marks the order paid and clears the tab.
+        Owed <strong className="text-danger-text">{formatMoney(order.totalCents)}</strong>, settling marks the order paid and clears the tab.
       </p>
       <Tabs
         tabs={[

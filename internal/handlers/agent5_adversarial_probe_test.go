@@ -875,7 +875,7 @@ func TestAgent5CSVFormulaInjectionExport(t *testing.T) {
                 t.Errorf("comma/quote/newline name not properly quoted:\n%s", csv)
         }
         // Sanity: clean cell stays clean.
-        if !strings.Contains(csv, "Classic Cotton Tee — Black") {
+        if !strings.Contains(csv, "Classic Cotton Tee, Black") {
                 t.Errorf("clean name missing from export")
         }
 }
@@ -1512,6 +1512,6 @@ func TestAgent5BugZeroAmountCallbackMarksPaidSilently(t *testing.T) {
         // when nothing was proven collected — if it did deduct, discrepancy
         // is the only honest signal (asserted above).
         if order["status"] == "PAID" {
-                t.Logf("order was completed by zero-evidence callback; stock now %d", a5StockOf(t, engine, cashier, "Classic Cotton Tee — Black"))
+                t.Logf("order was completed by zero-evidence callback; stock now %d", a5StockOf(t, engine, cashier, "Classic Cotton Tee, Black"))
         }
 }

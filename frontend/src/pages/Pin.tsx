@@ -211,7 +211,7 @@ export function Pin() {
                   <div className="text-center text-pending-text text-xs mb-3 space-y-1">
                     <p className="font-semibold">{lockNote}</p>
                     <p className="text-ink-muted">
-                      Locked out? Tap <strong className="text-ink">Forgot PIN?</strong> below — the owner can reset it from
+                      Locked out? Tap <strong className="text-ink">Forgot PIN?</strong> below, the owner can reset it from
                       any other till in about a minute. No data is lost.
                     </p>
                   </div>
@@ -374,7 +374,7 @@ function ForgotPinPanel({
           {busy ? <Spinner className="border-t-brand-ink" /> : 'Send reset request'}
         </button>
         <p className="text-[11.5px] text-ink-subtle">
-          Nothing is deleted and no money is touched — this only lets the owner hand you a code.
+          Nothing is deleted and no money is touched, this only lets the owner hand you a code.
         </p>
         <button
           onClick={onCancel}
@@ -389,7 +389,7 @@ function ForgotPinPanel({
   return (
     <div className="bg-surface border-2 border-line-strong rounded-card shadow-brutal p-5 space-y-4">
       <div className="bg-brand-soft border border-brand/30 rounded-input px-3 py-2.5 text-[12.5px] text-brand font-semibold">
-        Request sent. Now call or message the owner — on their till they open{' '}
+        Request sent. Now call or message the owner, on their till they open{' '}
         <span className="font-bold">Settings → Team → PIN reset requests</span>, tap{' '}<span className="font-bold">Approve</span>{' '}
         (or <span className="font-bold">New code</span> if one expired) next to "{state.username}" and read you the 8-digit code.
       </div>
@@ -442,7 +442,7 @@ function ForgotPinPanel({
       </button>
       <p className="text-[11.5px] text-ink-subtle">
         The code works for 15 minutes, on this till only. Expired or mistyped past the retries? Ask the
-        owner to tap Approve again — they'll get a fresh code for the same request.
+        owner to tap Approve again, they'll get a fresh code for the same request.
       </p>
       <button
         onClick={onCancel}

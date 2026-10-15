@@ -10,7 +10,7 @@ func TestStocktakeFlow(t *testing.T) {
         engine, admin, _, _ := newTestServer(t)
 
         // Stock before (product 1: 40 units in seed).
-        prods := productIDs(t, engine, admin, "Classic Cotton Tee — Black")
+        prods := productIDs(t, engine, admin, "Classic Cotton Tee, Black")
         before := int(prods[0]["stockQty"].(float64))
 
         // Open a count session.
@@ -64,7 +64,7 @@ func TestStocktakeFlow(t *testing.T) {
         }
 
         // System stock must now equal the counted value.
-        prods = productIDs(t, engine, admin, "Classic Cotton Tee — Black")
+        prods = productIDs(t, engine, admin, "Classic Cotton Tee, Black")
         after := int(prods[0]["stockQty"].(float64))
         if after != three {
                 t.Fatalf("stock after apply = %d, want %d", after, three)

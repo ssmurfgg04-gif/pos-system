@@ -117,7 +117,7 @@ export function Shifts() {
                       {s.varianceCents > 0 ? '+' : ''}{centsToAmount(s.varianceCents)}
                     </span>
                   ) : (
-                    <span className="text-ink-subtle">—</span>
+                    <span className="text-ink-subtle">,</span>
                   )}
                 </td>
                 <td className="px-3 py-2.5">
@@ -208,7 +208,7 @@ function ShiftReportModal({ report, loading, onClose }: { report: ShiftReport | 
           </div>
           {report.open && (
             <p className="text-[11.5px] text-ink-subtle">
-              X report — nothing is final yet. Count the drawer when you close; the Z report freezes these numbers.
+              X report, nothing is final yet. Count the drawer when you close; the Z report freezes these numbers.
             </p>
           )}
         </div>

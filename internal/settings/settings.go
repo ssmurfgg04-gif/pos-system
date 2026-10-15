@@ -351,8 +351,9 @@ func AllowedKeys() map[string]bool {
         }
         // paystack_enabled is deliberately not seeded (absence means
         // "on whenever a valid secret key exists"), but admins may still
-        // toggle it explicitly through the API.
+        // toggle it explicitly through the API. paystack_enabled_touched
+        // is runtime bookkeeping (internal): the handler writes it with
+        // Set directly, never through this allowlist.
         out["paystack_enabled"] = true
-        out["paystack_enabled_touched"] = true
         return out
 }

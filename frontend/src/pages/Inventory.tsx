@@ -280,7 +280,7 @@ export function Inventory() {
             </>
           )}
           {tab === 'stockcount' && (
-            <p className="text-[12px] text-ink-subtle">Count sessions, variance and apply-to-stock — nothing leaves the building uncounted.</p>
+            <p className="text-[12px] text-ink-subtle">Count sessions, variance and apply-to-stock, nothing leaves the building uncounted.</p>
           )}
         </div>
 

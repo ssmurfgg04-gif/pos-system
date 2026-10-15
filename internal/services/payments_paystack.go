@@ -479,9 +479,10 @@ const PaystackTimeout = 15 * time.Minute
 const STKFailGrace = 10 * time.Second
 
 // stkGraceExpired records the first terminal verify for a reference and
-// reports whether the grace window has passed. Popup legs (mode != 'stk')
-// fail immediately, unchanged. Nil-map safe (tests build Service structs
-// literally).
+// reports whether the grace window has passed (the entry is dropped once
+// the window passes, so a leg that later fails through any other path
+// leaves nothing behind). Popup legs (mode != 'stk') fail immediately,
+// unchanged. Nil-map safe (tests build Service structs literally).
 func (s *Service) stkGraceExpired(reference, mode string) bool {
         if mode != "stk" {
                 return true
@@ -497,7 +498,11 @@ func (s *Service) stkGraceExpired(reference, mode string) bool {
                 s.stkFailAt[reference] = now
                 return false
         }
-        return now.Sub(first) >= STKFailGrace
+        if now.Sub(first) >= STKFailGrace {
+                delete(s.stkFailAt, reference)
+                return true
+        }
+        return false
 }
 
 // stkGraceClear forgets a reference's grace timer (on success or after the

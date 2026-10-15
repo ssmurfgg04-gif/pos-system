@@ -19,7 +19,7 @@ import { productPhotoCandidates } from '../lib/photos'
 export function ProductMonogram({ name }: { name: string }) {
   const initials =
     name
-      .split(/\s+—\s+|\s+/)
+      .split(/\s+,\s+|\s+/)
       .slice(0, 2)
       .map((w) => w[0] ?? '')
       .join('')

@@ -190,7 +190,7 @@ def copy_assets() -> None:
 
 def link_check() -> None:
     html = open(os.path.join(DIST, "index.html")).read()
-    hrefs = re.findall(r'(?:href|src|content)="((?:downloads|demo|icon)[^"]*)"', html)
+    hrefs = re.findall(r'(?:href|src|content)="((?:downloads|demo|icon|join|portal)[^"]*)"', html)
     for h in hrefs:
         target = os.path.join(DIST, h.rstrip("/").replace("/", os.sep))
         if not (os.path.isfile(target) or os.path.isdir(target)):
@@ -199,13 +199,21 @@ def link_check() -> None:
         if h.endswith("/"):
             if not os.path.isfile(os.path.join(DIST, h, "index.html")):
                 die(f"directory link without index.html: {h}")
+    # Standalone pages (join/portal) reference ../icon-64.png and ../ —
+    # resolve their relative refs too, so a bad icon path fails the build.
+    for page in ("join", "portal"):
+        page_html = open(os.path.join(DIST, page, "index.html")).read()
+        for m in re.findall(r'(?:src|href)="\.\./([^"]+)"', page_html):
+            target = os.path.join(DIST, m)
+            if not (os.path.isfile(target) or os.path.isdir(target)):
+                die(f"{page} page references missing asset: ../{m}")
     # demo assets referenced by its own index.html must exist under dist/demo
     demo_html = open(os.path.join(DIST, "demo", "index.html")).read()
     for m in re.findall(r'(?:src|href)="(/demo/[^"]+)"', demo_html):
         target = os.path.join(DIST, m.lstrip("/").replace("/", os.sep))
         if not os.path.isfile(target):
             die(f"demo references missing asset: {m}")
-    print(f"link check: {len(hrefs)} landing refs + demo assets resolve")
+    print(f"link check: {len(hrefs)} landing refs + join/portal pages + demo assets resolve")
 
 
 def main() -> None:

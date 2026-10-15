@@ -130,7 +130,7 @@ export function SplitTenderEditor({
             {leg.method === 'credit' && !creditReady && (
               <p className="text-[11px] text-danger-text font-semibold flex items-center gap-1">
                 <AlertTriangle size={12} strokeWidth={2.5} aria-hidden />
-                Pick the customer below — store credit pays from their wallet.
+                Pick the customer below, store credit pays from their wallet.
               </p>
             )}
           </div>
@@ -165,7 +165,7 @@ export function SplitTenderEditor({
       </div>
 
       <p className="text-[11px] text-ink-subtle">
-        Cash and store credit settle now. One M-Pesa or card payment can stay pending — a second one is not allowed.
+        Cash and store credit settle now. One M-Pesa or card payment can stay pending, a second one is not allowed.
       </p>
     </div>
   )
