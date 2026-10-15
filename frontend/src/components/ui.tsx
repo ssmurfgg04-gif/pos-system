@@ -442,7 +442,7 @@ export class ErrorBoundary extends React.Component<
           <div>
             <p className="font-bold text-ink">This panel hit a snag</p>
             <p className="text-[12px] text-ink-muted mt-1 max-w-[280px]">{error.message || 'Unexpected error'}</p>
-            <p className="text-[11px] text-ink-subtle mt-1">The rest of the POS keeps working — your cart is safe.</p>
+            <p className="text-[11px] text-ink-subtle mt-1">The rest of the POS keeps working, your cart is safe.</p>
           </div>
           <div className="flex gap-2">
             <Button size="sm" variant="primary" onClick={this.reset}>Try again</Button>

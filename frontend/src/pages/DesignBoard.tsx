@@ -74,7 +74,7 @@ export function DesignBoard() {
         try {
           const files = await api.get<DesignFile[]>(`/api/v1/design/${j.id}/files`)
           setFilesByJob((m) => ({ ...m, [j.id]: files }))
-        } catch { /* attachments unavailable — leave count as-is */ }
+        } catch { /* attachments unavailable, leave count as-is */ }
       })
     } catch (e: any) {
       toast.error('Load failed', e?.message)
@@ -146,7 +146,7 @@ export function DesignBoard() {
                       )}
                       {j.notes && <p className="text-[12px] text-ink-muted mt-1 line-clamp-2">{j.notes}</p>}
                       <div className="flex items-center justify-between mt-2">
-                        <span className="text-[11px] text-ink-subtle">{j.assigneeName || j.createdBy || ', '}</span>
+                        <span className="text-[11px] text-ink-subtle">{j.assigneeName || j.createdBy || '-'}</span>
                         <span className="flex items-center gap-1.5">
                           <button
                             type="button"
@@ -394,7 +394,7 @@ function AttachmentsModal({
             {uploading ? <Spinner className="border-t-brand-ink" /> : <UploadCloud size={15} strokeWidth={2.25} aria-hidden />}
             Attach file
           </Button>
-          <span className="text-[12px] text-ink-subtle">Any file type, up to 5 MB — travels with the job for the whole team.</span>
+          <span className="text-[12px] text-ink-subtle">Any file type, up to 5 MB, travels with the job for the whole team.</span>
           <input
             ref={fileRef}
             type="file"

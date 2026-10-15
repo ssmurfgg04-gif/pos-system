@@ -353,7 +353,7 @@ func checkoutBody(extra map[string]any) map[string]any {
 func TestCashCheckoutFlow(t *testing.T) {
         engine, _, cashier, _ := newTestServer(t)
         // Stock before.
-        prods := productIDs(t, engine, cashier, "Classic Cotton Tee — Black")
+        prods := productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
         before := int(prods[0]["stockQty"].(float64))
 
         w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, checkoutBody(map[string]any{
@@ -372,7 +372,7 @@ func TestCashCheckoutFlow(t *testing.T) {
         }
 
         // Stock decremented.
-        prods = productIDs(t, engine, cashier, "Classic Cotton Tee — Black")
+        prods = productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
         after := int(prods[0]["stockQty"].(float64))
         if after != before-2 {
                 t.Fatalf("stock %d -> %d (want %d)", before, after, before-2)
@@ -389,7 +389,7 @@ func TestCashCheckoutFlow(t *testing.T) {
         if replay["id"] != order["id"] {
                 t.Fatalf("replay created a new order: %v vs %v", replay["id"], order["id"])
         }
-        prods = productIDs(t, engine, cashier, "Classic Cotton Tee — Black")
+        prods = productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
         if int(prods[0]["stockQty"].(float64)) != after {
                 t.Fatal("replay changed stock — idempotency broken")
         }
@@ -507,13 +507,13 @@ func TestMpesaSTKFlowCompletesViaSweeper(t *testing.T) {
 
         // Duplicate callback is idempotent — no error, order stays PAID,
         // stock is not double-deducted.
-        prods := productIDs(t, engine, cashier, "Classic Cotton Tee — Black")
+        prods := productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
         stockAfterFirst := int(prods[0]["stockQty"].(float64))
         w = do(t, engine, "POST", "/api/v1/payments/mpesa/callback", "", cb)
         if w.Code != 200 {
                 t.Fatalf("duplicate callback: %d", w.Code)
         }
-        prods = productIDs(t, engine, cashier, "Classic Cotton Tee — Black")
+        prods = productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
         if int(prods[0]["stockQty"].(float64)) != stockAfterFirst {
                 t.Fatal("duplicate callback double-deducted stock")
         }
@@ -637,7 +637,7 @@ func TestSyncIdempotency(t *testing.T) {
 
 func TestVoidRestoresStock(t *testing.T) {
         engine, _, cashier, _ := newTestServer(t)
-        prods := productIDs(t, engine, cashier, "Classic Cotton Tee — Black")
+        prods := productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
         before := int(prods[0]["stockQty"].(float64))
         w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, checkoutBody(nil))
         order := dataMap(t, w)
@@ -650,7 +650,7 @@ func TestVoidRestoresStock(t *testing.T) {
         if order["status"] != "VOIDED" {
                 t.Fatalf("status: %v", order["status"])
         }
-        prods = productIDs(t, engine, cashier, "Classic Cotton Tee — Black")
+        prods = productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
         if int(prods[0]["stockQty"].(float64)) != before {
                 t.Fatal("void did not restore stock")
         }
@@ -851,7 +851,7 @@ func TestRolesCrud(t *testing.T) {
 func TestCSVImportUpsert(t *testing.T) {
         engine, admin, _, _ := newTestServer(t)
         csv := "sku,barcode,name,category,price,cost,stock,track_stock,active\n" +
-                "TS-001,,Classic Cotton Tee — Black UPDATED,T-Shirts,600.00,320.00,40,true,true\n" +
+                "TS-001,,\"Classic Cotton Tee, Black UPDATED\",T-Shirts,600.00,320.00,40,true,true\n" +
                 ",,Brand New Wristband,Accessories,25.00,10.00,80,true,true\n"
         // Proper multipart form with a "file" field.
         var buf bytes.Buffer

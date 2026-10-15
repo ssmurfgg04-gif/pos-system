@@ -106,7 +106,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
     if (stopping) return
     if (!window.confirm(`Quit ${branding.app_name || 'the app'}? The local app and its server will stop, your data is saved on this machine.`)) return
     setStopping(true)
-    try { await api.post('/api/v1/system/quit') } catch { /* server is going away — expected */ }
+    try { await api.post('/api/v1/system/quit') } catch { /* server is going away, expected */ }
     logout()
     disconnectWs()
   }
@@ -121,10 +121,10 @@ export function AppShell({ current, children }: { current: string; children: Rea
           onClick={() => navigate('/settings')}
           className="bg-pending-bg border-b border-pending-text/30 px-3 py-2 text-[13px] font-bold text-pending-text text-center hover:underline"
         >
-          Update {updateNote.latest} is ready — install it in Settings → System
+          Update {updateNote.latest} is ready, install it in Settings → System
         </button>
       )}
-      {/* Header — 72px, logo left, global search centered, status right */}
+      {/* Header, 72px, logo left, global search centered, status right */}
       <header className="bg-surface border-b border-line h-[72px] px-2 sm:px-4 flex items-center gap-2 sm:gap-4 shrink-0 overflow-hidden">
         <div className="flex items-center gap-2.5 min-w-0 w-auto max-w-52 shrink">
           {branding.brand_logo_url ? (
@@ -164,7 +164,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
           </select>
         )}
 
-        {/* Global catalog search — drives the Sell screen filter */}
+        {/* Global catalog search, drives the Sell screen filter */}
         <div className="hidden md:block flex-1 max-w-xl mx-auto">
           <div className="relative">
             <Search size={15} strokeWidth={2.5} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-subtle pointer-events-none" aria-hidden />
@@ -239,7 +239,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
       <OfflineBanner />
 
       <div className="flex-1 min-h-0 flex">
-        {/* Dark slim navigation rail — 190px at desktop, icon strip below lg */}
+        {/* Dark slim navigation rail, 190px at desktop, icon strip below lg */}
         <nav
           className="bg-sidebar flex lg:flex-col items-center lg:items-stretch gap-1 p-2 lg:p-2.5 lg:w-[190px] shrink-0 overflow-x-auto lg:overflow-y-auto lg:overflow-x-hidden"
           aria-label="Main"
@@ -266,13 +266,13 @@ export function AppShell({ current, children }: { current: string; children: Rea
           })}
         </nav>
 
-        {/* Content canvas — light workspace, full bleed at desktop */}
+        {/* Content canvas, light workspace, full bleed at desktop */}
         <main className="flex-1 min-w-0 min-h-0 overflow-y-auto bg-shell">
           <div className={`p-4 lg:p-5 ${current === '/' ? 'h-full' : 'max-w-7xl mx-auto'}`}>{children}</div>
         </main>
       </div>
 
-      {/* Desktop app stopped — safe-to-close takeover */}
+      {/* Desktop app stopped, safe-to-close takeover */}
       {stopping && (
         <div className="fixed inset-0 z-70 bg-shell flex items-center justify-center p-4" role="status">
           <div className="bg-surface border border-line rounded-card shadow-brutal p-6 max-w-sm w-full text-center">
@@ -283,7 +283,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
               {branding.app_name || 'The app'} has stopped
             </h2>
             <p className="text-ink-muted text-sm mt-1.5">
-              All sales are saved on this machine. You can close this browser tab — start the app again from its shortcut whenever you need it.
+              All sales are saved on this machine. You can close this browser tab, start the app again from its shortcut whenever you need it.
             </p>
           </div>
         </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useRoute, homeFor, withBase } from './lib/router'
+import { useRoute, homeFor, withBase, navigate } from './lib/router'
 import { useAuth } from './stores/auth'
 import { useBranding } from './stores/branding'
 import { AppShell, Booting } from './components/shell'
@@ -67,7 +67,20 @@ function GatedApp({ path, user }: { path: string; user: User }) {
   }, [isAdmin])
 
   // Guided first run for admins; everyone else (and errors) skips it.
-  if (isAdmin && onboarded === false) return <Onboarding onDone={() => setOnboarded(true)} />
+  if (isAdmin && onboarded === false) {
+    return (
+      <Onboarding
+        onDone={() => {
+          setOnboarded(true)
+          // Onboarding can be entered straight from a PIN sign-in (a fresh
+          // store opens with the PIN pad). Public routes are not real
+          // authenticated pages, so finishing there would reveal a 404:
+          // land on the shop floor instead.
+          if (['/pin', '/login', '/join', '/signup'].includes(path)) navigate('/')
+        }}
+      />
+    )
+  }
   if (isAdmin && onboarded === null) return <Booting />
 
   const page = (() => {

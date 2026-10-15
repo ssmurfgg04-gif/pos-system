@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LedgerPOS — Join your team</title>
+<title>LedgerPOS, Join your team</title>
 <meta name="description" content="You were invited to a LedgerPOS team. Here is how to join on your till in under a minute: copy your link, open the app, paste, pick a PIN.">
 <meta name="robots" content="noindex">
 <link rel="icon" href="../icon-64.png">
@@ -57,7 +57,7 @@
   .btn:active{transform:translate(4px,4px);box-shadow:0 0 0 var(--brand-strong)}
   .btn.ok{background:var(--surface-muted);color:var(--ink);border-color:var(--line-strong);box-shadow:4px 4px 0 var(--line-strong)}
   .note{margin-top:14px;font-size:12.5px;color:var(--ink-muted);line-height:1.5}
-  .fallback{display:none;margin-top:14px;font-size:12.5px;font-weight:700;color:var(--danger)}
+  .fallback{display:none;margin-top:14px;font-size:12.5px;font-weight:700;color:#DC2626}
   footer{border-top:1px solid var(--shell-edge);padding:22px 0 30px;color:var(--on-shell-muted);font-size:12.5px;text-align:center}
   footer b{color:var(--on-shell)}
 </style>
@@ -79,7 +79,7 @@
     <h2>Your join link</h2>
     <div class="ready" id="ready">
       <div class="team" id="teamline"></div>
-      <textarea id="linkBox" readonly spellcheck="false"></textarea>
+      <textarea id="linkBox" readonly spellcheck="false" aria-label="Your join link (read only)"></textarea>
       <button class="btn" id="copyBtn" type="button">Copy my join link</button>
       <p class="note">Tap <b>Copy my join link</b>, then follow the three steps below on the till where LedgerPOS is installed.</p>
       <p class="fallback" id="fallback">Copy did not work. Select the link text above and copy it manually.</p>
@@ -110,6 +110,9 @@
   if (!/[?&#]k=/.test(hash)) return
   // The link carries team (t), role (r) and the single-use token (k). It
   // never contains a username, joining does not need one.
+  function safeDecode(s) {
+    try { return decodeURIComponent(s) } catch (e) { return s }
+  }
   var full = window.location.href
   var box = document.getElementById('linkBox')
   box.value = full
@@ -117,31 +120,31 @@
   var role = hash.match(/[?&#]r=([^&#]+)/)
   var line = document.getElementById('teamline')
   var bits = []
-  if (team) bits.push('Team: <b>' + decodeURIComponent(team[1]).replace(/[<>&]/g, '') + '</b>')
-  if (role) bits.push('Role: <b>' + decodeURIComponent(role[1]).replace(/[<>&]/g, '') + '</b>')
+  if (team) bits.push('Team: <b>' + safeDecode(team[1]).replace(/[<>&]/g, '') + '</b>')
+  if (role) bits.push('Role: <b>' + safeDecode(role[1]).replace(/[<>&]/g, '') + '</b>')
   line.innerHTML = bits.length ? bits.join(' &nbsp;·&nbsp; ') : ''
   document.getElementById('nolink').style.display = 'none'
   document.getElementById('ready').style.display = 'block'
   var btn = document.getElementById('copyBtn')
+  function done() {
+    btn.textContent = 'Copied! Now follow the 3 steps below'
+    btn.classList.add('ok')
+    setTimeout(function () {
+      btn.textContent = 'Copy my join link'
+      btn.classList.remove('ok')
+    }, 4000)
+  }
+  function manual() {
+    box.focus(); box.select()
+    var ok = false
+    try { ok = document.execCommand('copy') } catch (e) { ok = false }
+    if (ok) { done() } else { document.getElementById('fallback').style.display = 'block' }
+  }
   btn.addEventListener('click', function () {
-    function done() {
-      btn.textContent = 'Copied! Now follow the 3 steps below'
-      btn.classList.add('ok')
-      setTimeout(function () {
-        btn.textContent = 'Copy my join link'
-        btn.classList.remove('ok')
-      }, 4000)
-    }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(full).then(done, manual)
     } else {
       manual()
-    }
-    function manual() {
-      box.focus(); box.select()
-      var ok = false
-      try { ok = document.execCommand('copy') } catch (e) { ok = false }
-      if (ok) { done() } else { document.getElementById('fallback').style.display = 'block' }
     }
   })
 })()

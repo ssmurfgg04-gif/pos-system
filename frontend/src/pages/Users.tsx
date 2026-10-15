@@ -344,7 +344,7 @@ function DashboardEditor({ roleId, roleName }: { roleId: number; roleName: strin
 
   return (
     <div className="space-y-3" aria-label={`Dashboard for ${roleName}`}>
-      <p className="text-[12px] uppercase font-bold text-ink-muted">Dashboard — what this role lands on</p>
+      <p className="text-[12px] uppercase font-bold text-ink-muted">Dashboard, what this role lands on</p>
       <Field label="Landing page" hint="Where members of this role land after signing in.">
         <Select value={homePage} onChange={(e) => setHomePage(e.target.value)}>
           {HOME_PAGES.map((h) => (

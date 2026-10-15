@@ -72,7 +72,7 @@ function SupplierList({ manage }: { manage: boolean }) {
                 <p className="font-bold text-ink text-[13px]">{s.name}</p>
                 <p className="text-[11px] text-ink-subtle">{s.address || 'no address'}</p>
               </td>
-              <td className="px-3 py-2.5 text-[13px] text-ink-muted">{s.phone || s.email || ', '}</td>
+              <td className="px-3 py-2.5 text-[13px] text-ink-muted">{s.phone || s.email || '-'}</td>
               <td className="px-3 py-2.5">
                 <StatusPill status={s.active ? 'paid' : 'void'} label={s.active ? 'Active' : 'Inactive'} />
               </td>
@@ -448,7 +448,7 @@ function TakeList({ manage }: { manage: boolean }) {
                     )}
                   </td>
                   <td className={`px-3 py-2 tabular font-bold ${variance === 0 ? 'text-ink-muted' : variance > 0 ? 'text-paid-text' : 'text-danger-text'}`}>
-                    {variance === 0 ? ', ' : variance > 0 ? `+${variance}` : variance}
+                    {variance === 0 ? '-' : variance > 0 ? `+${variance}` : variance}
                   </td>
                 </tr>
               )

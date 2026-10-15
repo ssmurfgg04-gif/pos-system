@@ -38,7 +38,7 @@ func sampleOrder() *models.Order {
                 CashierName: "Alex", CustomerName: "Jane",
                 CreatedAt: "2026-09-11T10:00:00Z", PaidAt: "2026-09-11T10:01:00Z",
                 Items: []models.OrderItem{
-                        {ID: 1, ProductID: 1, Name: "Classic Cotton Tee — Black", SKU: "TS-001", Qty: 1, UnitPriceCents: 55000, LineTotalCents: 55000},
+                        {ID: 1, ProductID: 1, Name: "Classic Cotton Tee, Black", SKU: "TS-001", Qty: 1, UnitPriceCents: 55000, LineTotalCents: 55000},
                         {ID: 2, ProductID: 5, Name: "Ceramic Mug — 11oz", SKU: "MG-001", Qty: 1, UnitPriceCents: 45000, LineTotalCents: 45000},
                 },
                 Payments: []models.Payment{

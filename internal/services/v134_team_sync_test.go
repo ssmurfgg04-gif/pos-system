@@ -152,7 +152,7 @@ func TestSettingsStoreNameSyncsBetweenTills(t *testing.T) {
         }
         // Exactly-once: pulling again applies nothing new.
         if applied, err := cb.pull(b); err != nil || applied != 0 {
-                t.Fatalf("second pull: %d %v — re-pull must be idempotent", applied, err)
+                t.Fatalf("second pull: %d %v, re-pull must be idempotent", applied, err)
         }
 }
 

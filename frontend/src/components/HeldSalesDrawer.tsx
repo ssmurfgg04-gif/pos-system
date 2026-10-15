@@ -129,7 +129,7 @@ export function HeldSalesDrawer({
                   <div className="min-w-0">
                     <p className="font-bold text-[13px] text-ink leading-snug truncate">{s.refName}</p>
                     <p className="text-[11px] text-ink-subtle mt-0.5">
-                      {s.customerName ? `${s.customerName} · ` : ''}{s.createdByName || ', '} · {when(s.createdAt)}
+                      {s.customerName ? `${s.customerName} · ` : ''}{s.createdByName || '-'} · {when(s.createdAt)}
                     </p>
                   </div>
                   <span className="font-black text-ink tabular text-[15px] whitespace-nowrap">≈ {formatMoneyCompact(estimate(s))}</span>

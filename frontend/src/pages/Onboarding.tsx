@@ -72,7 +72,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             Setting up a second till for a shop that already runs LedgerPOS?{' '}
             <button type="button" onClick={() => navigate('/join')} className="font-bold underline decoration-line hover:decoration-ink">
               Use a team join link instead
-            </button>{' '}— no setup needed, the shop syncs in.
+            </button>.{' '}No setup needed, the shop syncs in.
           </p>
           {step === 1 && <LogoStep onNext={() => { mark(1); setStep(2) }} onBack={() => setStep(0)} />}
           {step === 2 && <ReceiptStep onSave={saveSettings} onNext={() => { mark(2); setStep(3) }} onBack={() => setStep(1)} busy={busy} />}
@@ -171,10 +171,10 @@ function ReceiptStep({ onSave, onNext, onBack, busy }: { onSave: (v: Record<stri
       <div className="grid grid-cols-2 gap-2">
         <Field label="Currency">
           <Select value={currency} onChange={(e) => setCurrency(e.target.value)}>
-            <option value="KES">KES — Kenyan shilling</option>
-            <option value="USD">USD — US dollar</option>
-            <option value="TZS">TZS — Tanzanian shilling</option>
-            <option value="UGX">UGX — Ugandan shilling</option>
+            <option value="KES">KES, Kenyan shilling</option>
+            <option value="USD">USD, US dollar</option>
+            <option value="TZS">TZS, Tanzanian shilling</option>
+            <option value="UGX">UGX, Ugandan shilling</option>
           </Select>
         </Field>
         <Field label="VAT %"><Input value={tax} onChange={(e) => setTax(e.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" /></Field>
@@ -293,7 +293,7 @@ function StaffStep({ adminId, onNext, onBack, busy, setBusy }: { adminId: number
           Signed in as <strong className="text-ink">{user?.username}</strong>, you're all set. Add your first cashier below, or open the shop now.
         </p>
       )}
-      <p className="text-[13px] text-ink-muted pt-1">First cashier (optional — they set their own password on first login):</p>
+      <p className="text-[13px] text-ink-muted pt-1">First cashier (optional, they set their own password on first login):</p>
       <div className="grid grid-cols-2 gap-2">
         <Field label="Name"><Input value={cashierName} onChange={(e) => setCashierName(e.target.value)} placeholder="e.g. Brian" /></Field>
         <Field label="PIN"><Input value={cashierPin} onChange={(e) => setCashierPin(e.target.value.replace(/\D/g, '').slice(0, 4))} inputMode="numeric" placeholder="4 digits" /></Field>

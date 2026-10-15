@@ -52,7 +52,7 @@ export function Signup() {
         >
           <div>
             <h1 className="font-black text-xl text-ink">Open a new shop</h1>
-            <p className="text-[13px] text-ink-muted mt-0.5">Your own database, your own login — nobody sees anyone else's shop.</p>
+            <p className="text-[13px] text-ink-muted mt-0.5">Your own database, your own login, nobody sees anyone else's shop.</p>
           </div>
           <Field label="Username">
             <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus required placeholder="e.g. wanjiku" />

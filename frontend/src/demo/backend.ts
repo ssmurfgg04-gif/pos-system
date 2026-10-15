@@ -1731,7 +1731,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const heldId = (d.seq as any).held++
     const sale: DemoHeldSale = {
       id: heldId,
-      refName: `Quote ${qy.quoteNo} — ${qy.customerName}`,
+      refName: `Quote ${qy.quoteNo}, ${qy.customerName}`,
       items: lines.map((it) => ({ productId: it.productId, qty: it.qty, unitPriceCents: it.unitPriceCents })),
       customerId: qy.customerId, customerName: qy.customerName,
       note: `From quote ${qy.quoteNo}`,

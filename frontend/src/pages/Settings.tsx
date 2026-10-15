@@ -130,7 +130,7 @@ export function Settings() {
     setCheckingPay(true)
     try {
       setPayConfig(await api.get<PaymentConfig>('/api/v1/payments/config'))
-    } catch { /* demo backend or offline — hint simply stays hidden */ }
+    } catch { /* demo backend or offline, hint simply stays hidden */ }
     finally { setCheckingPay(false) }
   }
 
@@ -264,7 +264,7 @@ export function Settings() {
             <div className="sm:col-span-2 flex flex-wrap items-start justify-between gap-2 bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
               <p className="min-w-56 flex-1">
                 <strong className="text-ink inline-flex items-center gap-1.5"><CreditCard size={15} strokeWidth={2.25} aria-hidden />Card &amp; M-Pesa payments.</strong>{' '}
-                Already set up for you — no pasting, no per-machine setup.
+                Already set up for you, no pasting, no per-machine setup.
                 Staff only touch the Till / Paybill numbers below.
               </p>
               <div className="flex items-center gap-2">
@@ -302,7 +302,7 @@ export function Settings() {
               <p>
                 {payConfig?.paystack.configured
                   ? <>Card &amp; M-Pesa payments are ready at checkout.</>
-                  : <>This till activates payments automatically once they are enabled for your business — nothing to paste, nothing to type.</>}
+                  : <>This till activates payments automatically once they are enabled for your business, nothing to paste, nothing to type.</>}
               </p>
             </div>
 
@@ -325,8 +325,8 @@ export function Settings() {
                   }>
                     {payConfig.mpesa.route === 'paystack' ? 'Automatic STK push (real money)'
                       : payConfig.mpesa.route === 'daraja' ? 'Safaricom Daraja (real money)'
-                      : payConfig.mpesa.route === 'mock' ? 'Training mode — no real money (ALLOW_MOCK_PAYMENTS)'
-                      : 'Manual receipt code — no STK configured'}
+                      : payConfig.mpesa.route === 'mock' ? 'Training mode, no real money (ALLOW_MOCK_PAYMENTS)'
+                      : 'Manual receipt code, no STK configured'}
                   </strong>
                 </p>
               )}
@@ -521,7 +521,7 @@ export function Settings() {
                     </Button>
                     {update.staged && (
                       <Button size="sm" variant="secondary" disabled={updating} onClick={async () => {
-                        if (!confirm('Install the update now? The app will close to finish installing — finish the current sale first.')) return
+                        if (!confirm('Install the update now? The app will close to finish installing, finish the current sale first.')) return
                         setUpdating(true)
                         try {
                           await api.post('/api/v1/system/update/install')
@@ -619,7 +619,7 @@ export function Settings() {
                 <Field label="Service role key">
                   <SecretField label="Service role key" storeKey="offsite_secret_key" values={values} set={set} placeholder="eyJhbGciOi... (the service role key)" />
                 </Field>
-                <Field label="Backup passphrase" hint="Encrypts every copy. Write it down somewhere safe — without it the backups cannot be opened.">
+                <Field label="Backup passphrase" hint="Encrypts every copy. Write it down somewhere safe, without it the backups cannot be opened.">
                   <SecretField label="Backup passphrase" storeKey="offsite_passphrase" values={values} set={set} placeholder="A long phrase only you know" />
                 </Field>
               </>
@@ -1157,8 +1157,8 @@ function TeamSyncPanel() {
   }
 
   // Approve a locked till's PIN reset: the cloud mints a single-use
-  // 8-digit code (15 minutes, that one till only). Shown here exactly once
-  //, read it to the worker over a call or WhatsApp.
+  // 8-digit code (15 minutes, that one till only). Shown here exactly once:
+  // read it to the worker over a call or WhatsApp.
   const approvePinReset = async (id: number) => {
     setWorkingReset(id)
     setApprovedCode(null)
@@ -1215,7 +1215,7 @@ function TeamSyncPanel() {
               )}
               {status.source === 'cloud' && (
                 <span className="inline-flex flex-col gap-1">
-                  <StatusPill status="paid" label="LedgerPOS Cloud — automatic" />
+                  <StatusPill status="paid" label="LedgerPOS Cloud, automatic" />
                   <span className="text-[12px] text-ink-muted">This till found its team in the cloud database. No codes, no keys.</span>
                 </span>
               )}
@@ -1293,7 +1293,7 @@ function TeamSyncPanel() {
                         {d.deviceName || d.deviceId.slice(0, 8)}
                       </span>
                     </td>
-                    <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || ', '}</td>
+                    <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || '-'}</td>
                     <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">
                       {d.lastSeen ? new Date(d.lastSeen).toLocaleString() : 'never'}
                     </td>
@@ -1310,7 +1310,7 @@ function TeamSyncPanel() {
                             variant="secondary"
                             onClick={() => approveDevice(d)}
                             disabled={workingDevice === d.deviceId}
-                            title="Un-revoke this till — it rejoins the team and syncs again"
+                            title="Un-revoke this till, it rejoins the team and syncs again"
                           >
                             {workingDevice === d.deviceId ? <Spinner /> : <Undo2 size={14} strokeWidth={2.5} aria-hidden />}
                             Unrevoke
@@ -1321,7 +1321,7 @@ function TeamSyncPanel() {
                             variant="secondary"
                             onClick={() => approveDevice(d)}
                             disabled={workingDevice === d.deviceId}
-                            title="Approve this till — it joins the team on its next heartbeat"
+                            title="Approve this till, it joins the team on its next heartbeat"
                           >
                             {workingDevice === d.deviceId ? <Spinner /> : <CircleCheck size={14} strokeWidth={2.5} aria-hidden />}
                             Approve
@@ -1333,7 +1333,7 @@ function TeamSyncPanel() {
                             variant="ghost"
                             onClick={() => removeDevice(d)}
                             disabled={workingDevice === d.deviceId}
-                            title="Revoke this till — it is cut off from the cloud immediately"
+                            title="Revoke this till, it is cut off from the cloud immediately"
                           >
                             {workingDevice === d.deviceId ? <Spinner /> : <Trash2 size={14} strokeWidth={2.25} aria-hidden />}
                             Revoke
@@ -1407,7 +1407,7 @@ function TeamSyncPanel() {
                           {d.deviceName || d.deviceId.slice(0, 8)}
                         </span>
                       </td>
-                      <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || ', '}</td>
+                      <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || '-'}</td>
                       <td className="px-3 py-2">
                         <Select
                           className="w-44 text-[12px]"
@@ -1504,7 +1504,7 @@ function TeamSyncPanel() {
                   </div>
                   <div className="w-60">
                     <Field label="Note (optional)">
-                      <Input value={inviteNote} onChange={(e) => setInviteNote(e.target.value)} placeholder="e.g. Brian — front counter" />
+                      <Input value={inviteNote} onChange={(e) => setInviteNote(e.target.value)} placeholder="e.g. Brian, front counter" />
                     </Field>
                   </div>
                   <Button size="sm" onClick={createInvite} disabled={inviteBusy || !inviteRole} title="Mints a single-use link that expires in 7 days">
@@ -1538,7 +1538,7 @@ function TeamSyncPanel() {
                         return (
                           <tr key={inv.id}>
                             <td className="px-3 py-2 text-[13px] font-semibold text-ink">{inv.roleName}</td>
-                            <td className="px-3 py-2 text-[12px] text-ink-muted">{inv.note || ', '}</td>
+                            <td className="px-3 py-2 text-[12px] text-ink-muted">{inv.note || '-'}</td>
                             <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{new Date(inv.createdAt).toLocaleDateString()}</td>
                             <td className="px-3 py-2">
                               <StatusPill status={state === 'active' ? 'paid' : state === 'used' ? 'info' : 'pending'}

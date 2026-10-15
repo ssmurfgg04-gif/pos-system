@@ -357,7 +357,7 @@ function CreditTopUpForm({ customer, onDone }: { customer: CustomerRow; onDone: 
   return (
     <div className="space-y-3">
       <p className="text-[13px] text-ink-muted">
-        Store credit is prepaid money the shop owes the customer — they spend it at checkout.
+        Store credit is prepaid money the shop owes the customer, they spend it at checkout.
         {customer.storeCreditCents !== undefined && (
           <> Current balance: <strong className="text-paid-text">{formatMoney(customer.storeCreditCents)}</strong>.</>
         )}

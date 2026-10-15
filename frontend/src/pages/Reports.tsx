@@ -134,7 +134,7 @@ function Daily() {
             <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Payment split</p>
             {data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents === 0 ? (
               <p className="text-sm text-ink-muted bg-surface-muted border-2 border-line rounded-input px-3 py-2">
-                No completed payments yet today — the split appears with the first paid order.
+                No completed payments yet today, the split appears with the first paid order.
               </p>
             ) : (
               <div className="flex h-9 border-2 border-line-strong rounded-input overflow-hidden font-bold text-[13px]">
@@ -286,7 +286,7 @@ function Monthly() {
 
           {/* Per-day bars for the month */}
           <div className="mt-5">
-            <p className="text-[12px] uppercase font-bold text-ink-muted mb-2">Daily sales — {month}</p>
+            <p className="text-[12px] uppercase font-bold text-ink-muted mb-2">Daily sales, {month}</p>
             <div className="flex items-end gap-[3px] h-24 border-b-2 border-line pb-px" role="img" aria-label={`Sales per day during ${month}`}>
               {data.series.map((s) => (
                 <div

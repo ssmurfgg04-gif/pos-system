@@ -233,7 +233,7 @@ export function Login() {
         {demo && mode === 'login' && (
           <div className="mt-4 bg-surface border border-line rounded-card shadow-brutal p-4">
             <p className="text-[12px] uppercase font-bold text-ink-muted mb-2.5">
-              Demo mode — try a role
+              Demo mode, try a role
             </p>
             <div className="space-y-2">
               {DEMO_ACCOUNTS.map((a) => {
@@ -260,7 +260,7 @@ export function Login() {
               })}
             </div>
             <p className="text-[11px] text-ink-subtle mt-2.5">
-              Data lives in this browser only — a demo of the full POS. Reset it anytime in Settings → System.
+              Data lives in this browser only, a demo of the full POS. Reset it anytime in Settings → System.
             </p>
           </div>
         )}
@@ -303,7 +303,7 @@ function WelcomeChoice({ onSignIn, onRegister, onPassword }: { onSignIn: () => v
         I use a username &amp; password on this till →
       </button>
       <p className="text-[11.5px] text-ink-subtle text-center pt-1">
-        Signing in brings your whole shop down from the cloud — products,
+        Signing in brings your whole shop down from the cloud, products,
         customers, history. Nothing is created until you choose to.
       </p>
     </div>
@@ -349,7 +349,7 @@ function OwnerCloudSignin({ onDone, onBack }: { onDone: () => void; onBack: () =
         </span>
         <div>
           <h2 className="text-ink font-bold leading-tight">Sign in to your business</h2>
-          <p className="text-[12px] text-ink-subtle">Your shop syncs down from the cloud — no setup, nothing to create.</p>
+          <p className="text-[12px] text-ink-subtle">Your shop syncs down from the cloud, no setup, nothing to create.</p>
         </div>
       </div>
       <Field label="Username">
@@ -369,7 +369,7 @@ function OwnerCloudSignin({ onDone, onBack }: { onDone: () => void; onBack: () =
       <p className="text-[11.5px] text-ink-subtle">
         These are your owner credentials (the same ones as the owner web
         portal). Cloud sign-in needs to be activated once from
-        Settings → Team on any till of the business — otherwise use a join link.
+        Settings → Team on any till of the business, otherwise use a join link.
       </p>
       <button
         type="button"
@@ -416,7 +416,14 @@ function SetupOwner({ onDone, onCancel }: { onDone: () => void; onCancel?: () =>
       await useAuth.getState().refresh()
       setRecoveryCode(res.recoveryCode)
     } catch (err: any) {
-      setError(err?.message || 'Setup failed')
+      const m = err?.message || 'Setup failed'
+      if (/already exist/i.test(m)) {
+        // Registering on a till that already has accounts: give the human
+        // the two paths that actually work from here.
+        setError('This till already has accounts. Go back and sign in, or use a join link if you are adding a teammate.')
+      } else {
+        setError(m)
+      }
     } finally {
       setBusy(false)
     }
@@ -432,7 +439,7 @@ function SetupOwner({ onDone, onCancel }: { onDone: () => void; onCancel?: () =>
           <h2 className="text-ink font-bold">Owner account created</h2>
         </div>
         <p className="text-[13px] text-ink-muted">
-          This is your <span className="font-bold text-ink">recovery code</span> — the only way back in if
+          This is your <span className="font-bold text-ink">recovery code</span>, the only way back in if
           the password is ever forgotten. Write it down and store it away from this machine.
           It is shown <span className="font-bold text-ink">only once</span>.
         </p>
@@ -449,7 +456,7 @@ function SetupOwner({ onDone, onCancel }: { onDone: () => void; onCancel?: () =>
             onDone()
           }}
         >
-          I saved it — open my store
+          I saved it, open my store
         </Button>
       </div>
     )

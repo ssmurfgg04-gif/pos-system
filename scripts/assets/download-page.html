@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LedgerPOS — the point of sale that installs itself</title>
+<title>LedgerPOS, the point of sale that installs itself</title>
 <meta name="description" content="Download LedgerPOS and start selling in about a minute. The whole shop, offline till, stock, M-Pesa STK, shifts, KRA VAT reports, as one free app for Windows, macOS or Linux. Your data never leaves your machine.">
 <meta property="og:title" content="LedgerPOS, the point of sale that installs itself">
 <meta property="og:description" content="Download it. Double-click it. Start selling. Offline till, M-Pesa, KRA reports, one free app for any Windows, macOS or Linux machine.">
@@ -37,7 +37,7 @@
   .nav .sub{color:var(--on-shell-muted);font-size:11px;margin-top:1px}
   .nav .pill{margin-left:auto;font-size:11px;font-weight:700;color:var(--brand);border:1px solid rgba(16,185,129,.45);border-radius:999px;padding:4px 10px;white-space:nowrap}
 
-  /* hero — the money zone: one CTA, value first */
+  /* hero, the money zone: one CTA, value first */
   .hero{padding:56px 0 36px;text-align:center}
   .hero h1{font-size:clamp(30px,5vw,46px);font-weight:900;letter-spacing:-.02em;line-height:1.08}
   .hero h1 em{font-style:normal;color:var(--brand)}
@@ -147,7 +147,7 @@
     </div>
     <span class="pill" style="margin-left:0">v{{VERSION}} · {{BUILD_DATE}}</span>
     <a class="pill" href="join/">Join a team? Open your link here</a>
-    <a class="pill" style="margin-left:auto" href="portal/">Owner login — see your shop's numbers</a>
+    <a class="pill" style="margin-left:auto" href="portal/">Owner login, see your shop's numbers</a>
   </div>
 </header>
 
@@ -170,7 +170,7 @@
       <a id="alt-linux" href="downloads/ledgerpos-linux-x64.tar.xz" download>Linux</a>·
       <a id="alt-windows" href="downloads/ledgerpos-setup-windows-x64.exe" download>Windows</a>
     </div>
-    <div class="mobile-note" id="mobile-note">LedgerPOS runs on Windows, macOS and Linux computers —
+    <div class="mobile-note" id="mobile-note">LedgerPOS runs on Windows, macOS and Linux computers
       save this page and download it from your computer.</div>
   </div>
 
@@ -191,12 +191,12 @@
         </div>
         <div><h2>Windows</h2><span>10 &amp; 11 · 64-bit</span></div>
       </div>
-      <p class="desc">One file. Double-click the installer, click through once: desktop + Start-menu shortcuts, an Add/Remove Programs entry — then the app opens. Re-download any time; running a newer file updates the install.</p>
+      <p class="desc">One file. Double-click the installer, click through once: desktop + Start-menu shortcuts, an Add/Remove Programs entry, then the app opens. Re-download any time; running a newer file updates the install.</p>
       <a class="btn" href="downloads/ledgerpos-setup-windows-x64.exe" download>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
         Download for Windows <small>{{WIN_SIZE_MB}} MB</small>
       </a>
-      <p class="note"><b>Windows may ask once</b> to confirm an unfamiliar app — this is normal for new, unsigned software: <b>More info → Run anyway</b>. Data lives in <code>%APPDATA%\LedgerPOS</code>.</p>
+      <p class="note"><b>Windows may ask once</b> to confirm an unfamiliar app, this is normal for new, unsigned software: <b>More info → Run anyway</b>. Data lives in <code>%APPDATA%\LedgerPOS</code>.</p>
     </div>
 
     <div class="card">
@@ -265,7 +265,7 @@
   <div class="row">
     <div class="step"><div class="n">1</div><h3>Download</h3><p>One ~10&nbsp;MB file for your machine, the entire app, about the size of a photo.</p></div>
     <div class="step"><div class="n">2</div><h3>Double-click</h3><p>It sets itself up: database, users, starting stock, a free local port, and opens your browser.</p></div>
-    <div class="step"><div class="n">3</div><h3>Sign in &amp; sell</h3><p>First login <b>admin / admin123</b> (PIN 1234). Change it in Settings, set your shop's name — done.</p></div>
+    <div class="step"><div class="n">3</div><h3>Sign in &amp; sell</h3><p>First login <b>admin / admin123</b> (PIN 1234). Change it in Settings, set your shop's name, done.</p></div>
   </div>
 </section>
 
@@ -315,7 +315,7 @@
 
 // Paystack redirect landing: customers returning from a hosted checkout
 // arrive here with ?reference=… (or ?trxref=…). The till completes the
-// sale via its own server-side verify — this card just reassures them.
+// sale via its own server-side verify, this card just reassures them.
 (function () {
   var q = new URLSearchParams(location.search);
   var ref = q.get('reference') || q.get('trxref');

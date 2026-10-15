@@ -5,9 +5,12 @@
 //  1. A 401 outside the auth paths wipes pos_token (dead session → login).
 //  2. A 401 ON an auth path (wrong password on the login form) never wipes
 //     a still-valid token.
-//  3. A 422 from the owner-approval dialog NEVER wipes the token (the
-//     v1.3.3 kick-out bug: the endpoint answered 401 and the owner was
-//     dumped on the login page mid-invite).
+//  3. A 422 from the owner-approval dialog NEVER wipes the token. The
+//     v1.3.3 kick-out was the backend answering 401 for bad portal
+//     credentials; that is pinned SERVER-side (Go TestOwnerApproval...)
+//     so a regression to 401 fails the Go suite. This test pins the
+//     client side: whatever status the dialog endpoint answers, only a
+//     real dead-session 401 may clear the token.
 //  4. Join links carry team/role/token only — never a username.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 

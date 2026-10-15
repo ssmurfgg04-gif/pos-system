@@ -128,7 +128,7 @@ export function Quotes() {
             <FileText size={19} strokeWidth={2.25} aria-hidden /> Quotations
           </h1>
           <p className="text-[12.5px] text-ink-muted mt-0.5">
-            Priced offers for custom work — send, track, and move the yes to a till.
+            Priced offers for custom work, send, track, and move the yes to a till.
           </p>
         </div>
         {canManage && (
@@ -196,7 +196,7 @@ export function Quotes() {
                   <td className="px-3 py-2 text-[12.5px] text-ink-muted tabular">{qy.items.length}</td>
                   <td className="px-3 py-2 text-[13px] font-bold text-ink tabular">{money(qy.totalCents)}</td>
                   <td className="px-3 py-2 text-[12px] text-ink-muted tabular">
-                    {qy.validUntil || ', '}
+                    {qy.validUntil || '-'}
                     {qy.validUntil && new Date(qy.validUntil + 'T23:59:59') < new Date() && qy.status !== 'converted' && (
                       <span className="block text-[11px] font-bold text-pending-text">expired</span>
                     )}

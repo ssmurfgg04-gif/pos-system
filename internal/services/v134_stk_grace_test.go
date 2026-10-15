@@ -144,7 +144,8 @@ func TestSTKAbandonedStaysPendingThroughGrace(t *testing.T) {
         if got := payStatus(t, s, payID); got != "PENDING" {
                 t.Fatalf("after first abandoned verify: status = %s, want PENDING (grace must keep the leg alive)", got)
         }
-        // Second sweep (5s later in production): still within grace.
+        // Second sweep (5s later in production): still within grace: pin the timer to now so a slow CI runner cannot outrun the window.
+        s.setFailAt("LP-STK-GRACE-1", time.Now())
         s.SweepPaystack(context.Background())
         if got := payStatus(t, s, payID); got != "PENDING" {
                 t.Fatalf("after second abandoned verify: status = %s, want PENDING", got)

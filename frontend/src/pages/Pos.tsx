@@ -377,7 +377,7 @@ export function Pos() {
         {rail}
       </aside>
 
-      {/* Mobile checkout sheet — the same rail in a modal */}
+      {/* Mobile checkout sheet, the same rail in a modal */}
       <Modal
         open={sheetOpen}
         onClose={() => {
@@ -475,7 +475,7 @@ function ProductCard({ p, qty, onAdd, onInc, onDec }: {
           <p className="text-[11px] text-ink-subtle mt-0.5 truncate">{p.sku || p.categoryName || '\u00a0'}</p>
         </div>
       </button>
-      {/* Full-width control zone — the + Add button and the − qty + stepper
+      {/* Full-width control zone, the + Add button and the − qty + stepper
           span the whole card, so the stepper can never be squeezed off the
           card by a long price (the "cards only have a + button" bug). */}
       <div className="px-2 pb-2 pt-1 space-y-1.5">
