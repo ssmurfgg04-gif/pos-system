@@ -173,7 +173,7 @@ func (s *Service) PaystackInit(orderID int64, email, phone string, p *auth.Princ
                         phone = n
                 }
                 if !mpesaPhoneOK(phone) {
-                        return nil, nil, fmt.Errorf("invalid customer phone %q — expected 07XX/2547XX/2541XX", phone)
+                        return nil, nil, fmt.Errorf("invalid customer phone %q, expected 07XX/2547XX/2541XX", phone)
                 }
         }
         wirePhone := paystackWirePhoneKe(phone)
@@ -297,11 +297,11 @@ func (s *Service) PaystackInit(orderID int64, email, phone string, p *auth.Princ
 func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay *models.Payment, p *auth.Principal) (*models.Order, error) {
         client := s.GetPaystack()
         if !s.paystackUsable() || !s.settings.GetBool("paystack_enabled", true) {
-                return nil, fmt.Errorf("%w: paystack is not connected — M-Pesa STK needs it (or use manual receipt entry)", ErrNotConfigured)
+                return nil, fmt.Errorf("%w: paystack is not connected, M-Pesa STK needs it (or use manual receipt entry)", ErrNotConfigured)
         }
         phone := paystackPhoneKe(pay.Phone)
         if !mpesaPhoneOK(phone) {
-                return nil, fmt.Errorf("invalid customer phone %q — expected 07XX/2547XX/2541XX", pay.Phone)
+                return nil, fmt.Errorf("invalid customer phone %q, expected 07XX/2547XX/2541XX", pay.Phone)
         }
         wirePhone := paystackWirePhoneKe(phone)
 
@@ -387,8 +387,9 @@ func (s *Service) PaystackVerify(orderID int64, reference string, p *auth.Princi
                 return nil, errors.New("invalid payment reference")
         }
         var paymentID int64
-        err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM payments WHERE checkout_request_id = ? AND order_id = ? AND method = 'paystack'`),
-                reference, orderID).Scan(&paymentID)
+        var payMode string
+        err := s.db.QueryRow(s.db.Rebind(`SELECT id, COALESCE(mode, 'popup') FROM payments WHERE checkout_request_id = ? AND order_id = ? AND method = 'paystack'`),
+                reference, orderID).Scan(&paymentID, &payMode)
         if err != nil {
                 return nil, fmt.Errorf("%w: no paystack payment for reference %s", ErrNotFound, reference)
         }
@@ -403,13 +404,20 @@ func (s *Service) PaystackVerify(orderID int64, reference string, p *auth.Princi
         if v.Status != "success" {
                 // abandoned / failed / pending — payment stays PENDING unless
                 // Paystack says definitively abandoned/failed, so the cashier can
-                // re-open checkout.
+                // re-open checkout. STK legs get a grace window: the verify can
+                // report abandoned/failed while the customer is still entering
+                // their PIN, and the cashier screen reads this same status —
+                // failing instantly here is what cancelled the prompt too early.
                 if v.Status == "failed" || v.Status == "abandoned" {
-                        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
-                                truncStr("paystack "+v.Status, 200), paymentID)
+                        if s.stkGraceExpired(reference, payMode) {
+                                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
+                                        truncStr("paystack "+v.Status, 200), paymentID)
+                                s.stkGraceClear(reference)
+                        }
                 }
                 return nil, fmt.Errorf("payment not successful (status %s)", v.Status)
         }
+        s.stkGraceClear(reference)
         order, err := s.completePayment(paymentID, reference, v.Amount, "Paystack "+v.Channel)
         if err != nil {
                 return nil, err
@@ -429,9 +437,9 @@ func (s *Service) paystackGuardVoid(paymentID int64) error {
                 return ErrNotFound
         }
         if status == models.OrderVoided {
-                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paid after void — refund via paystack dashboard' WHERE id = ? AND status = 'PENDING'`), paymentID)
+                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paid after void, refund via paystack dashboard' WHERE id = ? AND status = 'PENDING'`), paymentID)
                 s.Audit(0, "system", "PAYSTACK_AFTER_VOID", "order", fmt.Sprint(orderID), "refund required in paystack dashboard")
-                return fmt.Errorf("%w: order was voided — refund this charge from the Paystack dashboard", ErrInvalidState)
+                return fmt.Errorf("%w: order was voided, refund this charge from the Paystack dashboard", ErrInvalidState)
         }
         return nil
 }
@@ -463,6 +471,45 @@ func (s *Service) HandlePaystackWebhook(raw []byte, signature string) error {
 // the sweeper gives up (the popup was likely abandoned).
 const PaystackTimeout = 15 * time.Minute
 
+// STKFailGrace is the extra window an STK leg stays pending after Paystack
+// first reports abandoned/failed: the customer may simply still be entering
+// their PIN. Field report (v1.3.3): the cashier screen cancelled before the
+// customer could answer the prompt. During the window the leg is re-verified
+// on every sweep/verify tick; money landing inside it completes the sale.
+const STKFailGrace = 10 * time.Second
+
+// stkGraceExpired records the first terminal verify for a reference and
+// reports whether the grace window has passed. Popup legs (mode != 'stk')
+// fail immediately, unchanged. Nil-map safe (tests build Service structs
+// literally).
+func (s *Service) stkGraceExpired(reference, mode string) bool {
+        if mode != "stk" {
+                return true
+        }
+        now := time.Now()
+        s.stkFailMu.Lock()
+        defer s.stkFailMu.Unlock()
+        if s.stkFailAt == nil {
+                s.stkFailAt = map[string]time.Time{}
+        }
+        first, ok := s.stkFailAt[reference]
+        if !ok {
+                s.stkFailAt[reference] = now
+                return false
+        }
+        return now.Sub(first) >= STKFailGrace
+}
+
+// stkGraceClear forgets a reference's grace timer (on success or after the
+// leg finally fails).
+func (s *Service) stkGraceClear(reference string) {
+        s.stkFailMu.Lock()
+        defer s.stkFailMu.Unlock()
+        if s.stkFailAt != nil {
+                delete(s.stkFailAt, reference)
+        }
+}
+
 // SweepPaystack polls pending paystack payments via the verify API — the
 // completion path for redirect flows whose callback never reached us.
 func (s *Service) SweepPaystack(ctx context.Context) {
@@ -477,8 +524,9 @@ func (s *Service) SweepPaystack(ctx context.Context) {
                 id        int64
                 reference string
                 createdAt time.Time
+                mode      string
         }
-        rows, err := s.db.Query(`SELECT id, checkout_request_id, created_at FROM payments
+        rows, err := s.db.Query(`SELECT id, checkout_request_id, created_at, COALESCE(mode, 'popup') FROM payments
                 WHERE status = 'PENDING' AND method = 'paystack' AND checkout_request_id != ''`)
         if err != nil {
                 return
@@ -488,7 +536,7 @@ func (s *Service) SweepPaystack(ctx context.Context) {
         for rows.Next() {
                 var p pending
                 var created string
-                if err := rows.Scan(&p.id, &p.reference, &created); err != nil {
+                if err := rows.Scan(&p.id, &p.reference, &created, &p.mode); err != nil {
                         break
                 }
                 if t, err := time.Parse("2006-01-02 15:04:05", created); err == nil {
@@ -520,7 +568,7 @@ func (s *Service) SweepPaystack(ctx context.Context) {
                         // definitive non-success verify may fail the row.
                         v, err := s.paystackVerifyRef(p.reference)
                         if err != nil {
-                                log.Printf("[paystack] sweep final verify %s errored (%v) — staying pending", p.reference, err)
+                                log.Printf("[paystack] sweep final verify %s errored (%v), staying pending", p.reference, err)
                                 continue
                         }
                         if v.Status == "success" {
@@ -528,10 +576,14 @@ func (s *Service) SweepPaystack(ctx context.Context) {
                                         if _, err := s.completePayment(p.id, p.reference, v.Amount, "Paystack "+v.Channel+" (late verify)"); err != nil {
                                                 log.Printf("[paystack] sweep late-complete %d: %v", p.id, err)
                                         }
+                                        s.stkGraceClear(p.reference)
                                         continue
                                 }
                         }
-                        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paystack checkout timeout (15 min, final verify not success)' WHERE id = ? AND status = 'PENDING'`), p.id)
+                        if s.stkGraceExpired(p.reference, p.mode) {
+                                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paystack checkout timeout (15 min, final verify not success)' WHERE id = ? AND status = 'PENDING'`), p.id)
+                                s.stkGraceClear(p.reference)
+                        }
                         continue
                 }
                 v, err := s.paystackVerifyRef(p.reference)
@@ -546,9 +598,17 @@ func (s *Service) SweepPaystack(ctx context.Context) {
                         if _, err := s.completePayment(p.id, p.reference, v.Amount, "Paystack "+v.Channel); err != nil {
                                 log.Printf("[paystack] sweep complete %d: %v", p.id, err)
                         }
+                        s.stkGraceClear(p.reference)
                 case v.Status == "abandoned" || v.Status == "failed":
-                        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
-                                truncStr("paystack "+v.Status, 200), p.id)
+                        // STK grace: the customer may still be mid-PIN. Keep the
+                        // leg pending and let the next sweep (5s tick) re-verify;
+                        // only fail once the window has passed. Popup legs fail
+                        // immediately, as before.
+                        if s.stkGraceExpired(p.reference, p.mode) {
+                                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
+                                        truncStr("paystack "+v.Status, 200), p.id)
+                                s.stkGraceClear(p.reference)
+                        }
                 }
         }
 }
@@ -658,8 +718,8 @@ func (s *Service) RecheckPayment(orderID int64, p *auth.Principal) (*models.Orde
                         }
                         s.settleSiblings(orderID, l.id)
                         s.Audit(p.ID, p.Username, "PAYMENT_RECHECK", "order", order.Number,
-                                fmt.Sprintf("ref %s, channel %s, amount %d — money arrived after the till moved on", l.ref, v.Channel, v.Amount))
-                        return order, "Payment confirmed — the money arrived after we stopped watching. Sale complete.", nil
+                                fmt.Sprintf("ref %s, channel %s, amount %d, money arrived after the till moved on", l.ref, v.Channel, v.Amount))
+                        return order, "Payment confirmed, the money arrived after we stopped watching. Sale complete.", nil
                 }
         }
 
@@ -678,20 +738,20 @@ func (s *Service) RecheckPayment(orderID int64, p *auth.Principal) (*models.Orde
                                 return nil, "", err
                         }
                         s.Audit(p.ID, p.Username, "PAYMENT_RECHECK", "order", order.Number,
-                                fmt.Sprintf("daraja receipt %s — money arrived after the till moved on", res.MpesaReceiptNumber))
-                        return order, "Payment confirmed — the M-Pesa money arrived. Sale complete.", nil
+                                fmt.Sprintf("daraja receipt %s, money arrived after the till moved on", res.MpesaReceiptNumber))
+                        return order, "Payment confirmed, the M-Pesa money arrived. Sale complete.", nil
                 }
         }
 
         switch {
         case !s.paystackUsable():
-                return order, "Paystack is not connected on this till — nothing to re-check against. Enter the M-Pesa receipt code manually instead.", nil
+                return order, "Paystack is not connected on this till, nothing to re-check against. Enter the M-Pesa receipt code manually instead.", nil
         case len(legs) == 0:
                 return order, "No Paystack or M-Pesa charge on this order to re-check. Enter the M-Pesa receipt code manually if the customer paid.", nil
         case lastStatus != "":
-                return order, "No confirmed payment yet — Paystack reports the latest charge as “" + lastStatus + "”. Nothing has been marked paid.", nil
+                return order, "No confirmed payment yet, Paystack reports the latest charge as “" + lastStatus + "”. Nothing has been marked paid.", nil
         default:
-                return order, "Could not reach Paystack to re-check — check the internet connection and try again.", nil
+                return order, "Could not reach Paystack to re-check, check the internet connection and try again.", nil
         }
 }
 
@@ -763,7 +823,7 @@ func (s *Service) SweepFailedPaystack(ctx context.Context) {
                 }
                 s.settleSiblings(f.orderID, f.id)
                 s.Audit(0, "system", "PAYSTACK_LATE_RECOVERED", "order", fmt.Sprint(f.orderID),
-                        fmt.Sprintf("ref %s, amount %d — customer paid after the till moved on", f.ref, v.Amount))
+                        fmt.Sprintf("ref %s, amount %d, customer paid after the till moved on", f.ref, v.Amount))
                 log.Printf("[paystack] late-recovered reference %s onto order %d", f.ref, f.orderID)
         }
 }

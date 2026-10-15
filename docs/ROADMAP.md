@@ -1,9 +1,9 @@
-# LedgerPOS Roadmap — approved 2026-09-14
+# LedgerPOS Roadmap, approved 2026-09-14
 
 Direction: shop features first, then distribution. Hygiene throughout.
 Out of scope for now: paid code signing, macOS/Linux native windows.
 
-## Phase 1 — Shop features
+## Phase 1, Shop features
 
 ### 1. Customer tabs & credit
 Customer records, running tabs, pay-against-balance, credit limits with
@@ -17,7 +17,7 @@ stock-take counts with a variance report.
 ### 3. Checkout polish
 Cash drawer kick, brand logo on printed receipts, quicker tender flow.
 
-## Phase 2 — Distribution
+## Phase 2, Distribution
 
 ### 4. Guided onboarding
 First-run wizard: store name → logo → receipt → printer test →

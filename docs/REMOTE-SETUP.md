@@ -1,4 +1,4 @@
-# Remote setup — link a till without leaving your chair
+# Remote setup, link a till without leaving your chair
 
 Every till links itself to the team **automatically**: it finds its team in
 the LedgerPOS cloud database (Supabase), registers its own identity, and
@@ -18,11 +18,11 @@ starts syncing. No join codes, no keys to type, nothing to copy-paste.
 
 ## Multiple stores under one owner (v1.1.1+)
 
-One cloud project can carry any number of stores — your first store behaves
+One cloud project can carry any number of stores, your first store behaves
 exactly as before, and every new store grows under the same umbrella:
 
 - `sync_stores` is the registry: one row per store (slug, name, team code).
-  The **team code is minted by the database** — the app never invents one.
+  The **team code is minted by the database**, the app never invents one.
 - While a project has **exactly one store**, a new till auto-joins it
   (zero-config, unchanged).
 - The moment a **second store** exists, a new till registers as *pending*
@@ -36,20 +36,20 @@ exactly as before, and every new store grows under the same umbrella:
 - **Add a store**: Settings → Team → *Stores in the cloud* → name it →
   **Add store**.
 - **Revoke a till** (stolen, sold, retired): Settings → Team → roster →
-  **Revoke** — or `update sync_devices set revoked = true where device_id = 'dev-…';`
+  **Revoke**, or `update sync_devices set revoked = true where device_id = 'dev-…';`
 
 ## Bring a new till online (remote, 2 steps)
 
 1. **Update the app** on the till: Settings → System → Updates → Check →
    Download → Install (v1.1.0 or newer carries zero-config sync). If the
    till is on the old version, install the latest from
-   https://awesomeposs.netlify.app/ (download page) — same app, double-click.
+   https://awesomeposs.netlify.app/ (download page), same app, double-click.
 2. **Nothing else.** On the next start the till reads the bootstrap row,
    registers itself, and appears in Settings → Team on every device with a
    green "Approved" chip. Products, prices, customers, orders, void reasons
    and store settings flow over WiFi every ~20 seconds.
 
-To verify from anywhere: open Settings → Team on YOUR machine — the Kiambu
+To verify from anywhere: open Settings → Team on YOUR machine, the Kiambu
 devices show up in the roster with version + last-seen.
 
 ## Approving / revoking a device (SQL, only when auto-approve is off)
@@ -66,14 +66,14 @@ Run via the Supabase SQL editor or the Management API.
 
 M-Pesa and card payments both run through **Paystack**: with Paystack
 connected, the checkout's M-Pesa button opens the Paystack popup (the
-customer picks M-Pesa / mobile money / card inside it) — no Safaricom
+customer picks M-Pesa / mobile money / card inside it), no Safaricom
 Daraja keys needed. A direct-Daraja path remains under Settings → Payments
 → Advanced for shops that prefer it.
 
 The Paystack **secret** key never syncs and never leaves the machine it is
 entered on (that is the point of it). It is also **encrypted at rest**:
 AES-256-GCM with a key file (`secret.key`) that lives in the app data
-folder NEXT TO the database — a copied `pos.db` file alone reveals no
+folder NEXT TO the database, a copied `pos.db` file alone reveals no
 payment secrets. On each till that takes card/M-Pesa payments:
 Settings → Payments → paste the secret key once (it is masked and stored
 encrypted locally), or set `PAYSTACK_SECRET_KEY` as an environment
@@ -83,7 +83,7 @@ variable. The public key, currency (KES) and callback URL
 ## Manual key entry was removed (security)
 
 Older builds let an admin paste a Supabase `service_role` key into
-Settings → Team on any till. That key bypasses all row-level security —
+Settings → Team on any till. That key bypasses all row-level security
 pasting it on a till everyone touches gives the whole team god access to
 the cloud database. Manual key entry is gone from the UI and the API now
 ignores those fields entirely: tills link via the cloud bootstrap row.
@@ -103,7 +103,7 @@ device roster. Binary app updates still arrive via Settings → Updates.
 - Sync access is device-scoped: a till can only read events from approved
   devices and only push under its own registered identity (secret hash,
   SHA-256; the secret itself never leaves the till).
-- RLS: anon can read exactly one row — the bootstrap config. Sync tables
+- RLS: anon can read exactly one row, the bootstrap config. Sync tables
   deny anon entirely.
 - Paystack/M-Pesa secrets: local per machine, masked in the API, excluded
   from sync and backups, and **encrypted at rest** (AES-256-GCM, key file
@@ -116,11 +116,11 @@ Updating (Settings → Updates, or re-running a newer installer) swaps only
 the app file in `Programs\LedgerPOS`. The shop database lives in
 `%APPDATA%\LedgerPOS\pos.db` (macOS: `~/Library/Application
 Support/LedgerPOS`, Linux: `~/.local/share/LedgerPOS`) and is never
-touched by an install or update — no re-uploading store info, no data
+touched by an install or update, no re-uploading store info, no data
 re-entry. Schema upgrades apply automatically on the next start.
 
 
-## The key vault — payment config lives in the cloud (v1.1.5+)
+## The key vault, payment config lives in the cloud (v1.1.5+)
 
 No till ever needs a `.env`, a pasted secret key, or a site visit. Payment
 and deployment configuration lives in the cloud's `app_config` table and
@@ -128,7 +128,7 @@ flows to every machine by itself:
 
 - **What is in the vault:** `paystack_secret_key` (sk_live, marked secret),
   `paystack_public_key`, `paystack_callback_url`, `paystack_currency`,
-  `paystack_mode`, `paystack_enabled` — plus, optionally, the off-site
+  `paystack_mode`, `paystack_enabled`, plus, optionally, the off-site
   backup destination (`offsite_endpoint`, `offsite_bucket`,
   `offsite_secret_key`, `offsite_passphrase`) and anything else the fleet
   needs later.
@@ -140,7 +140,7 @@ flows to every machine by itself:
   copy, so an offline till keeps charging.
 - **Precedence:** real environment variables always win over the vault,
   the vault wins over values typed locally. A value typed in a till's
-  Settings UI survives only until the next cloud refresh — rotate keys in
+  Settings UI survives only until the next cloud refresh, rotate keys in
   the cloud, never on machines.
 - **Rotation:** one SQL statement, zero site visits:
 

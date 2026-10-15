@@ -66,7 +66,7 @@ func openAppWindow(url, dataDir string) (hosted bool) {
 	w.SetTitle(appName)
 	w.SetSize(1280, 800, webview2.HintNone)
 	w.Navigate(url)
-	log.Printf("app window open — close the window to quit %s", appName)
+	log.Printf("app window open, close the window to quit %s", appName)
 	w.Run() // returns when the user closes the window
 	return true
 }

@@ -80,7 +80,7 @@ export function Customers() {
     <div className="space-y-4">
       <Card
         title="Customers"
-        sub="Tabs, credit limits, loyalty — money owed lives here, not in anyone's head"
+        sub="Tabs, credit limits, loyalty, money owed lives here, not in anyone's head"
         actions={manage ? <Button variant="primary" size="sm" onClick={() => setEditing('new')}>+ Customer</Button> : undefined}
         pad={false}
       >
@@ -103,7 +103,7 @@ export function Customers() {
                   {formatMoney(c.balanceCents)}
                 </td>
                 <td className={`px-3 py-2.5 text-[13px] font-bold ${(c.storeCreditCents ?? 0) > 0 ? 'text-paid-text' : 'text-ink-subtle'}`}>
-                  {c.storeCreditCents !== undefined ? formatMoney(c.storeCreditCents) : '—'}
+                  {c.storeCreditCents !== undefined ? formatMoney(c.storeCreditCents) : ', '}
                 </td>
                 <td className="px-3 py-2.5 text-[13px] text-ink-muted">
                   {c.creditLimitCents > 0 ? formatMoney(c.creditLimitCents) : 'cash only'}
@@ -132,7 +132,7 @@ export function Customers() {
         {editing && <CustomerForm initial={editing === 'new' ? null : editing} onDone={() => { setEditing(null); load() }} />}
       </Modal>
 
-      <Modal open={historyFor !== null} onClose={() => { setHistoryFor(null); setHistory(null) }} title={historyFor ? `Purchases — ${historyFor.name}` : 'Purchase history'} size="lg">
+      <Modal open={historyFor !== null} onClose={() => { setHistoryFor(null); setHistory(null) }} title={historyFor ? `Purchases, ${historyFor.name}` : 'Purchase history'} size="lg">
         {!history ? (
           <div className="py-8 flex justify-center"><Spinner /></div>
         ) : history.length === 0 ? (
@@ -153,7 +153,7 @@ export function Customers() {
         )}
       </Modal>
 
-      <Modal open={ledgerFor !== null} onClose={() => { setLedgerFor(null); setLedger(null) }} title={ledgerFor ? `Ledger — ${ledgerFor.name}` : 'Ledger'} size="lg">
+      <Modal open={ledgerFor !== null} onClose={() => { setLedgerFor(null); setLedger(null) }} title={ledgerFor ? `Ledger, ${ledgerFor.name}` : 'Ledger'} size="lg">
         {!ledger ? (
           <div className="py-8 flex justify-center"><Spinner /></div>
         ) : ledger.length === 0 ? (
@@ -178,7 +178,7 @@ export function Customers() {
                   <td className={`px-3 py-2 text-[12px] font-bold ${isCredit ? kind.cls : e.amountCents > 0 ? 'text-danger-text' : 'text-paid-text'}`}>
                     {e.amountCents > 0 ? '+' : ''}{formatMoney(e.amountCents)}
                   </td>
-                  <td className="px-3 py-2 text-[12px] text-ink-muted">{e.pointsDelta > 0 ? `+${e.pointsDelta}` : '—'}</td>
+                  <td className="px-3 py-2 text-[12px] text-ink-muted">{e.pointsDelta > 0 ? `+${e.pointsDelta}` : ', '}</td>
                   <td className="px-3 py-2 text-[12px] text-ink-muted max-w-48 truncate">{e.note}</td>
                 </tr>
               )
@@ -187,14 +187,14 @@ export function Customers() {
         )}
       </Modal>
 
-      <Modal open={payFor !== null} onClose={() => setPayFor(null)} title={payFor ? `Take payment — ${payFor.name}` : 'Take payment'}>
+      <Modal open={payFor !== null} onClose={() => setPayFor(null)} title={payFor ? `Take payment, ${payFor.name}` : 'Take payment'}>
         {payFor && <PaymentForm customer={payFor} onDone={() => { setPayFor(null); load() }} />}
       </Modal>
 
       <Modal
         open={creditFor !== null}
         onClose={() => setCreditFor(null)}
-        title={creditFor ? `Top up credit — ${creditFor.name}` : 'Top up credit'}
+        title={creditFor ? `Top up credit, ${creditFor.name}` : 'Top up credit'}
         size="sm"
       >
         {creditFor && <CreditTopUpForm customer={creditFor} onDone={() => { setCreditFor(null); load() }} />}
@@ -266,7 +266,7 @@ function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: (
       <Field label="Name">
         <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Mama Mboga" />
       </Field>
-      <Field label="Phone" hint="Keys the shared purchase history — one customer per number">
+      <Field label="Phone" hint="Keys the shared purchase history, one customer per number">
         <Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" />
       </Field>
       <Field label="Email (optional)">
@@ -275,7 +275,7 @@ function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: (
       <Field label="Notes (optional)">
         <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Preferences, sizes, delivery notes…" />
       </Field>
-      <Field label="Credit limit (KES)" hint="0 means cash only — no tab">
+      <Field label="Credit limit (KES)" hint="0 means cash only, no tab">
         <Input value={limit} onChange={(e) => setLimit(e.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" placeholder="0" />
       </Field>
       {initial && (
@@ -345,7 +345,7 @@ function CreditTopUpForm({ customer, onDone }: { customer: CustomerRow; onDone: 
     setBusy(true)
     try {
       await api.post<Customer>(`/api/v1/customers/${customer.id}/credit-topup`, { amountCents: cents, note: note.trim() })
-      toast.success('Credit topped up', `${customer.name} — ${formatMoney(cents)}`)
+      toast.success('Credit topped up', `${customer.name}, ${formatMoney(cents)}`)
       onDone()
     } catch (e: any) {
       toast.error('Top-up failed', e?.message)
@@ -423,8 +423,8 @@ function GiftCardRedeemForm({ initial, onDone }: { initial: CustomerRow; onDone:
       toast.success(
         'Gift card redeemed',
         credited > 0
-          ? `${trimmed.toUpperCase()} — ${formatMoney(credited)} credited to ${updated?.name ?? customer.name}`
-          : `${customer.name} — store credit now ${formatMoney(updated?.storeCreditCents ?? 0)}`,
+          ? `${trimmed.toUpperCase()}, ${formatMoney(credited)} credited to ${updated?.name ?? customer.name}`
+          : `${customer.name}, store credit now ${formatMoney(updated?.storeCreditCents ?? 0)}`,
       )
       onDone()
     } catch (e: any) {
@@ -437,7 +437,7 @@ function GiftCardRedeemForm({ initial, onDone }: { initial: CustomerRow; onDone:
   return (
     <div className="space-y-3">
       <p className="text-[13px] text-ink-muted">
-        The card's remaining value becomes store credit for the customer — one ledger entry, spendable at checkout.
+        The card's remaining value becomes store credit for the customer, one ledger entry, spendable at checkout.
       </p>
       <Field label="Gift card code" hint="Printed on the card, e.g. GC-KQ7P-2MX9. Case doesn't matter.">
         <Input

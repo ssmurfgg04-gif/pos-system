@@ -152,7 +152,7 @@ func (s *Service) NotifyReady(p *auth.Principal, jobID, orderID int64) (*models.
 		orderID = job.OrderID
 	}
 	if orderID <= 0 {
-		return nil, fmt.Errorf("this job is not linked to a sale — add the customer's phone and try again")
+		return nil, fmt.Errorf("this job is not linked to a sale, add the customer's phone and try again")
 	}
 	order, err := s.GetOrder(orderID)
 	if err != nil {
@@ -171,7 +171,7 @@ func (s *Service) NotifyReady(p *auth.Principal, jobID, orderID int64) (*models.
 	}
 	phone = normalizeKenyanPhone(phone)
 	if phone == "" {
-		return nil, fmt.Errorf("no phone number on this order — record the customer's phone first")
+		return nil, fmt.Errorf("no phone number on this order, record the customer's phone first")
 	}
 	msg := s.whatsappReadyMessage(order, jobTitle(job))
 	link := fmt.Sprintf("https://wa.me/%s?text=%s", phone, url.QueryEscape(msg))
@@ -182,7 +182,7 @@ func (s *Service) NotifyReady(p *auth.Principal, jobID, orderID int64) (*models.
 		name = job.Title
 	}
 	s.AddOrderEvent(orderID, kind,
-		fmt.Sprintf("WhatsApp prepared for %s — staff review-and-send%s", phone, jobSuffix(name)), p)
+		fmt.Sprintf("WhatsApp prepared for %s, staff review-and-send%s", phone, jobSuffix(name)), p)
 	s.Audit(p.ID, p.Username, "WHATSAPP_READY_SENT", "order", order.Number, phone)
 	return &models.WhatsAppContact{
 		OrderID:   orderID,

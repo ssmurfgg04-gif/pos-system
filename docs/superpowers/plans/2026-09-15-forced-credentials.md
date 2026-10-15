@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** No LedgerPOS box keeps working with seeded default credentials — every seeded user must set their own password and PIN on first login before any other API call succeeds.
+**Goal:** No LedgerPOS box keeps working with seeded default credentials, every seeded user must set their own password and PIN on first login before any other API call succeeds.
 
 **Architecture:** A `must_rotate` column on `users` (migration v4) checked in the auth middleware allowlist style: login succeeds and returns `mustRotate: true`, and every other authenticated endpoint (except `/me`, password/PIN change, branding, health) returns 403 `password rotation required` until rotated. Seeded users ship with `must_rotate = 1`; admin-created users default to 0.
 
@@ -12,14 +12,14 @@
 
 ## Global Constraints
 
-- Repo Go files are mixed tabs/spaces PER FILE — match each file's own style, never run gofmt -w.
+- Repo Go files are mixed tabs/spaces PER FILE, match each file's own style, never run gofmt -w.
 - Money stays integer cents; this plan touches no money code.
 - JWT stays 12h; permissions reload per request (existing behavior, keep).
-- PostgreSQL dialect must keep working — every SQL change needs both SQLite and Pg bodies via `d.Rebind` where placeholders appear.
+- PostgreSQL dialect must keep working, every SQL change needs both SQLite and Pg bodies via `d.Rebind` where placeholders appear.
 
 ---
 
-### Task 1: Migration v4 — `users.must_rotate`
+### Task 1: Migration v4, `users.must_rotate`
 
 **Files:**
 - Modify: `internal/database/migrations.go` (append v5 entry after v3 block)
@@ -48,7 +48,7 @@ UPDATE users SET must_rotate = 1;
 - [ ] **Step 2: Boot the app once and confirm the column**
 
 Run: `go run . version` (compiles) then boot desktop or run tests (any boot runs `Migrate()`).
-Then: `sqlite3 <data-dir>/pos.db "PRAGMA table_info(users);"` — expect a `must_rotate` row.
+Then: `sqlite3 <data-dir>/pos.db "PRAGMA table_info(users);"`, expect a `must_rotate` row.
 Expected: column present.
 
 - [ ] **Step 3: Commit**
@@ -61,8 +61,8 @@ git commit -m "feat: v5 migration adds users.must_rotate, flags existing rows"
 ### Task 2: Seed new users with `must_rotate = 1`
 
 **Files:**
-- Modify: `internal/database/seed.go` (`seedUsers` INSERT — add `must_rotate` literal `1`)
-- Test: `internal/handlers/handlers_test.go` — new test asserts seeded admin has mustRotate on login (Task 4 covers the test; this task is code-only plus compile check)
+- Modify: `internal/database/seed.go` (`seedUsers` INSERT, add `must_rotate` literal `1`)
+- Test: `internal/handlers/handlers_test.go`, new test asserts seeded admin has mustRotate on login (Task 4 covers the test; this task is code-only plus compile check)
 
 **Interfaces:**
 - Consumes: `seedUsers` slice and roles lookup in `seed.go`.
@@ -104,7 +104,7 @@ git commit -m "feat: seeded users require rotation on first login"
 
 - [ ] **Step 1: Add MustRotate to Principal and LoadPrincipal**
 
-In `internal/auth/middleware.go`, add the field and extend the user lookup query to select `must_rotate` into it. Exact column expression depends on the existing query — read the file first, keep its style.
+In `internal/auth/middleware.go`, add the field and extend the user lookup query to select `must_rotate` into it. Exact column expression depends on the existing query, read the file first, keep its style.
 
 - [ ] **Step 2: Gate in authRequired**
 
@@ -188,12 +188,12 @@ func TestForcedRotation(t *testing.T) {
 }
 ```
 
-(`itoa64` lives in `customers_test.go`, same package — reuse, do not redefine.)
+(`itoa64` lives in `customers_test.go`, same package, reuse, do not redefine.)
 
 - [ ] **Step 2: Run it**
 
 Run: `C:\Users\Jackb\tools\go\bin\go.exe test ./internal/handlers/ -run TestForcedRotation -v -count=1`
-Expected: PASS. (If existing tests now 403 because they log in as seeded users, update those tests to rotate first — count failures and fix each.)
+Expected: PASS. (If existing tests now 403 because they log in as seeded users, update those tests to rotate first, count failures and fix each.)
 
 - [ ] **Step 3: Run the full backend suite**
 
@@ -213,7 +213,7 @@ git commit -m "test: forced rotation lifecycle pinned"
 - Create: `frontend/src/pages/Rotate.tsx` (password + PIN fields, calls existing `PUT /users/:id/password` and `PUT /users/:id/pin`, then re-fetches `/me`)
 - Modify: `frontend/src/App.tsx` (after login/me load: if `me.mustRotate` → render `<Rotate/>` instead of routes)
 - Modify: `frontend/src/lib/api.ts` (`Me` interface gains `mustRotate: boolean`; login response type gains `mustRotate: boolean`)
-- Test: `frontend/__tests__/demo.test.ts` — demo backend must mirror the gate or frontend tests using seeded logins break; add `must_rotate` default 1 to demo seed users, `mustRotate` in demo login DTOs, same allowlist in `demoRequest` gate. Then: `npm test`.
+- Test: `frontend/__tests__/demo.test.ts`, demo backend must mirror the gate or frontend tests using seeded logins break; add `must_rotate` default 1 to demo seed users, `mustRotate` in demo login DTOs, same allowlist in `demoRequest` gate. Then: `npm test`.
 
 **Interfaces:**
 - Consumes: `GET /api/v1/me`, `PUT /api/v1/users/:id/password`, `PUT /api/v1/users/:id/pin` (all exist).
@@ -265,7 +265,7 @@ git commit -m "feat: frontend forces credential rotation on first login"
 - Modify: `README.md` (replace "change it in Settings on first run" with "forced change on first login").
 
 - [ ] **Step 1: Update README**
-- [ ] **Step 2: Full verification**: `go build`, `go test ./internal/...`, `npx tsc --noEmit`, `npm test` — all green.
+- [ ] **Step 2: Full verification**: `go build`, `go test ./internal/...`, `npx tsc --noEmit`, `npm test`, all green.
 - [ ] **Step 3: Commit**
 
 ```bash

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Shops stop manually re-downloading releases — the app checks GitHub Releases on boot, tells the admin a newer build exists, and installs it in one click.
+**Goal:** Shops stop manually re-downloading releases, the app checks GitHub Releases on boot, tells the admin a newer build exists, and installs it in one click.
 
 **Architecture:** A tiny `internal/update` package (pure version-compare + GitHub API client with injectable base URL for tests) + two admin endpoints (check, download-and-stage) + a frontend banner/Settings card. Windows install = download the NSIS setup asset and launch it, then quit self via the existing `POST /system/quit`; the installer replaces the running exe on next launch flow (documented behavior, verified manually once). Linux/macOS: download staged + instructions (best-effort restart documented, not automated).
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Never auto-install without an admin click (shops update between rush hours, not during).
-- `main.version` is `dev` in dev builds — dev builds must never report an update.
+- `main.version` is `dev` in dev builds, dev builds must never report an update.
 - No new Go module dependencies. CGO-free.
 
 ---
@@ -24,12 +24,12 @@
 
 - [ ] **Step 1: Read `scripts/create_release.py` + `scripts/package_desktop.py` + `scripts/build_installer.py`** and record: release tag format (`vX.Y.Z`?), exact asset filenames for Windows (setup exe name pattern), Linux tarball name. Write findings as a comment block at the top of the Task-2 client file (so the strings live next to the code that consumes them).
 
-Expected: a short list like `tag: v1.2.0 / windows: LedgerPOS-Setup-1.2.0.exe / linux: ledgerpos-linux-x64.tar.xz` (illustrative — use what the scripts actually say).
+Expected: a short list like `tag: v1.2.0 / windows: LedgerPOS-Setup-1.2.0.exe / linux: ledgerpos-linux-x64.tar.xz` (illustrative, use what the scripts actually say).
 
-### Task 2: `internal/update` package — compare + check
+### Task 2: `internal/update` package, compare + check
 
 **Files:**
-- Create: `internal/update/update.go` (tabs or spaces? New package — use tabs, canonical Go): `ParseVersion(s) (major, minor, patch int, ok bool)`, `IsNewer(current, latest string) bool`, `Check(ctx, apiBase, repo, current string) (Release, error)` hitting `{apiBase}/repos/{repo}/releases/latest`, `Release{Tag, Name, Notes, Assets[{Name, URL}]}`.
+- Create: `internal/update/update.go` (tabs or spaces? New package, use tabs, canonical Go): `ParseVersion(s) (major, minor, patch int, ok bool)`, `IsNewer(current, latest string) bool`, `Check(ctx, apiBase, repo, current string) (Release, error)` hitting `{apiBase}/repos/{repo}/releases/latest`, `Release{Tag, Name, Notes, Assets[{Name, URL}]}`.
 - Test: `internal/update/update_test.go`.
 
 **Interfaces:**
@@ -66,7 +66,7 @@ func TestCheckAgainstStub(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: Run** `C:\Users\Jackb\tools\go\bin\go.exe test ./internal/update/ -count=1` — expect PASS.
+- [ ] **Step 4: Run** `C:\Users\Jackb\tools\go\bin\go.exe test ./internal/update/ -count=1`, expect PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -77,11 +77,11 @@ git commit -m "feat: update checker package with semver compare"
 ### Task 3: Check endpoint + boot check + staged download
 
 **Files:**
-- Modify: `main.go` or services wiring: on boot (both modes), if `update_channel != "off"`, run `update.Check` once in background and cache result (in-memory struct + mutex; re-check every 24h via the backup-scheduler pattern — read `StartBackupScheduler` and mirror the loop shape).
+- Modify: `main.go` or services wiring: on boot (both modes), if `update_channel != "off"`, run `update.Check` once in background and cache result (in-memory struct + mutex; re-check every 24h via the backup-scheduler pattern, read `StartBackupScheduler` and mirror the loop shape).
 - Modify: `internal/handlers/system.go`: `GET /system/update` (perm `settings.manage`) → `{current, latest, notes, url, updateAvailable, checkedAt}`; `POST /system/update/download` → downloads picked asset to temp dir, returns `{stagedPath, asset}`.
 - Modify: `internal/router/router.go`: register both routes.
 - Modify: `internal/database/seed.go`: settings `update_channel` (`"stable"`, `"off"` disables).
-- Test: `internal/handlers` test with `httptest` stub as GitHub API (override base URL via settings key `update_api_base` default `https://api.github.com` — add it to seed too, hidden from UI).
+- Test: `internal/handlers` test with `httptest` stub as GitHub API (override base URL via settings key `update_api_base` default `https://api.github.com`, add it to seed too, hidden from UI).
 
 **Interfaces:**
 - Consumes: `update.Check/PickAsset`, settings store.
@@ -96,9 +96,9 @@ git commit -m "feat: update checker package with semver compare"
 ### Task 4: One-click install + frontend banner
 
 **Files:**
-- Modify: `internal/handlers/system.go`: `POST /system/update/install` → Windows: `exec.Command(stagedSetup, "/S").Start()` (silent NSIS flag — verify `/S` against the NSIS docs comment in `build_installer.py`; if the installer doesn't support silent, launch normally), then trigger existing quit path (same code `QuitApp` uses); other OS: 501 `{"error":"manual install on this platform"}` with the download URL.
+- Modify: `internal/handlers/system.go`: `POST /system/update/install` → Windows: `exec.Command(stagedSetup, "/S").Start()` (silent NSIS flag, verify `/S` against the NSIS docs comment in `build_installer.py`; if the installer doesn't support silent, launch normally), then trigger existing quit path (same code `QuitApp` uses); other OS: 501 `{"error":"manual install on this platform"}` with the download URL.
 - Modify: `frontend/src/App.tsx`: update banner (admin-only, `updateAvailable` from status endpoint polled on load) linking to Settings → System.
-- Modify: `frontend/src/pages/Settings.tsx`: System card section — Check now / Download / Install buttons wired to the three endpoints, notes rendered.
+- Modify: `frontend/src/pages/Settings.tsx`: System card section, Check now / Download / Install buttons wired to the three endpoints, notes rendered.
 - Test: demo backend stubs the three endpoints (static fixture: update available v9.9.9); `npx tsc --noEmit` + `npm test`.
 
 - [ ] **Step 1: Install endpoint (Windows-first).**
@@ -108,7 +108,7 @@ git commit -m "feat: update checker package with semver compare"
 
 ### Task 5: Manual install verification + README + full gates
 
-- [ ] **Step 1:** Real-machine check (Windows): stage an older build, confirm banner appears, download stages, installer launches. Record result in the commit message (pass/fail + build numbers). This is a manual gate — no command can click an installer for you.
+- [ ] **Step 1:** Real-machine check (Windows): stage an older build, confirm banner appears, download stages, installer launches. Record result in the commit message (pass/fail + build numbers). This is a manual gate, no command can click an installer for you.
 - [ ] **Step 2:** README: updates section (channel off switch, manual fallback = download site).
 - [ ] **Step 3:** Full gates: `go build`, `go test ./internal/...`, `npx tsc --noEmit`, `npm test`.
 - [ ] **Step 4: Commit.**

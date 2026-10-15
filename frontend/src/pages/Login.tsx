@@ -9,7 +9,7 @@ import { api, backendMode } from '../lib/api'
 import { ShieldCheck, User, Palette, KeyRound, LifeBuoy, LogIn, Store, Users, Hash } from 'lucide-react'
 
 const DEMO_ACCOUNTS = [
-  { username: 'admin', password: '0000', label: 'Admin', hint: 'Full control — settings, stock, KRA reports', icon: ShieldCheck },
+  { username: 'admin', password: '0000', label: 'Admin', hint: 'Full control, settings, stock, KRA reports', icon: ShieldCheck },
   { username: 'cashier', password: '0000', label: 'Cashier', hint: 'POS terminal, shifts, M-Pesa entry', icon: User },
   { username: 'designer', password: '0000', label: 'Designer', hint: 'Design board, production queue', icon: Palette },
 ]
@@ -176,9 +176,24 @@ export function Login() {
                 {error}
               </p>
             )}
-            <Button type="submit" variant="primary" size="lg" className="w-full" disabled={busy}>
-              {busy ? <Spinner className="border-t-white" /> : 'Sign in'}
-            </Button>
+            <div className="flex gap-2">
+              <Button type="submit" variant="primary" size="lg" className="flex-1" disabled={busy}>
+                {busy ? <Spinner className="border-t-white" /> : 'Sign in'}
+              </Button>
+              {!demo && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="lg"
+                  className="flex-1"
+                  disabled={busy}
+                  onClick={() => { setMode('welcome'); setError('') }}
+                  title="New here? Register a business or join your team"
+                >
+                  <span className="inline-flex items-center gap-2"><Store size={16} strokeWidth={2.5} aria-hidden />Register</span>
+                </Button>
+              )}
+            </div>
             <div className="pt-1 border-t border-line space-y-0.5">
               <button
                 type="button"
@@ -448,7 +463,7 @@ function SetupOwner({ onDone, onCancel }: { onDone: () => void; onCancel?: () =>
         </span>
         <div>
           <h2 className="text-ink font-bold leading-tight">Set up your store's owner</h2>
-          <p className="text-[12px] text-ink-subtle">This machine has no accounts yet — create the first one.</p>
+          <p className="text-[12px] text-ink-subtle">This machine has no accounts yet, create the first one.</p>
         </div>
       </div>
       <Field label="Your name">
@@ -463,7 +478,7 @@ function SetupOwner({ onDone, onCancel }: { onDone: () => void; onCancel?: () =>
       <Field label="Confirm password">
         <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" required placeholder="••••••••" />
       </Field>
-      <Field label="Quick PIN (optional — 4 digits)">
+      <Field label="Quick PIN (optional, 4 digits)">
         <Input
           value={pin}
           onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}

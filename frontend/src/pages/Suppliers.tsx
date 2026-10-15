@@ -72,7 +72,7 @@ function SupplierList({ manage }: { manage: boolean }) {
                 <p className="font-bold text-ink text-[13px]">{s.name}</p>
                 <p className="text-[11px] text-ink-subtle">{s.address || 'no address'}</p>
               </td>
-              <td className="px-3 py-2.5 text-[13px] text-ink-muted">{s.phone || s.email || '—'}</td>
+              <td className="px-3 py-2.5 text-[13px] text-ink-muted">{s.phone || s.email || ', '}</td>
               <td className="px-3 py-2.5">
                 <StatusPill status={s.active ? 'paid' : 'void'} label={s.active ? 'Active' : 'Inactive'} />
               </td>
@@ -159,7 +159,7 @@ function POList({ manage }: { manage: boolean }) {
   const receive = async (o: PurchaseOrder) => {
     try {
       await api.post(`/api/v1/purchase-orders/${o.id}/receive`, {})
-      toast.success('Stock received', `${o.number} — quantities added, costs averaged`)
+      toast.success('Stock received', `${o.number}, quantities added, costs averaged`)
       load()
       setViewing(null)
     } catch (e: any) {
@@ -339,7 +339,7 @@ function TakeList({ manage }: { manage: boolean }) {
   const create = async () => {
     try {
       const t = await api.post<StockTake>('/api/v1/stock-takes', { note: '' })
-      toast.success('Count started', `${t.number} — ${t.items.length} lines`)
+      toast.success('Count started', `${t.number}, ${t.items.length} lines`)
       load()
       openTake(t)
     } catch (e: any) {
@@ -448,7 +448,7 @@ function TakeList({ manage }: { manage: boolean }) {
                     )}
                   </td>
                   <td className={`px-3 py-2 tabular font-bold ${variance === 0 ? 'text-ink-muted' : variance > 0 ? 'text-paid-text' : 'text-danger-text'}`}>
-                    {variance === 0 ? '—' : variance > 0 ? `+${variance}` : variance}
+                    {variance === 0 ? ', ' : variance > 0 ? `+${variance}` : variance}
                   </td>
                 </tr>
               )

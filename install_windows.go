@@ -71,10 +71,10 @@ func desktopBeforeRun() bool {
 
         dst, err := selfInstall(exe)
         if err != nil {
-                log.Printf("self-install failed (%v) — continuing portable", err)
+                log.Printf("self-install failed (%v), continuing portable", err)
                 return false // portable run still works fine
         }
-        log.Printf("installed to %s — relaunching", dst)
+        log.Printf("installed to %s, relaunching", dst)
         relaunch(dst)
         return true
 }

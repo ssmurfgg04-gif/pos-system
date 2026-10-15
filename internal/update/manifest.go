@@ -108,7 +108,7 @@ func guardProduction(host string) error {
 		// to a fake server, so reaching the production host from a test
 		// binary means somebody forgot to stub — refuse.
 		if isGoTest() {
-			return fmt.Errorf("test refused to touch the production cloud — point cloudmeta.BaseURL at a fake server")
+			return fmt.Errorf("test refused to touch the production cloud, point cloudmeta.BaseURL at a fake server")
 		}
 	}
 	return nil

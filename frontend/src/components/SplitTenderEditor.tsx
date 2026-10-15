@@ -110,7 +110,7 @@ export function SplitTenderEditor({
                 value={leg.phone || ''}
                 onChange={(e) => update(i, { phone: e.target.value })}
                 inputMode="tel"
-                placeholder="Customer M-Pesa phone — 07XX XXX XXX"
+                placeholder="Customer M-Pesa phone, 07XX XXX XXX"
                 aria-label="M-Pesa phone for this leg"
               />
             )}
@@ -123,7 +123,7 @@ export function SplitTenderEditor({
                 value={leg.email || ''}
                 onChange={(e) => update(i, { email: e.target.value })}
                 inputMode="email"
-                placeholder="Customer email (optional — receipt)"
+                placeholder="Customer email (optional, receipt)"
                 aria-label="Email for the card payment leg"
               />
             )}

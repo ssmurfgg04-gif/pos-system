@@ -68,7 +68,7 @@ begin
       and expires_at > now() and used_by = '';
   if inv.id is null then
     return json_build_object('ok', false, 'error',
-        'this invite is invalid, already used, or expired — ask the owner for a fresh link');
+        'this invite is invalid, already used, or expired, ask the owner for a fresh link');
   end if;
   -- Claim the invite atomically FIRST (check-then-act on used_by would let
   -- two concurrent joins share one single-use token under READ COMMITTED).
@@ -76,7 +76,7 @@ begin
     where id = inv.id and used_by = '';
   if not found then
     return json_build_object('ok', false, 'error',
-        'this invite is invalid, already used, or expired — ask the owner for a fresh link');
+        'this invite is invalid, already used, or expired, ask the owner for a fresh link');
   end if;
   select * into cur from sync_devices where device_id = p_device_id;
   if cur.device_id is not null then
@@ -137,7 +137,7 @@ begin
     where username = p_username and window_start > now() - interval '15 minutes';
   if coalesce(fails, 0) >= 10 then
     return json_build_object('ok', false, 'error',
-      'too many attempts — try again in 15 minutes');
+      'too many attempts, try again in 15 minutes');
   end if;
 
   -- verify against the portal credential store (bcrypt)
@@ -150,7 +150,7 @@ begin
         where team_code = acct.team_code and active limit 1;
       if store.id is null then
         return json_build_object('ok', false, 'error',
-          'your store is not active in the cloud — contact support');
+          'your store is not active in the cloud, contact support');
       end if;
 
       select * into dev from sync_devices where device_id = p_device_id;
@@ -198,7 +198,7 @@ begin
                               then portal_signin_fails.window_start else now() end;
 
   return json_build_object('ok', false, 'error',
-    'wrong username or password — or cloud sign-in is not activated for your shop yet (activate it from Settings → Team on an existing till)');
+    'wrong username or password, or cloud sign-in is not activated for your shop yet (activate it from Settings → Team on an existing till)');
 end $function$;
 
 -- ===================================================== FORGOT PIN FLOW ===
@@ -312,7 +312,7 @@ begin
   end if;
   if req.created_at < now() - interval '7 days' then
     update sync_pin_resets set status = 'cancelled' where id = req.id;
-    return json_build_object('ok', false, 'error', 'this request expired — ask them to send it again');
+    return json_build_object('ok', false, 'error', 'this request expired, ask them to send it again');
   end if;
   b := gen_random_bytes(4);
   c := lpad((((get_byte(b,0)::bigint * 16777216) + (get_byte(b,1)::bigint * 65536)
@@ -348,24 +348,24 @@ begin
   select * into req from sync_pin_resets
     where id = p_request_id and device_id = p_device_id;
   if req.id is null then
-    return json_build_object('ok', false, 'error', 'reset request not found — send a new one from this screen');
+    return json_build_object('ok', false, 'error', 'reset request not found, send a new one from this screen');
   end if;
   if req.status = 'used' then
     return json_build_object('ok', false, 'error', 'this code was already used');
   end if;
   if req.status <> 'approved' then
-    return json_build_object('ok', false, 'error', 'no approved code yet — the owner still needs to tap Approve');
+    return json_build_object('ok', false, 'error', 'no approved code yet, the owner still needs to tap Approve');
   end if;
   if req.expires_at is null or req.expires_at < now() then
-    return json_build_object('ok', false, 'error', 'this code expired — tap Approve on the owner till again');
+    return json_build_object('ok', false, 'error', 'this code expired, tap Approve on the owner till again');
   end if;
   if req.attempts >= 6 then
     update sync_pin_resets set status = 'cancelled' where id = req.id;
-    return json_build_object('ok', false, 'error', 'too many wrong tries — send a fresh request');
+    return json_build_object('ok', false, 'error', 'too many wrong tries, send a fresh request');
   end if;
   if encode(digest(btrim(coalesce(p_code, '')), 'sha256'), 'hex') <> req.code_hash then
     update sync_pin_resets set attempts = attempts + 1 where id = req.id;
-    return json_build_object('ok', false, 'error', 'that code is not right — check the digits and try again');
+    return json_build_object('ok', false, 'error', 'that code is not right, check the digits and try again');
   end if;
   update sync_pin_resets set status = 'used', used_at = now() where id = req.id;
   return json_build_object('ok', true, 'username', req.username);
@@ -379,7 +379,7 @@ end $function$;
 
 select public.upsert_app_config('update_manifest_tag', 'v1.3.0', false);
 select public.upsert_app_config('update_manifest_notes',
-  '1.3.0 — quotations (draft → sent → accepted → move to till, synced across machines, printable A4 offers), locked-out recovery (Forgot PIN? → owner approves → one-time 8-digit code), revoked tills can rejoin with a fresh join link, plus a deep money & sync review: loyalty no longer mints on voided synced sales, cross-shop data can never ride a till that switches teams, photo-sync reliability fix, tax-rate guardrails.', false);
+  '1.3.0, quotations (draft → sent → accepted → move to till, synced across machines, printable A4 offers), locked-out recovery (Forgot PIN? → owner approves → one-time 8-digit code), revoked tills can rejoin with a fresh join link, plus a deep money & sync review: loyalty no longer mints on voided synced sales, cross-shop data can never ride a till that switches teams, photo-sync reliability fix, tax-rate guardrails.', false);
 select public.upsert_app_config('update_manifest_assets', '[
   {"name":"ledgerpos-setup-windows-x64.exe","url":"https://github.com/ssmurfgg04-gif/pos-system/releases/download/v1.3.0/ledgerpos-setup-windows-x64.exe","sha256":"8e3dbe28382289a86a58749b15cd36e734a958713ae6c0daa1b2f32250494141"},
   {"name":"ledgerpos-macos-apple-silicon.zip","url":"https://github.com/ssmurfgg04-gif/pos-system/releases/download/v1.3.0/ledgerpos-macos-apple-silicon.zip","sha256":"d5f455d8f02987c4ac18596de8728244ea269ff2704ff6f8883a3d0942d9d9db"},

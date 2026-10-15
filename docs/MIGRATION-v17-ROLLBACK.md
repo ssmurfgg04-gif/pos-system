@@ -1,6 +1,6 @@
 # Migration v17 rollback plan
 
-v17 creates the `quotes` table (a brand-new table — no existing table is
+v17 creates the `quotes` table (a brand-new table, no existing table is
 altered, no data moves, nothing is dropped) and unions the two new
 permission keys (`quotes.view`, `quotes.manage`) into seeded roles.
 
@@ -22,7 +22,7 @@ removed.
    `POST /api/v1/system/backup`), file listed under
    `data/backups/` with today's date.
 2. Real staff accounts intact: `SELECT id, username, is_active FROM users;`
-   matches expectations (v17 touches nothing here — this is the standard
+   matches expectations (v17 touches nothing here, this is the standard
    pre-migration gate per the client's standing order).
 3. Historical sales intact: `SELECT COUNT(*) FROM orders;` recorded before
    upgrade (v17 touches nothing here either).
@@ -35,7 +35,7 @@ v17 is purely additive; the one-statement rollback is:
 DROP TABLE IF EXISTS quotes;
 ```
 
-Role permissions: leave them — extra permissions on seeded roles are
+Role permissions: leave them, extra permissions on seeded roles are
 harmless and re-running v17's backfill is a no-op (union-only,
 `schema_migrations` records the version so it never runs twice).
 
@@ -44,7 +44,7 @@ harmless and re-running v17's backfill is a no-op (union-only,
 v17 does NOT change the cloud schema. The v1.3.0 cloud changes live in
 `db/cloud_schema_v117.sql` (join resurrect, PIN-reset RPCs) and are
 individually reversible by re-applying the previous function definitions
-(`create or replace function` semantics — the old bodies are in git
+(`create or replace function` semantics, the old bodies are in git
 history at db/cloud_schema.sql@v1.2.1). The `sync_pin_resets` table can be
 dropped with no local impact (in-flight requests would simply error
 cleanly).

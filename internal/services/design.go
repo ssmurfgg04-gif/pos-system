@@ -48,7 +48,7 @@ func assertJobAccess(p *auth.Principal, job *models.DesignJob) error {
 
 func (s *Service) CreateDesignJob(p *auth.Principal, in DesignJobInput) (*models.DesignJob, error) {
         if !canDelegate(p) {
-                return nil, fmt.Errorf("only the front desk and owners can create jobs — designers work the jobs assigned to them")
+                return nil, fmt.Errorf("only the front desk and owners can create jobs, designers work the jobs assigned to them")
         }
         status := in.Status
         if status == "" {

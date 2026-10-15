@@ -104,7 +104,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
   const canQuit = !!(desk?.desktop && user?.permissions.includes('settings.manage'))
   const quitApp = async () => {
     if (stopping) return
-    if (!window.confirm(`Quit ${branding.app_name || 'the app'}? The local app and its server will stop — your data is saved on this machine.`)) return
+    if (!window.confirm(`Quit ${branding.app_name || 'the app'}? The local app and its server will stop, your data is saved on this machine.`)) return
     setStopping(true)
     try { await api.post('/api/v1/system/quit') } catch { /* server is going away — expected */ }
     logout()
@@ -186,7 +186,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
           {demo && (
             <span
               className="min-h-8 px-2.5 rounded-pill bg-info-bg text-info-text border border-info-text/40 text-[11px] font-bold inline-flex items-center gap-1.5 whitespace-nowrap"
-              title="Demo sandbox — a deliberately reduced playground (data lives in your browser only, 3 sample roles). The real app enforces the full role model."
+              title="Demo sandbox, a deliberately reduced playground (data lives in your browser only, 3 sample roles). The real app enforces the full role model."
             >
               <FlaskConical size={12} aria-hidden />
               Demo sandbox
@@ -197,7 +197,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
               onClick={() => flushQueue()}
               title={
                 net.failed > 0
-                  ? `${net.pending} offline sale(s) queued — ${net.failed} hit errors and will keep retrying. Click to sync now.`
+                  ? `${net.pending} offline sale(s) queued, ${net.failed} hit errors and will keep retrying. Click to sync now.`
                   : 'Sync queued offline sales'
               }
               className={`min-h-9 px-2.5 rounded-input text-[12px] font-bold border inline-flex items-center gap-1.5 ${

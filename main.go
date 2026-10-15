@@ -134,7 +134,7 @@ func ensureDefaultShop(reg *tenants.Registry, db *database.DB, dbPath, storeName
                         }
                 }
                 if len(reg.ShopList) > 1 {
-                        log.Printf("RECOVERED %s as shop %q (%d products, %d users) — it was no longer referenced by the registry", abs, name, products, users)
+                        log.Printf("RECOVERED %s as shop %q (%d products, %d users), it was no longer referenced by the registry", abs, name, products, users)
                 } else {
                         log.Printf("adopted %s as default shop %s", abs, shop.ID)
                 }
@@ -336,7 +336,7 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
         case <-sigDone:
                 log.Printf("shutting down...")
         case <-onQuit:
-                log.Printf("quit requested by admin session — shutting down...")
+                log.Printf("quit requested by admin session, shutting down...")
         }
 
         // Stop background workers BEFORE closing the database — otherwise
@@ -390,7 +390,7 @@ func runResetOwner(args []string) int {
         }
         dbPath := filepath.Join(dir, "pos.db")
         if !fileExists(dbPath) {
-                fmt.Fprintf(os.Stderr, "reset-owner: no database found at %s — run this on the till that holds the store's data\n", dbPath)
+                fmt.Fprintf(os.Stderr, "reset-owner: no database found at %s, run this on the till that holds the store's data\n", dbPath)
                 return 1
         }
         if !*yes {
@@ -398,7 +398,7 @@ func runResetOwner(args []string) int {
                 fmt.Print("Continue? [y/N] ")
                 var answer string
                 if _, err := fmt.Scanln(&answer); err != nil || (answer != "y" && answer != "Y") {
-                        fmt.Println("Aborted — nothing changed.")
+                        fmt.Println("Aborted, nothing changed.")
                         return 1
                 }
         }
@@ -432,7 +432,7 @@ func runResetOwner(args []string) int {
         svc.Audit(userID, *username, "RECOVERY_CODE_ISSUED", "user", *username, "reset-owner CLI")
         fmt.Printf("\nRecovery code for %s (%s):\n\n    %s\n\n", fullName, *username, code)
         fmt.Println("Open the app, choose Forgot password, enter the code and the new password.")
-        fmt.Println("The code is single-use — it stops working the moment the password is reset.")
+        fmt.Println("The code is single-use, it stops working the moment the password is reset.")
         return 0
 }
 

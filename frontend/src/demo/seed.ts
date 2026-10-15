@@ -309,16 +309,16 @@ const CATEGORIES: [string, string][] = [
 
 const PRODUCTS: [string, string, string, string, number, number, number, boolean][] = [
   // sku, barcode, name, catSlug, priceCents, costCents, stock, track
-  ['TS-001', '4001234500011', 'Classic Cotton Tee — Black', 'tshirts', 55000, 32000, 46, true],
-  ['TS-002', '4001234500028', 'Classic Cotton Tee — White', 'tshirts', 55000, 32000, 38, true],
+  ['TS-001', '4001234500011', 'Classic Cotton Tee, Black', 'tshirts', 55000, 32000, 46, true],
+  ['TS-002', '4001234500028', 'Classic Cotton Tee, White', 'tshirts', 55000, 32000, 38, true],
   ['TS-003', '4001234500035', 'Premium Heavyweight Tee', 'tshirts', 85000, 48000, 22, true],
   ['TS-004', '4001234500042', 'Oversized Streetwear Tee', 'tshirts', 90000, 52000, 17, true],
-  ['TS-005', '4001234500127', 'Ladies Fitted Tee — Navy', 'tshirts', 65000, 36000, 25, true],
-  ['TS-006', '4001234500134', 'Kids Cotton Tee — Assorted', 'tshirts', 40000, 22000, 30, true],
-  ['HD-001', '4001234500141', 'Pullover Hoodie — Grey', 'hoodies', 180000, 110000, 12, true],
-  ['HD-002', '4001234500158', 'Zip Hoodie — Black', 'hoodies', 200000, 125000, 8, true],
-  ['HD-003', '4001234500165', 'Sleeveless Hoodie — Olive', 'hoodies', 150000, 92000, 4, true],
-  ['MG-001', '4001234500059', 'Ceramic Mug — 11oz', 'mugs-bottles', 45000, 22000, 54, true],
+  ['TS-005', '4001234500127', 'Ladies Fitted Tee, Navy', 'tshirts', 65000, 36000, 25, true],
+  ['TS-006', '4001234500134', 'Kids Cotton Tee, Assorted', 'tshirts', 40000, 22000, 30, true],
+  ['HD-001', '4001234500141', 'Pullover Hoodie, Grey', 'hoodies', 180000, 110000, 12, true],
+  ['HD-002', '4001234500158', 'Zip Hoodie, Black', 'hoodies', 200000, 125000, 8, true],
+  ['HD-003', '4001234500165', 'Sleeveless Hoodie, Olive', 'hoodies', 150000, 92000, 4, true],
+  ['MG-001', '4001234500059', 'Ceramic Mug, 11oz', 'mugs-bottles', 45000, 22000, 54, true],
   ['MG-002', '4001234500066', 'Enamel Camping Mug', 'mugs-bottles', 60000, 34000, 26, true],
   ['MG-003', '4001234500073', 'Insulated Travel Tumbler', 'mugs-bottles', 120000, 70000, 14, true],
   ['MG-004', '4001234500172', 'Magic Colour-Changing Mug', 'mugs-bottles', 80000, 45000, 3, true],
@@ -327,7 +327,7 @@ const PRODUCTS: [string, string, string, string, number, number, number, boolean
   ['AC-003', '4001234500103', 'Canvas Tote Bag', 'accessories', 55000, 28000, 33, true],
   ['AC-004', '4001234500110', 'Embroidered Cap', 'accessories', 70000, 40000, 19, true],
   ['AC-005', '4001234500189', 'Lanyard with PVC Pouch', 'accessories', 35000, 16000, 75, true],
-  ['SV-001', '', 'Custom Print Run — per design', 'services', 25000, 0, 0, false],
+  ['SV-001', '', 'Custom Print Run, per design', 'services', 25000, 0, 0, false],
   ['SV-002', '', 'Artwork & Branding Setup', 'services', 100000, 0, 0, false],
   ['SV-003', '', 'Same-Day Rush Fee', 'services', 50000, 0, 0, false],
   ['GC-001', '', 'Gift Card', 'services', 100000, 0, 0, false],
@@ -344,7 +344,7 @@ export function buildSeed(): DemoDB {
   const now = new Date()
 
   const roles: DemoRole[] = [
-    { id: 1, name: 'Admin', description: 'Full access: settings, users, stock, reports, KRA returns — and checkout when fixing problems', permissions: [...ALL_PERMS], system: true },
+    { id: 1, name: 'Admin', description: 'Full access: settings, users, stock, reports, KRA returns, and checkout when fixing problems', permissions: [...ALL_PERMS], system: true },
     { id: 2, name: 'Cashier', description: 'Point of sale: checkout, manual M-Pesa entry, shifts', permissions: ['pos.sell', 'pos.void', 'orders.view', 'payments.manual', 'shifts.manage', 'customers.view', 'quotes.view'], system: true },
     { id: 3, name: 'Designer', description: 'Design & production board, catalog visibility', permissions: ['design.view', 'design.manage', 'orders.perform', 'products.view', 'orders.view', 'quotes.view'], system: true },
   ]
@@ -480,10 +480,10 @@ export function buildSeed(): DemoDB {
 
   // ---- Design board ----
   const designJobs: DemoDesignJob[] = [
-    { id: 1, title: 'Zawadi Ventures — staff tees', productName: 'Classic Cotton Tee — White', customerName: 'Zawadi Ventures Ltd', notes: 'Logo front pocket, names on back. 25 pcs.', status: 'in_progress', assigneeId: 3, createdBy: 'admin', createdAt: iso(new Date(now.getTime() - 3 * 864e5)), updatedAt: iso(new Date(now.getTime() - 1 * 864e5)) },
-    { id: 2, title: 'Wedding — couple mugs', productName: 'Magic Colour-Changing Mug', customerName: 'Faith M.', notes: 'Photos both sides, pastel theme.', status: 'ready', assigneeId: 3, createdBy: 'cashier', createdAt: iso(new Date(now.getTime() - 2 * 864e5)), updatedAt: iso(new Date(now.getTime() - 864e5)) },
+    { id: 1, title: 'Zawadi Ventures, staff tees', productName: 'Classic Cotton Tee, White', customerName: 'Zawadi Ventures Ltd', notes: 'Logo front pocket, names on back. 25 pcs.', status: 'in_progress', assigneeId: 3, createdBy: 'admin', createdAt: iso(new Date(now.getTime() - 3 * 864e5)), updatedAt: iso(new Date(now.getTime() - 1 * 864e5)) },
+    { id: 2, title: 'Wedding, couple mugs', productName: 'Magic Colour-Changing Mug', customerName: 'Faith M.', notes: 'Photos both sides, pastel theme.', status: 'ready', assigneeId: 3, createdBy: 'cashier', createdAt: iso(new Date(now.getTime() - 2 * 864e5)), updatedAt: iso(new Date(now.getTime() - 864e5)) },
     { id: 3, title: 'Church youth camp wristbands', productName: 'Fabric Wristband', customerName: 'Brian O.', notes: '300 pcs, 3 colourways, collect Sunday.', status: 'queue', assigneeId: 3, createdBy: 'cashier', createdAt: iso(new Date(now.getTime() - 864e5)), updatedAt: iso(new Date(now.getTime() - 864e5)) },
-    { id: 4, title: 'Company hoodie re-order', productName: 'Pullover Hoodie — Grey', customerName: 'Zawadi Ventures Ltd', notes: 'Same artwork as last batch.', status: 'delivered', assigneeId: 3, createdBy: 'admin', createdAt: iso(new Date(now.getTime() - 9 * 864e5)), updatedAt: iso(new Date(now.getTime() - 5 * 864e5)) },
+    { id: 4, title: 'Company hoodie re-order', productName: 'Pullover Hoodie, Grey', customerName: 'Zawadi Ventures Ltd', notes: 'Same artwork as last batch.', status: 'delivered', assigneeId: 3, createdBy: 'admin', createdAt: iso(new Date(now.getTime() - 9 * 864e5)), updatedAt: iso(new Date(now.getTime() - 5 * 864e5)) },
     { id: 5, title: 'Sports day caps', productName: 'Embroidered Cap', customerName: 'Mutua', notes: 'School crest embroidery, 40 pcs.', status: 'queue', assigneeId: 3, createdBy: 'cashier', createdAt: iso(new Date(now.getTime() - 12 * 36e5)), updatedAt: iso(new Date(now.getTime() - 12 * 36e5)) },
     { id: 6, title: 'Cafe branding tote bags', productName: 'Canvas Tote Bag', customerName: 'Priya S.', notes: 'Single-colour print, kraft handle.', status: 'in_progress', assigneeId: 3, createdBy: 'admin', createdAt: iso(new Date(now.getTime() - 30 * 36e5)), updatedAt: iso(new Date(now.getTime() - 6 * 36e5)) },
   ]

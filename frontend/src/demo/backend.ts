@@ -363,7 +363,7 @@ function userFromToken(): { user: DemoUser; perms: string[] } {
   // Sessions die with the credentials they were issued for (server parity).
   const issued = tokenIssued.get(t) ?? 0
   if (u.passwordChangedAt && issued < u.passwordChangedAt) {
-    throw new ApiError(401, 'session expired — sign in again')
+    throw new ApiError(401, 'session expired, sign in again')
   }
   const role = db!.roles.find((r) => r.id === u.roleId)
   return { user: u, perms: role ? role.permissions : [] }
@@ -845,7 +845,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   if (m === 'POST' && p === '/auth/signup') {
     const username = String(body?.username || '').trim()
     if (!/^[A-Za-z0-9._-]{3,32}$/.test(username)) throw new ApiError(400, 'username must be 3-32 letters, digits, dot, underscore, or hyphen')
-    if (isDefaultPassword(String(body?.password))) throw new ApiError(400, 'choose a stronger password — that one is public')
+    if (isDefaultPassword(String(body?.password))) throw new ApiError(400, 'choose a stronger password, that one is public')
     if (!body?.shopName || String(body.shopName).trim().length > 80) throw new ApiError(400, 'shop name required')
     // Single-shop demo: no tenant provisioning here.
     throw new ApiError(501, 'signup is not available in the demo')
@@ -858,7 +858,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const pin = String(body?.pin || '')
     const km = link.match(/k=([A-Za-z0-9-]{12,64})/)
     const inv = demoInvites.find((i) => i.token === (km ? km[1] : link.trim()) && !i.revoked && !i.usedBy)
-    if (!inv) throw new ApiError(422, 'this invite is invalid, already used, or expired — ask the owner for a fresh link')
+    if (!inv) throw new ApiError(422, 'this invite is invalid, already used, or expired, ask the owner for a fresh link')
     if (name.length < 2) throw new ApiError(422, 'enter the worker\'s name (2-40 characters)')
     if (!/^\d{4}$/.test(pin) || pin === '0000' || pin === '1234') throw new ApiError(422, "choose a 4-digit PIN that isn't 0000 or 1234")
     const role = d.roles.find((r) => r.name === inv.roleName) || d.roles.find((r) => r.name === 'Cashier')
@@ -882,7 +882,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   if (m === 'GET' && p === '/branding') return brandingDTO() as T
   if (m === 'POST' && p === '/payments/mpesa/callback') return { ResultCode: 0 } as T
 
-  // Public product photo (like the real route — <img> tags can't auth).
+  // Public product photo (like the real route, <img> tags can't auth).
   const pubImg = p.match(/^\/products\/(\d+)\/image$/)
   if (m === 'GET' && pubImg) {
     const dataUrl = (d as DemoDBX).productImages?.[pubImg[1]] || ''
@@ -902,7 +902,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
 
   if (m === 'GET' && p === '/me') return userDTO(user) as T
 
-  // Tender capabilities snapshot (public identifiers only — server parity).
+  // Tender capabilities snapshot (public identifiers only, server parity).
   if (m === 'GET' && p === '/payments/config') {
     return {
       paystack: {
@@ -993,7 +993,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     persist()
     return productDTO(prod) as T
   }
-  // Product photo upload (multipart 'file', ≤2 MB, raster images only —
+  // Product photo upload (multipart 'file', ≤2 MB, raster images only, 
   // stored as a data URL, served public from the GET image route).
   const imgMatch = p.match(/^\/products\/(\d+)\/image$/)
   if (m === 'POST' && imgMatch) {
@@ -1101,7 +1101,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     }
     if (m === 'DELETE') {
       requirePerm(perms, 'products.manage')
-      if (d.products.some((x) => x.categoryId === cat.id)) throw new ApiError(409, 'category has products — move them first')
+      if (d.products.some((x) => x.categoryId === cat.id)) throw new ApiError(409, 'category has products, move them first')
       d.categories = d.categories.filter((x) => x.id !== cat.id)
       audit(user.id, user.username, 'CATEGORY_DELETED', 'category', String(cat.id), cat.name)
       persist()
@@ -1175,7 +1175,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       : method === 'cash' ? 'cash' : ''
     // Tab checkout, store-credit checkout and loyalty redemption all need a
     // live customer up front (server parity: active, and the charge fits
-    // inside the limit/wallet — points inside the balance).
+    // inside the limit/wallet, points inside the balance).
     const wantPoints = Math.round(Number(body?.redeemPoints) || 0)
     let tabCustomer: DemoCustomer | undefined
     if (method === 'account' || method === 'credit' || wantPoints > 0) {
@@ -1343,12 +1343,12 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     }
     if (method === 'account') {
       const c = tabCustomer!
-      if (c.creditLimitCents <= 0) throw new ApiError(409, 'customer has no credit — cash only')
+      if (c.creditLimitCents <= 0) throw new ApiError(409, 'customer has no credit, cash only')
       if (c.balanceCents + payable > c.creditLimitCents) {
         throw new ApiError(409, `tab would exceed customer credit limit (${c.name})`)
       }
       // Stock was fail-fast checked per line above; the guarded deduction
-      // happens once at settle time (server parity — never here).
+      // happens once at settle time (server parity, never here).
       o.payments.push(pay)
       d.orders.push(o)
       postLedger(c.id, o.id, 'charge', payable, 0, `tab charge ${o.number}`, user.id)
@@ -1384,7 +1384,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       completeOrder(o.id, { method: 'cash', mode: 'cash' })
     } else if (method === 'paystack') {
       // Server parity: the order is created PENDING and checkout is opened
-      // by a separate init call — which the demo answers with 501 below.
+      // by a separate init call, which the demo answers with 501 below.
       o.payments.push(pay)
       d.orders.push(o)
       if (redeemSpent > 0 && tabCustomer) {
@@ -1420,11 +1420,11 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       for (const it of o.items) adjustStock(it.productId, it.qty) // restore
     }
     // Tab void: reverse the ledger charge so a cancelled sale leaves no
-    // debt on the balance (server parity — applies to PENDING and PAID).
+    // debt on the balance (server parity, applies to PENDING and PAID).
     if (o.customerId && o.payments.some((pay) => pay.method === 'account')) {
       postLedger(o.customerId, o.id, 'adjustment', -o.totalCents, 0, 'void reversal', user.id)
     }
-    // Refund loyalty points redeemed at checkout — a cancelled sale gives
+    // Refund loyalty points redeemed at checkout, a cancelled sale gives
     // the points back (server parity).
     const spent = Math.round(Number((o as any).pointsRedeemed) || 0)
     if (spent > 0 && o.customerId) {
@@ -1433,7 +1433,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
         c.loyaltyPoints += spent
         d.ledger.push({
           id: d.seq.ledger++, customerId: c.id, orderId: o.id, kind: 'loyalty',
-          amountCents: 0, pointsDelta: spent, note: 'void refund — points returned',
+          amountCents: 0, pointsDelta: spent, note: 'void refund, points returned',
           createdBy: user.id, createdAt: nowIso(),
         })
       }
@@ -1444,7 +1444,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       const c = d.customers.find((x) => x.id === o.customerId)
       if (c) {
         ;(c as any).storeCreditCents = Math.round(Number((c as any).storeCreditCents) || 0) + creditPay.amountCents
-        postCreditLedger(d, c.id, o.id, 'credit_redeem', creditPay.amountCents, 'void refund — store credit returned', user.id)
+        postCreditLedger(d, c.id, o.id, 'credit_redeem', creditPay.amountCents, 'void refund, store credit returned', user.id)
       }
     }
     o.status = 'VOIDED'
@@ -1463,7 +1463,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (o.status !== 'PENDING') return orderDTO(o) as T
     const phone = String(body?.phone || '')
     if (!/^254[17]\d{8}$/.test(phone.replace(/^0/, '254').replace(/^\+?254/, '254'))) {
-      // light validation — the UI normalizes; accept 07.. too
+      // light validation, the UI normalizes; accept 07.. too
       const norm = phone.replace(/[\s-]/g, '').replace(/^0/, '254')
       if (!/^254[17]\d{8}$/.test(norm)) throw new ApiError(400, 'a valid Safaricom number is required')
     }
@@ -1523,7 +1523,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     return orderDTO(o) as T
   }
 
-  // ---- Paystack checkout (demo: init/verify always refuse — no gateway,
+  // ---- Paystack checkout (demo: init/verify always refuse, no gateway,
   // no secret key. The PENDING order can be reopened from Orders or voided.)
   const psInitMatch = p.match(/^\/orders\/(\d+)\/paystack\/init$/)
   if (m === 'POST' && psInitMatch) {
@@ -1555,7 +1555,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
         unitPriceCents: it?.unitPriceCents === undefined ? undefined : Math.max(0, Math.round(Number(it.unitPriceCents)) || 0),
       }))
       .filter((it: any) => it.productId > 0)
-    if (items.length === 0) throw new ApiError(400, 'nothing to hold — the cart is empty')
+    if (items.length === 0) throw new ApiError(400, 'nothing to hold, the cart is empty')
     const customerId = Math.round(Number(body?.cart?.customerId) || 0)
     let customerName = String(body?.cart?.customerName || '')
     if (customerId) {
@@ -1590,9 +1590,9 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     return { deleted: true } as T
   }
 
-  // ---- forgot-PIN recovery (needs the real cloud — demo says so plainly) ----
+  // ---- forgot-PIN recovery (needs the real cloud, demo says so plainly) ----
   if (p === '/auth/forgot-pin' || p === '/auth/forgot-pin/status' || p === '/auth/forgot-pin/redeem') {
-    throw new ApiError(501, 'PIN recovery runs on the live LedgerPOS cloud — try it on a real till')
+    throw new ApiError(501, 'PIN recovery runs on the live LedgerPOS cloud, try it on a real till')
   }
 
   // ---- quotations (v1.3.0 parity with the real server) ----
@@ -1875,7 +1875,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       return customerDTO(c) as T
     }
   }
-  // Store-credit top-up (credit.manage) — prepaid money in, wallet grows,
+  // Store-credit top-up (credit.manage), prepaid money in, wallet grows,
   // ledger records it without touching the tab balance (server parity).
   const topupMatch = p.match(/^\/customers\/(\d+)\/credit-topup$/)
   if (m === 'POST' && topupMatch) {
@@ -2141,7 +2141,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
         line.countedQty = qty
       }
       c.linesCounted = c.lines.filter((l) => l.countedQty !== null).length
-      audit(user.id, user.username, 'STOCKCOUNT_LINE_SAVED', 'stocktake', c.number, `${line.sku} = ${line.countedQty ?? '—'}`)
+      audit(user.id, user.username, 'STOCKCOUNT_LINE_SAVED', 'stocktake', c.number, `${line.sku} = ${line.countedQty ?? ', '}`)
       persist()
       return { saved: true } as T
     }
@@ -2210,7 +2210,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   }
 
   // ---- team sync (Settings → Team; the demo till is always cloud-linked) ----
-  // Zero-config identity: the till finds its team in the cloud database —
+  // Zero-config identity: the till finds its team in the cloud database, 
   // no join codes, no keys. The status carries no teamCode for that reason.
   // Multi-store: the demo cloud has one store, so the stores view shows the
   // default store and there is nothing pending assignment.
@@ -2250,8 +2250,8 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     requirePerm(perms, 'settings.manage')
     // v1.1 flow: tills find their team in the cloud database by themselves.
     // Codes only exist as a manual fallback for a till with no cloud
-    // reachability — the demo till is always cloud-linked, so teach that.
-    throw new ApiError(409, 'No team code needed — this till already found its team in the cloud automatically. Codes are only for tills that cannot reach the cloud.')
+    // reachability, the demo till is always cloud-linked, so teach that.
+    throw new ApiError(409, 'No team code needed, this till already found its team in the cloud automatically. Codes are only for tills that cannot reach the cloud.')
   }
   if (m === 'POST' && p === '/team-sync/stores') {
     requirePerm(perms, 'settings.manage')
@@ -2386,13 +2386,13 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       .map((s) => ({ ...s, userName: (d.users.find((u) => u.id === s.userId)?.fullName) || '' })) as T
   }
 
-  // X/Z report (P6) — previously 404'd in demo mode, so the download page's
-  // headline feature showed "Report failed — not found" to every prospect.
+  // X/Z report (P6), previously 404'd in demo mode, so the download page's
+  // headline feature showed "Report failed, not found" to every prospect.
   if (m === 'GET' && p === '/shifts/report') {
     const q = url.searchParams
     const shiftId = Number(q.get('shift') || 0)
     const shift = shiftId ? d.shifts.find((s) => s.id === shiftId) : d.shifts.find((s) => s.userId === user.id && !s.closedAt)
-    if (!shift) throw new ApiError(404, 'no shift to report on — open a session first')
+    if (!shift) throw new ApiError(404, 'no shift to report on, open a session first')
     const [from, to] = shift.closedAt ? [shift.openedAt, shift.closedAt] : [shift.openedAt, new Date().toISOString()]
     const inShift = d.orders.filter((o) => o.createdAt >= from && o.createdAt <= to)
     const paid = inShift.filter((o) => o.status === 'PAID')
@@ -2417,13 +2417,13 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     } as T
   }
 
-  // Recheck (P6) — demo orders settle instantly, so a recheck always
+  // Recheck (P6), demo orders settle instantly, so a recheck always
   // resolves to the current truth with a friendly message instead of 404.
   if (m === 'POST' && /^\/orders\/\d+\/recheck$/.test(p)) {
     const id = Number(p.split('/')[2])
     const o = d.orders.find((x) => x.id === id)
     if (!o) throw new ApiError(404, 'order not found')
-    const msg = o.status === 'PAID' ? 'Payment already confirmed.' : o.status === 'VOIDED' ? 'Order was voided.' : 'No provider payment found yet — the sale is still pending.'
+    const msg = o.status === 'PAID' ? 'Payment already confirmed.' : o.status === 'VOIDED' ? 'Order was voided.' : 'No provider payment found yet, the sale is still pending.'
     return { order: orderDTO(o), message: msg } as T
   }
 
@@ -2495,7 +2495,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (!/^[A-Za-z0-9._-]{3,32}$/.test(username)) throw new ApiError(400, 'username must be 3-32 letters, digits, dot, underscore, or hyphen')
     if (d.users.some((u) => u.username === username)) throw new ApiError(409, 'username taken')
     if (!body?.password || String(body.password).length < 6 || String(body.password).length > 128) throw new ApiError(400, 'password must be 6-128 characters')
-    if (isDefaultPassword(String(body.password))) throw new ApiError(400, 'choose a stronger password — that one is public')
+    if (isDefaultPassword(String(body.password))) throw new ApiError(400, 'choose a stronger password, that one is public')
     if (body?.pin && !/^\d{4}$/.test(String(body.pin))) throw new ApiError(400, 'PIN must be exactly 4 digits')
     const u: DemoUser = {
       id: d.seq.user++, username, fullName: String(body?.fullName || ''),
@@ -2519,14 +2519,14 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       if (!self) requirePerm(perms, 'users.manage')
       if (kind === 'password') {
         if (!body?.password || String(body.password).length < 6 || String(body.password).length > 128) throw new ApiError(400, 'password must be 6-128 characters')
-        if (isDefaultPassword(String(body.password))) throw new ApiError(400, 'choose a stronger password — that one is public')
+        if (isDefaultPassword(String(body.password))) throw new ApiError(400, 'choose a stronger password, that one is public')
         u.password = String(body.password)
         u.mustRotate = !self
         u.passwordChangedAt = Date.now()
         audit(user.id, user.username, 'PASSWORD_RESET', 'user', String(u.id), u.username)
       } else {
         if (!/^\d{4}$/.test(String(body?.pin || ''))) throw new ApiError(400, 'PIN must be exactly 4 digits')
-        if (isDefaultPassword(String(body.pin))) throw new ApiError(400, 'choose a stronger PIN — that one is well-known')
+        if (isDefaultPassword(String(body.pin))) throw new ApiError(400, 'choose a stronger PIN, that one is well-known')
         u.pin = String(body.pin)
         u.mustRotate = !self
         u.passwordChangedAt = Date.now()
@@ -2609,7 +2609,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const values = body?.values || {}
     for (const [k, v] of Object.entries(values)) {
       if (!ALLOWED_KEYS.has(k)) {
-        if (v === MASK) continue // untouched read-only echo — skip (server parity)
+        if (v === MASK) continue // untouched read-only echo, skip (server parity)
         throw new ApiError(400, 'unknown setting key: ' + k)
       }
       if (String(v).length > 500) throw new ApiError(400, 'value too long for key: ' + k)
@@ -2618,7 +2618,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     for (const [k, v] of Object.entries(values)) {
       if (!ALLOWED_KEYS.has(k)) continue
       if (isSecretKey(k)) {
-        if (v === MASK || v === '') continue // untouched echo or cleared-by-accident — keep stored secret
+        if (v === MASK || v === '') continue // untouched echo or cleared-by-accident, keep stored secret
         if (v === '__CLEAR__') {
           if (d.settings[k]) changed.push(k)
           d.settings[k] = ''
@@ -2668,7 +2668,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   throw new ApiError(404, 'not found: ' + m + ' ' + p)
 }
 
-/** raw (text) downloads for CSV endpoints — mirrors api.raw in demo mode. */
+/** raw (text) downloads for CSV endpoints, mirrors api.raw in demo mode. */
 export async function demoRaw(path: string): Promise<string> {
   await sleep()
   const url = new URL(path, 'http://demo.local')

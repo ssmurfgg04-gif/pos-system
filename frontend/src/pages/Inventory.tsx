@@ -90,7 +90,7 @@ export function Inventory() {
     setRemoving(p.id)
     try {
       await api.del(`/api/v1/products/${p.id}`)
-      toast.success('Product removed', `${p.name} is archived — restore it anytime.`)
+      toast.success('Product removed', `${p.name} is archived, restore it anytime.`)
       load()
     } catch (e: any) {
       toast.error('Remove failed', e?.message)
@@ -139,7 +139,7 @@ export function Inventory() {
     if (n === 0) {
       toast.error('Popup blocked', 'Allow popups for this page to print labels.')
     } else {
-      toast.success('Labels ready', `${n} label${n === 1 ? '' : 's'} — 50×30 mm, use the print dialog`)
+      toast.success('Labels ready', `${n} label${n === 1 ? '' : 's'}, 50×30 mm, use the print dialog`)
     }
   }
 
@@ -469,7 +469,7 @@ function StockModal({ product, onClose, onSaved }: { product: Product; onClose: 
   }
 
   return (
-    <Modal open onClose={onClose} title={`Stock — ${product.name}`} size="sm" footer={
+    <Modal open onClose={onClose} title={`Stock, ${product.name}`} size="sm" footer={
       <>
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="primary" onClick={save} disabled={busy || !valid}>
@@ -489,7 +489,7 @@ function StockModal({ product, onClose, onSaved }: { product: Product; onClose: 
             autoFocus
           />
         </Field>
-        <Field label="Reason (optional)" hint="Recorded in the audit log — e.g. “received from supplier”">
+        <Field label="Reason (optional)" hint="Recorded in the audit log, e.g. “received from supplier”">
           <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Received from supplier" />
         </Field>
         {valid && (
@@ -638,7 +638,7 @@ function ProductModal({
   }
 
   return (
-    <Modal open onClose={onClose} title={product ? `Edit — ${product.name}` : 'New product'} footer={
+    <Modal open onClose={onClose} title={product ? `Edit, ${product.name}` : 'New product'} footer={
       <>
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="primary" onClick={save} disabled={busy || !form.name.trim()}>

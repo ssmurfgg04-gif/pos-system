@@ -40,6 +40,7 @@ DL_SRC = os.path.join(ROOT, "downloads")
 ICONS_SRC = os.path.join(ROOT, "scripts", "assets", "icons")
 TEMPLATE = os.path.join(ROOT, "scripts", "assets", "download-page.html")
 PORTAL_TEMPLATE = os.path.join(ROOT, "scripts", "assets", "portal-page.html")
+JOIN_TEMPLATE = os.path.join(ROOT, "scripts", "assets", "join-page.html")
 
 RELEASES_PAGE = "https://github.com/ssmurfgg04-gif/pos-system/releases"
 VERSION = "1.3.3"
@@ -158,6 +159,19 @@ def render_portal() -> None:
     print("portal/index.html rendered")
 
 
+def render_join() -> None:
+    """The /join landing for team join links. The app's join links point here
+    (fragment carries t/r/k); a worker opening the link in a BROWSER lands on
+    real instructions instead of a 404, with a copy box for the till."""
+    src = JOIN_TEMPLATE
+    if not os.path.isfile(src):
+        die("scripts/assets/join-page.html missing")
+    join_dir = os.path.join(DIST, "join")
+    os.makedirs(join_dir, exist_ok=True)
+    shutil.copy2(src, os.path.join(join_dir, "index.html"))
+    print("join/index.html rendered")
+
+
 def copy_assets() -> None:
     dl = os.path.join(DIST, "downloads")
     os.makedirs(dl, exist_ok=True)
@@ -201,12 +215,13 @@ def main() -> None:
     restructure()
     render_landing(sizes)
     render_portal()
+    render_join()
     copy_assets()
     link_check()
     n_files = sum(len(fs) for _, _, fs in os.walk(DIST))
     total = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(DIST) for f in fs)
     print(f"\nDONE — {n_files} files, {total/1e6:.1f} MB in frontend/dist "
-          "(landing at /, demo at /demo/, owner portal at /portal/, installers at /downloads/)")
+          "(landing at /, demo at /demo/, owner portal at /portal/, join page at /join/, installers at /downloads/)")
 
 
 if __name__ == "__main__":

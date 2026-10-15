@@ -98,7 +98,7 @@ func (s *Service) CreateCustomer(name, phone, email, notes string, limitCents in
         if norm != "" {
                 var existing int64
                 if err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM customers WHERE phone = ?`), norm).Scan(&existing); err == nil {
-                        return nil, fmt.Errorf("a customer with phone %s already exists (customer #%d) — open their record instead", norm, existing)
+                        return nil, fmt.Errorf("a customer with phone %s already exists (customer #%d), open their record instead", norm, existing)
                 }
         }
         now := nowStamp()

@@ -200,7 +200,7 @@ export function Pos() {
   // catalog (deleted products are skipped with a warning), restore the
   // customer + note. The drawer deletes the hold only after this succeeds.
   const resumeHeld = async (sale: import('../lib/api').HeldSale) => {
-    if (!products) throw new Error('Products are still loading — try again in a second')
+    if (!products) throw new Error('Products are still loading, try again in a second')
     // A hold IS a sale: resuming replaces whatever is in the cart instead of
     // merging (two merged baskets under one customer is a money bug, not a
     // convenience). The replaced basket is auto-held so nothing is lost.
@@ -215,7 +215,7 @@ export function Pos() {
             paymentMethod: 'cash' as const,
           },
         })
-        toast.info('Previous cart held', 'It moved to Held sales — resume or discard it there')
+        toast.info('Previous cart held', 'It moved to Held sales, resume or discard it there')
       } catch {
         toast.error('Cart not empty', 'Clear or hold the current cart before resuming a held sale')
         return
@@ -234,7 +234,7 @@ export function Pos() {
     if (sale.customerName) cart.setCustomerName(sale.customerName)
     if (sale.note) cart.setNote(sale.note)
     if (missing > 0) {
-      toast.error('Some items skipped', `${missing} product(s) no longer exist in the catalog — check the cart`)
+      toast.error('Some items skipped', `${missing} product(s) no longer exist in the catalog, check the cart`)
     }
   }
 
@@ -251,7 +251,7 @@ export function Pos() {
             // Paid panel + receipt are order-driven and stay put.
             cart.clear()
             load()
-            toast.success(`Sale complete — ${o.number}`, formatMoney(o.totalCents))
+            toast.success(`Sale complete, ${o.number}`, formatMoney(o.totalCents))
             setReceiptFor(o)
           } catch (e) {
             // A toast/receipt hiccup must never take the POS down after money moved.
@@ -387,7 +387,7 @@ export function Pos() {
           }
           setSheetOpen(false)
         }}
-        title={`Cart — ${formatMoney(totals.total)}`}
+        title={`Cart, ${formatMoney(totals.total)}`}
         size="md"
       >
         <div className="h-[70vh] -mx-5 -my-4">
@@ -464,7 +464,7 @@ function ProductCard({ p, qty, onAdd, onInc, onDec }: {
       <button
         onClick={onAdd}
         disabled={out}
-        aria-label={out ? `${p.name} — out of stock` : `Add ${p.name} to cart`}
+        aria-label={out ? `${p.name}, out of stock` : `Add ${p.name} to cart`}
         className="text-left flex flex-col flex-1 min-h-0"
       >
         <div className="h-24 sm:h-28 w-full bg-surface-muted border-b border-line overflow-hidden shrink-0 p-1">

@@ -736,6 +736,8 @@ export interface TeamDevice {
   thisDevice: boolean
   /** Cloud device roster accepts this till's events. */
   approved: boolean
+  /** True when the owner revoked this till (roster keeps the row so it can be un-revoked). */
+  revoked?: boolean
 }
 
 export interface TeamStore {
@@ -927,7 +929,7 @@ declare global {
 export function openPaystackPopup(init: PaystackInitResult, _email: string,
   callbacks: { onSuccess(ref: string): void; onCancelled(): void; onError?(message: string): void }): void {
   if (!window.PaystackPop) {
-    callbacks.onError?.('Paystack popup library not loaded — check the internet connection and retry')
+    callbacks.onError?.('Paystack popup library not loaded, check the internet connection and retry')
     callbacks.onCancelled()
     return
   }

@@ -176,7 +176,7 @@ func (s *Service) TeamJoinWithLink(link, name, pin string) (models.TeamJoinInfo,
         info := models.TeamJoinInfo{}
         token := extractJoinToken(link)
         if token == "" {
-                return info, fmt.Errorf("that doesn't look like a join link — paste the whole link the owner sent")
+                return info, fmt.Errorf("that doesn't look like a join link, paste the whole link the owner sent")
         }
         name = strings.TrimSpace(name)
         if len(name) < 2 || len(name) > 40 {
@@ -202,7 +202,7 @@ func (s *Service) TeamJoinWithLink(link, name, pin string) (models.TeamJoinInfo,
                 "p_secret_hash": secretHash(s.deviceSecret()),
                 "p_token":       token,
         }, &res); err != nil {
-                return info, fmt.Errorf("could not reach the LedgerPOS cloud — check the internet and try again")
+                return info, fmt.Errorf("could not reach the LedgerPOS cloud, check the internet and try again")
         }
         if !res.OK {
                 return info, fmt.Errorf("%s", res.Error)
@@ -319,5 +319,5 @@ func (s *Service) PortalPublishCredentials(username, password string) {
                 log.Printf("[portal] publish credentials: %v", err)
                 return
         }
-        log.Printf("[portal] owner credentials published — the website portal is live for %s", s.settings.Get("sync_team_code"))
+        log.Printf("[portal] owner credentials published, the website portal is live for %s", s.settings.Get("sync_team_code"))
 }

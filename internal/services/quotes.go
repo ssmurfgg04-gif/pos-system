@@ -269,7 +269,7 @@ func (s *Service) CreateQuote(in models.QuoteInput, p *auth.Principal) (*models.
         }
         s.EmitQuote(id)
         s.Audit(createdBy, createdByName, "QUOTE_CREATED", "quote", qy.QuoteNo,
-                fmt.Sprintf("%s — %s", qy.CustomerName, moneyStr(qy.TotalCents)))
+                fmt.Sprintf("%s, %s", qy.CustomerName, moneyStr(qy.TotalCents)))
         return qy, nil
 }
 
@@ -408,7 +408,7 @@ func (s *Service) ConvertQuote(id int64, p *auth.Principal) (*models.HeldSale, e
                 return nil, fmt.Errorf("this quote was already moved to a till")
         }
         if qy.Status == models.QuoteDeclined {
-                return nil, fmt.Errorf("this quote was declined — set it back or create a new one")
+                return nil, fmt.Errorf("this quote was declined, set it back or create a new one")
         }
         // Catalog lines only: held sales freeze productId/qty/price triples.
         // Lines are resolved by SKU FIRST (stable across tills), with the
@@ -449,12 +449,12 @@ func (s *Service) ConvertQuote(id int64, p *auth.Principal) (*models.HeldSale, e
                 })
         }
         if len(req.Items) == 0 {
-                return nil, fmt.Errorf("this quote has no catalog products to move to the till — add products to the catalog first")
+                return nil, fmt.Errorf("this quote has no catalog products to move to the till, add products to the catalog first")
         }
         if len(skipped) > 0 {
                 req.Note += fmt.Sprintf(" (custom lines not in catalog: %s)", truncStr(strings.Join(skipped, ", "), 200))
         }
-        held, err := s.HoldSale(fmt.Sprintf("Quote %s — %s", qy.QuoteNo, qy.CustomerName), req, p)
+        held, err := s.HoldSale(fmt.Sprintf("Quote %s, %s", qy.QuoteNo, qy.CustomerName), req, p)
         if err != nil {
                 return nil, err
         }

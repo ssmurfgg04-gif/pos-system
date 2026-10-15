@@ -121,7 +121,7 @@ Task: Research + refined plan for white-label Go+React POS (user's new primary p
 
 Work Log:
 - Installed Go 1.27.1 (user-space tarball; apt needs root). Node 24, npm 11, git 2.47 present. Network OK (proxy.golang.org, npm, GitHub)
-- Cloned + dissected via parallel Explore agents: madebyaris/poinf-of-sales (Go+Gin+React18, entity model worth keeping, hardcoded-JWT-secret/SQLi flaws to avoid), mannyd209/GO-POS-Server (PIN auth pattern but plaintext+no lockout+no WAL — re-implement properly; NO license so patterns only), Tuma-Solutions/mpesa-pos (aggregator not direct Daraja; real captured callback JSON; OSPOS permission model + cash_up shift model + CSV template patterns; manual receipt entry missing — we build it)
+- Cloned + dissected via parallel Explore agents: madebyaris/poinf-of-sales (Go+Gin+React18, entity model worth keeping, hardcoded-JWT-secret/SQLi flaws to avoid), mannyd209/GO-POS-Server (PIN auth pattern but plaintext+no lockout+no WAL, re-implement properly; NO license so patterns only), Tuma-Solutions/mpesa-pos (aggregator not direct Daraja; real captured callback JSON; OSPOS permission model + cash_up shift model + CSV template patterns; manual receipt entry missing, we build it)
 - Eliahhango/SmartPOS no longer exists on GitHub; 4-role concept covered by our dynamic permission-based RBAC
 - frontend-styling-expert produced complete "Ledger" design system spec (Tailwind v4 @theme tokens, WCAG-verified contrast, neubrutalist component recipes, 65/35 POS layout)
 - Verified via web search: Daraja endpoints current (POST /mpesa/stkpush/v1/processrequest), receipt codes 10-char alnum
@@ -139,7 +139,7 @@ Task: Build complete Go backend
 Work Log:
 - Packages: config, database (dual sqlite-WAL/postgres with ?→$N rebind, versioned migrations, idempotent generic seeds), models (camelCase DTOs, cents, RFC3339 strings), auth (JWT 12h + bcrypt + PIN lockout 5→30-300s + sliding-window rate limiter + per-request permission reload), settings (DB key/value, secrets masked "__SET__"), ws (hub, first-message token auth, ping/pong), mpesa (Provider interface; Daraja token cache/STK/query/callback parse; Manual validation ^[A-Z0-9]{10}$; Mock provider w/ configurable delay+result), printer (hennedo/escpos renderer 58/80mm, TCP/file targets, persistent print_jobs worker w/ 5-attempt backoff + crash recovery), mdns (zeroconf _pos-server._tcp), services (checkout w/ server-side price re-read + guarded stock deduction; completePayment guarded transition + amount-mismatch DISCREPANCY handling + receipt backfill; manual confirm w/ dedupe; void restores stock; idempotent offline sync via client_uuid; sweeper polls pending STK every 5s w/ 3min timeout; shifts w/ expected/variance; design board), handlers (auth/login/pin/pin-users, users, roles+permissions catalog, products+categories+CSV import/export, orders+receipt.html, payments stk/manual/callback, sync, reports, shifts, design, settings+test-print+audit), router (public health/login/pin/pin-users/callback; permission-gated rest), main (graceful shutdown, worker+sweeper lifecycle)
 - Fixed during build: import cycle seed→settings; embed path must be in package dir (moved to root static.go); seed SQL category_id bug; checkout returned stale order after STK init (reload); portability (COALESCE, no COLLATE NOCASE, no ? IS NOT NULL patterns)
-- E2E smoke script (scripts/smoke_test.py): 41/41 PASS — auth, RBAC 403s, cash checkout+stock+idempotent replay, insufficient stock, M-Pesa mock STK via sweeper w/ receipt, manual entry + dedupe + format validation, offline sync + replay safety, void+restore, design board, shifts, reports, receipt HTML, callback completion + amount-mismatch flagging, roles CRUD, audit
+- E2E smoke script (scripts/smoke_test.py): 41/41 PASS, auth, RBAC 403s, cash checkout+stock+idempotent replay, insufficient stock, M-Pesa mock STK via sweeper w/ receipt, manual entry + dedupe + format validation, offline sync + replay safety, void+restore, design board, shifts, reports, receipt HTML, callback completion + amount-mismatch flagging, roles CRUD, audit
 - Go unit tests all green: mpesa (phone norm, receipt validation, callback parse w/ real Daraja sample, password format, mock flows), printer (FormatMoney, 80mm render contains all fields + ESC @ + GS V cut, 58mm truncation, target parsing), handlers (12 in-process httptest E2E: checkout, STK query completion idempotent, manual dedupe, sync, void, RBAC, settings masking, price override permission gate, CSV import upsert)
 
 Stage Summary:
@@ -160,7 +160,7 @@ Work Log:
 - Specified 20+ component recipes with exact class strings and enumerated states: Button (4 variants x 3 sizes, press = translate+shadow-collapse), Card, Modal (5 sizes), Input/Select/MoneyInput, StatusPill (never color-only), Table (sticky header), Toast (bottom-center, justified), 3x4 Keypad, ProductTile (grid math: 5/6/7 cols at 1024/1280/1536 → 112/120/125px tiles), CartLine (2-row layout to fit 300px panel), CategoryFilter, Tabs, EmptyState, OfflineBanner, Spinner, M-Pesa pending pulse/progress
 - Specified POS terminal layout (h-16 topbar, 65/35 grid, exact paddings, <1024 stacked + bottom-sheet cart), and screen specs for Login/PIN quick-switch, M-Pesa checkout (4 states incl. manual receipt-code fallback), Inventory, Orders + drawer, Design/Production kanban, Shifts open/close with variance coloring, Reports + CSS bar chart, Users & Roles, Settings incl. Daraja + danger zone
 - Accessibility rules section: verified contrast table, 2px focus rings with offset, 44px targets (enumerated exceptions), icon+text status, reduced-motion kill switch, KES Intl.NumberFormat + tabular-nums, <100ms touch feedback (duration-75 + navigator.vibrate)
-- Delivered full spec in final message (document only — no code files written to any project, per instructions)
+- Delivered full spec in final message (document only, no code files written to any project, per instructions)
 
 Stage Summary:
 - Key decisions: dark slate-900 shell + white surfaces CONFIRMED; primary emerald button uses slate-900 text (7.04:1) not white; emerald reserved for paid/success semantics only (active category chip = black, not emerald); toasts bottom-center (topbar barcode search is the highest-frequency target and must never be covered); toasts z-60 above modals z-50; system font stack (no webfont on flaky connections); runtime --color-brand override hook for white-label customers
@@ -174,16 +174,16 @@ Task: Dissect Tuma-Solutions/mpesa-pos
 Work Log:
 - Read worklog context; surveyed repo structure (opensourcepos 3.4 fork on CodeIgniter 4 + Bootstrap 3; single squashed commit "bug fix: payment model")
 - Read all 6 Tuma integration files: Controllers/Tuma.php + Tuma_callback.php, Libraries/Tuma_lib.php, Models/Tuma_payment.php, Views/configs/tuma_config.php + sales/tuma_payment.php (modal+JS), plus en/Tuma.php + Sales.php lang keys, Routes.php, locale_helper get_payment_options(), tabular_helper, receipt_default/email/short views
-- KEY: NO direct Daraja integration — payments go through Tuma's own aggregator (https://api.tuma.co.ke, POST /auth/token + POST /payment/stk-push only). 30+ banks/Airtel are aggregator-side claims (README); no Safaricom/Daraja URLs anywhere in code
+- KEY: NO direct Daraja integration, payments go through Tuma's own aggregator (https://api.tuma.co.ke, POST /auth/token + POST /payment/stk-push only). 30+ banks/Airtel are aggregator-side claims (README); no Safaricom/Daraja URLs anywhere in code
 - Verified real production callback payload from writable/logs/log-2026-03-03.log (flat JSON: status/merchant_request_id/checkout_request_id/result_code/result_desc/timestamp/mpesa_receipt_number/amount; result_code=0 + status=completed = success)
 - Traced full sale linkage: initiate (insert tuma_pos_tuma_payments w/ sale_id often -1) -> JS polls /tuma/status/{checkout_request_id} every 2s x60 -> success -> hidden input -> session tuma_checkout_request_id -> after sale save, _update_tuma_payment_sale_id() back-fills sale_id (session-dependent; 4/6 dump rows orphaned at -1)
 - Dissected tuma_mpesa_pos.sql dump: full schema for sales/sales_items/sales_items_taxes/sales_taxes/sales_payments/cash_up/employees/grants/permissions/modules/items/inventory + tuma_pos_tuma_payments table (indexes non-unique, no dedupe)
 - Documented phone normalization (07xx/7xx/+254 -> 254XXXXXXXXX, dead +254 branch), encrypted api_key storage (CI encrypter + .env key), token NOT cached (re-auth per request), webhook PUBLIC + unsigned (no HMAC/IP check), no server-side verification of payment before sale completion (client-trust flaw), Tuma controller permission = 'sales' not 'config'
 - Audited Kenyan UX: KES currency settings, Africa/Nairobi TZ, tax_included VAT-inclusive support in Tax_lib (this deploy: tax-exclusive, rate 8), NO Swahili locale (en only for Tuma strings), M-Pesa receipt line on receipts + Takings table column, no offline/PWA, Sms_lib is UK-stub
-- Catalogued permissions model (modules/permissions/grants, menu_group home/office/both/--, location-scoped *_stock subperms, sales_change_price/sales_delete), cash_up open/close flow (float, transfers, auto-computed closed amounts from Summary_payments — M-Pesa NOT bucketed), items CSV import (template download, all-or-rollback txn, barcode dedupe, per-location qty + attribute columns)
+- Catalogued permissions model (modules/permissions/grants, menu_group home/office/both/--, location-scoped *_stock subperms, sales_change_price/sales_delete), cash_up open/close flow (float, transfers, auto-computed closed amounts from Summary_payments, M-Pesa NOT bucketed), items CSV import (template download, all-or-rollback txn, barcode dedupe, per-location qty + attribute columns)
 
 Stage Summary:
-- Payment-integration reference decoded: aggregator pattern (auth token -> STK push -> flat webhook -> local status polling), NOT raw Daraja — our Go design must implement Daraja directly (base64(shortcode+passkey+timestamp), Body.stkCallback.CallbackMetadata parsing, sandbox/prod toggle, token caching w/ expiry) which this fork offloads to Tuma
+- Payment-integration reference decoded: aggregator pattern (auth token -> STK push -> flat webhook -> local status polling), NOT raw Daraja, our Go design must implement Daraja directly (base64(shortcode+passkey+timestamp), Body.stkCallback.CallbackMetadata parsing, sandbox/prod toggle, token caching w/ expiry) which this fork offloads to Tuma
 - Steal from OSPOS: sales/sales_items/sales_payments/sales_taxes schema + cash_up shift model (open float, transfers, counted close, open/close employee ids), 3-table granular permission system w/ menu groups + location scoping, CSV import/export w/ template + transactional all-or-nothing import, token-based invoice numbering ({CO}, Q%y{QSEQ:6}), M-Pesa receipt code on receipt + sales table, app_config key-value white-label settings
 - Must NOT copy (flaws): payment_type stored as localized display string; session-based cart/payment linkage; unsigned public webhook w/o idempotency or unique index on checkout_request_id; client-trusted payment amounts at sale completion; float money math; no reconciliation job for pending payments (model helpers get_pending_payments/get_total_paid are dead code); M-Pesa absent from cashup buckets; no sandbox env; no manual receipt-code entry flow (missing feature for Paybill/Till walk-ins)
 
@@ -203,7 +203,7 @@ Work Log:
 - Frontend inventory: RoleBasedLayout switches views by role; localStorage-based session (server verification DISABLED with enabled:false); react-query polling 2-5s for kitchen/counter "real-time"; found role type drift (frontend types say 'cashier', backend uses 'counter')
 - Found defects worth noting: SQL injection in getKitchenOrders (status param concatenated), hardcoded JWT secret, no migrations (init SQL only via docker-entrypoint-initdb.d), no inventory/stock decrement on sale, CORS hardcoded to localhost ports
 - Dissected GO-POS-Server: Fiber app, 10 SQLite tables (staff/category/item/modifier/option/discount/transaction/*), PIN auth via POST /staff/auth {pin} → cookie session (fiber/session); PIN STORED PLAINTEXT (docs falsely claim hashed); NO lockout logic; quick-switch = POST new PIN replaces session
-- SQLite: mattn/go-sqlite3, DSN = bare file path, NO WAL/pragma/pool config (default journal mode, unbounded conns) — WAL must be ADDED in our build; mDNS: grandcat/zeroconf registering hostname as instance, service _pos-server._tcp, domain local., port 8000, TXT version=1.0.0
+- SQLite: mattn/go-sqlite3, DSN = bare file path, NO WAL/pragma/pool config (default journal mode, unbounded conns), WAL must be ADDED in our build; mDNS: grandcat/zeroconf registering hostname as instance, service _pos-server._tcp, domain local., port 8000, TXT version=1.0.0
 - Noted /transactions routes are UNPROTECTED (no auth middleware), /ws websocket is dumb echo (docs claim event streams), rand-based IDs (sale000000, titem000000) not crypto-safe, deferred rows.Close in loops (leak under load), config via PORT/DB_PATH/APP_ENV env vars, graceful shutdown via SIGINT/SIGTERM + app.Shutdown()
 - Confirmed: NO ESC/POS printer code, NO offline/IndexedDB/batch sync, NO shift management in either repo; no LICENSE file in GO-POS-Server (github.com/mannyd209), poinf-of-sales is MIT (Copyright 2024 "POS Full System", github.com/madebyaris)
 
@@ -218,25 +218,25 @@ Task: Self-hosted downloads on Netlify (no GitHub redirect) + Big-7 landing rede
 
 Work Log:
 - SANDBOX WIPED AGAIN between messages (pos-system/, build artifacts, Go toolchain, download/ all gone; outer repo rolled back). Full recovery from GitHub: cloned repo @ c98b4e8, downloaded the 4 release assets byte-identical, npm ci for the demo build
-- Web research: Netlify drag-and-drop guidance = deploy <50MB total AND no file over ~10MB (answers.netlify.com staff) — our 10.31-10.39MB installers were over; research on value-prop landing pages: value validation above the fold, ONE primary CTA (single-CTA pages ~13.5% conversion), lean scannable content
-- Repacked all installers under 10,000,000 bytes with byte-identical binaries (sha256-verified): zopfli-deflated zips via scripts/pkgutil.py (raw deflate extracted from zopfli's zlib container, guarded FDICT check; hand-rolled ZIP writer w/ unix perms) — win 10.31->9.92MB, mac-arm 9.56->9.17MB, mac-intel 10.39->9.99MB; Linux switched to tar.xz 10.16->7.32MB; clean member roots (LedgerPOS/, LedgerPOS.app/); fixed mac app_root dirname bug (Contents vs .app — bundle was missing its Contents/ level, caught by member-name verification); checksums.txt generated
+- Web research: Netlify drag-and-drop guidance = deploy <50MB total AND no file over ~10MB (answers.netlify.com staff), our 10.31-10.39MB installers were over; research on value-prop landing pages: value validation above the fold, ONE primary CTA (single-CTA pages ~13.5% conversion), lean scannable content
+- Repacked all installers under 10,000,000 bytes with byte-identical binaries (sha256-verified): zopfli-deflated zips via scripts/pkgutil.py (raw deflate extracted from zopfli's zlib container, guarded FDICT check; hand-rolled ZIP writer w/ unix perms), win 10.31->9.92MB, mac-arm 9.56->9.17MB, mac-intel 10.39->9.99MB; Linux switched to tar.xz 10.16->7.32MB; clean member roots (LedgerPOS/, LedgerPOS.app/); fixed mac app_root dirname bug (Contents vs .app, bundle was missing its Contents/ level, caught by member-name verification); checksums.txt generated
 - Landing page redesigned (scripts/assets/download-page.html): hero with ONE auto-detected primary CTA (25-line progressive-enhancement JS; Windows default fallback; mobile note), alt-platform links, trust strip; the Big-7 value props (minute-to-first-sale, offline-first, M-Pesa STK+receipt-code, KRA monthly VAT, existing hardware, data-stays-local, MIT white-label); slim 3-step strip; relative downloads/ links with download attr; OG/Twitter meta; kept Ledger design language
-- scripts/build_site.py: fast-path site assembly (no Go/npm) — renders template, regenerates checksums, href link check, drag-and-drop zip with installers STORED (not double-compressed); 36.5MB / 14 files / ~37MB deployed
+- scripts/build_site.py: fast-path site assembly (no Go/npm), renders template, regenerates checksums, href link check, drag-and-drop zip with installers STORED (not double-compressed); 36.5MB / 14 files / ~37MB deployed
 - scripts/package_desktop.py updated to match (pkgutil zopfli zips, tar.xz, size guard, embed-by-default, LEDGERPOS_LIGHT_SITE=1 opt-out); scripts/create_release.py rewritten in-repo; GitHub release v1.0.0 re-synced (4 smaller packages + checksums.txt asset, legacy tar.gz deleted, notes patched)
-- Verification: local http.server — every href 200 with byte-exact sizes; browser E2E — title/Big-7 count 7/CTA auto-detect (Linux host -> Linux tar.xz + alt hidden)/emerald brand button; demo band clickthrough -> /demo/ loads app w/ Demo-mode pill; desktop E2E 17/17 on the repacked tar.xz artifact
+- Verification: local http.server, every href 200 with byte-exact sizes; browser E2E, title/Big-7 count 7/CTA auto-detect (Linux host -> Linux tar.xz + alt hidden)/emerald brand button; demo band clickthrough -> /demo/ loads app w/ Demo-mode pill; desktop E2E 17/17 on the repacked tar.xz artifact
 - VLM critique round on the landing page: applied real findings (note text contrast #94A3B8->#475569, dropped 'SQLite WAL' jargon from card 02, softened SmartScreen/Gatekeeper phrasing); rejected false positive ('Download for Linux' hero is correct per-host auto-detection)
 - README updated: downloads served straight from Netlify, build_site.py/repack.py commands, checksums, LEDGERPOS_LIGHT_SITE escape hatch, tar.xz
 - Committed + pushed: ba66960 (self-hosted downloads + Big-7 + sub-10MB packages) then polish commit
 
 Stage Summary:
-- Netlify page now serves installers DIRECTLY: drag download/ledgerpos-netlify-site.zip (36.5MB) onto Netlify and the download buttons hand users the file from the same site — no GitHub redirect
+- Netlify page now serves installers DIRECTLY: drag download/ledgerpos-netlify-site.zip (36.5MB) onto Netlify and the download buttons hand users the file from the same site, no GitHub redirect
 - All packages <10MB (Netlify drag-drop safe), binaries byte-identical to tested release, checksums published (site + release)
 - Landing page conversion-hardened: one-CTA hero w/ OS auto-detect, Big-7 props, VLM-reviewed
 - Repo fully pushed (source + scripts + DEVLOG); release v1.0.0 synced as mirror
 
 ---
 
-## Task 28 — GitHub → Netlify continuous deployment + the typing freeze
+## Task 28, GitHub → Netlify continuous deployment + the typing freeze
 
 **User report:** the live Netlify site showed the POS login page instead
 of the download landing page, and typing into any field froze the tab.
@@ -244,7 +244,7 @@ of the download landing page, and typing into any field froze the tab.
 **Root causes found (both reproduced before fixing):**
 
 1. **Deployment**: `netlify.toml` still deployed the demo SPA at `/`
-   (base=frontend, npm build, publish dist) — the landing-page work from
+   (base=frontend, npm build, publish dist), the landing-page work from
    Task 26/27 only ever produced drag-and-drop zips. With the repo now
    wired to Netlify auto-deploy, the wrong thing was being deployed.
 2. **Typing freeze**: `Login.tsx` (and `Settings.tsx`) registered
@@ -261,7 +261,7 @@ of the download landing page, and typing into any field froze the tab.
 
 - `frontend/src/pages/Login.tsx`, `Settings.tsx`: moved the
   backend-mode/desktop-status promises into `useEffect` with `alive`
-  flags — typing verified smooth via CDP insertText + Playwright
+  flags, typing verified smooth via CDP insertText + Playwright
   fill/type on Login, Settings and POS barcode search.
 - **Continuous deploy**: new `scripts/netlify_build.py` is the Netlify
   build command (netlify.toml: base=frontend, command, publish=dist).
@@ -275,13 +275,13 @@ of the download landing page, and typing into any field froze the tab.
   `VITE_BASE`. Root builds are byte-identical in behavior (BASE='/'
   identity), demo builds route under `/demo/`.
 - Installers + checksums + icons committed to the repo
-  (`downloads/`, `scripts/assets/icons/`) — the deploy serves them from
+  (`downloads/`, `scripts/assets/icons/`), the deploy serves them from
   the same Netlify site as the buttons point to.
 
 **Verification (all green before pushing):**
 
 - typing: CDP insertText + fill/type on login (demo + real), Settings,
-  POS search — no freeze anywhere; console clean
+  POS search, no freeze anywhere; console clean
 - demo under `/demo/`: deep-link `/demo/reports` (via a Netlify-like
   _redirects server) → login → Reports renders; router strips/re-adds
   base correctly
@@ -295,9 +295,9 @@ of the download landing page, and typing into any field froze the tab.
 `netlify_build.py` → live site = landing at `/`, demo at `/demo/`,
 installers at `/downloads/`.
 
-## v1.1.1 — multi-store cloud (2026-09-26)
+## v1.1.1, multi-store cloud (2026-09-26)
 
-**Cloud (Supabase, applied live — canonical SQL in `db/cloud_schema.sql`):**
+**Cloud (Supabase, applied live, canonical SQL in `db/cloud_schema.sql`):**
 
 - `sync_stores` registry: one row per store; team_code minted by the DB
   (client never invents one). Row 1 = Main Store (KIAMBU-MAIN).
@@ -317,7 +317,7 @@ installers at `/downloads/`.
 **App:**
 
 - `resolveCloudStore` (synccloud.go): store registry is the source of
-  truth; served project_url wins (tests point cloudBaseURL at a fake —
+  truth; served project_url wins (tests point cloudBaseURL at a fake
   client must never drift to the production host). Legacy bootstrap
   fallback preserved for pre-registry deployments.
 - `registerCloud` handles `pending` → `sync_store_pending` flag; pending
@@ -333,7 +333,7 @@ installers at `/downloads/`.
 **Incident (caught + fixed in-session):** the first resolveCloudStore draft
 hardcoded the production project URL as the client base, so the sync tests
 registered test devices and pushed ONE test event into the production
-cloud. Production impact: none — both real tills were offline during the
+cloud. Production impact: none, both real tills were offline during the
 window (last_seen ~09:08, leak at 10:12), the event was deleted within
 minutes, all test devices purged, and the fix derives the client base from
 the host the registry was actually fetched from.
@@ -344,7 +344,7 @@ flow exercised against the real cloud (create → pending → assign → remove 
 cleanup); site build green (35.1 MB dist, link check ok); v1.1.1 release
 cut with 4 installers + checksums (ledgerpos-linux stamps `1.1.1`).
 
-## v1.1.2 — join links, owner portal, onboarding fix (2026-09-26)
+## v1.1.2, join links, owner portal, onboarding fix (2026-09-26)
 
 **Team join links with role:**
 
@@ -366,7 +366,7 @@ cut with 4 installers + checksums (ledgerpos-linux stamps `1.1.1`).
   crypt-verified, replay of the team's order stream → sales today/7d/30d,
   payment mix, top products, cashiers, voids, devices, last seen).
 - Till publishes owner-level credentials (settings.manage + users.manage)
-  whenever such a password is set/created — bcrypt made locally, plaintext
+  whenever such a password is set/created, bcrypt made locally, plaintext
   never leaves the machine.
 - Website: /portal/ (static, vanilla JS, landing design language) with
   login gate + dashboard; linked from the landing nav ("Owner login").
@@ -385,7 +385,7 @@ the devices table untouched.
 
 **Cloud bugs found by E2E and fixed:** anonymous-composite crashes when
 passing JSONB/record fields into json_build_object (sync_join_team,
-portal_login) — typed locals now; cashiers block scoped wrong (c.aliases);
+portal_login), typed locals now; cashiers block scoped wrong (c.aliases);
 pgcrypto lives in the extensions schema → search_path widened.
 
 **Verification:** go build/vet/test ./... green; tsc clean; vitest 73/73;
@@ -401,8 +401,8 @@ Agent: main (Super Z)
 Task: quotations page, device un-brick (Salma PC), mom-friendly forgot-PIN, SawaPOS benchmark, codegraph deep review, NSIS-verified release.
 
 Work Log:
-- Field incident root-caused: revoking a till was a PERMANENT brick — sync_join_team refused revoked devices even with a valid owner-minted invite, owner_device_signin refused them, and sync_approve_device refused them as a TARGET (the UI's own advice pointed at an impossible action). %APPDATA% survives reinstall so the identity never resets. Fixed in cloud v117: all three owner-consented acts now heal the device (join token / portal credential / Approve), secret rotated on heal, revocation still gates every non-consented path.
-- Forgot-PIN (cloud one-time code): locked till files sync_request_pin_reset → owner till lists pending requests (Settings → Team) → approve mints a single-use 8-digit code (SHA-256 stored, 15 min, device-bound, 6 tries) → redeem clears lockout + sets PIN + auto sign-in. Review fixes: PinUser carries username (display names don't match accounts — was a flow-killing bug), redeem prologue enforces device identity, approve can re-mint expired codes, list includes code-issued rows with New code action.
+- Field incident root-caused: revoking a till was a PERMANENT brick, sync_join_team refused revoked devices even with a valid owner-minted invite, owner_device_signin refused them, and sync_approve_device refused them as a TARGET (the UI's own advice pointed at an impossible action). %APPDATA% survives reinstall so the identity never resets. Fixed in cloud v117: all three owner-consented acts now heal the device (join token / portal credential / Approve), secret rotated on heal, revocation still gates every non-consented path.
+- Forgot-PIN (cloud one-time code): locked till files sync_request_pin_reset → owner till lists pending requests (Settings → Team) → approve mints a single-use 8-digit code (SHA-256 stored, 15 min, device-bound, 6 tries) → redeem clears lockout + sets PIN + auto sign-in. Review fixes: PinUser carries username (display names don't match accounts, was a flow-killing bug), redeem prologue enforces device identity, approve can re-mint expired codes, list includes code-issued rows with New code action.
 - Quotations (SawaPOS benchmark headline): quotes table (migration v17), draft→sent→accepted/declined/converted, same tax math as checkout, team-synced (client_uuid + LWW + renumber), ConvertQuote = held sale via SKU-first line resolution + discount carry + CAS double-click guard, A4 print with body-class print isolation, demo-mode parity, quotes.view/manage permissions seeded via backfillRolePermsV17.
 - CodeGraph (colbymchenry/codegraph, 73.9k★) installed + indexed (4,689 nodes / 15,050 edges); 3 adversarial review agents ran against sync/auth/money/frontend. ALL findings fixed (see commit 0023b38): forgot-PIN username binding (critical), convert cross-till product-id collision, outbox cross-tenant leak on team change (quarantine), applyVoid loyalty-earn reversal on receivers, imagesync 'svg' Contains false-positive (~50% of photos dead-lettered), NaN tax_percent poisoning, PIN-redeem code-burn-before-validate, quote money-permission parity with checkout, invite single-use race, X/Z clock-skew window (+2s pad after real flake repro).
 - SAWAPOS-COMPARISON.md: offline durability + sync integrity + governance favor LedgerPOS; their public shopfront/online orders is the real gap (documented, not built); quotations parity shipped.
@@ -417,8 +417,8 @@ Agent: main (Super Z)
 Task: release-engineering diagnosis (site frozen at 1.2.1), security sweep riding the review checklist, v1.3.1 installers + OTA manifest.
 
 Work Log:
-- DIAGNOSED the "site still shows 1.2.1" report with GitHub API evidence: every "Deploy site to Netlify" run since the beginning — including the 10-03 run that coincided with the live 1.2.1 content — actually SKIPPED the deploy step (missing NETLIFY_AUTH_TOKEN/NETLIFY_SITE_ID secrets, logs fetched via API). No Netlify GitHub App check-runs/statuses exist on ANY commit in this repo, so the live site was a one-off deploy of the v1.2.1-era build (landing shows VERSION "1.1.10" — the un-bumped constant at commit b08a1f5 — with 1.2.1 installers). Not a size problem (all four packages 7.9-10.7 MB), not NSIS. Fix: replaced the workflow with .github/workflows/ci.yml — a real tests job (go vet/test + vitest) and a deploy job whose final step FAILS the run when the live site's checksums.txt does not match the repo's, with the exact 3 fix options printed.
-- Review checklist sweep (v1.3.1 hardening, mom-invisible): backup dir 0700 + forced 0600 on VACUUM INTO snapshots (backup.go, update_rollback.go); pre-update archive index write is now fatal on failure (8.14 fail-closed); per-IP rate limiter added alongside per-account (login, owner sign-in, PIN — 8.7); branding/logo WebSocket broadcasts shop-scoped (8.10); TestRolesCrud rewritten to resolve roles by name (IDs come from a random-order seed map — the test was flaky by construction and tripped the new last-owner guard); go vet self-assignment in quotes.go cleaned.
+- DIAGNOSED the "site still shows 1.2.1" report with GitHub API evidence: every "Deploy site to Netlify" run since the beginning, including the 10-03 run that coincided with the live 1.2.1 content, actually SKIPPED the deploy step (missing NETLIFY_AUTH_TOKEN/NETLIFY_SITE_ID secrets, logs fetched via API). No Netlify GitHub App check-runs/statuses exist on ANY commit in this repo, so the live site was a one-off deploy of the v1.2.1-era build (landing shows VERSION "1.1.10", the un-bumped constant at commit b08a1f5, with 1.2.1 installers). Not a size problem (all four packages 7.9-10.7 MB), not NSIS. Fix: replaced the workflow with .github/workflows/ci.yml, a real tests job (go vet/test + vitest) and a deploy job whose final step FAILS the run when the live site's checksums.txt does not match the repo's, with the exact 3 fix options printed.
+- Review checklist sweep (v1.3.1 hardening, mom-invisible): backup dir 0700 + forced 0600 on VACUUM INTO snapshots (backup.go, update_rollback.go); pre-update archive index write is now fatal on failure (8.14 fail-closed); per-IP rate limiter added alongside per-account (login, owner sign-in, PIN, 8.7); branding/logo WebSocket broadcasts shop-scoped (8.10); TestRolesCrud rewritten to resolve roles by name (IDs come from a random-order seed map, the test was flaky by construction and tripped the new last-owner guard); go vet self-assignment in quotes.go cleaned.
 - All suites green: go vet clean, go test ./... (handlers 124s), vitest 95/95, vite build, netlify_build.py end-to-end (landing v1.3.1, 14/14 links).
 - v1.3.1 release: four installers rebuilt with NSIS solid LZMA (exe 8.3 MB; NSIS via apt-get download + dpkg -x with NSISDIR env override), committed to downloads/, checksums.txt updated.
 

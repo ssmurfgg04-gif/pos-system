@@ -144,7 +144,7 @@ func decryptSecret(stored string) (string, error) {
 	}
 	plain, err := gcm.Open(nil, nonce, ct, nil)
 	if err != nil {
-		return "", errors.New("secret decryption failed — wrong or missing key file")
+		return "", errors.New("secret decryption failed, wrong or missing key file")
 	}
 	return string(plain), nil
 }

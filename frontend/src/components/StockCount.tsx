@@ -34,7 +34,7 @@ export function StockCountPanel({ onChanged }: { onChanged?: () => void }) {
     <>
       <Card
         title="Stock counts"
-        sub="Count what is on the shelf, then close with a report — or write the counted stock back"
+        sub="Count what is on the shelf, then close with a report, or write the counted stock back"
         actions={<Button variant="primary" size="sm" onClick={() => setNewOpen(true)}><Plus size={14} strokeWidth={2.5} aria-hidden />New count</Button>}
         pad={false}
       >
@@ -65,15 +65,15 @@ export function StockCountPanel({ onChanged }: { onChanged?: () => void }) {
                       label={c.status === 'OPEN' ? 'Open' : c.status === 'DONE' ? 'Closed' : 'Cancelled'}
                     />
                   </td>
-                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.openedAt ? new Date(c.openedAt).toLocaleString() : '—'}</td>
-                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.closedAt ? new Date(c.closedAt).toLocaleString() : '—'}</td>
+                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.openedAt ? new Date(c.openedAt).toLocaleString() : ', '}</td>
+                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.closedAt ? new Date(c.closedAt).toLocaleString() : ', '}</td>
                   <td className="px-3 py-2.5 tabular text-[13px] font-semibold text-ink">{c.linesCounted}/{c.linesTotal}</td>
                   <td className={`px-3 py-2.5 text-[13px] font-bold tabular ${!closed ? 'text-ink-subtle' : shrink ? 'text-danger-text' : surplus ? 'text-paid-text' : 'text-ink-muted'}`}>
                     {closed
                       ? `${c.varianceUnits > 0 ? '+' : ''}${c.varianceUnits} · ${c.varianceValueCents > 0 ? '+' : ''}${centsToAmount(c.varianceValueCents)}`
-                      : '—'}
+                      : ', '}
                   </td>
-                  <td className="px-3 py-2.5 text-[12px] text-ink-muted">{c.countedByName || '—'}</td>
+                  <td className="px-3 py-2.5 text-[12px] text-ink-muted">{c.countedByName || ', '}</td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
                     <Button size="sm" variant="ghost" onClick={() => setOpenId(c.id)}>{closed ? 'View' : 'Count'}</Button>
                   </td>
@@ -119,7 +119,7 @@ function NewCountModal({ open, onClose, onCreated }: { open: boolean; onClose: (
     setError('')
     try {
       const c = await api.post<StockCount>('/api/v1/stock-counts', { note: note.trim() })
-      toast.success('Count opened', `${c.number} — every tracked product is on the sheet`)
+      toast.success('Count opened', `${c.number}, every tracked product is on the sheet`)
       onCreated(c)
     } catch (e: any) {
       setError(e?.message || 'Could not open the count')
@@ -142,7 +142,7 @@ function NewCountModal({ open, onClose, onCreated }: { open: boolean; onClose: (
           Snapshots every stock-tracked product (gift cards excluded — they never track stock). Count at your own pace;
           sales keep working while the count is open.
         </p>
-        <Field label="Note (optional)" hint="e.g. “Month-end shelf count — back room”">
+        <Field label="Note (optional)" hint="e.g. “Month-end shelf count, back room”">
           <Textarea value={note} onChange={(e) => setNote(e.target.value)} autoFocus />
         </Field>
         {error && <p role="alert" className="text-danger-text text-sm font-semibold">{error}</p>}
@@ -206,7 +206,7 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
       setConfirmApply(false)
       toast.success(
         apply ? 'Counted stock applied' : 'Count closed',
-        `${done.number} — variance ${done.varianceUnits > 0 ? '+' : ''}${done.varianceUnits} units · ${formatMoney(done.varianceValueCents)}`,
+        `${done.number}, variance ${done.varianceUnits > 0 ? '+' : ''}${done.varianceUnits} units · ${formatMoney(done.varianceValueCents)}`,
       )
       onChanged()
       await load()
@@ -234,7 +234,7 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
     <Modal
       open
       onClose={onClose}
-      title={`Count ${count.number}${count.note ? ` — ${count.note}` : ''}`}
+      title={`Count ${count.number}${count.note ? `, ${count.note}` : ''}`}
       size="xl"
       footer={
         open ? (
@@ -258,7 +258,7 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill status={open ? 'progress' : count.status === 'DONE' ? 'paid' : 'void'} label={open ? 'Open' : count.status === 'DONE' ? 'Closed' : 'Cancelled'} />
           <span className="text-[12px] text-ink-muted">
-            Opened {count.openedAt ? new Date(count.openedAt).toLocaleString() : '—'} by {count.countedByName || '—'}
+            Opened {count.openedAt ? new Date(count.openedAt).toLocaleString() : ', '} by {count.countedByName || ', '}
             {count.closedAt ? ` · closed ${new Date(count.closedAt).toLocaleString()}` : ''}
           </span>
         </div>
@@ -293,7 +293,7 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
             const diff = open && n !== null && !isNaN(n) ? n - l.systemQty : l.countedQty !== null ? l.countedQty - l.systemQty : null
             return (
               <tr key={l.id}>
-                <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{l.sku || '—'}</td>
+                <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{l.sku || ', '}</td>
                 <td className="px-3 py-2 font-semibold text-ink text-[13px]">{l.name}</td>
                 <td className="px-3 py-2 tabular text-[13px] text-ink-muted">{l.expectedQty}</td>
                 <td className="px-3 py-2">
@@ -304,14 +304,14 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
                     onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur() } }}
                     disabled={!open}
                     inputMode="numeric"
-                    placeholder="—"
+                    placeholder=", "
                     aria-label={`Counted quantity for ${l.name}`}
                     className={`w-24 text-center tabular font-bold ${open ? '' : 'opacity-70'}`}
                   />
                   {saving === l.productId && <span className="ml-2 inline-block align-middle"><Spinner className="w-4 h-4" /></span>}
                 </td>
                 <td className={`px-3 py-2 tabular text-[13px] font-bold ${diff === null ? 'text-ink-subtle' : diff > 0 ? 'text-paid-text' : diff < 0 ? 'text-danger-text' : 'text-ink-muted'}`}>
-                  {diff === null ? '—' : `${diff > 0 ? '+' : ''}${diff}`}
+                  {diff === null ? ', ' : `${diff > 0 ? '+' : ''}${diff}`}
                 </td>
               </tr>
             )

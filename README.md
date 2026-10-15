@@ -1,6 +1,6 @@
 # Point of Sale
 
-A white-label, multi-terminal point-of-sale system for retail — built for
+A white-label, multi-terminal point-of-sale system for retail, built for
 Kenyan shops (M-Pesa first) but not hardcoded to any of them. One Go binary
 serves the API **and** the React frontend; SQLite runs in WAL mode so a
 power cut never corrupts a till.
@@ -16,118 +16,118 @@ power cut never corrupts a till.
 
 ## Feature highlights
 
-- **Dynamic RBAC** — an admin creates any role and edits its permissions
+- **Dynamic RBAC**, an admin creates any role and edits its permissions
   from a catalog (`pos.sell`, `payments.manual`, `products.manage`,
   `customers.view`, `customers.manage`, …). Seeded system roles:
   **Admin** (everything), **Cashier** (sell, void, manual M-Pesa entry,
   shifts, customer tabs), **Designer** (design/production board).
   Enforcement is server-side only; the UI just hides what you can't do.
-- **Suppliers & stock-in** — supplier records, purchase orders that post
+- **Suppliers & stock-in**, supplier records, purchase orders that post
   stock with weighted-average costing on receive, and stock takes that
   reconcile counted vs expected with a per-line variance report.
-- **Multiple shops, hard isolation** — one box serves many shops: signup
+- **Multiple shops, hard isolation**, one box serves many shops: signup
   provisions a shop file, login routes to the correct shop, and tokens are
-  shop-scoped (a user can never see another shop's data — verified by
+  shop-scoped (a user can never see another shop's data, verified by
   isolation tests). Server mode only (`ALLOW_SIGNUP=true`); desktop stays
   single-shop. Footprint per shop: a seeded shop database is ~0.2 MB
   (binary 27 MB, installer 10 MB, frontend bundle 0.4 MB).
-- **Customer tabs & credit** — regulars take goods now and pay later.
+- **Customer tabs & credit**, regulars take goods now and pay later.
   Each customer has a credit limit (0 = cash only), a live balance, and
   a loyalty balance (1 pt per 100 KES of settled sales). The till shows
   who owes what while tendering, the server enforces the limit at charge
   time, and every charge / payment / correction lands in an auditable
   per-customer ledger. Tabs settle in cash or against an M-Pesa receipt;
   voiding a tab reverses its charge so cancelled sales leave no debt.
-- **M-Pesa, three ways** — provider is swappable behind one interface:
+- **M-Pesa, three ways**, provider is swappable behind one interface:
   `mock` (demos/training, default), Daraja `sandbox`, Daraja `production`.
   Payment modes: `auto` (STK push, manual fallback), `stk`, `manual`.
   LAN boxes can't receive webhooks, so a **sweeper polls stkpushquery**
   every 5s and completes orders itself; the public callback endpoint works
   too, and both are idempotent.
-- **Manual receipt entry (first-class)** — customer pays to the
+- **Manual receipt entry (first-class)**, customer pays to the
   till/paybill themselves; the cashier types the 10-character M-Pesa
   receipt code. Format-validated (`^[A-Z0-9]{10}$`), unique-indexed,
   amount-checked. Paying the wrong amount flags a **discrepancy** for
   admin review instead of silently trusting it.
-- **Crash-safety everywhere** — integer cents for money, guarded stock
-  deduction (`WHERE status != 'PAID'` — no double-deduct even if two
+- **Crash-safety everywhere**, integer cents for money, guarded stock
+  deduction (`WHERE status != 'PAID'`, no double-deduct even if two
   completions race), persistent `print_jobs` (power loss = reprint on
   boot), idempotent offline sync keyed by `client_uuid`.
-- **Offline-first terminals** — the SPA queues cash sales in IndexedDB
+- **Offline-first terminals**, the SPA queues cash sales in IndexedDB
   when the network drops, shows a banner, and syncs on reconnect. The
   server replays idempotently, so double-submits are harmless.
-- **ESC/POS printing** — 80mm/58mm receipts over TCP (`tcp://host:9100`)
+- **ESC/POS printing**, 80mm/58mm receipts over TCP (`tcp://host:9100`)
   or USB (`file:///dev/usb/lp0`), retry queue with backoff, browser-print
   fallback at `/api/v1/orders/{id}/receipt`. The brand logo prints atop
   every receipt (toggleable), and the cash drawer kicks automatically on
   cash sales (plus a test button in Settings → Printer).
-- **Shifts & reconciliation** — open with a float, close counting the
+- **Shifts & reconciliation**, open with a float, close counting the
   drawer; expected cash is computed from completed cash payments, variance
   highlighted. Full audit log of who did what.
-- **KRA monthly returns** — Reports → Monthly gives the accountant one
+- **KRA monthly returns**, Reports → Monthly gives the accountant one
   calendar month of VAT figures (gross, taxable value, VAT collected,
   transaction count, cash/M-Pesa split, per-day chart) and downloads it
   as a CSV to attach to the iTax return.
-- **Automatic backups** — a daily 02:00 `VACUUM INTO` snapshot into
+- **Automatic backups**, a daily 02:00 `VACUUM INTO` snapshot into
   `backups/` (consistent even mid-sale) with configurable retention; a
   manual **Back up now** button lives in Settings → System. Snapshots
-  are plain SQLite files — copy them to USB/cloud for off-site safety.
-- **Encrypted off-site backup** — every snapshot can encrypt itself
+  are plain SQLite files, copy them to USB/cloud for off-site safety.
+- **Encrypted off-site backup**, every snapshot can encrypt itself
   (AES-256-GCM, your passphrase) and push to your own Supabase project
   over plain Bearer-auth REST (no signing dance, immune to shop-PC clock
   drift), retrying on its own until it lands. One project per shop, so a
   leaked key only ever opens that shop. Nobody commutes to copy files;
   `ledgerpos restore-backup` pulls the newest copy back down and
   decrypts it.
-- **Remote owner playbook** — `docs/REMOTE-OWNER.md`: Tailscale tunnel +
+- **Remote owner playbook**, `docs/REMOTE-OWNER.md`: Tailscale tunnel +
   a read-only Owner role, so the owner watches sales, shifts, voids, and
   stock from anywhere without touching the till.
-- **Self-updating** — the app checks GitHub Releases on boot and shows
+- **Self-updating**, the app checks GitHub Releases on boot and shows
   admins a banner when a newer build exists; one click downloads it and
   launches the installer (Windows), then quits so the install can land.
   Set `update_channel` to `off` to stay manual.
-- **Windows install note** — the installer is currently **unsigned**, so
+- **Windows install note**, the installer is currently **unsigned**, so
   SmartScreen shows "Windows protected your PC". Verify first: the file
   must come from our GitHub Releases page, match the published SHA-256,
   and show ProductVersion in file Properties → Details. Then **More
   info → Run anyway**. Never disable SmartScreen, never run copies from
   anywhere else. Full policy: `docs/DISTRIBUTION-TRUST.md`.
-- **Barcode scanners (no focus needed)** — hardware USB/Bluetooth
+- **Barcode scanners (no focus needed)**, hardware USB/Bluetooth
   scanners fire straight into the cart via a global HID listener that
   only accepts scanner-speed keystroke bursts; focused typing into the
   search box works too.
-- **Every screen works on phones** — the POS stacks under 1024px with a
+- **Every screen works on phones**, the POS stacks under 1024px with a
   full cart bottom-sheet (add/remove/qty), and the charge modal's
   quick-tender buttons are 48px touch targets.
-- **White-label by construction** — every visible string (app name, store
+- **White-label by construction**, every visible string (app name, store
   name/address/phone, receipt footer, currency, VAT %, brand color, till/
   paybill numbers) comes from the settings table, plus an uploadable
   **brand logo** (Settings → Store) shown on login and the topbar.
   No company name is hardcoded anywhere. Secrets are masked (`__SET__`)
   in the API.
-- **Fast shift handoff** — 4-digit PIN quick-switch (bcrypt-hashed,
+- **Fast shift handoff**, 4-digit PIN quick-switch (bcrypt-hashed,
   escalating lockout, rate-limited). JWT 12h, per-request permission
   reload so role edits apply immediately.
-- **mDNS discovery** — broadcasts `_pos-server._tcp.local` so terminals
+- **mDNS discovery**, broadcasts `_pos-server._tcp.local` so terminals
   find the server on the LAN (best-effort; never fatal).
 
 ## The desktop app: download, double-click, sell
 
 The recommended way to run this in a real shop is the **standalone
-desktop build** — the same single binary, shipped as an app for Windows,
+desktop build**, the same single binary, shipped as an app for Windows,
 macOS and Linux. No terminal, no localhost URL to remember, no server
 to configure:
 
 1. Download the package for your machine from the
    [releases page](https://github.com/ssmurfgg04-gif/pos-system/releases)
-   — or from the LedgerPOS download page (see the Netlify section below,
+  , or from the LedgerPOS download page (see the Netlify section below,
    which serves the installers directly).
 2. Double-click it. On Windows run the installer once (desktop +
    Start-menu shortcuts, Add/Remove Programs entry, no extraction
    needed); on macOS unzip and open `LedgerPOS.app`; on Linux
    `tar xf ledgerpos-linux-x64.tar.xz` then `./ledgerpos`.
-3. The app opens in its own window — no browser tabs. The very first
-   screen asks you to **create the owner account** — pick your own name,
+3. The app opens in its own window, no browser tabs. The very first
+   screen asks you to **create the owner account**, pick your own name,
    a strong password and (optionally) a 4-digit PIN. Write down the
    recovery code it shows you once: that code is the only way back in if
    the password is ever forgotten.
@@ -137,12 +137,12 @@ database, runs migrations, seeds the catalog and users, picks a free
 local port (8765–7914), binds to 127.0.0.1 **only**, and opens its own
 app window (a Chromium app-mode window; falls back to your default
 browser if none is installed). The first admin through the door gets a
-five-step setup wizard — store name, logo, receipt, printer test,
-staff + PINs — and seeded passwords never serve until changed.
+five-step setup wizard, store name, logo, receipt, printer test,
+staff + PINs, and seeded passwords never serve until changed.
 Launching it again while it's running just opens a new window.
 An admin can stop it from the UI (sidebar → Quit). All data lives in a
-per-OS app directory — `%APPDATA%\LedgerPOS`,
-`~/Library/Application Support/LedgerPOS`, `~/.local/share/LedgerPOS` —
+per-OS app directory, `%APPDATA%\LedgerPOS`,
+`~/Library/Application Support/LedgerPOS`, `~/.local/share/LedgerPOS`
 so it survives reinstalls and never leaves the machine.
 
 Build the installers yourself (cross-compiles all four targets,
@@ -174,13 +174,13 @@ The site is **wired to GitHub for continuous deployment**: every push to
 
 | Path          | What the visitor gets                                            |
 |---------------|------------------------------------------------------------------|
-| `/`           | the landing page — Big-7 value props, OS-detected primary CTA     |
+| `/`           | the landing page, Big-7 value props, OS-detected primary CTA     |
 | `/downloads/` | the four installer packages + `checksums.txt`, served from the deploy |
 | `/demo/`      | the full POS as an in-browser demo (seeded data, mock M-Pesa)     |
 
 The installers are **committed under `downloads/`** (mirrored from the
 GitHub Release, SHA-256-verified at build time), so deploys never depend
-on network fetches — the build is deterministic and offline-safe. After
+on network fetches, the build is deterministic and offline-safe. After
 `scripts/package_desktop.py` produces new packages, sync them with:
 
 ```bash
@@ -197,16 +197,16 @@ python3 scripts/netlify_build.py --skip-npm # re-assemble using the existing dis
 
 The SPA ships with an **in-browser demo backend**: when no server answers
 `/api/v1/health`, the app runs on a seeded, fully interactive dataset
-(localStorage) — same login accounts, same M-Pesa STK simulation, same
+(localStorage), same login accounts, same M-Pesa STK simulation, same
 RBAC. That means the static Netlify build is a working demo you can show
 anyone.
 
 If download traffic grows heavy, host the installers on GitHub Releases
-instead (they're mirrored there) and change the landing-page links — the
+instead (they're mirrored there) and change the landing-page links, the
 page footer links to the releases either way.
 
 To point the deployed app at a **real** server later: remove
-`VITE_DEMO_MODE` and set `VITE_API_URL=https://your-server.example` — the
+`VITE_DEMO_MODE` and set `VITE_API_URL=https://your-server.example`, the
 app then talks to that backend (and shows connection errors instead of
 falling back to demo). Demo data resets anytime via **Settings → System →
 Reset demo data**.
@@ -233,7 +233,7 @@ Demo accounts (seeded once, safe to delete):
 M-Pesa runs through **Paystack** once connected: the M-Pesa button pushes a
 real STK prompt to the customer's phone and the sale completes only after
 Paystack confirms the money. Without a provider, M-Pesa falls back to
-**manual receipt-code entry** — nothing ever completes by itself (the old
+**manual receipt-code entry**, nothing ever completes by itself (the old
 auto-succeeding "mock" provider is tests/demos only, gated behind
 `ALLOW_MOCK_PAYMENTS=true`). Connect Paystack in **Settings → Payments**
 or drop a `.env` file next to the database (see below).
@@ -245,34 +245,34 @@ or drop a `.env` file next to the database (see below).
 | `PORT`        | `3000`     | HTTP port                            |
 | `DB_DRIVER`   | `sqlite`   | `sqlite` or `postgres`               |
 | `DB_PATH`     | `pos.db`   | SQLite file                          |
-| `POSTGRES_DSN`| —          | e.g. `postgres://user:pw@host/db`    |
+| `POSTGRES_DSN`|,          | e.g. `postgres://user:pw@host/db`    |
 | `SEED_DEMO`   | `false`    | Seed the demo catalog (demos/tests)  |
 | `MDNS_ENABLED`| `true`     | LAN discovery broadcast              |
-| `PAYSTACK_SECRET_KEY` | —  | `sk_live_…` — server-side only      |
-| `PAYSTACK_PUBLIC_KEY` | —  | `pk_live_…` — checkout popup        |
-| `PAYSTACK_CALLBACK_URL` | — | defaults to `https://awesomeposs.netlify.app/` |
+| `PAYSTACK_SECRET_KEY` |,  | `sk_live_…`, server-side only      |
+| `PAYSTACK_PUBLIC_KEY` |,  | `pk_live_…`, checkout popup        |
+| `PAYSTACK_CALLBACK_URL` |, | defaults to `https://awesomeposs.netlify.app/` |
 | `ALLOW_MOCK_PAYMENTS` | `false` | Opt-in for the auto-succeeding test provider (tests/demos) |
 
 **Secrets belong in `.env`, not forms.** Place a `.env` file next to the
 database (desktop: `%APPDATA%\LedgerPOS\.env`) with the keys above and
-restart the till — payment config becomes zero-touch and nothing
+restart the till, payment config becomes zero-touch and nothing
 sensitive ever appears in the Settings UI.
 
-### Go real with M-Pesa (Paystack — recommended)
+### Go real with M-Pesa (Paystack, recommended)
 
 1. Put `PAYSTACK_SECRET_KEY` + `PAYSTACK_PUBLIC_KEY` in the till's `.env`
-   (or paste them in Settings → Payments — they are encrypted at rest).
+   (or paste them in Settings → Payments, they are encrypted at rest).
 2. That's it: the M-Pesa button now pushes a real STK prompt via Paystack
    and the Card button opens the Paystack popup. The webhook/callback URL
    is `https://awesomeposs.netlify.app/`.
 3. Manual receipt-code entry always remains available as a fallback.
 
-### Direct M-Pesa (Daraja) — optional
+### Direct M-Pesa (Daraja), optional
 
 1. Settings → Payments: enter shortcode, passkey, consumer key/secret and
    set the environment to `sandbox`/`production` on that machine (keys are
    not part of the till UI; this is an owner/dev action).
-2. Incomplete credentials fail loudly — the till never silently fakes a
+2. Incomplete credentials fail loudly, the till never silently fakes a
    payment.
 
 ### Go real with M-Pesa (Daraja)
@@ -280,7 +280,7 @@ sensitive ever appears in the Settings UI.
 1. Settings → Payments → environment: `sandbox` (test credentials) or
    `production`.
 2. Fill shortcode, passkey, consumer key/secret. The callback URL is
-   optional — polling covers LAN deployments.
+   optional, polling covers LAN deployments.
 3. Leave the mode on `auto`: customers get an STK push; if they pay at
    the till instead, the cashier enters the receipt code. Both complete
    the same order.
@@ -291,7 +291,7 @@ sensitive ever appears in the Settings UI.
   the till. WAL mode + `synchronous=NORMAL` is the right trade for a POS.
 - Run it behind Caddy/nginx for TLS if terminals connect over Wi-Fi you
   don't fully trust. The API allows all origins by design (LAN appliance)
-  — scope that down if you expose it publicly.
+ , scope that down if you expose it publicly.
 - `GET /api/v1/health` for uptime checks; the audit log is under
   Settings → Audit log.
 
@@ -334,4 +334,4 @@ scripts/      E2E smoke test
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).

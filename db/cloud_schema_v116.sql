@@ -47,7 +47,7 @@ begin
     where username = p_username and window_start > now() - interval '15 minutes';
   if coalesce(fails, 0) >= 10 then
     return json_build_object('ok', false, 'error',
-      'too many attempts — try again in 15 minutes');
+      'too many attempts, try again in 15 minutes');
   end if;
 
   -- verify against the portal credential store (bcrypt)
@@ -60,7 +60,7 @@ begin
         where team_code = acct.team_code and active limit 1;
       if store.id is null then
         return json_build_object('ok', false, 'error',
-          'your store is not active in the cloud — contact support');
+          'your store is not active in the cloud, contact support');
       end if;
 
       select * into dev from sync_devices where device_id = p_device_id;
@@ -71,7 +71,7 @@ begin
                   coalesce(nullif(btrim(p_app_version), ''), ''), p_secret_hash, true, now());
       elsif dev.revoked then
         return json_build_object('ok', false, 'error',
-          'this device was revoked — ask the owner to approve it again from Settings → Team');
+          'this device was revoked, ask the owner to approve it again from Settings → Team');
       else
         update sync_devices
           set team_code = acct.team_code, approved = true, last_seen = now(),
@@ -101,5 +101,5 @@ begin
                               then portal_signin_fails.window_start else now() end;
 
   return json_build_object('ok', false, 'error',
-    'wrong username or password — or cloud sign-in is not activated for your shop yet (activate it from Settings → Team on an existing till)');
+    'wrong username or password, or cloud sign-in is not activated for your shop yet (activate it from Settings → Team on an existing till)');
 end $function$;

@@ -67,7 +67,7 @@ export function Orders() {
     try {
       const r = await api.post<{ order: Order; message: string }>(`/api/v1/orders/${o.id}/recheck`, {})
       if (r?.order?.status === 'PAID') {
-        toast.success('Payment confirmed', `${r.order.number} — the money arrived, order is now paid`)
+        toast.success('Payment confirmed', `${r.order.number}, the money arrived, order is now paid`)
         load()
       } else {
         toast.info('No payment yet', r?.message || 'No confirmed payment for this order yet.')
@@ -143,7 +143,7 @@ export function Orders() {
                   <td className="px-3 py-2.5">
                     <StatusPill
                       status={o.status === 'PAID' ? 'paid' : o.status === 'PENDING' ? 'pending' : 'void'}
-                      label={o.discrepancy ? (o.status === 'PAID' ? 'Paid — check amount' : 'Pending — check amount') : undefined}
+                      label={o.discrepancy ? (o.status === 'PAID' ? 'Paid, check amount' : 'Pending, check amount') : undefined}
                     />
                     {o.status === 'VOIDED' && o.voidReason && (
                       <p className="mt-1 text-[11px] font-bold text-void-text max-w-44 truncate" title={o.voidReason}>
@@ -160,7 +160,7 @@ export function Orders() {
                         {pay.method === 'mpesa' && pay.mpesaReceipt ? <> · <span className="font-mono text-[12px] font-semibold text-ink" title="M-Pesa receipt code">{pay.mpesaReceipt}</span></> : null}
                         {pay.method === 'paystack' && pay.mpesaReceipt ? <> · <span className="font-mono text-[12px] font-semibold text-ink" title="Payment reference">{pay.mpesaReceipt}</span></> : null}
                       </span>
-                    ) : '—'}
+                    ) : ', '}
                   </td>
                   <td className="px-3 py-2.5 text-[13px] text-ink-muted">{o.cashierName}</td>
                   <td className="px-3 py-2.5 text-right">
@@ -171,7 +171,7 @@ export function Orders() {
                           variant="secondary"
                           disabled={checkingId === o.id}
                           onClick={() => recheck(o)}
-                          title="Re-verify the charge — completes the sale if the money arrived"
+                          title="Re-verify the charge, completes the sale if the money arrived"
                         >
                           {checkingId === o.id ? <Spinner /> : 'Check payment'}
                         </Button>
@@ -301,7 +301,7 @@ function OrderDrawer({
       footer={
         <>
           {onRecheck && live.status === 'PENDING' && (
-            <Button variant="secondary" onClick={onRecheck} disabled={checking} title="Re-verify the charge — completes the sale if the money arrived">
+            <Button variant="secondary" onClick={onRecheck} disabled={checking} title="Re-verify the charge, completes the sale if the money arrived">
               {checking ? <Spinner /> : 'Check payment'}
             </Button>
           )}
@@ -346,7 +346,7 @@ function OrderDrawer({
         <div className="flex justify-between"><span className="text-ink-muted">Subtotal</span><span className="tabular font-semibold">{centsToAmount(live.subtotalCents)}</span></div>
         {!!live.discountCents && live.discountCents > 0 && (
           <div className="flex justify-between">
-            <span className="text-ink-muted">Discount{live.discountLabel ? ` — ${live.discountLabel}` : ''}</span>
+            <span className="text-ink-muted">Discount{live.discountLabel ? `, ${live.discountLabel}` : ''}</span>
             <span className="tabular font-semibold text-pending-text">−{centsToAmount(live.discountCents)}</span>
           </div>
         )}
@@ -368,7 +368,7 @@ function OrderDrawer({
         return (
           <div key={p.id} className="mt-3 border-2 border-line rounded-input p-3 text-[13px]">
             <div className="flex justify-between">
-              <span className="font-bold"><PaymentLabel method={p.method} /> <span className="text-ink-subtle font-normal">({p.mode || '—'})</span></span>
+              <span className="font-bold"><PaymentLabel method={p.method} /> <span className="text-ink-subtle font-normal">({p.mode || ', '})</span></span>
               <StatusPill status={p.status === 'COMPLETED' ? 'paid' : p.status === 'PENDING' ? 'pending' : p.status === 'VOIDED' ? 'void' : 'danger'} label={p.status} />
             </div>
             <div className="mt-1 grid grid-cols-2 gap-x-3 text-ink-muted">
@@ -400,7 +400,7 @@ function OrderDrawer({
               <span
                 key={g.id}
                 className="inline-flex items-center gap-2 px-2.5 py-1 rounded-pill border-2 border-line-strong bg-surface text-[12px] font-bold"
-                title={g.status === 'ACTIVE' ? 'Redeemable — credit the code to a customer from their profile' : 'Already redeemed to store credit'}
+                title={g.status === 'ACTIVE' ? 'Redeemable, credit the code to a customer from their profile' : 'Already redeemed to store credit'}
               >
                 <span className="font-mono tracking-wider text-ink">{g.code}</span>
                 <span className="text-ink-muted tabular">{formatMoney(g.initialCents)}</span>
@@ -450,7 +450,7 @@ function OrderDrawer({
         </div>
         {(live.jobs ?? []).length === 0 ? (
           <p className="text-[12px] text-ink-subtle">
-            No jobs yet{canAssign && live.status === 'PAID' ? ' — create one to route this sale to a designer or the branding team.' : '.'}
+            No jobs yet{canAssign && live.status === 'PAID' ? ', create one to route this sale to a designer or the branding team.' : '.'}
           </p>
         ) : (
           <ul className="space-y-1.5">
@@ -606,7 +606,7 @@ function JobFromOrderModal({ order, onClose, onDone }: { order: Order; onClose: 
             className="w-full min-h-10 px-3 bg-surface-muted border border-line rounded-input text-ink text-[13px]">
             <option value={0}>Unassigned (queue)</option>
             {staff.map((m) => (
-              <option key={m.id} value={m.id}>{m.fullName || String(m.id)}{m.roleName ? ` — ${m.roleName}` : ''}</option>
+              <option key={m.id} value={m.id}>{m.fullName || String(m.id)}{m.roleName ? `, ${m.roleName}` : ''}</option>
             ))}
           </select>
         </Field>
@@ -628,7 +628,7 @@ function SettleModal({ order, onClose, onDone }: { order: Order; onClose: () => 
     setError('')
     try {
       await api.post(`/api/v1/orders/${order.id}/settle`, method === 'cash' ? { method } : { method, receiptCode: code })
-      toast.success('Tab settled', `${order.number} — ${formatMoney(order.totalCents)}`)
+      toast.success('Tab settled', `${order.number}, ${formatMoney(order.totalCents)}`)
       onDone()
     } catch (e: any) {
       setError(e?.message)
@@ -638,7 +638,7 @@ function SettleModal({ order, onClose, onDone }: { order: Order; onClose: () => 
   }
 
   return (
-    <Modal open onClose={onClose} title={`Settle tab — ${order.number}`} size="sm" footer={
+    <Modal open onClose={onClose} title={`Settle tab, ${order.number}`} size="sm" footer={
       <>
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="primary" onClick={go} disabled={busy || !valid}>Settle {formatMoney(order.totalCents)}</Button>
@@ -677,7 +677,7 @@ function VoidModal({ order, onClose, onDone }: { order: Order; onClose: () => vo
     setError('')
     try {
       await api.post(`/api/v1/orders/${order.id}/void`, { reason })
-      toast.success('Order voided', `${order.number} — stock restored`)
+      toast.success('Order voided', `${order.number}, stock restored`)
       onDone()
     } catch (e: any) {
       setError(e?.message)
@@ -714,7 +714,7 @@ function ManualModal({ order, onClose, onDone }: { order: Order; onClose: () => 
     setError('')
     try {
       await api.post(`/api/v1/orders/${order.id}/manual`, { receiptCode: code })
-      toast.success('Payment confirmed', `${order.number} — receipt ${code}`)
+      toast.success('Payment confirmed', `${order.number}, receipt ${code}`)
       onDone()
     } catch (e: any) {
       setError(e?.message)
@@ -724,7 +724,7 @@ function ManualModal({ order, onClose, onDone }: { order: Order; onClose: () => 
   }
 
   return (
-    <Modal open onClose={onClose} title={`Receipt code — ${order.number}`} size="sm" footer={
+    <Modal open onClose={onClose} title={`Receipt code, ${order.number}`} size="sm" footer={
       <>
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="primary" onClick={go} disabled={busy || !valid}>Confirm payment</Button>

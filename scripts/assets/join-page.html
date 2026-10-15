@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LedgerPOS — Join your team</title>
+<meta name="description" content="You were invited to a LedgerPOS team. Here is how to join on your till in under a minute: copy your link, open the app, paste, pick a PIN.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="../icon-64.png">
+<style>
+  :root{
+    --shell:#0F172A; --shell-edge:#1E293B; --on-shell:#F8FAFC; --on-shell-muted:#94A3B8;
+    --brand:#10B981; --brand-strong:#065F46; --brand-ink:#052E22;
+    --surface:#FFFFFF; --surface-muted:#F8FAFC; --line:#E2E8F0; --line-strong:#CBD5E1;
+    --ink:#0F172A; --ink-muted:#475569; --ink-subtle:#94A3B8;
+    --danger:#EF4444;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--shell);color:var(--on-shell);line-height:1.5;min-height:100vh}
+  .wrap{max-width:640px;margin:0 auto;padding:0 20px}
+  a{color:inherit;text-decoration:none}
+  header{border-bottom:1px solid var(--shell-edge)}
+  .nav{display:flex;align-items:center;gap:12px;height:64px}
+  .nav img{width:38px;height:38px;border-radius:10px;border:2px solid var(--brand-strong);display:block}
+  .nav .name{font-weight:800;font-size:17px}
+  .nav .back{margin-left:auto;font-size:13px;font-weight:700;color:var(--on-shell-muted)}
+  .nav .back:hover{color:var(--brand)}
+  main{padding:36px 0 60px}
+  h1{font-size:clamp(24px,4.5vw,32px);font-weight:900;letter-spacing:-.02em}
+  h1 em{font-style:normal;color:var(--brand)}
+  p.sub{color:var(--on-shell-muted);font-size:14.5px;margin:8px 0 26px}
+  .card{background:var(--surface);color:var(--ink);border:2px solid var(--line-strong);border-radius:14px;padding:24px;box-shadow:5px 5px 0 rgba(2,6,23,.55);margin-bottom:18px}
+  .card h2{font-size:15px;font-weight:900;margin-bottom:14px}
+  ol.steps{list-style:none;counter-reset:step}
+  ol.steps li{counter-increment:step;display:flex;gap:12px;padding:10px 0;font-size:14px;font-weight:600;align-items:flex-start}
+  ol.steps li::before{
+    content:counter(step);flex:none;width:26px;height:26px;border-radius:8px;
+    background:var(--surface-muted);border:2px solid var(--line-strong);
+    display:flex;align-items:center;justify-content:center;
+    font-size:12px;font-weight:900;color:var(--ink-muted);margin-top:1px}
+  ol.steps li b{color:var(--ink)}
+  ol.steps li span{color:var(--ink-muted);font-weight:500}
+  .ready{display:none}
+  .ready .team{font-size:13px;font-weight:800;color:var(--ink-muted);margin-bottom:10px}
+  .ready .team b{color:var(--brand-strong)}
+  textarea{
+    width:100%;font:inherit;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    color:var(--ink);background:var(--surface-muted);border:2px solid var(--line);
+    border-radius:10px;padding:10px 12px;outline:none;resize:none;min-height:74px}
+  textarea:focus{border-color:var(--brand)}
+  .btn{
+    display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
+    background:var(--brand);color:var(--brand-ink);font-weight:900;font-size:15px;
+    border:2px solid var(--brand-strong);border-radius:10px;padding:13px 18px;
+    box-shadow:4px 4px 0 var(--brand-strong);cursor:pointer;margin-top:14px;font-family:inherit}
+  .btn:active{transform:translate(4px,4px);box-shadow:0 0 0 var(--brand-strong)}
+  .btn.ok{background:var(--surface-muted);color:var(--ink);border-color:var(--line-strong);box-shadow:4px 4px 0 var(--line-strong)}
+  .note{margin-top:14px;font-size:12.5px;color:var(--ink-muted);line-height:1.5}
+  .fallback{display:none;margin-top:14px;font-size:12.5px;font-weight:700;color:var(--danger)}
+  footer{border-top:1px solid var(--shell-edge);padding:22px 0 30px;color:var(--on-shell-muted);font-size:12.5px;text-align:center}
+  footer b{color:var(--on-shell)}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <img src="../icon-64.png" alt="LedgerPOS logo">
+    <span class="name">LedgerPOS</span>
+    <a class="back" href="../">Back to the download page</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <h1>Join your team <em>in under a minute</em></h1>
+  <p class="sub">Your team owner invited you. You need the LedgerPOS app on this computer and the join link (it usually arrives by WhatsApp or text).</p>
+
+  <section class="card" id="linkCard">
+    <h2>Your join link</h2>
+    <div class="ready" id="ready">
+      <div class="team" id="teamline"></div>
+      <textarea id="linkBox" readonly spellcheck="false"></textarea>
+      <button class="btn" id="copyBtn" type="button">Copy my join link</button>
+      <p class="note">Tap <b>Copy my join link</b>, then follow the three steps below on the till where LedgerPOS is installed.</p>
+      <p class="fallback" id="fallback">Copy did not work. Select the link text above and copy it manually.</p>
+    </div>
+    <div id="nolink">
+      <p class="note" style="margin-top:0">This page was opened without a join link. Ask your team owner to send the link again (Settings → Team → Invite a worker on their till), then open it here.</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>How to join on the till</h2>
+    <ol class="steps">
+      <li><span><b>Open LedgerPOS</b> on the till. On the sign-in screen, tap <b>“Joining a team? Paste your join link”</b> (or <b>Register</b>, then <b>“Adding a teammate? Use a join link”</b>).</span></li>
+      <li><span><b>Paste the link</b> into the join link box. It is filled in for you if you opened the link on the till itself.</span></li>
+      <li><span><b>Type your name and pick a 4-digit PIN</b> (not 0000 or 1234). Tap <b>Join the team</b>. Your shift screen opens and the shop's products sync in the background.</span></li>
+    </ol>
+    <p class="note">Trouble joining? The link works for 7 days and can be used once. If it expired, ask the owner for a fresh one. If this till was removed from the team earlier, a fresh link still works.</p>
+  </section>
+</main>
+
+<footer class="wrap">
+  <b>LedgerPOS</b>, the till that works the way your shop does. <a href="../" style="text-decoration:underline">Download the app</a>
+</footer>
+
+<script>
+(function () {
+  var hash = window.location.hash || ''
+  if (!/[?&#]k=/.test(hash)) return
+  // The link carries team (t), role (r) and the single-use token (k). It
+  // never contains a username, joining does not need one.
+  var full = window.location.href
+  var box = document.getElementById('linkBox')
+  box.value = full
+  var team = hash.match(/[?&#]t=([^&#]+)/)
+  var role = hash.match(/[?&#]r=([^&#]+)/)
+  var line = document.getElementById('teamline')
+  var bits = []
+  if (team) bits.push('Team: <b>' + decodeURIComponent(team[1]).replace(/[<>&]/g, '') + '</b>')
+  if (role) bits.push('Role: <b>' + decodeURIComponent(role[1]).replace(/[<>&]/g, '') + '</b>')
+  line.innerHTML = bits.length ? bits.join(' &nbsp;·&nbsp; ') : ''
+  document.getElementById('nolink').style.display = 'none'
+  document.getElementById('ready').style.display = 'block'
+  var btn = document.getElementById('copyBtn')
+  btn.addEventListener('click', function () {
+    function done() {
+      btn.textContent = 'Copied! Now follow the 3 steps below'
+      btn.classList.add('ok')
+      setTimeout(function () {
+        btn.textContent = 'Copy my join link'
+        btn.classList.remove('ok')
+      }, 4000)
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(full).then(done, manual)
+    } else {
+      manual()
+    }
+    function manual() {
+      box.focus(); box.select()
+      var ok = false
+      try { ok = document.execCommand('copy') } catch (e) { ok = false }
+      if (ok) { done() } else { document.getElementById('fallback').style.display = 'block' }
+    }
+  })
+})()
+</script>
+</body>
+</html>

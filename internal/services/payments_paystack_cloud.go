@@ -288,7 +288,7 @@ func (s *Service) completePaystackEvent(ev *paystack.WebhookEvent) error {
                                 }
                         }
                         s.Audit(0, "system", "PAYSTACK_UNKNOWN_REF", "order", orderNum,
-                                "money arrived for reference "+ev.Data.Reference+" — refund or reconcile in the Paystack dashboard")
+                                "money arrived for reference "+ev.Data.Reference+", refund or reconcile in the Paystack dashboard")
                 }
                 log.Printf("[paystack] relay for unknown reference %s", ev.Data.Reference)
                 return nil
