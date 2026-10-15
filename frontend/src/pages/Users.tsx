@@ -168,7 +168,7 @@ export function Users() {
                     )}
                   </td>
                   <td className="px-3 py-2.5 text-[12px] text-ink-muted tabular whitespace-nowrap">
-                    {u.lastOrderAt ? new Date(u.lastOrderAt).toLocaleString() : '—'}
+                    {u.lastOrderAt ? new Date(u.lastOrderAt).toLocaleString() : ', '}
                   </td>
                   <td className="px-3 py-2.5">
                     <span className="inline-flex flex-wrap items-center gap-1">
@@ -330,7 +330,7 @@ function DashboardEditor({ roleId, roleName }: { roleId: number; roleName: strin
       if (role?.dashboard?.widgetsOrder) config.widgetsOrder = role.dashboard.widgetsOrder
       if (role?.dashboard_config?.widgets) config.widgets = role.dashboard_config.widgets
       await api.put(`/api/v1/roles/${roleId}/dashboard`, { homePage, config })
-      toast.success('Dashboard saved', `${roleName} — ${HOME_PAGES.find((h) => h.value === homePage)?.label ?? homePage}`)
+      toast.success('Dashboard saved', `${roleName}, ${HOME_PAGES.find((h) => h.value === homePage)?.label ?? homePage}`)
     } catch (e: any) {
       setError(e?.message)
     } finally {
@@ -420,7 +420,7 @@ function UserModal({ user, roles, onClose, onSaved }: { user: User | null; roles
   }
 
   return (
-    <Modal open onClose={onClose} title={user ? `Edit — ${user.username}` : 'New user'} footer={
+    <Modal open onClose={onClose} title={user ? `Edit, ${user.username}` : 'New user'} footer={
       <>
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="primary" onClick={save} disabled={busy || !form.username.trim()}>
@@ -488,7 +488,7 @@ function SecretModal({ kind, user, onClose }: { kind: 'password' | 'pin'; user: 
   const ok = kind === 'pin' ? /^\d{4}$/.test(value) : value.length >= 6
 
   return (
-    <Modal open onClose={onClose} title={`${kind === 'password' ? 'Password' : 'PIN'} — ${user.username}`} size="sm" footer={
+    <Modal open onClose={onClose} title={`${kind === 'password' ? 'Password' : 'PIN'}, ${user.username}`} size="sm" footer={
       <>
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="primary" onClick={save} disabled={busy || !ok}>Save</Button>
@@ -549,7 +549,7 @@ function RoleModal({ role, catalog, onClose, onSaved }: { role: Role | null; cat
   }
 
   return (
-    <Modal open onClose={onClose} title={role ? `Permissions — ${role.name}` : 'New role'} size="lg" footer={
+    <Modal open onClose={onClose} title={role ? `Permissions, ${role.name}` : 'New role'} size="lg" footer={
       <>
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="primary" onClick={save} disabled={busy || !name.trim()}>

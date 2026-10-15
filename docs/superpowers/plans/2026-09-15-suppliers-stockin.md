@@ -12,14 +12,14 @@
 
 ## Global Constraints
 
-- Repo Go files are mixed tabs/spaces PER FILE — match each file's own style, never run gofmt -w.
+- Repo Go files are mixed tabs/spaces PER FILE, match each file's own style, never run gofmt -w.
 - Money and quantities stay integer (`*_cents`, integer qty); cost averaging rounds half-up.
 - Every SQL change needs SQLite + Pg bodies.
 - Stock mutations happen only inside transactions with audit rows, like checkout/void.
 
 ---
 
-### Task 1: Migration v5 — suppliers, purchase_orders, stock_takes
+### Task 1: Migration v5, suppliers, purchase_orders, stock_takes
 
 **Files:**
 - Modify: `internal/database/migrations.go` (append v5 after v3; file uses tabs, SQL bodies use tabs)
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS stock_take_items (
 },
 ```
 
-Write the Pg body fully (do not leave the comment above — expand every CREATE TABLE with `SERIAL`, `BIGINT`, `TIMESTAMP NOT NULL DEFAULT NOW()`).
+Write the Pg body fully (do not leave the comment above, expand every CREATE TABLE with `SERIAL`, `BIGINT`, `TIMESTAMP NOT NULL DEFAULT NOW()`).
 
 - [ ] **Step 2: Boot + verify tables**
 
@@ -204,7 +204,7 @@ git add internal/models/models.go internal/models/permissions.go
 git commit -m "feat: supplier/PO/stock-take models, Admin-only supplier permissions"
 ```
 
-### Task 3: `services/suppliers.go` — suppliers CRUD + PO lifecycle
+### Task 3: `services/suppliers.go`, suppliers CRUD + PO lifecycle
 
 **Files:**
 - Create: `internal/services/suppliers.go` (spaces, like `orders.go`)
@@ -212,7 +212,7 @@ git commit -m "feat: supplier/PO/stock-take models, Admin-only supplier permissi
 
 **Interfaces:**
 - Consumes: `models.Supplier/PurchaseOrder/POItem`, `auth.Principal`.
-- Produces: `ListSuppliers(search)`, `CreateSupplier`, `UpdateSupplier`, `CreatePO(supplierID, items[{productId,qty,costCents}], note, p)`, `ReceivePO(poID, p)`, `CancelPO(poID, reason, p)`. PO numbers `PO{YYYYMMDD}{####}` via a generalized `nextDocNumber(tx, prefix)` — refactor `nextOrderNumber` to call it (keep `ORD` behavior identical).
+- Produces: `ListSuppliers(search)`, `CreateSupplier`, `UpdateSupplier`, `CreatePO(supplierID, items[{productId,qty,costCents}], note, p)`, `ReceivePO(poID, p)`, `CancelPO(poID, reason, p)`. PO numbers `PO{YYYYMMDD}{####}` via a generalized `nextDocNumber(tx, prefix)`, refactor `nextOrderNumber` to call it (keep `ORD` behavior identical).
 
 - [ ] **Step 1: Supplier CRUD (mirrors customers.go List/Create/Update)**
 
@@ -234,9 +234,9 @@ func (s *Service) nextDocNumber(tx *sql.Tx, prefix string) (string, error) {
 }
 ```
 
-Table `order_sequences` is prefix-agnostic already (day+seq shared across prefixes — acceptable; note it in a comment).
+Table `order_sequences` is prefix-agnostic already (day+seq shared across prefixes, acceptable; note it in a comment).
 
-- [ ] **Step 3: ReceivePO — stock up with weighted-average cost**
+- [ ] **Step 3: ReceivePO, stock up with weighted-average cost**
 
 ```go
 // ReceivePO posts a PENDING PO: stock_qty += qty per line and cost_cents =
@@ -254,7 +254,7 @@ func (s *Service) ReceivePO(poID int64, p *auth.Principal) (*models.PurchaseOrde
 }
 ```
 
-- [ ] **Step 4: CancelPO** — PENDING → CANCELLED with reason in note/audit `PO_CANCELLED`; no stock movement (nothing was ever deducted).
+- [ ] **Step 4: CancelPO**, PENDING → CANCELLED with reason in note/audit `PO_CANCELLED`; no stock movement (nothing was ever deducted).
 
 - [ ] **Step 5: Compile**
 
@@ -304,9 +304,9 @@ git commit -m "feat: stock takes with variance report"
 ### Task 5: Handlers + router + error codes
 
 **Files:**
-- Create: `internal/handlers/suppliers.go` (spaces): `ListSuppliers`, `CreateSupplier`, `UpdateSupplier`, `CreatePO`, `GetPO` (single-PO fetch — add `GetPO` to service in Task 3's file if missing: select + items), `ReceivePO`, `CancelPO`, `CreateTake`, `CountTake`, `ApplyTake`, `CancelTake`, `GetTake`.
+- Create: `internal/handlers/suppliers.go` (spaces): `ListSuppliers`, `CreateSupplier`, `UpdateSupplier`, `CreatePO`, `GetPO` (single-PO fetch, add `GetPO` to service in Task 3's file if missing: select + items), `ReceivePO`, `CancelPO`, `CreateTake`, `CountTake`, `ApplyTake`, `CancelTake`, `GetTake`.
 - Modify: `internal/router/router.go` (spaces): `supv` group (`suppliers.view`): GET /suppliers, GET /purchase-orders, GET /purchase-orders/:id, GET /stock-takes, GET /stock-takes/:id; `supm` group (`suppliers.manage`): POST/PUT suppliers, POST POs, POST /:id/receive|cancel, POST takes, POST /:id/count|apply|cancel.
-- Modify: `internal/handlers/helpers.go`: map `ErrInvalidState` already 409 — no change needed. PO/stock errors reuse `ErrNotFound`/`ErrInvalidState`.
+- Modify: `internal/handlers/helpers.go`: map `ErrInvalidState` already 409, no change needed. PO/stock errors reuse `ErrNotFound`/`ErrInvalidState`.
 
 **Interfaces:**
 - Consumes: service funcs from Tasks 3–4.
@@ -346,7 +346,7 @@ func TestSupplierPOLifecycle(t *testing.T) {
 }
 ```
 
-Read product 1's `costCents`/`stockQty` from `GET /api/v1/products` (admin) at test start and compute expectations from those values — never hardcode seed numbers.
+Read product 1's `costCents`/`stockQty` from `GET /api/v1/products` (admin) at test start and compute expectations from those values, never hardcode seed numbers.
 
 ```go
 // Stock take: create (all tracked), count one product ±, apply sets stock.
@@ -377,7 +377,7 @@ git commit -m "test: PO receive costing + stock-take apply pinned"
 ### Task 7: Frontend page + demo parity + demo tests
 
 **Files:**
-- Create: `frontend/src/pages/Suppliers.tsx` (Suppliers list + form; POs list + create/receive; takes list + count/apply + variance table), register route in `frontend/src/App.tsx` + nav in `frontend/src/components/shell.tsx` (mirrors Customers.tsx registration — read both first).
+- Create: `frontend/src/pages/Suppliers.tsx` (Suppliers list + form; POs list + create/receive; takes list + count/apply + variance table), register route in `frontend/src/App.tsx` + nav in `frontend/src/components/shell.tsx` (mirrors Customers.tsx registration, read both first).
 - Modify: `frontend/src/lib/api.ts` (Supplier/PO/Take interfaces).
 - Modify: `frontend/src/demo/backend.ts` + `seed.ts` (in-memory suppliers/POs/takes mirroring the Go semantics incl. weighted-average math; seed 2 suppliers).
 - Modify: `frontend/__tests__/demo.test.ts` (tab-style lifecycle test for receive + take apply).
@@ -385,7 +385,7 @@ git commit -m "test: PO receive costing + stock-take apply pinned"
 - [ ] **Step 1: api.ts types.**
 - [ ] **Step 2: Suppliers.tsx** (three cards: Suppliers, Purchase orders, Stock takes; variance shown red/green).
 - [ ] **Step 3: Route + nav.**
-- [ ] **Step 4: Demo backend mirror** (same permission gates: `suppliers.view`/`suppliers.manage`; Admin-only seed — demo Admin has ALL_PERMS automatically via catalog map).
+- [ ] **Step 4: Demo backend mirror** (same permission gates: `suppliers.view`/`suppliers.manage`; Admin-only seed, demo Admin has ALL_PERMS automatically via catalog map).
 - [ ] **Step 5: Demo test + run**: `npx tsc --noEmit` clean, `npm test` all pass.
 - [ ] **Step 6: Commit** (one commit for the whole frontend slice).
 

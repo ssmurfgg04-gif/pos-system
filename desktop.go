@@ -65,7 +65,7 @@ func runDesktop() int {
 	// for it. The window call blocks; returning afterwards exits without
 	// touching the running server.
 	if port := readPortFile(dir); port != "" && probeOurs(port) {
-		log.Printf("%s already running on port %s — opening app window", appName, port)
+		log.Printf("%s already running on port %s, opening app window", appName, port)
 		openAppWindow("http://127.0.0.1:"+port, dir)
 		return 0
 	}
@@ -82,7 +82,7 @@ func runDesktop() int {
 	_ = os.Setenv("DB_PATH", dbPath)
 	_ = os.Setenv("MDNS_ENABLED", "false")
 
-	log.Printf("%s %s starting — data: %s — http://127.0.0.1:%s", appName, version, dir, port)
+	log.Printf("%s %s starting, data: %s, http://127.0.0.1:%s", appName, version, dir, port)
 
 	quit := make(chan struct{})
 	meta := &desktopMeta{
@@ -197,7 +197,7 @@ func openBrowser(url string) {
 	}
 	go func() {
 		if err := cmd.Run(); err != nil {
-			log.Printf("browser open: %v — open %s manually", err, url)
+			log.Printf("browser open: %v, open %s manually", err, url)
 		}
 	}()
 }

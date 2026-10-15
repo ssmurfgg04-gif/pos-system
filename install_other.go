@@ -15,7 +15,7 @@ func runUninstall() int {
 		fmt.Println("Nothing to uninstall.")
 		return 0
 	}
-	fmt.Printf("This app is portable — just delete the binary.\n")
+	fmt.Printf("This app is portable, just delete the binary.\n")
 	fmt.Printf("Your data lives in %s (delete it to remove everything).\n", dir)
 	return 0
 }

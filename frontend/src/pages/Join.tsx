@@ -4,7 +4,7 @@
 // POS — the shop's config (store name, currency, receipt) syncs from the
 // team in the background. No admin onboarding, no keys, nothing to type.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, TeamJoinResult } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
@@ -22,6 +22,24 @@ export function Join() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [joined, setJoined] = useState<TeamJoinResult | null>(null)
+  const [linkHint, setLinkHint] = useState('')
+
+  // The owner's link carries the payload in the URL fragment
+  // (#t=<team>&r=<role>&k=<token>) so it never reaches web-server logs.
+  // When this page is OPENED with the link (not pasted), self-fill it: the
+  // worker should not have to copy the same text they just clicked.
+  useEffect(() => {
+    const frag = window.location.hash
+    if (!frag || !/[?&#]k=/.test(frag)) return
+    const full = 'https://awesomeposs.netlify.app/join' + frag
+    setLink(full)
+    const team = frag.match(/[?&#]t=([^&#]+)/)
+    const role = frag.match(/[?&#]r=([^&#]+)/)
+    const bits: string[] = []
+    if (team) bits.push(`Team ${decodeURIComponent(team[1])}`)
+    if (role) bits.push(`role: ${decodeURIComponent(role[1])}`)
+    if (bits.length) setLinkHint(bits.join(' \u00b7 '))
+  }, [])
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -46,14 +64,14 @@ export function Join() {
       reconnectWs()
       setJoined(res)
       toast.success(`Welcome to ${res.storeName || 'the team'}`,
-        `You're in as ${res.roleName} — the shop's products and settings are syncing now.`)
+        `You're in as ${res.roleName}. The shop's products and settings are syncing now.`)
       navigate(homeFor(useAuth.getState().user))
     } catch (err: any) {
       const msg = err?.message || 'Could not join with that link'
       // A previously-revoked till CAN rejoin with a fresh link — the link is
       // owner consent. Only surface extra help if something is still off.
       if (/revoked/i.test(msg)) {
-        setError('This till was removed from the team earlier. A fresh link from the owner still works — ask them to mint a new one (Settings → Team → Invite a worker) and paste it here.')
+        setError('This till was removed from the team earlier. A fresh link from the owner still works: ask them to mint a new one (Settings → Team → Invite a worker) and paste it here.')
       } else {
         setError(msg)
       }
@@ -69,12 +87,12 @@ export function Join() {
           <div className="w-16 h-16 rounded-card bg-brand border-2 border-brand-strong shadow-brutal-brand flex items-center justify-center text-brand-ink mb-4" aria-hidden>
             <Users size={28} strokeWidth={2.25} />
           </div>
-          <h1 className="text-on-shell text-xl font-bold text-center">Join a team</h1>
-          <p className="text-on-shell-muted text-sm mt-0.5">Paste the link the owner sent you</p>
+          <h1 className="text-ink text-xl font-bold text-center">Join a team</h1>
+          <p className="text-ink-muted text-sm mt-0.5">Paste the link the owner sent you</p>
         </div>
 
         <form onSubmit={submit} className="bg-surface border-2 border-line-strong rounded-card shadow-brutal p-5 space-y-4">
-          <Field label="Team join link" hint="Looks like https://awesomeposs.netlify.app/join#t=…&r=…&k=… — paste the whole thing.">
+          <Field label="Team join link" hint="Looks like https://awesomeposs.netlify.app/join#t=…&r=…&k=… Paste the whole thing.">
             <textarea
               value={link}
               onChange={(e) => setLink(e.target.value)}
@@ -85,6 +103,9 @@ export function Join() {
               className="w-full min-h-11 rounded-input border-2 border-line bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none font-mono text-[12px]"
             />
           </Field>
+          {linkHint && (
+            <p className="text-[12px] text-ink-subtle">Link detected: {linkHint}</p>
+          )}
           <Field label="Your name">
             <Input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Brian" />
           </Field>

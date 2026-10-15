@@ -34,7 +34,11 @@ func (h *H) TeamOwnerApproval(c *gin.Context) {
 	owner, expiresIn, err := h.svc(c).MintOwnerCapability(body.Username, body.Password)
 	if err != nil {
 		if services.OwnerApprovalRequired(err) || services.IsOwnerAuthError(err) {
-			h.fail(c, 401, err.Error())
+			// 422, never 401: a wrong portal password is THIS dialog's
+			// problem, not a dead session. 401 makes the frontend's
+			// session-expiry interceptor wipe the token and dump the
+			// owner on the login page mid-task (the kick-out bug).
+			h.fail(c, 422, err.Error())
 			return
 		}
 		h.fail(c, 502, err.Error())

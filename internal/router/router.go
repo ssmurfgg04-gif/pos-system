@@ -52,7 +52,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
                 // second-precision, which cannot order same-second events).
                 changedAt := auth.ParseChangedAt(p.PasswordChangedAt)
                 if p.PasswordChangedAt != "" && issuedAt.Before(changedAt) {
-                        c.AbortWithStatusJSON(401, gin.H{"error": "session expired — sign in again"})
+                        c.AbortWithStatusJSON(401, gin.H{"error": "session expired, sign in again"})
                         return
                 }
                 p.ShopID = shopID

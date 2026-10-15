@@ -61,7 +61,7 @@ func (s *Service) RequestPinReset(username, deviceName string) (models.PinResetR
         }
         c, err := s.ownerClient()
         if err != nil {
-                return out, fmt.Errorf("PIN recovery needs the shop's cloud link — join the team first, or ask the owner for a fresh join link")
+                return out, fmt.Errorf("PIN recovery needs the shop's cloud link, join the team first, or ask the owner for a fresh join link")
         }
         var res struct {
                 OK        bool   `json:"ok"`
@@ -75,7 +75,7 @@ func (s *Service) RequestPinReset(username, deviceName string) (models.PinResetR
                 "p_username":    username,
                 "p_device_name": deviceName,
         }, &res); err != nil {
-                return out, fmt.Errorf("could not reach the LedgerPOS cloud — check the internet and try again")
+                return out, fmt.Errorf("could not reach the LedgerPOS cloud, check the internet and try again")
         }
         if !res.OK {
                 return out, fmt.Errorf("%s", res.Error)
@@ -128,7 +128,7 @@ func (s *Service) ListPinResetRequests() ([]PinResetRequest, error) {
                 "p_device_id":   c.device,
                 "p_secret_hash": c.secretHash,
         }, &res); err != nil {
-                return nil, fmt.Errorf("could not reach the LedgerPOS cloud — check the internet and try again")
+                return nil, fmt.Errorf("could not reach the LedgerPOS cloud, check the internet and try again")
         }
         if !res.OK {
                 return nil, fmt.Errorf("%s", res.Error)
@@ -168,7 +168,7 @@ func (s *Service) ApprovePinReset(requestID int64) (PinResetApproved, error) {
                 "p_secret_hash": c.secretHash,
                 "p_request_id":  requestID,
         }, &res); err != nil {
-                return out, fmt.Errorf("could not reach the LedgerPOS cloud — check the internet and try again")
+                return out, fmt.Errorf("could not reach the LedgerPOS cloud, check the internet and try again")
         }
         if !res.OK {
                 return out, fmt.Errorf("%s", res.Error)
@@ -193,7 +193,7 @@ func (s *Service) RedeemPinReset(requestID int64, code, newPin string) (models.P
         }
         c, err := s.ownerClient()
         if err != nil {
-                return out, fmt.Errorf("PIN recovery needs the shop's cloud link — join the team first")
+                return out, fmt.Errorf("PIN recovery needs the shop's cloud link, join the team first")
         }
         var res struct {
                 OK       bool   `json:"ok"`
@@ -206,7 +206,7 @@ func (s *Service) RedeemPinReset(requestID int64, code, newPin string) (models.P
                 "p_request_id":  requestID,
                 "p_code":        strings.TrimSpace(code),
         }, &res); err != nil {
-                return out, fmt.Errorf("could not reach the LedgerPOS cloud — check the internet and try again")
+                return out, fmt.Errorf("could not reach the LedgerPOS cloud, check the internet and try again")
         }
         if !res.OK {
                 return out, fmt.Errorf("%s", res.Error)
@@ -222,7 +222,7 @@ func (s *Service) RedeemPinReset(requestID int64, code, newPin string) (models.P
         err = s.db.QueryRow(s.db.Rebind(`SELECT id, username FROM users WHERE LOWER(username) = LOWER(?) AND is_active = 1`), res.Username).Scan(&userID, &uname)
         if err == sql.ErrNoRows {
                 s.clearPendingPinReset()
-                return out, fmt.Errorf("no active account named %s on this till anymore — send a fresh request or ask the owner to add you back", res.Username)
+                return out, fmt.Errorf("no active account named %s on this till anymore, send a fresh request or ask the owner to add you back", res.Username)
         }
         if err != nil {
                 return out, fmt.Errorf("could not look up the account: %v", err)
@@ -241,7 +241,7 @@ func (s *Service) RedeemPinReset(requestID int64, code, newPin string) (models.P
         if n, _ := res2.RowsAffected(); n == 0 {
                 // Lost a race with a deactivation between check and update.
                 s.clearPendingPinReset()
-                return out, fmt.Errorf("no active account named %s on this till — ask the owner", res.Username)
+                return out, fmt.Errorf("no active account named %s on this till, ask the owner", res.Username)
         }
         s.clearPendingPinReset()
         s.Audit(userID, uname, "PIN_RESET_REDEEMED", "user", uname, fmt.Sprintf("request %d", requestID))

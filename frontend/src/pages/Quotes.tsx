@@ -172,8 +172,8 @@ export function Quotes() {
             body={q || status !== 'all'
               ? 'Try a different search or filter.'
               : canManage
-                ? 'Create the first quotation — pick the customer, add the products, print or WhatsApp it.'
-                : 'Ask the front desk to create one — you will see it here the moment it exists.'}
+                ? 'Create the first quotation, pick the customer, add the products, print or WhatsApp it.'
+                : 'Ask the front desk to create one, you will see it here the moment it exists.'}
             action={canManage && !q && status === 'all' ? (
               <Button variant="primary" onClick={() => { setCreating(true); setEditing({} as Quote) }}>
                 <Plus size={15} strokeWidth={2.5} aria-hidden /> New quotation
@@ -196,7 +196,7 @@ export function Quotes() {
                   <td className="px-3 py-2 text-[12.5px] text-ink-muted tabular">{qy.items.length}</td>
                   <td className="px-3 py-2 text-[13px] font-bold text-ink tabular">{money(qy.totalCents)}</td>
                   <td className="px-3 py-2 text-[12px] text-ink-muted tabular">
-                    {qy.validUntil || '—'}
+                    {qy.validUntil || ', '}
                     {qy.validUntil && new Date(qy.validUntil + 'T23:59:59') < new Date() && qy.status !== 'converted' && (
                       <span className="block text-[11px] font-bold text-pending-text">expired</span>
                     )}
@@ -411,7 +411,7 @@ function QuoteEditor({
               </>
             )}
           </Field>
-          <Field label="Phone (optional — syncs the customer)">
+          <Field label="Phone (optional, syncs the customer)">
             <Input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="e.g. 0712 345 678" />
           </Field>
         </div>
@@ -426,7 +426,7 @@ function QuoteEditor({
             <Input
               value={prodQ}
               onChange={(e) => setProdQ(e.target.value)}
-              placeholder="Search products to add — name, SKU or barcode"
+              placeholder="Search products to add, name, SKU or barcode"
             />
           </div>
           {prodQ.trim() && (
@@ -642,7 +642,7 @@ function QuotePrint({ quote, onClose }: { quote: Quote; onClose: () => void }) {
   const cur = branding.currency_symbol || ''
   useEffect(() => {
     const prev = document.title
-    document.title = `${quote.quoteNo} — ${quote.customerName}`
+    document.title = `${quote.quoteNo}, ${quote.customerName}`
     return () => { document.title = prev }
   }, [quote])
   // Toggle the isolation class the print stylesheet targets; without it,

@@ -57,7 +57,7 @@ export function Shifts() {
         actions={
           <div className="flex items-center gap-2">
             {current && (
-              <Button variant="ghost" size="sm" onClick={() => openReport()} title="X report — live totals so far">
+              <Button variant="ghost" size="sm" onClick={() => openReport()} title="X report, live totals so far">
                 <FileText size={14} strokeWidth={2.5} aria-hidden /> X report
               </Button>
             )}
@@ -72,8 +72,8 @@ export function Shifts() {
         {current ? (
           <div className="grid grid-cols-3 gap-3">
             <Stat label="Opening float" value={formatMoney(current.openingFloatCents)} />
-            <Stat label="Counted at close" value="—" />
-            <Stat label="Variance" value="—" />
+            <Stat label="Counted at close" value=", " />
+            <Stat label="Variance" value=", " />
           </div>
         ) : (
           <EmptyState
@@ -109,8 +109,8 @@ export function Shifts() {
                 </td>
                 <td className="px-3 py-2.5 text-[13px] font-semibold text-ink">{s.userName}</td>
                 <td className="px-3 py-2.5 tabular text-ink-muted">{centsToAmount(s.openingFloatCents)}</td>
-                <td className="px-3 py-2.5 tabular text-ink-muted">{s.closedAt ? centsToAmount(s.expectedCents) : '—'}</td>
-                <td className="px-3 py-2.5 tabular text-ink-muted">{s.closedAt ? centsToAmount(s.countedCents) : '—'}</td>
+                <td className="px-3 py-2.5 tabular text-ink-muted">{s.closedAt ? centsToAmount(s.expectedCents) : ', '}</td>
+                <td className="px-3 py-2.5 tabular text-ink-muted">{s.closedAt ? centsToAmount(s.countedCents) : ', '}</td>
                 <td className="px-3 py-2.5">
                   {s.closedAt ? (
                     <span className={`font-bold tabular text-[13px] ${s.varianceCents === 0 ? 'text-paid-text' : Math.abs(s.varianceCents) > 10000 ? 'text-danger-text' : 'text-pending-text'}`}>
@@ -127,7 +127,7 @@ export function Shifts() {
                   <button
                     onClick={() => openReport(s.id)}
                     className="text-[12px] font-bold text-brand hover:underline"
-                    title={s.closedAt ? 'Z report — frozen close-out' : 'X report — live totals'}
+                    title={s.closedAt ? 'Z report, frozen close-out' : 'X report, live totals'}
                   >
                     {s.closedAt ? 'Z' : 'X'}
                   </button>
@@ -169,7 +169,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 // (nothing is final) and Z once it's closed (the signed-off close-out).
 function ShiftReportModal({ report, loading, onClose }: { report: ShiftReport | null; loading: boolean; onClose: () => void }) {
   return (
-    <Modal open onClose={onClose} title={report && !report.open ? 'Z report — shift close-out' : 'X report — shift so far'} size="sm">
+    <Modal open onClose={onClose} title={report && !report.open ? 'Z report, shift close-out' : 'X report, shift so far'} size="sm">
       {loading || !report ? (
         <div className="py-10 flex justify-center"><Spinner /></div>
       ) : (
@@ -274,7 +274,7 @@ function CloseModal({ shift, onClose, onDone }: { shift: Shift; onClose: () => v
     try {
       const closed = await api.post<Shift>('/api/v1/shifts/close', { countedCents: counted })
       const v = closed.varianceCents
-      toast.success('Shift closed', v === 0 ? 'Perfect count — zero variance' : `Variance ${v > 0 ? '+' : ''}${centsToAmount(v)}`)
+      toast.success('Shift closed', v === 0 ? 'Perfect count, zero variance' : `Variance ${v > 0 ? '+' : ''}${centsToAmount(v)}`)
       onDone()
     } catch (e: any) {
       setError(e?.message)

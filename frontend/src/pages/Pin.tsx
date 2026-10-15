@@ -63,7 +63,7 @@ export function Pin() {
       setPin('')
       const msg = err?.message || 'Wrong PIN'
       setError(msg)
-      if (/locked/i.test(msg)) setLockNote('Too many attempts — the account is temporarily locked.')
+      if (/locked/i.test(msg)) setLockNote('Too many attempts, the account is temporarily locked.')
     } finally {
       busyRef.current = false
       setBusy(false)
@@ -135,11 +135,11 @@ export function Pin() {
   return (
     <div className="min-h-full flex flex-col items-center justify-center bg-shell px-4 py-8">
       <div className="w-full max-w-sm">
-        <h1 className="text-on-shell text-lg font-bold text-center mb-1">
+        <h1 className="text-ink text-lg font-bold text-center mb-1">
           {recover ? 'Forgot your PIN?' : selected ? `Hello, ${selected.fullName}` : branding.store_name || branding.app_name}
         </h1>
-        <p className="text-on-shell-muted text-sm text-center mb-5">
-          {recover ? 'The owner can get you back in — takes a minute' : selected ? 'Enter your 4-digit PIN' : 'Who is starting this shift?'}
+        <p className="text-ink-muted text-sm text-center mb-5">
+          {recover ? 'The owner can get you back in, it takes a minute' : selected ? 'Enter your 4-digit PIN' : 'Who is starting this shift?'}
         </p>
 
         {recover ? (
@@ -160,7 +160,7 @@ export function Pin() {
                 } catch {
                   // Extremely unlikely (pin just set) — fall back to the pad.
                   setUserId(uid)
-                  toast.success('PIN changed — sign in with it now')
+                  toast.success('PIN changed, sign in with it now')
                 }
               }
               finish()
@@ -251,7 +251,7 @@ export function Pin() {
 
         <button
           onClick={() => navigate('/login')}
-          className="w-full mt-4 min-h-11 flex items-center justify-center text-center text-sm font-semibold text-on-shell-muted hover:text-on-shell"
+          className="w-full mt-4 min-h-11 flex items-center justify-center text-center text-sm font-semibold text-ink-muted hover:text-ink"
         >
           Password sign-in instead
         </button>
@@ -309,7 +309,7 @@ function ForgotPinPanel({
       })
       setState({ step: 'code', requestId: r.requestId, username: r.username })
     } catch (err: any) {
-      setError(err?.message || 'Could not send the request — check the internet')
+      setError(err?.message || 'Could not send the request, check the internet')
     } finally {
       setBusy(false)
     }
@@ -335,10 +335,10 @@ function ForgotPinPanel({
       const r = await api.post<{ username: string; userId: number }>('/api/v1/auth/forgot-pin/redeem', {
         requestId: state.requestId, code: code.trim(), pin,
       })
-      toast.success('PIN changed', 'You\u2019re signed in — welcome back.')
+      toast.success('PIN changed', 'You\u2019re signed in, welcome back.')
       onDone(r.userId, pin)
     } catch (err: any) {
-      setError(err?.message || 'That code didn\u2019t work — check the digits')
+      setError(err?.message || 'That code didn\u2019t work, check the digits')
     } finally {
       setBusy(false)
     }

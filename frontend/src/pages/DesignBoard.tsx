@@ -101,7 +101,7 @@ export function DesignBoard() {
     <div className="space-y-4">
       <Card
         title="Design & production board"
-        sub={canDelegate ? 'Custom work: artwork, branding runs, custom merch' : 'Your assigned jobs — move them as you progress'}
+        sub={canDelegate ? 'Custom work: artwork, branding runs, custom merch' : 'Your assigned jobs, move them as you progress'}
         actions={canDelegate && <Button variant="primary" size="sm" onClick={() => setCreating(true)}>+ Job</Button>}
       >
         {empty && (
@@ -109,7 +109,7 @@ export function DesignBoard() {
             <EmptyState
               icon={<Palette size={24} strokeWidth={2.25} />}
               title="No design jobs yet"
-              body={canManage ? 'Create the first job — it will land in the Queue column.' : 'Jobs will appear here as they are created.'}
+              body={canManage ? 'Create the first job, it will land in the Queue column.' : 'Jobs will appear here as they are created.'}
             />
           </div>
         )}
@@ -146,12 +146,12 @@ export function DesignBoard() {
                       )}
                       {j.notes && <p className="text-[12px] text-ink-muted mt-1 line-clamp-2">{j.notes}</p>}
                       <div className="flex items-center justify-between mt-2">
-                        <span className="text-[11px] text-ink-subtle">{j.assigneeName || j.createdBy || '—'}</span>
+                        <span className="text-[11px] text-ink-subtle">{j.assigneeName || j.createdBy || ', '}</span>
                         <span className="flex items-center gap-1.5">
                           <button
                             type="button"
                             onClick={() => setAttachFor(j)}
-                            aria-label={`Attachments — ${j.title}`}
+                            aria-label={`Attachments, ${j.title}`}
                             title="Attachments"
                             className="inline-flex items-center gap-1 text-[11px] font-semibold text-ink-muted border-2 border-line-strong rounded-input px-1.5 py-1 bg-surface hover:bg-surface-muted hover:text-ink"
                           >
@@ -162,8 +162,8 @@ export function DesignBoard() {
                             <button
                               type="button"
                               onClick={() => setNotifyFor(j)}
-                              title="Contact the customer on WhatsApp — you review the message before sending"
-                              aria-label={`Contact customer on WhatsApp — ${j.title}`}
+                              title="Contact the customer on WhatsApp, you review the message before sending"
+                              aria-label={`Contact customer on WhatsApp, ${j.title}`}
                               className="inline-flex items-center gap-1 text-[11px] font-bold text-paid-text border-2 border-paid-text/40 rounded-input px-1.5 py-1 bg-paid-bg hover:brightness-95"
                             >
                               <MessageCircle size={12} strokeWidth={2.5} aria-hidden />
@@ -262,7 +262,7 @@ function JobModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => vo
         <Field label="Product">
           <Input value={form.productName} onChange={(e) => setForm({ ...form, productName: e.target.value })} placeholder="e.g. Premium Heavyweight Tee" />
         </Field>
-        <Field label="Customer" hint="Pick from Customers tab for linked ledger — or type a new name.">
+        <Field label="Customer" hint="Pick from Customers tab for linked ledger, or type a new name.">
           <Input
             value={form.customerName}
             onChange={(e) => { setForm({ ...form, customerName: e.target.value }); setCustQuery(e.target.value) }}
@@ -336,7 +336,7 @@ function AttachmentsModal({
 
   const upload = async (file: File) => {
     if (file.size > MAX_ATTACHMENT_BYTES) {
-      toast.error('File too large', `${file.name} is ${(file.size / (1024 * 1024)).toFixed(1)} MB — the cap is 5 MB`)
+      toast.error('File too large', `${file.name} is ${(file.size / (1024 * 1024)).toFixed(1)} MB, the cap is 5 MB`)
       if (fileRef.current) fileRef.current.value = ''
       return
     }
@@ -384,7 +384,7 @@ function AttachmentsModal({
     <Modal
       open
       onClose={onClose}
-      title={`Attachments — ${job.title}`}
+      title={`Attachments, ${job.title}`}
       size="md"
       footer={<Button variant="primary" onClick={onClose}>Close</Button>}
     >
@@ -411,7 +411,7 @@ function AttachmentsModal({
         <EmptyState
           icon={<Paperclip size={24} strokeWidth={2.25} />}
           title="No attachments yet"
-          body={canManage ? 'Attach artwork, briefs or reference photos — everyone on the board sees them.' : 'Files attached to this job will appear here.'}
+          body={canManage ? 'Attach artwork, briefs or reference photos, everyone on the board sees them.' : 'Files attached to this job will appear here.'}
         />
       ) : (
         <ul className="divide-y divide-line border-2 border-line rounded-input overflow-hidden">
@@ -479,7 +479,7 @@ function WhatsAppModal({ job, onClose }: { job: DesignJob; onClose: () => void }
   }, [job.id])
 
   return (
-    <Modal open onClose={onClose} title={`Contact customer — ${job.title}`} size="sm"
+    <Modal open onClose={onClose} title={`Contact customer, ${job.title}`} size="sm"
       footer={<Button variant="primary" onClick={onClose}>Close</Button>}>
       {busy && <div className="py-6 flex justify-center"><Spinner /></div>}
       {error && (
@@ -495,13 +495,13 @@ function WhatsAppModal({ job, onClose }: { job: DesignJob; onClose: () => void }
       {contact && (
         <div className="space-y-3">
           <p className="text-[13px] text-ink-muted">
-            Ready for pickup — message to <span className="font-bold text-ink">{contact.phone}</span>:
+            Ready for pickup, message to <span className="font-bold text-ink">{contact.phone}</span>:
           </p>
           <p className="bg-surface-muted border border-line rounded-input px-3 py-2.5 text-[13px] text-ink select-all">
             {contact.message}
           </p>
           <p className="text-[11.5px] text-ink-subtle">
-            WhatsApp opens with this message prefilled — you review it and press send. The contact is logged on
+            WhatsApp opens with this message prefilled, you review it and press send. The contact is logged on
             the order's timeline; the app never sends automatically or claims delivery.
           </p>
           <Button
@@ -510,7 +510,7 @@ function WhatsAppModal({ job, onClose }: { job: DesignJob; onClose: () => void }
             className="w-full"
             onClick={() => {
               window.open(contact.url, '_blank', 'noopener')
-              toast.success('WhatsApp opened', 'Send the message from there — the attempt is on the order timeline.')
+              toast.success('WhatsApp opened', 'Send the message from there, the attempt is on the order timeline.')
             }}
           >
             <MessageCircle size={16} strokeWidth={2.5} aria-hidden className="mr-2" />

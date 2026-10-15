@@ -11,9 +11,9 @@ import (
 func errInvalidProduct(msg string) error { return errors.New(msg) }
 
 const (
-        OrderPending  = "PENDING"
-        OrderPaid     = "PAID"
-        OrderVoided   = "VOIDED"
+        OrderPending = "PENDING"
+        OrderPaid    = "PAID"
+        OrderVoided  = "VOIDED"
 
         // Order-event kinds (per-order activity timeline).
         OrderEventJob      = "job"
@@ -21,15 +21,15 @@ const (
         OrderEventNote     = "note"
         OrderEventStatus   = "status"
 
-        PaymentPending    = "PENDING"
-        PaymentCompleted  = "COMPLETED"
-        PaymentFailed     = "FAILED"
-        PaymentVoided     = "VOIDED"
+        PaymentPending   = "PENDING"
+        PaymentCompleted = "COMPLETED"
+        PaymentFailed    = "FAILED"
+        PaymentVoided    = "VOIDED"
 
-        MethodCash    = "cash"
-        MethodMpesa   = "mpesa"
-        MethodAccount = "account"  // charge to a customer tab (customer credit)
-        MethodCredit  = "credit"   // pay from prepaid store credit balance
+        MethodCash     = "cash"
+        MethodMpesa    = "mpesa"
+        MethodAccount  = "account"  // charge to a customer tab (customer credit)
+        MethodCredit   = "credit"   // pay from prepaid store credit balance
         MethodPaystack = "paystack" // card / mobile money via Paystack checkout
 
         // Store-credit ledger kinds (customer_ledger.kind). Store credit is
@@ -98,12 +98,12 @@ type TokenResponse struct {
 }
 
 type Role struct {
-        ID          int64    `json:"id"`
-        Name        string   `json:"name"`
-        Description string   `json:"description"`
-        Permissions []string `json:"permissions"`
-        System      bool     `json:"system"`
-        HomePage    string   `json:"homePage"`            // landing route after login ("" = permission cascade)
+        ID          int64            `json:"id"`
+        Name        string           `json:"name"`
+        Description string           `json:"description"`
+        Permissions []string         `json:"permissions"`
+        System      bool             `json:"system"`
+        HomePage    string           `json:"homePage"`            // landing route after login ("" = permission cascade)
         Dashboard   *DashboardConfig `json:"dashboard,omitempty"` // per-role dashboard tailoring
 }
 
@@ -144,26 +144,26 @@ type Product struct {
 // ---- Orders ----
 
 type CheckoutItem struct {
-        ProductID     int64 `json:"productId" binding:"required"`
-        Qty           int   `json:"qty" binding:"required,min=1"`
+        ProductID      int64 `json:"productId" binding:"required"`
+        Qty            int   `json:"qty" binding:"required,min=1"`
         UnitPriceCents int64 `json:"unitPriceCents"` // optional override (permission-gated)
 }
 
 type CheckoutRequest struct {
-        Items             []CheckoutItem `json:"items" binding:"required,min=1"`
-        PaymentMethod     string         `json:"paymentMethod" binding:"required,oneof=cash mpesa account credit paystack"`
-        PaymentMode       string         `json:"paymentMode"`   // auto|stk|manual (mpesa only)
-        CustomerPhone     string         `json:"customerPhone"`
-        CustomerName      string         `json:"customerName"`
-        CustomerEmail     string         `json:"customerEmail"` // paystack receipt + receipt email
-        CustomerID        int64          `json:"customerId"` // required for account tabs + credit
-        BuyerPIN          string         `json:"buyerPin"`  // eTIMS: customer KRA PIN — turns the receipt into a tax invoice
-        Note              string         `json:"note"`
-        ClientUUID        string         `json:"clientUuid"` // offline idempotency key
-        DiscountCents     int64          `json:"discountCents"` // order-level discount (permission-gated)
-        DiscountLabel     string         `json:"discountLabel"` // e.g. "staff 10%", "negotiated"
-        RedeemPoints      int64          `json:"redeemPoints"`  // loyalty points spent as payment (permission-gated)
-        SplitPayments     []SplitLeg     `json:"splitPayments"` // optional mixed tender (part cash, part M-Pesa…)
+        Items         []CheckoutItem `json:"items" binding:"required,min=1"`
+        PaymentMethod string         `json:"paymentMethod" binding:"required,oneof=cash mpesa account credit paystack"`
+        PaymentMode   string         `json:"paymentMode"` // auto|stk|manual (mpesa only)
+        CustomerPhone string         `json:"customerPhone"`
+        CustomerName  string         `json:"customerName"`
+        CustomerEmail string         `json:"customerEmail"` // paystack receipt + receipt email
+        CustomerID    int64          `json:"customerId"`    // required for account tabs + credit
+        BuyerPIN      string         `json:"buyerPin"`      // eTIMS: customer KRA PIN — turns the receipt into a tax invoice
+        Note          string         `json:"note"`
+        ClientUUID    string         `json:"clientUuid"`    // offline idempotency key
+        DiscountCents int64          `json:"discountCents"` // order-level discount (permission-gated)
+        DiscountLabel string         `json:"discountLabel"` // e.g. "staff 10%", "negotiated"
+        RedeemPoints  int64          `json:"redeemPoints"`  // loyalty points spent as payment (permission-gated)
+        SplitPayments []SplitLeg     `json:"splitPayments"` // optional mixed tender (part cash, part M-Pesa…)
 }
 
 // SplitLeg is one tender in a mixed payment. Loyalty redemption is NOT a
@@ -171,8 +171,8 @@ type CheckoutRequest struct {
 type SplitLeg struct {
         Method      string `json:"method" binding:"required,oneof=cash mpesa paystack credit"`
         AmountCents int64  `json:"amountCents"`
-        Phone       string `json:"phone"`  // mpesa leg (auto/stk)
-        Email       string `json:"email"`  // paystack leg
+        Phone       string `json:"phone"` // mpesa leg (auto/stk)
+        Email       string `json:"email"` // paystack leg
 }
 
 type OrderItem struct {
@@ -193,8 +193,8 @@ type Payment struct {
         AmountCents       int64  `json:"amountCents"`
         Status            string `json:"status"`
         Phone             string `json:"phone"`
-        Email             string `json:"email"` // paystack: address the charge was opened for
-        MpesaReceipt      string `json:"mpesaReceipt"` // mpesa code, or the paystack reference once completed
+        Email             string `json:"email"`             // paystack: address the charge was opened for
+        MpesaReceipt      string `json:"mpesaReceipt"`      // mpesa code, or the paystack reference once completed
         CheckoutRequestID string `json:"checkoutRequestId"` // daraja checkout id, or paystack reference
         ResultDesc        string `json:"resultDesc"`
         Discrepancy       bool   `json:"discrepancy"`
@@ -203,35 +203,35 @@ type Payment struct {
 }
 
 type Order struct {
-        ID            int64       `json:"id"`
-        Number        string      `json:"number"`
-        Status        string      `json:"status"`
-        SubtotalCents int64       `json:"subtotalCents"`
-        DiscountCents int64       `json:"discountCents"`
-        DiscountLabel string      `json:"discountLabel"`
-        PointsRedeemed int64      `json:"pointsRedeemed"`
-        TaxCents      int64       `json:"taxCents"`
-        TotalCents    int64       `json:"totalCents"`
-        TaxPercent    float64     `json:"taxPercent"`
-        TaxIncluded   bool        `json:"taxIncluded"`
-        CashierID     int64       `json:"cashierId"`
-        CashierName   string      `json:"cashierName"`
-        CustomerName  string      `json:"customerName"`
-        CustomerID    int64       `json:"customerId"`
-        Note          string      `json:"note"`
-        ClientUUID    string      `json:"clientUuid"`
-        Discrepancy   bool        `json:"discrepancy"`
-        CreatedAt     string      `json:"createdAt"`
-        PaidAt        string      `json:"paidAt"`
-        VoidedAt      string      `json:"voidedAt"`
-        VoidReason    string      `json:"voidReason"`
-        Items         []OrderItem `json:"items"`
-        Payments      []Payment   `json:"payments"`
+        ID             int64       `json:"id"`
+        Number         string      `json:"number"`
+        Status         string      `json:"status"`
+        SubtotalCents  int64       `json:"subtotalCents"`
+        DiscountCents  int64       `json:"discountCents"`
+        DiscountLabel  string      `json:"discountLabel"`
+        PointsRedeemed int64       `json:"pointsRedeemed"`
+        TaxCents       int64       `json:"taxCents"`
+        TotalCents     int64       `json:"totalCents"`
+        TaxPercent     float64     `json:"taxPercent"`
+        TaxIncluded    bool        `json:"taxIncluded"`
+        CashierID      int64       `json:"cashierId"`
+        CashierName    string      `json:"cashierName"`
+        CustomerName   string      `json:"customerName"`
+        CustomerID     int64       `json:"customerId"`
+        Note           string      `json:"note"`
+        ClientUUID     string      `json:"clientUuid"`
+        Discrepancy    bool        `json:"discrepancy"`
+        CreatedAt      string      `json:"createdAt"`
+        PaidAt         string      `json:"paidAt"`
+        VoidedAt       string      `json:"voidedAt"`
+        VoidReason     string      `json:"voidReason"`
+        Items          []OrderItem `json:"items"`
+        Payments       []Payment   `json:"payments"`
         // Connected job lifecycle: fulfilment jobs spawned from this sale
         // (loaded on the detail view) + the last WhatsApp contact attempt.
-        Jobs           []DesignJob  `json:"jobs,omitempty"`
-        AssignedToID   int64        `json:"assignedToId"`
-        NotifiedAt     string       `json:"notifiedAt"`
+        Jobs         []DesignJob `json:"jobs,omitempty"`
+        AssignedToID int64       `json:"assignedToId"`
+        NotifiedAt   string      `json:"notifiedAt"`
         // ERP depth (P6): eTIMS-ready invoice identity. BuyerPIN is the
         // customer's KRA PIN (present ⇒ tax invoice); InvoiceNumber is the
         // document number (defaults to the order number).
@@ -299,10 +299,10 @@ type Customer struct {
         Phone            string `json:"phone"`
         Email            string `json:"email"`
         Notes            string `json:"notes"`
-        CreditLimitCents int64  `json:"creditLimitCents"`  // 0 = no tab allowed
+        CreditLimitCents int64  `json:"creditLimitCents"` // 0 = no tab allowed
         LoyaltyPoints    int64  `json:"loyaltyPoints"`
-        BalanceCents     int64  `json:"balanceCents"`      // >0 means the customer owes the shop
-        StoreCreditCents int64  `json:"storeCreditCents"`  // >0 means the shop owes the customer (prepaid)
+        BalanceCents     int64  `json:"balanceCents"`     // >0 means the customer owes the shop
+        StoreCreditCents int64  `json:"storeCreditCents"` // >0 means the shop owes the customer (prepaid)
         Active           bool   `json:"active"`
         CreatedAt        string `json:"createdAt"`
         UpdatedAt        string `json:"updatedAt"`
@@ -323,9 +323,9 @@ type LedgerEntry struct {
 // ---- Suppliers & stock-in ----
 
 const (
-        POPending   = "PENDING"
-        POReceived  = "RECEIVED"
-        POCancelled = "CANCELLED"
+        POPending     = "PENDING"
+        POReceived    = "RECEIVED"
+        POCancelled   = "CANCELLED"
         TakeOpen      = "OPEN"
         TakeApplied   = "APPLIED"
         TakeCancelled = "CANCELLED"
@@ -551,13 +551,13 @@ type TeamSyncStatus struct {
         // Hardened-sync surface: events that could not be applied or pushed
         // (quarantined to the dead-letter table) — visible, retryable, never
         // silently dropped.
-        FailedEvents int64             `json:"failedEvents"`
+        FailedEvents int64 `json:"failedEvents"`
         // v1.3.2 outbox reconciliation: local write failures of the outbox
         // row itself (the mutation committed, the sync event did not). The
         // backfill re-emits these; the counter stays visible until reset.
-        OutboxFailures  int64  `json:"outboxFailures"`
-        OutboxLastError string `json:"outboxLastError,omitempty"`
-        Failed       []SyncFailedEvent `json:"failed"`
+        OutboxFailures  int64             `json:"outboxFailures"`
+        OutboxLastError string            `json:"outboxLastError,omitempty"`
+        Failed          []SyncFailedEvent `json:"failed"`
 }
 
 // SyncFailedEvent is one quarantined sync event shown in the Team panel.
@@ -665,12 +665,12 @@ const (
 )
 
 type QuoteItem struct {
-        ProductID     int64  `json:"productId"`
-        SKU           string `json:"sku"`
-        Name          string `json:"name"`
-        Qty           int    `json:"qty"`
-        UnitPriceCents int64 `json:"unitPriceCents"`
-        LineTotalCents int64 `json:"lineTotalCents"`
+        ProductID      int64  `json:"productId"`
+        SKU            string `json:"sku"`
+        Name           string `json:"name"`
+        Qty            int    `json:"qty"`
+        UnitPriceCents int64  `json:"unitPriceCents"`
+        LineTotalCents int64  `json:"lineTotalCents"`
 }
 
 type Quote struct {
@@ -714,6 +714,7 @@ type TeamDevice struct {
         LastSeen   string `json:"lastSeen"`
         ThisDevice bool   `json:"thisDevice"`
         Approved   bool   `json:"approved"`
+        Revoked    bool   `json:"revoked"`
 }
 
 type TeamSyncConfigRequest struct {
@@ -737,15 +738,15 @@ type AuditEntry struct {
 }
 
 type PrintJob struct {
-        ID         int64  `json:"id"`
-        OrderID    int64  `json:"orderId"`
+        ID          int64  `json:"id"`
+        OrderID     int64  `json:"orderId"`
         OrderNumber string `json:"orderNumber"`
-        Status     string `json:"status"`
-        Target     string `json:"target"`
-        Attempts   int    `json:"attempts"`
-        LastError  string `json:"lastError"`
-        CreatedAt  string `json:"createdAt"`
-        PrintedAt  string `json:"printedAt"`
+        Status      string `json:"status"`
+        Target      string `json:"target"`
+        Attempts    int    `json:"attempts"`
+        LastError   string `json:"lastError"`
+        CreatedAt   string `json:"createdAt"`
+        PrintedAt   string `json:"printedAt"`
 }
 
 type SyncRequest struct {
@@ -753,11 +754,11 @@ type SyncRequest struct {
 }
 
 type SyncResult struct {
-        ClientUUID string `json:"clientUuid"`
-        OrderID    int64  `json:"orderId"`
+        ClientUUID  string `json:"clientUuid"`
+        OrderID     int64  `json:"orderId"`
         OrderNumber string `json:"orderNumber"`
-        Status     string `json:"status"`
-        Error      string `json:"error,omitempty"`
+        Status      string `json:"status"`
+        Error       string `json:"error,omitempty"`
         // Rejected=true means the server UNDERSTOOD the sale and definitively
         // refused it (stock, credit limit, duplicate receipt…) — the offline
         // queue may drop it after telling staff. Anything else (5xx text, HTML
@@ -811,17 +812,17 @@ type PaystackVerifyRequest struct {
 // identifiers only — no secret keys).
 type PaymentConfig struct {
         Paystack struct {
-                Enabled   bool   `json:"enabled"`
-                PublicKey string `json:"publicKey"`
-                Currency  string `json:"currency"`
-                Callback  string `json:"callbackUrl"`
-                Configured bool `json:"configured"` // secret key present server-side
-                FromEnv   bool `json:"fromEnv"`    // keys supplied via environment
+                Enabled    bool   `json:"enabled"`
+                PublicKey  string `json:"publicKey"`
+                Currency   string `json:"currency"`
+                Callback   string `json:"callbackUrl"`
+                Configured bool   `json:"configured"` // secret key present server-side
+                FromEnv    bool   `json:"fromEnv"`    // keys supplied via environment
         } `json:"paystack"`
         Mpesa struct {
-                Env    string `json:"env"`
-                Route  string `json:"route"` // paystack | daraja | mock | manual
-                Till   string `json:"till"`
+                Env     string `json:"env"`
+                Route   string `json:"route"` // paystack | daraja | mock | manual
+                Till    string `json:"till"`
                 Paybill string `json:"paybill"`
         } `json:"mpesa"`
         CreditEnabled  bool `json:"creditEnabled"`
@@ -885,15 +886,15 @@ type CompleteCountRequest struct {
 // Redeeming converts the remaining value into the customer's prepaid store
 // credit in one step (spending then works partially, from the balance).
 type GiftCard struct {
-        ID                int64  `json:"id"`
-        Code              string `json:"code"`
-        OrderID           int64  `json:"orderId"`
-        InitialCents      int64  `json:"initialCents"`
-        RemainingCents    int64  `json:"remainingCents"`
-        Status            string `json:"status"` // ACTIVE | EMPTY
-        IssuedAt          string `json:"issuedAt"`
-        RedeemedAt        string `json:"redeemedAt"`
-        RedeemedByCustomer int64 `json:"redeemedByCustomerId"`
+        ID                 int64  `json:"id"`
+        Code               string `json:"code"`
+        OrderID            int64  `json:"orderId"`
+        InitialCents       int64  `json:"initialCents"`
+        RemainingCents     int64  `json:"remainingCents"`
+        Status             string `json:"status"` // ACTIVE | EMPTY
+        IssuedAt           string `json:"issuedAt"`
+        RedeemedAt         string `json:"redeemedAt"`
+        RedeemedByCustomer int64  `json:"redeemedByCustomerId"`
 }
 
 type RedeemGiftCardRequest struct {

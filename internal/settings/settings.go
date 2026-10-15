@@ -17,7 +17,7 @@ import (
         "posapp/internal/database"
 )
 
-const MaskToken = "__SET__" // echoed for configured secrets; never the value
+const MaskToken = "__SET__"    // echoed for configured secrets; never the value
 const ClearToken = "__CLEAR__" // explicit "remove this credential" from the UI
 
 // IsMaskToken reports whether v is the masked-secret sentinel.
@@ -207,6 +207,7 @@ func (s *Store) Set(key, value string) error {
 //     stray backspace, a browser autofill wipe) must never silently break
 //     Paystack at checkout; removing a credential is explicit
 //   - ClearToken removes the stored secret
+//
 // Returns the keys actually changed.
 func (s *Store) Update(kv map[string]string) ([]string, error) {
         changed := make([]string, 0, len(kv))
@@ -242,16 +243,54 @@ func (s *Store) Update(kv map[string]string) ([]string, error) {
         return changed, nil
 }
 
+// internalKeys are runtime bookkeeping keys the app writes itself (sync
+// state, device identity, synced logo payloads). They live in the same
+// settings table but are NOT admin-editable and never belong in an API
+// response: the Settings page round-trips whatever the GET returned, so
+// exposing them made every save fail with "unknown setting key" (the
+// store-name report-as-failed bug). Genuinely mistyped keys still fail
+// loudly; only these runtime keys are hidden.
+var internalKeys = map[string]bool{
+        "device_id":                true,
+        "sync_source":              true,
+        "sync_bootstrap_at":        true,
+        "sync_registered":          true,
+        "sync_approved":            true,
+        "sync_store_pending":       true,
+        "sync_auto_approve":        true,
+        "sync_disabled":            true,
+        "sync_last_push":           true,
+        "sync_last_pull":           true,
+        "sync_last_error":          true,
+        "sync_outbox_last_error":   true,
+        "brand_logo_data":          true, // synced logo data URL (can be huge)
+        "paystack_via_cloud":       true, // cloud route bookkeeping
+        "paystack_enabled_touched": true, // one-time migration marker
+}
+
+// IsInternalKey reports whether a settings key is runtime bookkeeping that
+// the API neither serves nor accepts. syncstate_* cursors/counters are
+// matched by prefix (they embed the team code).
+func IsInternalKey(k string) bool {
+        if internalKeys[k] {
+                return true
+        }
+        return strings.HasPrefix(k, "syncstate_")
+}
+
 // Snapshot returns all settings with secrets masked for API responses.
 // jwt_secret is never exposed: it is not API-writable, so echoing it back
 // (even masked) only invites the update endpoint to reject the whole save —
-// the exact bug that broke "Save changes" in admin Settings.
+// the exact bug that broke "Save changes" in admin Settings. Runtime
+// bookkeeping keys (sync state, device identity) are hidden for the same
+// reason: they are not API-writable, and an echo of them must never fail
+// the save.
 func (s *Store) Snapshot() map[string]any {
         s.mu.RLock()
         defer s.mu.RUnlock()
         out := make(map[string]any, len(s.cache))
         for k, v := range s.cache {
-                if k == "jwt_secret" {
+                if k == "jwt_secret" || IsInternalKey(k) {
                         continue
                 }
                 if isSecretKey(k) {
@@ -286,7 +325,7 @@ func (s *Store) Branding() map[string]any {
                 // eTIMS (P6): the shop's KRA PIN — when set, the receipt
                 // gains the tax-invoice header and the checkout rail offers
                 // a buyer PIN field.
-                "kra_pin":         s.GetString("kra_pin", ""),
+                "kra_pin": s.GetString("kra_pin", ""),
         }
 }
 

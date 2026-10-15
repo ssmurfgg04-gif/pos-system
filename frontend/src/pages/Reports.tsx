@@ -20,7 +20,7 @@ export function Reports() {
       <Tabs
         tabs={[
           { key: 'daily' as const, label: 'Daily', icon: <BarChart3 size={15} strokeWidth={2.25} aria-hidden /> },
-          { key: 'monthly' as const, label: 'Monthly — KRA returns', icon: <FileSpreadsheet size={15} strokeWidth={2.25} aria-hidden /> },
+          { key: 'monthly' as const, label: 'Monthly, KRA returns', icon: <FileSpreadsheet size={15} strokeWidth={2.25} aria-hidden /> },
         ]}
         value={view}
         onChange={setView}
@@ -55,7 +55,7 @@ function Daily() {
       // A failed request must never masquerade as "No sales on <date>" —
       // an owner reading that during an outage panics. Keep the last good
       // data on screen and say what actually happened.
-      setLoadError(e?.message || 'Could not load the report — check the connection and retry')
+      setLoadError(e?.message || 'Could not load the report, check the connection and retry')
     } finally {
       setLoading(false)
     }
@@ -228,7 +228,7 @@ function Monthly() {
     try {
       setData(await api.get<MonthlySummary>(`/api/v1/reports/monthly?month=${m}`))
     } catch (e: any) {
-      setLoadError(e?.message || 'Could not load the report — check the connection and retry')
+      setLoadError(e?.message || 'Could not load the report, check the connection and retry')
     } finally {
       setLoading(false)
     }
@@ -252,7 +252,7 @@ function Monthly() {
   return (
     <Card
       title="Monthly VAT return"
-      sub="VAT figures for the accountant — attach the CSV to your iTax return"
+      sub="VAT figures for the accountant, attach the CSV to your iTax return"
       actions={
         <div className="flex gap-2 items-center">
           <Input type="month" value={month} max={thisMonth()} onChange={(e) => setMonth(e.target.value)} className="w-40" />
@@ -307,7 +307,7 @@ function Monthly() {
             {data.ordersVoided > 0 && <StatusPill status="void" label={`${data.ordersVoided} voided orders (not in totals)`} />}
             {data.discrepancies > 0 && <StatusPill status="danger" label={`${data.discrepancies} amount discrepancies`} />}
             {data.ordersVoided === 0 && data.discrepancies === 0 && (
-              <StatusPill status="paid" label="Clean month — no voids or discrepancies" />
+              <StatusPill status="paid" label="Clean month, no voids or discrepancies" />
             )}
           </div>
         </>

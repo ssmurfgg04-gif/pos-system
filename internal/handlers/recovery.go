@@ -42,7 +42,7 @@ func (h *H) HasUsers(c *gin.Context) {
 // unlocks forgot-password if the password is ever lost).
 func (h *H) Bootstrap(c *gin.Context) {
         if !h.LoginRL.Allow("bootstrap") {
-                h.fail(c, 429, "too many attempts — wait a minute")
+                h.fail(c, 429, "too many attempts, wait a minute")
                 return
         }
         db, err := h.shopDB(c)
@@ -53,7 +53,7 @@ func (h *H) Bootstrap(c *gin.Context) {
         var n int
         db.QueryRow(`SELECT COUNT(*) FROM users WHERE is_active = 1`).Scan(&n)
         if n > 0 {
-                h.fail(c, 409, "accounts already exist — sign in instead")
+                h.fail(c, 409, "accounts already exist, sign in instead")
                 return
         }
         var body bootstrapBody
@@ -70,7 +70,7 @@ func (h *H) Bootstrap(c *gin.Context) {
                 return
         }
         if auth.IsDefaultPassword(body.Password) {
-                h.fail(c, 400, "choose a stronger password — that one is public")
+                h.fail(c, 400, "choose a stronger password, that one is public")
                 return
         }
         pinHash := ""
@@ -148,7 +148,7 @@ type forgotBody struct {
 func (h *H) ForgotPassword(c *gin.Context) {
         key := "forgot"
         if !h.LoginRL.Allow(key) {
-                h.fail(c, 429, "too many attempts — wait a minute")
+                h.fail(c, 429, "too many attempts, wait a minute")
                 return
         }
         var body forgotBody

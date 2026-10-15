@@ -109,18 +109,18 @@ var seedCategories = []struct{ name, slug string }{
 }
 
 var seedProducts = []seedProduct{
-        {"TS-001", "4001234500011", "Classic Cotton Tee — Black", "tshirts", 55000, 32000, 40, true},
-        {"TS-002", "4001234500028", "Classic Cotton Tee — White", "tshirts", 55000, 32000, 35, true},
+        {"TS-001", "4001234500011", "Classic Cotton Tee, Black", "tshirts", 55000, 32000, 40, true},
+        {"TS-002", "4001234500028", "Classic Cotton Tee, White", "tshirts", 55000, 32000, 35, true},
         {"TS-003", "4001234500035", "Premium Heavyweight Tee", "tshirts", 85000, 48000, 22, true},
         {"TS-004", "4001234500042", "Oversized Streetwear Tee", "tshirts", 90000, 52000, 18, true},
-        {"MG-001", "4001234500059", "Ceramic Mug — 11oz", "mugs-bottles", 45000, 22000, 50, true},
+        {"MG-001", "4001234500059", "Ceramic Mug, 11oz", "mugs-bottles", 45000, 22000, 50, true},
         {"MG-002", "4001234500066", "Enamel Camping Mug", "mugs-bottles", 60000, 34000, 25, true},
         {"MG-003", "4001234500073", "Insulated Travel Tumbler", "mugs-bottles", 120000, 70000, 15, true},
         {"AC-001", "4001234500080", "Silicone Wristband", "accessories", 15000, 5000, 200, true},
         {"AC-002", "4001234500097", "Fabric Wristband", "accessories", 20000, 8000, 150, true},
         {"AC-003", "4001234500103", "Canvas Tote Bag", "accessories", 55000, 28000, 30, true},
         {"AC-004", "4001234500110", "Embroidered Cap", "accessories", 70000, 40000, 20, true},
-        {"SV-001", "", "Custom Print Run — per design", "services", 25000, 0, 0, false},
+        {"SV-001", "", "Custom Print Run, per design", "services", 25000, 0, 0, false},
         {"SV-002", "", "Artwork & Branding Setup", "services", 100000, 0, 0, false},
 }
 
@@ -252,13 +252,13 @@ func (d *DB) seedRoles() error {
         for name, perms := range models.SeededRolePermissions {
                 jsonPerms, _ := json.Marshal(perms)
                 desc := map[string]string{
-                        "Admin":      "Technical owner — full access to every module",
-                        "Owner":      "Business owner — full control of accounts, reports, settings and staff",
+                        "Admin":      "Technical owner, full access to every module",
+                        "Owner":      "Business owner, full control of accounts, reports, settings and staff",
                         "Cashier":    "Point of sale: checkout, manual M-Pesa entry, shifts",
                         "Front Desk": "Run the floor: serve customers, take payment, delegate and track jobs",
                         "Branding":   "Sell and produce branding jobs; hand work to designers",
                         "Cyber":      "Sell and produce cyber-café jobs; hand work to designers",
-                        "Designer":   "Work the design board — only jobs assigned to you",
+                        "Designer":   "Work the design board, only jobs assigned to you",
                 }[name]
                 if desc == "" {
                         desc = "Staff role"

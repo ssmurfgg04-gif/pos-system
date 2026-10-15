@@ -55,7 +55,7 @@ func (s *Service) OwnerCloudSignin(username, password, deviceName string) (model
                 "p_username":    username,
                 "p_password":    password,
         }, &res); err != nil {
-                return info, fmt.Errorf("could not reach the LedgerPOS cloud — check the internet and try again")
+                return info, fmt.Errorf("could not reach the LedgerPOS cloud, check the internet and try again")
         }
         if !res.OK {
                 return info, fmt.Errorf("%s", res.Error)
@@ -90,7 +90,7 @@ func (s *Service) OwnerCloudSignin(username, password, deviceName string) (model
         }
         var roleID int64
         if err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM roles WHERE name = 'Admin' LIMIT 1`)).Scan(&roleID); err != nil {
-                return info, fmt.Errorf("the Admin role is missing on this till — run LedgerPOS once more, or use a join link")
+                return info, fmt.Errorf("the Admin role is missing on this till, run LedgerPOS once more, or use a join link")
         }
         var userID int64
         err = s.db.QueryRow(s.db.Rebind(`SELECT id FROM users WHERE LOWER(username) = LOWER(?)`), username).Scan(&userID)

@@ -1,8 +1,8 @@
-# Settings & Secrets Audit — v1.3.1
+# Settings & Secrets Audit, v1.3.1
 
 The classification pass behind the "hide secrets, keep capability" hardening.
 Every settings key was traced: where it is read, saved, encrypted, consumed,
-migrated, and synchronized. Nothing was deleted — presentation and access
+migrated, and synchronized. Nothing was deleted, presentation and access
 changed, capability did not.
 
 ## 1. Classified inventory
@@ -32,7 +32,7 @@ changed, capability did not.
 | `mpesa_consumer_secret`, `mpesa_passkey` | future Daraja | masked by the secret-class rule (`secret`/`passkey`/`passphrase`/`consumer_key` substrings) |
 
 Rules enforced (v1.3.1):
-- GET never returns a secret value — `__SET__` mask or empty.
+- GET never returns a secret value, `__SET__` mask or empty.
 - Save with `__SET__` echo → keeps the stored secret.
 - Save with `""` → **keeps** the stored secret (an accidental clear can
   never silently break Paystack at checkout). Removal is explicit:
@@ -45,20 +45,20 @@ Rules enforced (v1.3.1):
 
 | Keys | Notes |
 |---|---|
-| `paystack_public_key` | publishable key — checkout popup uses it |
+| `paystack_public_key` | publishable key, checkout popup uses it |
 | `paystack_callback_url`, `paystack_currency`, `paystack_mode`, `paystack_enabled` | non-secret integration state |
 | `update_manifest_tag/notes/assets` | OTA self-update manifest |
-| branding payload (`/settings/branding`) | pre-auth login screen needs it — explicitly secret-free |
+| branding payload (`/settings/branding`) | pre-auth login screen needs it, explicitly secret-free |
 
 These ride the anon-readable `app_config` rows (RLS: `is_secret = false`).
 The anon read path is verified in CI-style checks (Paystack secret must
-never appear — confirmed live 2026-10-13).
+never appear, confirmed live 2026-10-13).
 
 ### D. Operational status (read-only, plain language)
 
 | Endpoint | Shows |
 |---|---|
-| `/payments/config` | Connected / waiting-for-keys / disabled + route (Paystack STK, Daraja, mock) — booleans and public values only |
+| `/payments/config` | Connected / waiting-for-keys / disabled + route (Paystack STK, Daraja, mock), booleans and public values only |
 | `/system/offsite` | enabled, queued uploads, last upload time, last error |
 | `/system/update` + `/system/backups` | staged version, backup history |
 | `/team-sync` | registered/approved/pending, last push/pull, per-device roster |
@@ -80,9 +80,9 @@ never appear — confirmed live 2026-10-13).
    type-to-replace, confirmed "Remove saved key"; passphrase hint rewritten
    in plain language (no `__SET__` dev-speak on screen).
 3. Cloud vault blast radius: `sync_device_config` now returns ONLY
-   `paystack_*` + `update_manifest_*` keys — device approval can never leak
+   `paystack_*` + `update_manifest_*` keys, device approval can never leak
    unrelated/future infrastructure credentials to every till.
-4. Canonical `sync_register` repaired (stray `inv.id` block removed) — fresh
+4. Canonical `sync_register` repaired (stray `inv.id` block removed), fresh
    provisioning from `cloud_schema.sql` works again; deployed live.
 5. Privilege-escalation guards: authority keys (`users.manage`,
    `settings.manage`, `roles.manage`) can only be granted by callers who
@@ -97,14 +97,14 @@ never appear — confirmed live 2026-10-13).
 - No settings were removed; the Team panel, printer, backups, KRA returns,
   loyalty, and every business workflow kept their exact behavior.
 - Paystack flow untouched (keys still arrive from the vault at boot; the
-  STK path is byte-identical — verified by the full payments test battery).
+  STK path is byte-identical, verified by the full payments test battery).
 - The `?infra` gating of infrastructure config stays (it is the right
   split: support engineers, not shop staff).
 - Manual sync mode stays as a legacy fallback but is no longer advertised.
 
 ## 3. Remaining risks (honest list)
 
-1. The vault still delivers the Paystack secret to every approved till —
+1. The vault still delivers the Paystack secret to every approved till
    necessary today (any till can take payment), and revocation cuts access
    instantly. If per-till payment scoping is ever wanted, the RPC allowlist
    is the place to extend (e.g. per-device key grants).

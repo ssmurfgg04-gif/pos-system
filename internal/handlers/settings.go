@@ -4,8 +4,8 @@ import (
         "github.com/gin-gonic/gin"
 
         "posapp/internal/models"
-        "posapp/internal/settings"
         "posapp/internal/services"
+        "posapp/internal/settings"
 )
 
 // GetSettings (settings.manage) — secrets masked as "__SET__".
@@ -21,7 +21,10 @@ type settingsBody struct {
 // value runs through a key allowlist — no arbitrary writes. A masked echo
 // ("__SET__") of a key the API cannot write (e.g. jwt_secret echoed by an
 // older frontend build) is skipped silently instead of failing the whole
-// save — saving the form must never error on read-only secrets.
+// save — saving the form must never error on read-only secrets. The same
+// applies to runtime bookkeeping keys (sync_source, device_id, ...): the
+// Settings page round-trips the whole snapshot, and an echo of runtime
+// keys must never fail a real edit (the store-name report-as-failed bug).
 func (h *H) UpdateSettings(c *gin.Context) {
         p := h.principal(c)
         var body settingsBody
@@ -32,8 +35,12 @@ func (h *H) UpdateSettings(c *gin.Context) {
         allowed := settings.AllowedKeys()
         for k, v := range body.Values {
                 if !allowed[k] {
-                        if settings.IsMaskToken(v) {
-                                continue // untouched masked echo of a read-only key
+                        if settings.IsMaskToken(v) || settings.IsInternalKey(k) {
+                                // Echo of a key the API cannot write: drop it so
+                                // Update keeps the stored value (a stale echo must
+                                // never overwrite live runtime state either).
+                                delete(body.Values, k)
+                                continue
                         }
                         h.fail(c, 400, "unknown setting key: "+k)
                         return
@@ -56,7 +63,7 @@ func (h *H) UpdateSettings(c *gin.Context) {
                                         }
                                         if st, err := h.Shops.Settings(sid); err == nil {
                                                 if st.Get("offsite_endpoint") == ep && st.Get("offsite_bucket") == bucket {
-                                                        h.fail(c, 400, "that Supabase project is already used by another shop — create a separate project per shop")
+                                                        h.fail(c, 400, "that Supabase project is already used by another shop, create a separate project per shop")
                                                         return
                                                 }
                                         }

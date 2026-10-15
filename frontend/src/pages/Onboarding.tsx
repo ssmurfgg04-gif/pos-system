@@ -38,7 +38,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     try {
       await api.put('/api/v1/settings', { values: { onboarding_done: 'true' } })
       await useBranding.getState().load()
-      toast.success('Shop ready', 'Karibu — add your products in Inventory, or go sell.')
+      toast.success('Shop ready', 'Karibu, add your products in Inventory, or go sell.')
       // Continue means CONTINUE: land on the main page immediately instead of
       // waiting for a second click on the success banner.
       onDone()
@@ -53,7 +53,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     <div className="min-h-dvh bg-surface-muted flex items-center justify-center p-4">
       <Card
         title="Set up your shop"
-        sub={`Step ${step + 1} of ${STEPS.length} — ${STEPS[step]}`}
+        sub={`Step ${step + 1} of ${STEPS.length}, ${STEPS[step]}`}
         pad
       >
         <div className="min-w-80 max-w-md">
@@ -114,10 +114,10 @@ function StoreStep({ onSave, onNext, busy }: { onSave: (v: Record<string, string
   }, [])
   return (
     <div className="space-y-3">
-      <Field label="Store name" hint="Jina la duka — Printed on receipts and shown in the topbar.">
+      <Field label="Store name" hint="Jina la duka, Printed on receipts and shown in the topbar.">
         <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Zawadi Prints" />
       </Field>
-      <Field label="Address / Anwani"><Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, town — Mtaa, mji" /></Field>
+      <Field label="Address / Anwani"><Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, town, Mtaa, mji" /></Field>
       <Field label="Phone / Simu"><Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" /></Field>
       <Nav nextLabel={busy ? 'Saving…' : 'Save & continue'} disabled={busy || !name.trim()} onNext={async () => {
         if (await onSave({ store_name: name.trim(), store_address: address.trim(), store_phone: phone.trim() })) onNext()
@@ -281,7 +281,7 @@ function StaffStep({ adminId, onNext, onBack, busy, setBusy }: { adminId: number
       {mustRotate ? (
         <>
           <p className="text-[13px] text-ink-muted">
-            You're signed in as <strong className="text-ink">{user?.username}</strong> — set your own password + PIN:
+            You're signed in as <strong className="text-ink">{user?.username}</strong>, set your own password + PIN:
           </p>
           <div className="grid grid-cols-2 gap-2">
             <Field label="Admin password"><Input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoFocus placeholder="6+ characters" /></Field>
@@ -290,7 +290,7 @@ function StaffStep({ adminId, onNext, onBack, busy, setBusy }: { adminId: number
         </>
       ) : (
         <p className="text-[13px] text-ink-muted">
-          Signed in as <strong className="text-ink">{user?.username}</strong> — you're all set. Add your first cashier below, or open the shop now.
+          Signed in as <strong className="text-ink">{user?.username}</strong>, you're all set. Add your first cashier below, or open the shop now.
         </p>
       )}
       <p className="text-[13px] text-ink-muted pt-1">First cashier (optional — they set their own password on first login):</p>

@@ -41,7 +41,7 @@ func randToken(n int) string {
 // stocked, or charged until a normal checkout completes.
 func (s *Service) HoldSale(refName string, req models.CheckoutRequest, p *auth.Principal) (*models.HeldSale, error) {
 	if len(req.Items) == 0 {
-		return nil, fmt.Errorf("nothing to hold — the cart is empty")
+		return nil, fmt.Errorf("nothing to hold, the cart is empty")
 	}
 	if len(req.Items) > models.MaxOrderLines {
 		return nil, fmt.Errorf("too many lines (max %d)", models.MaxOrderLines)

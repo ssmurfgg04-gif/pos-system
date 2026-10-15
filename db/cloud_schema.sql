@@ -372,7 +372,7 @@ begin
     where username = p_username and window_start > now() - interval '15 minutes';
   if coalesce(fails, 0) >= 10 then
     return json_build_object('ok', false, 'error',
-      'too many attempts — try again in 15 minutes');
+      'too many attempts, try again in 15 minutes');
   end if;
 
   -- verify against the portal credential store (bcrypt)
@@ -385,7 +385,7 @@ begin
         where team_code = acct.team_code and active limit 1;
       if store.id is null then
         return json_build_object('ok', false, 'error',
-          'your store is not active in the cloud — contact support');
+          'your store is not active in the cloud, contact support');
       end if;
 
       select * into dev from sync_devices where device_id = p_device_id;
@@ -396,7 +396,7 @@ begin
                   coalesce(nullif(btrim(p_app_version), ''), ''), p_secret_hash, true, now());
       elsif dev.revoked then
         return json_build_object('ok', false, 'error',
-          'this device was revoked — ask the owner to approve it again from Settings → Team');
+          'this device was revoked, ask the owner to approve it again from Settings → Team');
       else
         update sync_devices
           set team_code = acct.team_code, approved = true, last_seen = now(),
@@ -426,7 +426,7 @@ begin
                               then portal_signin_fails.window_start else now() end;
 
   return json_build_object('ok', false, 'error',
-    'wrong username or password — or cloud sign-in is not activated for your shop yet (activate it from Settings → Team on an existing till)');
+    'wrong username or password, or cloud sign-in is not activated for your shop yet (activate it from Settings → Team on an existing till)');
 end $function$;
 
 -- ============================================================ v1.3.0 ====
@@ -533,7 +533,7 @@ begin
       and expires_at > now() and used_by = '';
   if inv.id is null then
     return json_build_object('ok', false, 'error',
-        'this invite is invalid, already used, or expired — ask the owner for a fresh link');
+        'this invite is invalid, already used, or expired, ask the owner for a fresh link');
   end if;
   -- Claim the invite atomically FIRST (check-then-act on used_by would let
   -- two concurrent joins share one single-use token under READ COMMITTED).
@@ -541,7 +541,7 @@ begin
     where id = inv.id and used_by = '';
   if not found then
     return json_build_object('ok', false, 'error',
-        'this invite is invalid, already used, or expired — ask the owner for a fresh link');
+        'this invite is invalid, already used, or expired, ask the owner for a fresh link');
   end if;
   select * into cur from sync_devices where device_id = p_device_id;
   if cur.device_id is not null then
@@ -602,7 +602,7 @@ begin
     where username = p_username and window_start > now() - interval '15 minutes';
   if coalesce(fails, 0) >= 10 then
     return json_build_object('ok', false, 'error',
-      'too many attempts — try again in 15 minutes');
+      'too many attempts, try again in 15 minutes');
   end if;
 
   -- verify against the portal credential store (bcrypt)
@@ -615,7 +615,7 @@ begin
         where team_code = acct.team_code and active limit 1;
       if store.id is null then
         return json_build_object('ok', false, 'error',
-          'your store is not active in the cloud — contact support');
+          'your store is not active in the cloud, contact support');
       end if;
 
       select * into dev from sync_devices where device_id = p_device_id;
@@ -663,7 +663,7 @@ begin
                               then portal_signin_fails.window_start else now() end;
 
   return json_build_object('ok', false, 'error',
-    'wrong username or password — or cloud sign-in is not activated for your shop yet (activate it from Settings → Team on an existing till)');
+    'wrong username or password, or cloud sign-in is not activated for your shop yet (activate it from Settings → Team on an existing till)');
 end $function$;
 
 -- ===================================================== FORGOT PIN FLOW ===
@@ -777,7 +777,7 @@ begin
   end if;
   if req.created_at < now() - interval '7 days' then
     update sync_pin_resets set status = 'cancelled' where id = req.id;
-    return json_build_object('ok', false, 'error', 'this request expired — ask them to send it again');
+    return json_build_object('ok', false, 'error', 'this request expired, ask them to send it again');
   end if;
   b := gen_random_bytes(4);
   c := lpad((((get_byte(b,0)::bigint * 16777216) + (get_byte(b,1)::bigint * 65536)
@@ -808,24 +808,24 @@ begin
   select * into req from sync_pin_resets
     where id = p_request_id and device_id = p_device_id;
   if req.id is null then
-    return json_build_object('ok', false, 'error', 'reset request not found — send a new one from this screen');
+    return json_build_object('ok', false, 'error', 'reset request not found, send a new one from this screen');
   end if;
   if req.status = 'used' then
     return json_build_object('ok', false, 'error', 'this code was already used');
   end if;
   if req.status <> 'approved' then
-    return json_build_object('ok', false, 'error', 'no approved code yet — the owner still needs to tap Approve');
+    return json_build_object('ok', false, 'error', 'no approved code yet, the owner still needs to tap Approve');
   end if;
   if req.expires_at is null or req.expires_at < now() then
-    return json_build_object('ok', false, 'error', 'this code expired — tap Approve on the owner till again');
+    return json_build_object('ok', false, 'error', 'this code expired, tap Approve on the owner till again');
   end if;
   if req.attempts >= 6 then
     update sync_pin_resets set status = 'cancelled' where id = req.id;
-    return json_build_object('ok', false, 'error', 'too many wrong tries — send a fresh request');
+    return json_build_object('ok', false, 'error', 'too many wrong tries, send a fresh request');
   end if;
   if encode(digest(btrim(coalesce(p_code, '')), 'sha256'), 'hex') <> req.code_hash then
     update sync_pin_resets set attempts = attempts + 1 where id = req.id;
-    return json_build_object('ok', false, 'error', 'that code is not right — check the digits and try again');
+    return json_build_object('ok', false, 'error', 'that code is not right, check the digits and try again');
   end if;
   update sync_pin_resets set status = 'used', used_at = now() where id = req.id;
   return json_build_object('ok', true, 'username', req.username);

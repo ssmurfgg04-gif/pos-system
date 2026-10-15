@@ -178,7 +178,7 @@ begin
       and expires_at > now() and used_by = '';
   if inv.id is null then
     return json_build_object('ok', false, 'error',
-        'this invite is invalid, already used, or expired — ask the owner for a fresh link');
+        'this invite is invalid, already used, or expired, ask the owner for a fresh link');
   end if;
   select * into cur from sync_devices where device_id = p_device_id;
   if cur.device_id is not null then
@@ -258,7 +258,7 @@ begin
     end if;
   end loop;
   if ok_team is null then
-    return json_build_object('ok', false, 'error', 'wrong username or password — or the portal is not activated yet for your shop');
+    return json_build_object('ok', false, 'error', 'wrong username or password, or the portal is not activated yet for your shop');
   end if;
   -- shop identity + currency from the latest synced config
   select payload->'values'->>'store_name' into cfg from sync_events

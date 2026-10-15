@@ -212,7 +212,7 @@ func (h *H) UndoUpdate(c *gin.Context) {
                 }
         }
         if len(manifest.Files) == 0 {
-                h.fail(c, 500, "archive is empty — nothing to restore")
+                h.fail(c, 500, "archive is empty, nothing to restore")
                 return
         }
 
@@ -282,7 +282,7 @@ func RestorePending(dataDir string) string {
                 _ = os.Remove(dst + "-wal")
                 _ = os.Remove(dst + "-shm")
                 if err := copyFileExclusive(src, dst); err != nil {
-                        log.Printf("restore: %s → %s failed (%v) — manifest kept for retry on next boot", src, dst, err)
+                        log.Printf("restore: %s → %s failed (%v), manifest kept for retry on next boot", src, dst, err)
                         failed = true
                         continue
                 }
@@ -293,7 +293,7 @@ func RestorePending(dataDir string) string {
         // which files a multi-store restore gets — re-copying an
         // already-restored file is idempotent).
         if failed {
-                return m.Reason + " (partial — retry scheduled)"
+                return m.Reason + " (partial, retry scheduled)"
         }
         _ = os.Remove(restoreManifestPath(dataDir))
         return m.Reason
@@ -316,7 +316,7 @@ func newestPreUpdateArchive(dataDir string) (string, error) {
         root := filepath.Join(dataDir, "backups")
         entries, err := os.ReadDir(root)
         if err != nil {
-                return "", fmt.Errorf("no backups directory — nothing to undo")
+                return "", fmt.Errorf("no backups directory, nothing to undo")
         }
         var dirs []string
         for _, e := range entries {
@@ -325,7 +325,7 @@ func newestPreUpdateArchive(dataDir string) (string, error) {
                 }
         }
         if len(dirs) == 0 {
-                return "", fmt.Errorf("no pre-update archive found — nothing to undo")
+                return "", fmt.Errorf("no pre-update archive found, nothing to undo")
         }
         sort.Strings(dirs) // stamps sort chronologically
         return filepath.Join(root, dirs[len(dirs)-1]), nil

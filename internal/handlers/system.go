@@ -128,12 +128,12 @@ func (h *H) UpdateInstall(c *gin.Context) {
         }
         staged := h.Updater.Staged()
         if staged == "" {
-                h.fail(c, 409, "nothing staged — download first")
+                h.fail(c, 409, "nothing staged, download first")
                 return
         }
         archive, err := h.PreUpdateSnapshot(h.Version)
         if err != nil {
-                h.fail(c, 500, "pre-update backup failed — update aborted so no work can be lost: "+err.Error())
+                h.fail(c, 500, "pre-update backup failed, update aborted so no work can be lost: "+err.Error())
                 return
         }
         h.svc(c).Audit(p.ID, p.Username, "UPDATE_PRE_BACKUP", "system", "update", archive)

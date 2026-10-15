@@ -27,14 +27,26 @@ type fakeSupabase struct {
         nextID   int64
         stores   []map[string]any  // multi-store registry (nil = legacy single-store)
         assigned map[string]string // device_id -> team_code ("sync_register" answer)
+
+        // v1.3.4 regression surface: team joins, portal credentials, owner
+        // capability, device approve (un-revoke) and the roster.
+        invites     map[string]map[string]any // token -> invite (team/store/role/perms)
+        invitesUsed map[string]bool
+        portalCreds []map[string]any        // recorded portal_set_credentials calls
+        capMints    []map[string]any        // recorded owner_mint_capability calls
+        capAnswer   map[string]any          // when set, owner_mint_capability answers this body
+        approveTgt  []string                // recorded sync_approve_device targets
+        roster      []map[string]any        // when non-nil, sync_roster answers these rows
 }
 
 func newFakeSupabase(t *testing.T) *fakeSupabase {
         f := &fakeSupabase{
-                device:   map[string]string{},
-                approved: map[string]bool{},
-                assigned: map[string]string{},
-                nextID:   1,
+                device:      map[string]string{},
+                approved:    map[string]bool{},
+                assigned:    map[string]string{},
+                nextID:      1,
+                invites:     map[string]map[string]any{},
+                invitesUsed: map[string]bool{},
         }
         mux := http.NewServeMux()
 
@@ -152,6 +164,120 @@ func newFakeSupabase(t *testing.T) *fakeSupabase {
                         }
                 }
                 json.NewEncoder(w).Encode(map[string]any{"ok": true, "events": out})
+        })
+
+        // POST /rest/v1/rpc/sync_create_invite — the owner mints a join token.
+        mux.HandleFunc("/rest/v1/rpc/sync_create_invite", func(w http.ResponseWriter, r *http.Request) {
+                var in struct {
+                        DeviceID   string          `json:"p_device_id"`
+                        SecretHash string          `json:"p_secret_hash"`
+                        RoleName   string          `json:"p_role_name"`
+                        Perms      json.RawMessage `json:"p_permissions"`
+                }
+                json.NewDecoder(r.Body).Decode(&in)
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                if f.device[in.DeviceID] != in.SecretHash || !f.approved[in.DeviceID] {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "device not recognized"})
+                        return
+                }
+                tok := "invite" + randToken(14) // matches the join-token shape (12-64 alnum)
+                perms := []string{}
+                _ = json.Unmarshal(in.Perms, &perms)
+                f.invites[tok] = map[string]any{
+                        "team": "TEST-TEAM", "store": "Test Store", "role": in.RoleName, "perms": perms,
+                }
+                json.NewEncoder(w).Encode(map[string]any{
+                        "ok": true, "token": tok, "team_code": "TEST-TEAM",
+                        "role_name": in.RoleName, "expires_at": "2026-12-31T00:00:00Z",
+                })
+        })
+
+        // POST /rest/v1/rpc/sync_join_team — a fresh till redeems the token.
+        mux.HandleFunc("/rest/v1/rpc/sync_join_team", func(w http.ResponseWriter, r *http.Request) {
+                var in struct {
+                        DeviceID   string `json:"p_device_id"`
+                        SecretHash string `json:"p_secret_hash"`
+                        Token      string `json:"p_token"`
+                }
+                json.NewDecoder(r.Body).Decode(&in)
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                inv, ok := f.invites[in.Token]
+                if !ok || f.invitesUsed[in.Token] {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "this join link is not valid anymore"})
+                        return
+                }
+                f.invitesUsed[in.Token] = true
+                f.device[in.DeviceID] = in.SecretHash
+                f.approved[in.DeviceID] = true
+                json.NewEncoder(w).Encode(map[string]any{
+                        "ok": true, "team_code": inv["team"], "store_name": inv["store"],
+                        "role_name": inv["role"], "permissions": inv["perms"],
+                })
+        })
+
+        // POST /rest/v1/rpc/portal_set_credentials — recorded for the
+        // self-heal assertions.
+        mux.HandleFunc("/rest/v1/rpc/portal_set_credentials", func(w http.ResponseWriter, r *http.Request) {
+                var in map[string]any
+                json.NewDecoder(r.Body).Decode(&in)
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                f.portalCreds = append(f.portalCreds, in)
+                json.NewEncoder(w).Encode(map[string]any{"ok": true})
+        })
+
+        // POST /rest/v1/rpc/owner_mint_capability — recorded; optional fixed answer.
+        mux.HandleFunc("/rest/v1/rpc/owner_mint_capability", func(w http.ResponseWriter, r *http.Request) {
+                var in map[string]any
+                json.NewDecoder(r.Body).Decode(&in)
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                f.capMints = append(f.capMints, in)
+                if f.capAnswer != nil {
+                        json.NewEncoder(w).Encode(f.capAnswer)
+                        return
+                }
+                json.NewEncoder(w).Encode(map[string]any{
+                        "ok": true, "capability": "cap-test-token", "owner": in["p_username"],
+                        "teamCode": "TEST-TEAM", "expiresAt": "2026-12-31T00:00:00Z",
+                })
+        })
+
+        // POST /rest/v1/rpc/sync_approve_device — records the target (the
+        // Approve-on-revoked un-revoke path).
+        mux.HandleFunc("/rest/v1/rpc/sync_approve_device", func(w http.ResponseWriter, r *http.Request) {
+                var in struct {
+                        DeviceID       string `json:"p_device_id"`
+                        SecretHash     string `json:"p_secret_hash"`
+                        TargetDeviceID string `json:"p_target_device_id"`
+                }
+                json.NewDecoder(r.Body).Decode(&in)
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                if f.device[in.DeviceID] != in.SecretHash || !f.approved[in.DeviceID] {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "device not recognized"})
+                        return
+                }
+                f.approveTgt = append(f.approveTgt, in.TargetDeviceID)
+                json.NewEncoder(w).Encode(map[string]any{"ok": true, "device_id": in.TargetDeviceID})
+        })
+
+        // POST /rest/v1/rpc/sync_roster — answers the test-provided rows.
+        mux.HandleFunc("/rest/v1/rpc/sync_roster", func(w http.ResponseWriter, r *http.Request) {
+                var in struct {
+                        DeviceID   string `json:"p_device_id"`
+                        SecretHash string `json:"p_secret_hash"`
+                }
+                json.NewDecoder(r.Body).Decode(&in)
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                if f.device[in.DeviceID] != in.SecretHash || !f.approved[in.DeviceID] {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "device not recognized"})
+                        return
+                }
+                json.NewEncoder(w).Encode(map[string]any{"ok": true, "devices": f.roster})
         })
 
         f.srv = httptest.NewServer(mux)

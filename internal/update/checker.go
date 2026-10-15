@@ -69,7 +69,7 @@ func (c *Checker) Refresh(ctx context.Context) {
 	}
 	rel, err := CheckCloudManifest(ctx, "")
 	if err != nil {
-		log.Printf("[update] cloud manifest: %v — falling back to GitHub", err)
+		log.Printf("[update] cloud manifest: %v, falling back to GitHub", err)
 		apiBase := c.store.Get("update_api_base")
 		if apiBase == "" {
 			apiBase = "https://api.github.com"
@@ -151,7 +151,7 @@ func (c *Checker) Download(ctx context.Context) (string, error) {
 	if wantSHA != "" {
 		if got := hex.EncodeToString(hasher.Sum(nil)); !strings.EqualFold(got, wantSHA) {
 			os.Remove(dst)
-			return "", fmt.Errorf("download failed integrity check (sha256 mismatch) — update refused")
+			return "", fmt.Errorf("download failed integrity check (sha256 mismatch), update refused")
 		}
 	}
 	c.mu.Lock()

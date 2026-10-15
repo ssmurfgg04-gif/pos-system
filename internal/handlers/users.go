@@ -9,6 +9,7 @@ import (
         "github.com/gin-gonic/gin"
 
         "posapp/internal/auth"
+        "posapp/internal/database"
         "posapp/internal/models"
 )
 
@@ -66,7 +67,7 @@ func (h *H) CreateUser(c *gin.Context) {
                 return
         }
         if auth.IsDefaultPassword(body.Password) {
-                h.fail(c, 400, "choose a stronger password — that one is public")
+                h.fail(c, 400, "choose a stronger password, that one is public")
                 return
         }
         var roleExists int
@@ -159,7 +160,7 @@ func (h *H) UpdateUser(c *gin.Context) {
         // keys requires the caller to hold those keys themselves.
         var newRolePerms string
         if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, body.RoleID).Scan(&newRolePerms); err != nil {
-                h.fail(c, 409, "cannot verify the role right now — the change was refused. Try again.")
+                h.fail(c, 409, "cannot verify the role right now, the change was refused. Try again.")
                 return
         }
         if !h.guardGrantElevation(c, newRolePerms) {
@@ -206,14 +207,14 @@ func (h *H) lastOwnerGuard(c *gin.Context, targetID int64, newRoleID int64, setA
         if setActive == 0 {
                 var roleID int64
                 if err := h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID); err != nil && !noRow(err) {
-                        h.fail(c, 409, "cannot verify the account's role right now — the last owner would be at risk, so the change was refused. Try again.")
+                        h.fail(c, 409, "cannot verify the account's role right now, the last owner would be at risk, so the change was refused. Try again.")
                         return false
                 } else if noRow(err) {
                         return true
                 }
                 ok, err := ownerLevel(roleID)
                 if err != nil {
-                        h.fail(c, 409, "cannot verify owner accounts right now — the last owner would be at risk, so the change was refused. Try again.")
+                        h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
                         return false
                 }
                 if !ok {
@@ -222,7 +223,7 @@ func (h *H) lastOwnerGuard(c *gin.Context, targetID int64, newRoleID int64, setA
         } else {
                 ok, err := ownerLevel(newRoleID)
                 if err != nil {
-                        h.fail(c, 409, "cannot verify owner accounts right now — the last owner would be at risk, so the change was refused. Try again.")
+                        h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
                         return false
                 }
                 if ok {
@@ -230,14 +231,14 @@ func (h *H) lastOwnerGuard(c *gin.Context, targetID int64, newRoleID int64, setA
                 }
                 var roleID int64
                 if err := h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID); err != nil && !noRow(err) {
-                        h.fail(c, 409, "cannot verify the account's role right now — the last owner would be at risk, so the change was refused. Try again.")
+                        h.fail(c, 409, "cannot verify the account's role right now, the last owner would be at risk, so the change was refused. Try again.")
                         return false
                 } else if noRow(err) {
                         return true
                 }
                 wasOwner, err := ownerLevel(roleID)
                 if err != nil {
-                        h.fail(c, 409, "cannot verify owner accounts right now — the last owner would be at risk, so the change was refused. Try again.")
+                        h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
                         return false
                 }
                 if !wasOwner {
@@ -249,7 +250,7 @@ func (h *H) lastOwnerGuard(c *gin.Context, targetID int64, newRoleID int64, setA
                 SELECT u.id, COALESCE(r.permissions, '[]') FROM users u JOIN roles r ON r.id = u.role_id
                 WHERE u.is_active = 1 AND u.id != ?`, targetID)
         if err != nil {
-                h.fail(c, 409, "cannot verify owner accounts right now — the last owner would be at risk, so the change was refused. Try again.")
+                h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
                 return false // fail CLOSED — never allow when safety cannot be proven
         }
         defer rows.Close()
@@ -262,7 +263,7 @@ func (h *H) lastOwnerGuard(c *gin.Context, targetID int64, newRoleID int64, setA
                         }
                 }
         }
-        h.fail(c, 409, "this is the last owner account — promote another owner first")
+        h.fail(c, 409, "this is the last owner account, promote another owner first")
         return false
 }
 
@@ -337,12 +338,13 @@ func (h *H) SetPassword(c *gin.Context) {
         h.ok(c, gin.H{"updated": true})
 }
 
-// ownerLevelUsername reports the username when the given user holds BOTH
+// userIsOwnerLevel reports the username when the given user holds BOTH
 // settings.manage and users.manage (i.e. an owner whose credentials unlock
-// the public performance portal).
-func (h *H) ownerLevelUsername(c *gin.Context, userID int64) (string, bool) {
+// the public performance portal). Shared by the password-save publish path
+// and the login self-heal path.
+func userIsOwnerLevel(db *database.DB, userID int64) (string, bool) {
         var username, permsJSON string
-        err := h.db(c).QueryRow(h.db(c).Rebind(`
+        err := db.QueryRow(db.Rebind(`
                 SELECT u.username, COALESCE(r.permissions, '[]')
                 FROM users u JOIN roles r ON r.id = u.role_id
                 WHERE u.id = ? AND u.is_active = 1`), userID).Scan(&username, &permsJSON)
@@ -363,6 +365,12 @@ func (h *H) ownerLevelUsername(c *gin.Context, userID int64) (string, bool) {
                 return "", false
         }
         return username, true
+}
+
+// ownerLevelUsername reports the username when the request's user holds
+// BOTH settings.manage and users.manage.
+func (h *H) ownerLevelUsername(c *gin.Context, userID int64) (string, bool) {
+        return userIsOwnerLevel(h.db(c), userID)
 }
 
 type pinBody2 struct {

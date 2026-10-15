@@ -53,7 +53,7 @@ function SecretField({
     <Field
       label={label}
       hint={configured
-        ? 'Saved securely on this machine. Leave blank to keep it — type a new one to replace it.'
+        ? 'Saved securely on this machine. Leave blank to keep it, type a new one to replace it.'
         : hint}
     >
       <div className="space-y-1.5">
@@ -243,7 +243,7 @@ export function Settings() {
             <Field label="Receipt footer" hint="Printed at the bottom of every receipt">
               <Textarea value={values.receipt_footer ?? ''} onChange={(e) => set('receipt_footer', e.target.value)} />
             </Field>
-            <Field label="KRA PIN (eTIMS)" hint="Your business KRA PIN — when set, receipts print it and checkout offers a buyer PIN for tax invoices.">
+            <Field label="KRA PIN (eTIMS)" hint="Your business KRA PIN, when set, receipts print it and checkout offers a buyer PIN for tax invoices.">
               <Input
                 value={values.kra_pin ?? ''}
                 onChange={(e) => set('kra_pin', e.target.value.toUpperCase())}
@@ -273,10 +273,10 @@ export function Settings() {
                     status={payConfig.paystack.configured && payConfig.paystack.enabled ? 'paid' : 'pending'}
                     label={
                       payConfig.paystack.configured && payConfig.paystack.enabled
-                        ? 'Connected — ready at checkout'
+                        ? 'Connected, ready at checkout'
                         : payConfig.paystack.configured
-                          ? 'Connected — checkout currently off'
-                          : 'Setting up — payments turn on automatically'
+                          ? 'Connected, checkout currently off'
+                          : 'Setting up, payments turn on automatically'
                     }
                   />
                 ) : (
@@ -339,13 +339,13 @@ export function Settings() {
             </Field>
             <Field label="Default M-Pesa mode at checkout" hint="Used when automatic STK is unavailable.">
               <Select value={values.payment_mode ?? 'auto'} onChange={(e) => set('payment_mode', e.target.value)}>
-                <option value="auto">Auto — STK push with manual fallback</option>
+                <option value="auto">Auto, STK push with manual fallback</option>
                 <option value="stk">STK push only</option>
                 <option value="manual">Manual receipt code only</option>
               </Select>
             </Field>
             <p className="sm:col-span-2 text-[12px] text-ink-subtle">
-              Payment connections are managed for you — nothing to paste or store on this machine.
+              Payment connections are managed for you, nothing to paste or store on this machine.
               Till / Paybill numbers here are shown to customers paying by M-Pesa manually.
             </p>
           </div>
@@ -421,12 +421,12 @@ export function Settings() {
           <div className="px-4 pb-4 sm:px-5 grid sm:grid-cols-2 gap-3">
             <div className="sm:col-span-2 bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
               <p><strong className="text-ink">Backups.</strong> A consistent snapshot of the database is written to the
-              <code className="font-mono text-ink"> backups/</code> folder daily at 02:00 (SQLite <code className="font-mono text-ink">VACUUM INTO</code> —
+              <code className="font-mono text-ink"> backups/</code> folder daily at 02:00 (SQLite <code className="font-mono text-ink">VACUUM INTO</code>, 
               safe while sales are running). Copy the folder to a USB drive or cloud folder for off-site protection.</p>
             </div>
             <Field label="Automatic daily backup">
               <Select value={values.backup_auto ?? 'true'} onChange={(e) => set('backup_auto', e.target.value)}>
-                <option value="true">Enabled — daily at 02:00</option>
+                <option value="true">Enabled, daily at 02:00</option>
                 <option value="false">Disabled</option>
               </Select>
             </Field>
@@ -474,7 +474,7 @@ export function Settings() {
               {!backups ? (
                 <div className="py-6 flex justify-center"><Spinner /></div>
               ) : backups.length === 0 ? (
-                <p className="text-sm text-ink-muted">No snapshots yet — take one now or wait for the nightly run.</p>
+                <p className="text-sm text-ink-muted">No snapshots yet, take one now or wait for the nightly run.</p>
               ) : (
                 <Table head={['Snapshot', 'Size', 'When']}>
                   {backups.map((b) => (
@@ -489,13 +489,13 @@ export function Settings() {
             </div>
             <p className="sm:col-span-2 text-[12px] text-ink-subtle flex items-start gap-1.5">
               <HardDriveDownload size={13} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
-              Snapshots are full SQLite databases — copy the backups folder anywhere and the app can restore from it directly.
+              Snapshots are full SQLite databases, copy the backups folder anywhere and the app can restore from it directly.
             </p>
             <div className="sm:col-span-2 border-t-2 border-line pt-3">
               <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Software updates</p>
               <p className="text-[12px] text-ink-subtle mb-2 flex items-start gap-1.5">
                 <ShieldCheck size={13} strokeWidth={2.5} className="shrink-0 mt-0.5 text-paid-text" aria-hidden />
-                Updating only swaps the app file — every sale, product and setting on this machine stays
+                Updating only swaps the app file, every sale, product and setting on this machine stays
                 exactly as it is. No re-uploading, no data entry, ever.
               </p>
               {!update ? (
@@ -589,11 +589,11 @@ export function Settings() {
               <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Off-site backup (encrypted, automatic)</p>
               <p className="text-[13px] text-ink-muted mb-3">
                 Every snapshot is encrypted on this machine before it leaves the shop, and uploads retry
-                by themselves — nobody has to be around.
+                by themselves, nobody has to be around.
                 {infraUnlocked
                   ? <> Configure the destination below. Use one project per shop, so a leaked key only ever opens that shop.
                      <strong className="text-danger-text"> Keep the passphrase somewhere safe: without it the copies cannot be opened.</strong></>
-                  : <> The destination is managed centrally and arrives with the daily cloud config — nothing for staff to enter.</>}
+                  : <> The destination is managed centrally and arrives with the daily cloud config, nothing for staff to enter.</>}
               </p>
             </div>
             {infraUnlocked ? (
@@ -601,7 +601,7 @@ export function Settings() {
                 <Field label="Off-site backup">
                   <Select value={values.offsite_enabled ?? 'false'} onChange={(e) => set('offsite_enabled', e.target.value)}>
                     <option value="false">Disabled</option>
-                    <option value="true">Enabled — push after every snapshot</option>
+                    <option value="true">Enabled, push after every snapshot</option>
                   </Select>
                 </Field>
                 <Field label="Keep last N remote copies">
@@ -633,13 +633,13 @@ export function Settings() {
               {!offsite ? (
                 <div className="py-4 flex justify-center"><Spinner /></div>
               ) : !offsite.enabled ? (
-                <p className="text-sm text-ink-muted">Off-site is disabled — enable it above and save.</p>
+                <p className="text-sm text-ink-muted">Off-site is disabled, enable it above and save.</p>
               ) : (
                 <div className="text-[13px] space-y-1">
-                  {offsite.pending > 0 && <p className="font-bold text-pending-text">{offsite.pending} upload(s) queued — retrying automatically.</p>}
+                  {offsite.pending > 0 && <p className="font-bold text-pending-text">{offsite.pending} upload(s) queued, retrying automatically.</p>}
                   {offsite.lastOk && <p className="text-paid-text">Last upload: <span className="font-mono text-[12px]">{offsite.lastOk}</span> ({offsite.lastAt ? new Date(offsite.lastAt).toLocaleString() : ''})</p>}
                   {offsite.lastError && <p className="text-danger-text font-semibold">Last error: {offsite.lastError}</p>}
-                  {!offsite.lastOk && !offsite.lastError && offsite.pending === 0 && <p className="text-ink-muted">No uploads yet — take a backup above.</p>}
+                  {!offsite.lastOk && !offsite.lastError && offsite.pending === 0 && <p className="text-ink-muted">No uploads yet, take a backup above.</p>}
                   <Button size="sm" variant="ghost" onClick={() => api.get<OffsiteStatus>('/api/v1/system/offsite').then(setOffsite).catch(() => undefined)}>Refresh status</Button>
                 </div>
               )}
@@ -740,7 +740,7 @@ function BrandLogoField() {
 
 // ---- Void reasons admin (Store tab) ----
 // The catalogue cashiers pick from when voiding an order. Lives in the
-// settings API (syncs to every till) — add / rename / toggle, no delete so
+// settings API (syncs to every till), add / rename / toggle, no delete so
 // audit-trail labels never disappear from old orders.
 
 function VoidReasonsAdmin() {
@@ -815,7 +815,7 @@ function VoidReasonsAdmin() {
       {!reasons ? (
         <div className="py-4 flex justify-center"><Spinner /></div>
       ) : reasons.length === 0 ? (
-        <p className="text-sm text-ink-muted mb-3">No reasons yet — add the first one below.</p>
+        <p className="text-sm text-ink-muted mb-3">No reasons yet, add the first one below.</p>
       ) : (
         <Table head={['Reason', 'Status', '']}>
           {reasons.map((r) => (
@@ -875,7 +875,7 @@ function VoidReasonsAdmin() {
 // ---- Team sync (Team tab) ----
 // Links this till to its team through the cloud database: catalogues,
 // customers, orders and settings flow between tills automatically. Identity
-// is zero-config — the till finds its team in the cloud bootstrap row, no
+// is zero-config, the till finds its team in the cloud bootstrap row, no
 // keys are ever typed in.
 
 function TeamSyncPanel() {
@@ -903,11 +903,13 @@ function TeamSyncPanel() {
   const [pinResetsError, setPinResetsError] = useState('')
   const [workingReset, setWorkingReset] = useState(0)
   const [approvedCode, setApprovedCode] = useState<{ code: string; username: string; deviceName: string } | null>(null)
-  // Owner approval (v1.3.2): cloud owner actions verify a HUMAN — when the
+  // Owner approval (v1.3.2): cloud owner actions verify a HUMAN, when the
   // cloud answers 'owner approval required', this dialog collects the owner's
-  // portal credential once and replays the interrupted action.
+  // portal credential once and replays the interrupted action. The username
+  // pre-fills from the signed-in owner: you should never have to remember
+  // which name to type, and the inviter's name must never be required.
   const [pendingOwnerAction, setPendingOwnerAction] = useState<(() => Promise<void>) | null>(null)
-  const [ownerUser, setOwnerUser] = useState('')
+  const [ownerUser, setOwnerUser] = useState(() => useAuth.getState().user?.username || '')
   const [ownerPass, setOwnerPass] = useState('')
   const [ownerBusy, setOwnerBusy] = useState(false)
 
@@ -921,7 +923,7 @@ function TeamSyncPanel() {
       setStatus(null)
       setLoadError(e?.message || 'Team sync status unavailable')
     }
-    // PIN reset requests are best-effort — an offline cloud shouldn't hide
+    // PIN reset requests are best-effort, an offline cloud shouldn't hide
     // the rest of the panel, but a failure must be VISIBLE (a swallowed
     // error read as "no requests" while a worker sat locked out).
     api.get<PinResetRow[]>('/api/v1/team-sync/pin-resets')
@@ -951,7 +953,7 @@ function TeamSyncPanel() {
       const act = pendingOwnerAction
       setPendingOwnerAction(null)
       setOwnerPass('')
-      toast.success('Owner approved', `Thank you, ${r.owner} — approved for about ${Math.max(1, Math.round(r.expiresInS / 60))} minutes.`)
+      toast.success('Owner approved', `Thank you, ${r.owner}, approved for about ${Math.max(1, Math.round(r.expiresInS / 60))} minutes.`)
       if (act) await act()
     } catch (e: any) {
       toast.error('Owner approval failed', e?.message || 'Check the username and password.')
@@ -1027,7 +1029,7 @@ function TeamSyncPanel() {
   }
 
   // Add a store under this owner's cloud project. The team code is minted
-  // by the database — the till never invents one.
+  // by the database, the till never invents one.
   const addStore = async () => {
     const name = newStoreName.trim()
     if (name.length < 2) {
@@ -1037,7 +1039,7 @@ function TeamSyncPanel() {
     setAddingStore(true)
     try {
       const st = await api.post<{ slug: string; name: string; teamCode: string }>('/api/v1/team-sync/stores', { name })
-      toast.success('Store added', `${st.name} — team code ${st.teamCode}. Assign tills to it from the pending list.`)
+      toast.success('Store added', `${st.name}, team code ${st.teamCode}. Assign tills to it from the pending list.`)
       setNewStoreName('')
       await load()
     } catch (e: any) {
@@ -1069,7 +1071,7 @@ function TeamSyncPanel() {
 
   const removeDevice = async (d: TeamDevice) => {
     const label = d.deviceName || d.deviceId.slice(0, 8)
-    if (!window.confirm(`Revoke ${label}? It is cut off from the cloud immediately. It can only come back with a fresh join link from you (Settings → Team) or your owner sign-in — nothing else on that till can undo this.`)) return
+    if (!window.confirm(`Revoke ${label}? It is cut off from the cloud immediately. It can only come back with a fresh join link from you (Settings → Team) or your owner sign-in, nothing else on that till can undo this.`)) return
     setWorkingDevice(d.deviceId)
     try {
       await api.post('/api/v1/team-sync/remove', { deviceId: d.deviceId })
@@ -1088,7 +1090,12 @@ function TeamSyncPanel() {
     setWorkingDevice(d.deviceId)
     try {
       await api.post('/api/v1/team-sync/approve', { deviceId: d.deviceId })
-      toast.success('Till approved', `${label} joins the team on its next heartbeat.`)
+      // Approve on a revoked till un-revokes it (owner consent, cloud-side).
+      if (d.revoked) {
+        toast.success('Till un-revoked', `${label} is back on the team and syncs again on its next heartbeat.`)
+      } else {
+        toast.success('Till approved', `${label} joins the team on its next heartbeat.`)
+      }
       await load()
     } catch (e: any) {
       if (ownerGuard(e, () => approveDevice(d))) return
@@ -1097,9 +1104,6 @@ function TeamSyncPanel() {
       setWorkingDevice('')
     }
   }
-
-  const joinLinkFor = (t: TeamInviteCreated) =>
-    `https://awesomeposs.netlify.app/join#t=${encodeURIComponent(t.teamCode)}&r=${encodeURIComponent(t.roleName)}&k=${encodeURIComponent(t.token)}`
 
   const createInvite = async () => {
     const role = roles.find((r) => r.name === inviteRole)
@@ -1154,7 +1158,7 @@ function TeamSyncPanel() {
 
   // Approve a locked till's PIN reset: the cloud mints a single-use
   // 8-digit code (15 minutes, that one till only). Shown here exactly once
-  // — read it to the worker over a call or WhatsApp.
+  //, read it to the worker over a call or WhatsApp.
   const approvePinReset = async (id: number) => {
     setWorkingReset(id)
     setApprovedCode(null)
@@ -1187,8 +1191,8 @@ function TeamSyncPanel() {
     <div className="px-4 pb-4 sm:px-5 space-y-4">
       <div className="bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
         <p><strong className="text-ink">Multi-store, multi-till syncing.</strong> Every till links itself to the team
-        automatically — it finds its team in the cloud database the moment it gets online. No codes to send,
-        no keys to paste. Running more than one shop? Add each store below — every store keeps its own
+        automatically, it finds its team in the cloud database the moment it gets online. No codes to send,
+        no keys to paste. Running more than one shop? Add each store below, every store keeps its own
         products, sales and tills, and the database only ever lets a till see its own store.</p>
       </div>
 
@@ -1237,7 +1241,7 @@ function TeamSyncPanel() {
                 <AlertTriangle size={15} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
                 <span>
                   This till is registered and waiting for the owner to assign it to a store. It will join
-                  automatically the moment the assignment is made — nothing to type here.
+                  automatically the moment the assignment is made, nothing to type here.
                 </span>
               </div>
             )}
@@ -1245,7 +1249,7 @@ function TeamSyncPanel() {
               <div className="flex items-start gap-2 bg-pending-bg border-2 border-pending-text/30 rounded-input p-3 text-[13px] font-bold text-pending-text">
                 <AlertTriangle size={15} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
                 <span>
-                  This till is registered but awaiting approval — it cannot push or pull events until another
+                  This till is registered but awaiting approval, it cannot push or pull events until another
                   approved device on the team accepts it{status.autoApprove ? ' (auto-approve is on, this should clear shortly)' : ''}.
                 </span>
               </div>
@@ -1261,7 +1265,7 @@ function TeamSyncPanel() {
               <div className="rounded-input border border-danger-text/30 bg-danger-bg p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[12.5px] font-bold text-danger-text">
-                    {status.failedEvents} sync event{status.failedEvents === 1 ? '' : 's'} could not be applied or pushed — they are
+                    {status.failedEvents} sync event{status.failedEvents === 1 ? '' : 's'} could not be applied or pushed, they are
                     kept and retried automatically, nothing is lost.
                   </p>
                   <Button size="sm" variant="secondary" onClick={retryFailed} disabled={syncing}>
@@ -1273,7 +1277,7 @@ function TeamSyncPanel() {
                   {status.failed.map((f, i) => (
                     <li key={i} className="truncate">
                       <span className="font-bold text-ink">{f.direction === 'push' ? 'Outgoing' : 'Incoming'} {f.entity}/{f.op}</span>
-                      {' — '}{f.error} <span className="text-ink-subtle">({f.attempts} attempt{f.attempts === 1 ? '' : 's'})</span>
+                      {', '}{f.error} <span className="text-ink-subtle">({f.attempts} attempt{f.attempts === 1 ? '' : 's'})</span>
                     </li>
                   ))}
                 </ul>
@@ -1289,16 +1293,29 @@ function TeamSyncPanel() {
                         {d.deviceName || d.deviceId.slice(0, 8)}
                       </span>
                     </td>
-                    <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || '—'}</td>
+                    <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || ', '}</td>
                     <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">
                       {d.lastSeen ? new Date(d.lastSeen).toLocaleString() : 'never'}
                     </td>
                     <td className="px-3 py-2">
-                      <StatusPill status={d.approved ? 'paid' : 'pending'} label={d.approved ? 'Approved' : 'Pending'} />
+                      {d.revoked
+                        ? <StatusPill status="void" label="Revoked" />
+                        : <StatusPill status={d.approved ? 'paid' : 'pending'} label={d.approved ? 'Approved' : 'Pending'} />}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <div className="inline-flex items-center gap-1.5">
-                        {!d.approved && (
+                        {d.revoked ? (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => approveDevice(d)}
+                            disabled={workingDevice === d.deviceId}
+                            title="Un-revoke this till — it rejoins the team and syncs again"
+                          >
+                            {workingDevice === d.deviceId ? <Spinner /> : <Undo2 size={14} strokeWidth={2.5} aria-hidden />}
+                            Unrevoke
+                          </Button>
+                        ) : !d.approved && (
                           <Button
                             size="sm"
                             variant="secondary"
@@ -1310,7 +1327,7 @@ function TeamSyncPanel() {
                             Approve
                           </Button>
                         )}
-                        {d.thisDevice ? <StatusPill status="info" label="This device" /> : (
+                        {d.thisDevice ? <StatusPill status="info" label="This device" /> : !d.revoked && (
                           <Button
                             size="sm"
                             variant="ghost"
@@ -1370,7 +1387,7 @@ function TeamSyncPanel() {
                 </div>
                 <p className="text-[12px] text-ink-subtle mt-1.5">
                   Each store keeps its own products, sales and tills. New tills join automatically while there is
-                  only one store; with several, you assign them below — the database never lets a till see another store's data.
+                  only one store; with several, you assign them below, the database never lets a till see another store's data.
                 </p>
               </div>
             )}
@@ -1390,7 +1407,7 @@ function TeamSyncPanel() {
                           {d.deviceName || d.deviceId.slice(0, 8)}
                         </span>
                       </td>
-                      <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || '—'}</td>
+                      <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || ', '}</td>
                       <td className="px-3 py-2">
                         <Select
                           className="w-44 text-[12px]"
@@ -1424,13 +1441,13 @@ function TeamSyncPanel() {
                   <div className="mb-2 rounded-input border-2 border-paid-text/40 bg-paid-bg p-3">
                     <p className="text-[12px] font-bold text-paid-text mb-1">
                       Code for <span className="font-bold">{approvedCode.username}</span>
-                      {approvedCode.deviceName ? ` on ${approvedCode.deviceName}` : ''} — read it to them now (works 15 minutes, this till only):
+                      {approvedCode.deviceName ? ` on ${approvedCode.deviceName}` : ''}, read it to them now (works 15 minutes, this till only):
                     </p>
                     <p className="text-2xl font-mono font-bold tracking-[0.3em] text-paid-text text-center select-all py-1">
                       {approvedCode.code}
                     </p>
                     <p className="text-[11px] text-ink-subtle mt-1">
-                      They type it on the PIN screen under “Forgot PIN?”. Shown only once — tap New code on the row for a fresh one.
+                      They type it on the PIN screen under “Forgot PIN?”. Shown only once, tap New code on the row for a fresh one.
                     </p>
                   </div>
                 )}
@@ -1467,7 +1484,7 @@ function TeamSyncPanel() {
                   </Table>
                 )}
                 <p className="text-[12px] text-ink-subtle mt-1.5">
-                  Approving never reveals or changes the old PIN — it hands out a one-time code that sets a new one. Codes expire after 15 minutes; tap New code for a fresh one.
+                  Approving never reveals or changes the old PIN, it hands out a one-time code that sets a new one. Codes expire after 15 minutes; tap New code for a fresh one.
                 </p>
               </div>
             )}
@@ -1498,7 +1515,7 @@ function TeamSyncPanel() {
                 {invite && (
                   <div className="mt-2 rounded-input border-2 border-paid-text/40 bg-paid-bg p-3">
                     <p className="text-[12px] font-bold text-paid-text mb-1.5">
-                      Join link for a {invite.roleName} — shown once, expires in 7 days. Send it to the worker:
+                      Join link for a {invite.roleName}, shown once, expires in 7 days. Send it to the worker:
                     </p>
                     <div className="flex gap-2 items-center">
                       <code className="flex-1 min-w-0 text-[11px] font-mono bg-surface border border-line rounded-input px-2 py-1.5 truncate text-ink">{joinLinkFor(invite)}</code>
@@ -1508,7 +1525,7 @@ function TeamSyncPanel() {
                       </Button>
                     </div>
                     <p className="text-[11px] text-ink-subtle mt-1.5">
-                      The worker installs the app on their machine and pastes this on the login screen — they pick a name + PIN and are selling in a minute, no admin setup.
+                      The worker installs the app on their machine and pastes this on the login screen, they pick a name + PIN and are selling in a minute, no admin setup.
                     </p>
                   </div>
                 )}
@@ -1521,7 +1538,7 @@ function TeamSyncPanel() {
                         return (
                           <tr key={inv.id}>
                             <td className="px-3 py-2 text-[13px] font-semibold text-ink">{inv.roleName}</td>
-                            <td className="px-3 py-2 text-[12px] text-ink-muted">{inv.note || '—'}</td>
+                            <td className="px-3 py-2 text-[12px] text-ink-muted">{inv.note || ', '}</td>
                             <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{new Date(inv.createdAt).toLocaleDateString()}</td>
                             <td className="px-3 py-2">
                               <StatusPill status={state === 'active' ? 'paid' : state === 'used' ? 'info' : 'pending'}
@@ -1542,7 +1559,7 @@ function TeamSyncPanel() {
                   </div>
                 )}
                 <p className="text-[12px] text-ink-subtle mt-1.5">
-                  The link carries the role: whoever pastes it becomes that role on their own machine — they never touch the admin setup, and the token is single-use.
+                  The link carries the role: whoever pastes it becomes that role on their own machine, they never touch the admin setup, and the token is single-use.
                 </p>
               </div>
             )}
@@ -1574,7 +1591,7 @@ function TeamSyncPanel() {
       <div className="bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
         <p>
           Changes to products, prices, customers, orders, void reasons and store settings sync to every
-          linked till automatically — no reinstalling. Binary updates still arrive via Settings → Updates.
+          linked till automatically, no reinstalling. Binary updates still arrive via Settings → Updates.
         </p>
         <p className="mt-2 text-[12px] text-ink-subtle">
           Manual key entry was removed for security: the database service key must never be typed into a
@@ -1591,7 +1608,7 @@ function TeamSyncPanel() {
             <div>
               <h3 className="text-ink font-bold leading-tight">Confirm it's you</h3>
               <p className="text-[12px] text-ink-muted mt-0.5">
-                This action changes how your whole team syncs. Enter your owner username and password once —
+                This action changes how your whole team syncs. Enter your owner username and password once, 
                 you stay approved for about 30 minutes.
               </p>
             </div>
@@ -1615,3 +1632,9 @@ function TeamSyncPanel() {
     </div>
   )
 }
+
+// joinLinkFor builds the invite URL the worker receives: team code, role and
+// the single-use token ONLY, in the URL fragment (never a server log). No
+// username, ever, joining must not require or expose the inviter's name.
+export const joinLinkFor = (t: TeamInviteCreated) =>
+  `https://awesomeposs.netlify.app/join#t=${encodeURIComponent(t.teamCode)}&r=${encodeURIComponent(t.roleName)}&k=${encodeURIComponent(t.token)}`

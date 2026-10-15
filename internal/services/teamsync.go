@@ -579,7 +579,7 @@ func (c *syncClient) registerCloud(s *Service, version string) error {
         }
         if !out.Approved {
                 if out.Pending {
-                        return fmt.Errorf("registered — waiting for the owner to assign this till to a store")
+                        return fmt.Errorf("registered, waiting for the owner to assign this till to a store")
                 }
                 return fmt.Errorf("awaiting approval in the cloud device list")
         }
@@ -708,6 +708,9 @@ func (s *Service) deviceName() string {
 }
 
 // fetchDevicesRPC pulls the team roster through the identity-checked RPC.
+// Revoked rows are included (the owner is the authority: the roster must
+// show them, with an Unrevoke action, or a mistaken revoke is invisible and
+// only fixable by hand in the database).
 func (c *syncClient) fetchDevicesRPC(s *Service) ([]models.TeamDevice, error) {
         var out struct {
                 OK      bool   `json:"ok"`
@@ -718,6 +721,7 @@ func (c *syncClient) fetchDevicesRPC(s *Service) ([]models.TeamDevice, error) {
                         AppVersion string `json:"app_version"`
                         LastSeen   string `json:"last_seen"`
                         Approved   bool   `json:"approved"`
+                        Revoked    bool   `json:"revoked"`
                         ThisDevice bool   `json:"this_device"`
                 } `json:"devices"`
         }
@@ -737,6 +741,7 @@ func (c *syncClient) fetchDevicesRPC(s *Service) ([]models.TeamDevice, error) {
                         AppVersion: d.AppVersion,
                         LastSeen:   d.LastSeen,
                         Approved:   d.Approved,
+                        Revoked:    d.Revoked,
                         ThisDevice: d.ThisDevice || d.DeviceID == c.device,
                 })
         }
@@ -1000,7 +1005,7 @@ func (c *syncClient) fetchDevices(s *Service) ([]models.TeamDevice, error) {
 func (s *Service) TeamSyncConfigure(req models.TeamSyncConfigRequest) error {
         if req.ProjectURL != "" || (req.ServiceKey != "" && req.ServiceKey != settings.MaskToken) || req.TeamCode != "" {
                 s.Audit(0, "system", "TEAM_SYNC_MANUAL_IGNORED", "settings", "",
-                        "manual sync keys are no longer accepted — tills link via cloud identity")
+                        "manual sync keys are no longer accepted, tills link via cloud identity")
         }
         if req.Enabled == nil {
                 return nil
@@ -1023,7 +1028,7 @@ func (s *Service) TeamSyncConfigure(req models.TeamSyncConfigRequest) error {
                 _ = s.settings.Set("sync_enabled", "true")
                 return nil
         }
-        return fmt.Errorf("no team link yet — this till joins its team automatically once it can reach the internet")
+        return fmt.Errorf("no team link yet, this till joins its team automatically once it can reach the internet")
 }
 
 func boolStr(b bool) string {
@@ -1056,7 +1061,7 @@ func (s *Service) TeamSyncUseCloud() error {
         _ = s.settings.Set("sync_source", "")
         _ = s.settings.Set("sync_registered", "false")
         if s.ensureCloudBootstrap() == nil {
-                return fmt.Errorf("could not reach the cloud — check internet and try again")
+                return fmt.Errorf("could not reach the cloud, check internet and try again")
         }
         return nil
 }
@@ -1131,7 +1136,7 @@ func (s *Service) QuarantineOutboxForTeamChange(oldTeam, newTeam string) {
         if len(pending) == 0 {
                 return
         }
-        cause := fmt.Sprintf("till moved from team %s to %s — events belong to the old team", truncStr(oldTeam, 40), truncStr(newTeam, 40))
+        cause := fmt.Sprintf("till moved from team %s to %s, events belong to the old team", truncStr(oldTeam, 40), truncStr(newTeam, 40))
         tx, err := s.db.Begin()
         if err != nil {
                 return
@@ -1156,7 +1161,7 @@ func (s *Service) QuarantineOutboxForTeamChange(oldTeam, newTeam string) {
                 log.Printf("[sync] team-change quarantine commit: %v", err)
                 return
         }
-        log.Printf("[sync] team change %s→%s: quarantined %d pending event(s) — review Settings → Team before re-pushing", oldTeam, newTeam, moved)
+        log.Printf("[sync] team change %s→%s: quarantined %d pending event(s), review Settings → Team before re-pushing", oldTeam, newTeam, moved)
 }
 
 // syncGetInt / syncSetInt — integer values in sync_state.

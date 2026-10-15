@@ -28,7 +28,7 @@ func (h *H) ForgotPinRequest(c *gin.Context) {
         }
         key := "forgotpin:" + h.shopID(c)
         if !h.LoginRL.Allow(key) {
-                h.fail(c, 429, "too many attempts — wait a minute")
+                h.fail(c, 429, "too many attempts, wait a minute")
                 return
         }
         info, err := h.svc(c).RequestPinReset(body.Username, body.DeviceName)
@@ -66,7 +66,7 @@ func (h *H) ForgotPinRedeem(c *gin.Context) {
         }
         key := "forgotpinredeem:" + h.shopID(c)
         if !h.LoginRL.Allow(key) {
-                h.fail(c, 429, "too many attempts — wait a minute")
+                h.fail(c, 429, "too many attempts, wait a minute")
                 return
         }
         out, err := h.svc(c).RedeemPinReset(body.RequestID, body.Code, body.PIN)

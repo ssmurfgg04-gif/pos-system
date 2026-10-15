@@ -43,10 +43,18 @@ type Service struct {
 	shopID string // ws broadcast scoping (set by the ShopPool)
 
 	orderSeqMu sync.Mutex
+
+	// STK cancel grace: Paystack verify can report abandoned/failed while
+	// the customer is still typing their M-Pesa PIN. The first terminal
+	// verify for an STK reference starts a short window; the leg only
+	// flips to FAILED after it expires. Keyed by reference.
+	stkFailMu sync.Mutex
+	stkFailAt map[string]time.Time
 }
 
 func New(db *database.DB, st *settings.Store, hub *ws.Hub, pw *printer.Worker) *Service {
-	return &Service{db: db, settings: st, hub: hub, printer: pw, mock: mpesa.NewMock(4*time.Second, 0)}
+	return &Service{db: db, settings: st, hub: hub, printer: pw, mock: mpesa.NewMock(4*time.Second, 0),
+		stkFailAt: map[string]time.Time{}}
 }
 
 // Settings exposes the shop's settings store (per-tenant).
@@ -124,7 +132,7 @@ func (s *Service) GetProvider() (mpesa.Provider, error) {
 		passkey := s.settings.Get("mpesa_passkey")
 		callback := s.settings.Get("mpesa_callback_url")
 		if key == "" || secret == "" || shortcode == "" || passkey == "" {
-			return nil, fmt.Errorf("mpesa_env=%s but Daraja credentials are incomplete — set them (or switch M-Pesa to Paystack) in settings; refusing to simulate payments", env)
+			return nil, fmt.Errorf("mpesa_env=%s but Daraja credentials are incomplete, set them (or switch M-Pesa to Paystack) in settings; refusing to simulate payments", env)
 		}
 		cacheKey := env + "|" + shortcode + "|" + key + "|" + secret + "|" + passkey + "|" + callback
 		if s.darajaKey != cacheKey {
@@ -139,7 +147,7 @@ func (s *Service) GetProvider() (mpesa.Provider, error) {
 			s.applyMockConfig()
 			return s.mock, nil
 		}
-		return nil, fmt.Errorf("mock M-Pesa is disabled (ALLOW_MOCK_PAYMENTS!=true) — real shops never auto-complete payments")
+		return nil, fmt.Errorf("mock M-Pesa is disabled (ALLOW_MOCK_PAYMENTS!=true), real shops never auto-complete payments")
 	default: // "manual", "paystack", or anything else: no local STK provider.
 		// When Paystack is configured, STK rides the Paystack mobile-money
 		// charge (see InitiateSTK) and verifies through SweepPaystack.

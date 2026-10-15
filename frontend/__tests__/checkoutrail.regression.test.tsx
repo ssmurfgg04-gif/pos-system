@@ -132,7 +132,7 @@ describe('CheckoutRail — in-rail STK payment (white-screen regression)', () =>
 
     // Pre-fix, this re-render crashed the whole React tree
     // ("Rendered fewer hooks than expected") — the app white-screened.
-    expect(container.textContent).toContain('Payment —')
+    expect(container.textContent).toMatch(/Payment[,:]/)  // em dash was swept from user-facing copy
     expect(container.textContent).toContain('Initiating')
     expect(container.textContent).toContain('Prompt sent')
     expect(container.textContent).toContain('Enter PIN')

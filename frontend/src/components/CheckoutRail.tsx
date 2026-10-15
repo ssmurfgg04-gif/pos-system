@@ -274,7 +274,7 @@ export function CheckoutRail({
     if (elapsed >= 900 && (stkStage === 'waiting' || stkStage === 'slow')) {
       stopTimers()
       setStkStage('failed')
-      setPayError('We stopped auto-watching after 15 minutes. If the customer says they already paid, tap “Check payment status” — it re-verifies the charge and completes the sale. Otherwise send the prompt again or key in the M-Pesa code.')
+      setPayError('We stopped auto-watching after 15 minutes. If the customer says they already paid, tap “Check payment status”, it re-verifies the charge and completes the sale. Otherwise send the prompt again or key in the M-Pesa code.')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elapsed, mode, stkStage])
@@ -330,13 +330,13 @@ export function CheckoutRail({
             if (settledRef.current) return
             settledRef.current = true
             setInlineStage('failed')
-            setPayError('Checkout closed before payment — the order stays pending. Retry or void it.')
+            setPayError('Checkout closed before payment, the order stays pending. Retry or void it.')
           },
           onError: (message) => {
             if (settledRef.current) return
             settledRef.current = true
             setInlineStage('failed')
-            setPayError(message || 'Checkout failed to open — try again.')
+            setPayError(message || 'Checkout failed to open, try again.')
           },
         },
       )
@@ -356,7 +356,7 @@ export function CheckoutRail({
       handlePaid(done)
     } catch (err: any) {
       setInlineStage('failed')
-      setPayError(err?.message || 'Verification failed — try again')
+      setPayError(err?.message || 'Verification failed, try again')
     }
   }
 
@@ -375,7 +375,7 @@ export function CheckoutRail({
         else setInlineStage('paid')
         stopTimers()
         handlePaid(r.order)
-        toast.success('Payment confirmed', `${r.order.number} — ${formatMoney(r.order.totalCents)}`)
+        toast.success('Payment confirmed', `${r.order.number}, ${formatMoney(r.order.totalCents)}`)
       } else {
         toast.info('No payment yet', r?.message || 'No confirmed payment for this order yet.')
       }
@@ -786,7 +786,7 @@ function PaymentForm(props: {
   const chargeLabel = busy
     ? 'Working…'
     : splitMode
-      ? `Charge ${formatMoney(tenderDue)} — ${splitLegs.length} payment${splitLegs.length === 1 ? '' : 's'}`
+      ? `Charge ${formatMoney(tenderDue)}, ${splitLegs.length} payment${splitLegs.length === 1 ? '' : 's'}`
       : method === 'cash'
         ? `Take ${formatMoney(tenderDue)}`
         : method === 'tab'
@@ -797,7 +797,7 @@ function PaymentForm(props: {
               ? `Pay ${formatMoney(tenderDue)} →`
               : manualMode
                 ? `Confirm ${formatMoney(tenderDue)} M-Pesa →`
-                : `Charge ${formatMoney(tenderDue)} — Send STK →`
+                : `Charge ${formatMoney(tenderDue)}, Send STK →`
 
   return (
     <div className="space-y-2.5">
@@ -1002,12 +1002,12 @@ function PaymentForm(props: {
             <p className="text-danger-text text-[13px] font-semibold">This customer is cash-only — pick someone with credit.</p>
           )}
           {!online && (
-            <p className="text-pending-text text-[13px] font-bold">You're offline — {method === 'credit' ? 'store credit' : 'tabs'} need the server for checks.</p>
+            <p className="text-pending-text text-[13px] font-bold">You're offline, {method === 'credit' ? 'store credit' : 'tabs'} need the server for checks.</p>
           )}
         </>
       ) : method === 'card' ? (
         <div className="bg-surface-muted border border-line rounded-input p-3 text-[13px] text-ink-muted space-y-1">
-          <p>A secure checkout opens right here in the app — card or mobile money, with the exact amount already set.</p>
+          <p>A secure checkout opens right here in the app, card or mobile money, with the exact amount already set.</p>
           {!online && (
             <p className="text-pending-text font-bold flex items-center gap-1.5">
               <AlertTriangle size={14} strokeWidth={2.5} aria-hidden />
@@ -1017,7 +1017,7 @@ function PaymentForm(props: {
         </div>
       ) : method === 'mpesa' && manualMode ? (
         <div className="bg-surface-muted border border-line rounded-input p-3 text-[13px] text-ink-muted">
-          The customer pays to {branding.paybill_number ? 'Paybill ' + branding.paybill_number : 'Till ' + (branding.till_number || '—')} (Account: the order number). You'll enter their receipt code next.
+          The customer pays to {branding.paybill_number ? 'Paybill ' + branding.paybill_number : 'Till ' + (branding.till_number || ', ')} (Account: the order number). You'll enter their receipt code next.
         </div>
       ) : method === 'mpesa' ? (
         <div className="bg-surface-muted border border-line rounded-input p-3 text-[13px] text-ink-muted space-y-1">
@@ -1025,13 +1025,13 @@ function PaymentForm(props: {
           {!online && (
             <p className="text-pending-text font-bold flex items-center gap-1.5">
               <AlertTriangle size={14} strokeWidth={2.5} aria-hidden />
-              You're offline — M-Pesa needs a connection. Cash sales keep working.
+              You're offline, M-Pesa needs a connection. Cash sales keep working.
             </p>
           )}
         </div>
       ) : null}
 
-      {/* Order-level discount — permission-gated, all tenders */}
+      {/* Order-level discount, permission-gated, all tenders */}
       {canDiscount && (
         <div className="grid grid-cols-2 gap-2 border-t border-line pt-3">
           <Field label="Discount label" hint="Shown on the order.">
@@ -1048,14 +1048,14 @@ function PaymentForm(props: {
         </div>
       )}
 
-      {/* Loyalty redemption — needs an attached customer, the program on,
+      {/* Loyalty redemption, needs an attached customer, the program on,
           and loyalty.redeem. The backend caps redemption authoritatively. */}
       {tabCustomerLoyalty && loyaltyEnabled && canRedeem && (
         <div className="border border-line rounded-input p-3 bg-surface-muted space-y-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-[13px] font-bold text-ink flex items-center gap-1.5">
               <Star size={14} strokeWidth={2.5} aria-hidden />
-              {tabCustomerLoyalty.name} — {tabCustomerLoyalty.loyaltyPoints} point{tabCustomerLoyalty.loyaltyPoints === 1 ? '' : 's'}
+              {tabCustomerLoyalty.name}, {tabCustomerLoyalty.loyaltyPoints} point{tabCustomerLoyalty.loyaltyPoints === 1 ? '' : 's'}
             </span>
             <span className="text-[11px] text-ink-subtle">1 pt ≈ {formatMoneyCompact(100)}</span>
           </div>
@@ -1155,20 +1155,20 @@ function PaymentPanel({
   useEffect(() => { setLocalPhone(phone) }, [phone])
   const lastPayment = order.payments?.[order.payments.length - 1]
 
-  // STK progress steps — the cashier should SEE the journey, not guess:
+  // STK progress steps, the cashier should SEE the journey, not guess:
   // Initiating → Prompt sent → Waiting for PIN → Result (paid/failed).
   const stkStep =
     stkStage === 'sending' ? 0
       : stkStage === 'sent' ? 1
         : (stkStage === 'waiting' || stkStage === 'slow') ? 2
-          : 3 // paid or failed — terminal
+          : 3 // paid or failed, terminal
 
   return (
     <div className="h-full flex flex-col">
       <header className="px-4 pt-4 pb-3 border-b border-line flex items-center justify-between">
         <div>
-          <h2 className="font-bold text-ink">Payment — {order.number}</h2>
-          <p className="text-[11px] text-ink-subtle">Everything stays on this screen — no external windows.</p>
+          <h2 className="font-bold text-ink">Payment, {order.number}</h2>
+          <p className="text-[11px] text-ink-subtle">Everything stays on this screen, no external windows.</p>
         </div>
         <StatusPill status={paid ? 'paid' : 'pending'} label={paid ? 'Paid' : 'Pending'} />
       </header>
@@ -1350,7 +1350,7 @@ function StkPanel({
         </div>
         <div>
           <p className="font-bold text-ink text-lg">Waiting for the customer…</p>
-          <p className="text-ink-muted text-sm mt-1">An M-Pesa prompt was sent to this number — ask them to enter their PIN:</p>
+          <p className="text-ink-muted text-sm mt-1">An M-Pesa prompt was sent to this number, ask them to enter their PIN:</p>
           <p className="mt-2 inline-block tabular font-extrabold text-2xl text-ink bg-surface border border-line rounded-input px-4 py-2 select-none" aria-label="Customer phone number (read-only)">
             {phone}
           </p>
@@ -1362,7 +1362,7 @@ function StkPanel({
         <p className="text-[11px] text-ink-subtle max-w-xs mx-auto leading-relaxed">
           On their phone the prompt shows <strong className="text-ink">PAYSTACK PAYMENTS KENYA LIMITED</strong>
           {branding.store_name ? <> for account <strong className="text-ink">{branding.store_name}</strong></> : null}
-          {' '}— that's Paystack, the card &amp; M-Pesa processor. Money lands in your account.
+          {' '}, that's Paystack, the card &amp; M-Pesa processor. Money lands in your account.
         </p>
         {till && (
           <div className="text-left bg-surface-muted border border-line rounded-input p-3">
@@ -1431,7 +1431,7 @@ function StkPanel({
           <AlertTriangle size={20} strokeWidth={2.5} className="text-pending-text shrink-0 mt-0.5" aria-hidden />
           <div>
             <p className="font-bold text-pending-text text-sm">Payment not confirmed yet</p>
-            <p role="alert" className="text-[13px] text-ink-muted mt-0.5">{payError || 'The customer may have cancelled, or the request timed out. The order stays pending — nothing was marked paid.'}</p>
+            <p role="alert" className="text-[13px] text-ink-muted mt-0.5">{payError || 'The customer may have cancelled, or the request timed out. The order stays pending, nothing was marked paid.'}</p>
           </div>
         </div>
       )}
@@ -1441,7 +1441,7 @@ function StkPanel({
       <p className="text-[12px] text-ink-muted text-center -mt-2">
         Re-verifies every charge sent for this order with Paystack and completes the sale if the money arrived.
       </p>
-      <Field label="Change M-Pesa number" hint="Wrong number? Fix it here — the cart is safe and the order stays put.">
+      <Field label="Change M-Pesa number" hint="Wrong number? Fix it here, the cart is safe and the order stays put.">
         <Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" />
       </Field>
       <Button variant="secondary" size="lg" className="w-full" onClick={onSend} disabled={busy || !phone.trim()}>
@@ -1513,7 +1513,7 @@ function InlinePanel({
             <AlertTriangle size={20} strokeWidth={2.5} className="text-pending-text shrink-0 mt-0.5" aria-hidden />
             <div>
               <p className="font-bold text-pending-text text-sm">Payment not completed</p>
-              <p role="alert" className="text-[13px] text-ink-muted mt-0.5">{payError || 'The checkout was closed before payment. The order stays pending — retry or void it.'}</p>
+              <p role="alert" className="text-[13px] text-ink-muted mt-0.5">{payError || 'The checkout was closed before payment. The order stays pending, retry or void it.'}</p>
             </div>
           </div>
           <Button variant="primary" size="lg" className="w-full" onClick={onRetry}>
@@ -1598,7 +1598,7 @@ export function VoidReasonPicker({
 
   const combined = catalogFailed
     ? extra.trim()
-    : (label ? label + (extra.trim() ? ' — ' + extra.trim() : '') : '')
+    : (label ? label + (extra.trim() ? ', ' + extra.trim() : '') : '')
 
   const submit = async () => {
     if (!combined || busy) return
@@ -1625,7 +1625,7 @@ export function VoidReasonPicker({
       </div>
 
       {catalogFailed ? (
-        <Field label="Reason" hint="Reason catalog unavailable offline — type the reason.">
+        <Field label="Reason" hint="Reason catalog unavailable offline, type the reason.">
           <Input value={extra} onChange={(e) => setExtra(e.target.value)} placeholder="e.g. Customer changed mind" autoFocus />
         </Field>
       ) : !reasons ? (
@@ -1728,7 +1728,7 @@ function ParkModal({
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Grace — hoodies"
+            placeholder="e.g. Grace, hoodies"
             autoFocus
             onKeyDown={(e) => e.key === 'Enter' && park()}
           />

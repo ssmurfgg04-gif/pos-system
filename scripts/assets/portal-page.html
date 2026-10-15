@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LedgerPOS — Owner portal</title>
-<meta name="description" content="Log in with your shop's admin credentials and see how your store is doing — sales today, this week, payment mix, top products — straight from your tills' synced data.">
+<meta name="description" content="Log in with your shop's admin credentials and see how your store is doing, sales today, this week, payment mix, top products, straight from your tills' synced data.">
 <meta name="robots" content="noindex">
 <link rel="icon" href="../icon-64.png">
 <style>
@@ -109,7 +109,7 @@
         </div>
         <button class="btn" id="go" type="submit">Show my shop's performance</button>
       </form>
-      <p class="note">Your password is verified against a hash your till published to the cloud — the portal can read your synced sales summary, never your products, customers, or receipts. Not activated yet? Open your till's app, change the admin password once (Settings → People &amp; Roles), and this page lights up.</p>
+      <p class="note">Your password is verified against a hash your till published to the cloud, the portal can read your synced sales summary, never your products, customers, or receipts. Not activated yet? Open your till's app, change the admin password once (Settings → People &amp; Roles), and this page lights up.</p>
     </div>
     <p class="hint">Works with any LedgerPOS shop synced to the team cloud (v1.1.2+).</p>
   </div>
@@ -184,7 +184,7 @@ function login(u, p, team) {
     headers: { 'apikey': ANON, 'Authorization': 'Bearer ' + ANON, 'Content-Type': 'application/json' },
     body: JSON.stringify(team ? { p_username: u, p_password: p, p_team_code: team } : { p_username: u, p_password: p }),
   }).then(function (r) {
-    if (!r.ok) throw new Error('The cloud could not be reached — try again in a moment.');
+    if (!r.ok) throw new Error('The cloud could not be reached, try again in a moment.');
     return r.json();
   });
 }
@@ -264,7 +264,7 @@ $('form').addEventListener('submit', function (e) {
   $('go').disabled = true; $('go').textContent = 'Checking…';
   login(u, p, chosenTeam).then(function (out) {
     if (out.needsStoreChoice && Array.isArray(out.teams) && out.teams.length) {
-      // Same credentials open more than one shop — never guess. Show the
+      // Same credentials open more than one shop, never guess. Show the
       // picker and re-run the login bound to the chosen team.
       renderStoreChoice(out.teams);
       return;

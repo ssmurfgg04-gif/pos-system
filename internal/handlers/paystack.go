@@ -32,7 +32,7 @@ func (h *H) PaymentConfig(c *gin.Context) {
 func (h *H) PaystackInit(c *gin.Context) {
         p := h.principal(c)
         if !paystackAllowed("init:" + p.Username) {
-                h.fail(c, 429, "too many checkout attempts — wait a moment")
+                h.fail(c, 429, "too many checkout attempts, wait a moment")
                 return
         }
         id, ok := h.pathID(c, "id")
@@ -58,7 +58,7 @@ func (h *H) PaystackInit(c *gin.Context) {
 func (h *H) PaystackVerify(c *gin.Context) {
         p := h.principal(c)
         if !paystackAllowed("verify:" + p.Username) {
-                h.fail(c, 429, "too many verification attempts — wait a moment")
+                h.fail(c, 429, "too many verification attempts, wait a moment")
                 return
         }
         id, ok := h.pathID(c, "id")

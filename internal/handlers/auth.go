@@ -34,7 +34,7 @@ func (h *H) Login(c *gin.Context) {
         }
         key := "login:" + strings.ToLower(body.Username)
         if !h.LoginRL.Allow(key) || !h.IPRL.Allow("login-ip:"+c.ClientIP()) {
-                h.fail(c, 429, "too many attempts — wait a minute")
+                h.fail(c, 429, "too many attempts, wait a minute")
                 return
         }
         if h.Tenants == nil || h.Shops == nil {
@@ -105,7 +105,7 @@ func (h *H) Login(c *gin.Context) {
                         }
                 }
                 h.failWith(c, 409, gin.H{
-                        "error":     "this account exists in several shops — pick one",
+                        "error":     "this account exists in several shops, pick one",
                         "needsShop": true,
                         "shops":     shops,
                 })
@@ -117,6 +117,17 @@ func (h *H) Login(c *gin.Context) {
         // Use matched shop's service for audit and token
         svc, _ := h.Shops.Service(matchedShop)
         h.LoginRL.Forget(key)
+        // Portal self-heal: portal_accounts rows are normally written on
+        // password SAVES, so an owner whose password predates the portal
+        // could never pass the owner-approval gate (every invite, device
+        // approval and PIN-reset approval failed forever). A successful
+        // owner-level password login just proved the SAME credential the
+        // portal checks, so publishing the hash here is safe (the plaintext
+        // stays local, only the bcrypt hash is sent) and makes the gate
+        // self-recovering. Best-effort and async: login never waits on it.
+        if uname, isOwner := userIsOwnerLevel(svc.DB(), matchedPrincipal.ID); isOwner {
+                go svc.PortalPublishCredentials(uname, body.Password)
+        }
         token, err := auth.IssueToken(h.MasterSecret, matchedPrincipal.ID, matchedPrincipal.Username, matchedShop)
         if err != nil {
                 h.fail(c, 500, "token error")
@@ -167,7 +178,7 @@ func (h *H) Signup(c *gin.Context) {
         // The default-password blocklist protects NEW passwords only: signup
         // is always fresh, so it shares the same gate as password changes.
         if auth.IsDefaultPassword(body.Password) {
-                h.fail(c, 400, "choose a stronger password — that one is public")
+                h.fail(c, 400, "choose a stronger password, that one is public")
                 return
         }
         if len(body.ShopName) > 80 {
@@ -175,7 +186,7 @@ func (h *H) Signup(c *gin.Context) {
                 return
         }
         if !h.LoginRL.Allow("signup:" + c.ClientIP()) {
-                h.fail(c, 429, "too many attempts — wait a minute")
+                h.fail(c, 429, "too many attempts, wait a minute")
                 return
         }
         shop, err := h.Tenants.CreateShop(strings.TrimSpace(body.ShopName), "",
@@ -279,7 +290,7 @@ func (h *H) PinLogin(c *gin.Context) {
         // Rate limit on the composite (shop, user) + source — a spray across
         // shops or users cannot share one bucket.
         if !h.PinRL.Allow("pin:"+body.ShopID+":"+itoa64(body.UserID)) || !h.IPRL.Allow("pin-ip:"+c.ClientIP()) {
-                h.fail(c, 429, "too many attempts — wait a minute")
+                h.fail(c, 429, "too many attempts, wait a minute")
                 return
         }
         if h.Shops == nil {
@@ -313,7 +324,7 @@ func (h *H) PinLogin(c *gin.Context) {
                 return
         }
         if wait := auth.PINLockRemaining(db, body.UserID); wait > 0 {
-                h.fail(c, 423, "PIN locked — try again in "+itoa(wait)+"s")
+                h.fail(c, 423, "PIN locked, try again in "+itoa(wait)+"s")
                 return
         }
         var pinHash string
@@ -328,7 +339,7 @@ func (h *H) PinLogin(c *gin.Context) {
         if !auth.VerifyPassword(pinHash, body.PIN) {
                 lock := auth.RegisterPINFailure(db, body.UserID)
                 if lock > 0 {
-                        h.fail(c, 423, "wrong PIN — locked for "+itoa(lock)+"s")
+                        h.fail(c, 423, "wrong PIN, locked for "+itoa(lock)+"s")
                         return
                 }
                 h.fail(c, 401, "wrong PIN")
@@ -373,7 +384,7 @@ func (h *H) TeamJoin(c *gin.Context) {
         }
         key := "teamjoin"
         if !h.LoginRL.Allow(key) {
-                h.fail(c, 429, "too many attempts — wait a minute")
+                h.fail(c, 429, "too many attempts, wait a minute")
                 return
         }
         svc := h.svc(c)
@@ -393,7 +404,7 @@ func (h *H) TeamJoin(c *gin.Context) {
         db := svc.DB()
         p, err := auth.LoadPrincipal(db, info.UserID)
         if err != nil {
-                h.fail(c, 500, "joined, but the session failed — try logging in with your PIN")
+                h.fail(c, 500, "joined, but the session failed, try logging in with your PIN")
                 return
         }
         p.ShopID = shopID
@@ -438,7 +449,7 @@ func (h *H) OwnerSignin(c *gin.Context) {
         }
         key := "ownersignin:" + strings.ToLower(body.Username)
         if !h.LoginRL.Allow(key) || !h.IPRL.Allow("owner-ip:"+c.ClientIP()) {
-                h.fail(c, 429, "too many attempts — wait a minute")
+                h.fail(c, 429, "too many attempts, wait a minute")
                 return
         }
         svc := h.svc(c)
@@ -458,7 +469,7 @@ func (h *H) OwnerSignin(c *gin.Context) {
         db := svc.DB()
         p, err := auth.LoadPrincipal(db, info.UserID)
         if err != nil {
-                h.fail(c, 500, "signed in, but the session failed — try logging in again")
+                h.fail(c, 500, "signed in, but the session failed, try logging in again")
                 return
         }
         p.ShopID = shopID

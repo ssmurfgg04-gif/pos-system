@@ -68,7 +68,7 @@ func (h *H) guardGrantElevation(c *gin.Context, permsJSON string) bool {
         for _, key := range authorityKeys {
                 for _, perm := range perms {
                         if perm == key && !p.Can(key) {
-                                h.fail(c, 403, "only the business owner (an account with "+key+") can grant "+key+" — ask the owner to make this change")
+                                h.fail(c, 403, "only the business owner (an account with "+key+") can grant "+key+", ask the owner to make this change")
                                 return false
                         }
                 }
@@ -81,7 +81,7 @@ func (h *H) guardGrantElevation(c *gin.Context, permsJSON string) bool {
 func (h *H) guardLastOwnerStrip(c *gin.Context, roleID int64, newPermsJSON string) bool {
         var oldPerms string
         if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, roleID).Scan(&oldPerms); err != nil {
-                h.fail(c, 409, "cannot verify owner roles right now — the change was refused. Try again.")
+                h.fail(c, 409, "cannot verify owner roles right now, the change was refused. Try again.")
                 return false
         }
         if !permsIncludeBoth(oldPerms, "settings.manage", "users.manage") ||
@@ -94,7 +94,7 @@ func (h *H) guardLastOwnerStrip(c *gin.Context, roleID int64, newPermsJSON strin
                 SELECT COALESCE(r.permissions, '[]') FROM users u JOIN roles r ON r.id = u.role_id
                 WHERE u.is_active = 1 AND u.role_id != ?`, roleID)
         if err != nil {
-                h.fail(c, 409, "cannot verify owner accounts right now — the change was refused. Try again.")
+                h.fail(c, 409, "cannot verify owner accounts right now, the change was refused. Try again.")
                 return false // fail closed
         }
         defer rows.Close()
@@ -104,7 +104,7 @@ func (h *H) guardLastOwnerStrip(c *gin.Context, roleID int64, newPermsJSON strin
                         return true // another owner exists outside this role
                 }
         }
-        h.fail(c, 409, "this is the last owner role with active members — promote another owner before removing its powers")
+        h.fail(c, 409, "this is the last owner role with active members, promote another owner before removing its powers")
         return false
 }
 

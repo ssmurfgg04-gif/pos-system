@@ -660,7 +660,7 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
                         // against the payable (after discount + points).
                         if tabCustomer.CreditLimitCents <= 0 {
                                 tx.Rollback()
-                                return nil, fmt.Errorf("customer has no credit — cash only")
+                                return nil, fmt.Errorf("customer has no credit, cash only")
                         }
                         // Limit enforced ATOMICALLY against the in-tx balance:
                         // tabCustomer above was read before BEGIN, so two
@@ -1015,7 +1015,7 @@ func (s *Service) InitiateSTK(ctx context.Context, orderID int64, p *auth.Princi
                 return nil, err
         }
         if provider == nil {
-                return nil, errors.New("M-Pesa STK is not configured — connect Paystack in Settings (or switch to manual receipt entry)")
+                return nil, errors.New("M-Pesa STK is not configured, connect Paystack in Settings (or switch to manual receipt entry)")
         }
         resp, err := provider.InitiateSTK(ctx, mpesa.STKRequest{
                 OrderID:          order.ID,
@@ -1102,11 +1102,11 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
                 return nil, err
         }
         if orderStatus == models.OrderVoided {
-                tx.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paid after void — refund required' WHERE id = ?`), paymentID)
+                tx.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paid after void, refund required' WHERE id = ?`), paymentID)
                 tx.Commit()
                 s.Audit(0, "system", "PAYMENT_AFTER_VOID", "order", fmt.Sprint(orderID),
-                        "money arrived for a voided order — refund from the provider dashboard")
-                return nil, fmt.Errorf("%w: order was voided — refund this payment, do not re-open the sale", ErrInvalidState)
+                        "money arrived for a voided order, refund from the provider dashboard")
+                return nil, fmt.Errorf("%w: order was voided, refund this payment, do not re-open the sale", ErrInvalidState)
         }
 
         // Receipt uniqueness (dedupe manual re-entry / double callbacks).
@@ -1349,7 +1349,7 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
         }
         if collectedOnline > 0 {
                 tx.Exec(`UPDATE orders SET discrepancy = 1 WHERE id = ?`, orderID)
-                tx.Exec(s.db.Rebind(`UPDATE payments SET result_desc = result_desc || ' — refund owed via provider' WHERE order_id = ? AND status = 'VOIDED' AND method IN ('paystack','mpesa')`), orderID)
+                tx.Exec(s.db.Rebind(`UPDATE payments SET result_desc = result_desc || ', refund owed via provider' WHERE order_id = ? AND status = 'VOIDED' AND method IN ('paystack','mpesa')`), orderID)
         }
         // Gift cards minted by this sale stop being shop liability the moment
         // the sale is voided — an ACTIVE code redeemable after its sale

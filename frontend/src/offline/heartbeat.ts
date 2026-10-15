@@ -105,7 +105,7 @@ export async function flushQueue(): Promise<Order[]> {
           if (q && (q.attempts || 0) + 1 >= MAX_FLUSH_ATTEMPTS) {
             toast.error(
               `Offline sale parked after ${MAX_FLUSH_ATTEMPTS} tries`,
-              'Show it to the owner — check Reports → Orders for duplicates before re-entering it.',
+              'Show it to the owner, check Reports → Orders for duplicates before re-entering it.',
             )
             // Kept in the queue (flagged failed) — never auto-deleted.
           }

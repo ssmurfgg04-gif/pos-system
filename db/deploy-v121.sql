@@ -40,7 +40,7 @@ begin
     where username = p_username and window_start > now() - interval '15 minutes';
   if coalesce(fails, 0) >= 10 then
     return json_build_object('ok', false, 'error',
-      'too many attempts — try again in 15 minutes');
+      'too many attempts, try again in 15 minutes');
   end if;
 
   for acct in select * from portal_accounts where username = p_username loop
@@ -52,7 +52,7 @@ begin
         where team_code = acct.team_code and active limit 1;
       if store.id is null then
         return json_build_object('ok', false, 'error',
-          'your store is not active in the cloud — contact support');
+          'your store is not active in the cloud, contact support');
       end if;
 
       select * into dev from sync_devices where device_id = p_device_id;
@@ -63,7 +63,7 @@ begin
                   coalesce(nullif(btrim(p_app_version), ''), ''), p_secret_hash, true, now());
       elsif dev.revoked then
         return json_build_object('ok', false, 'error',
-          'this device was revoked — ask the owner to approve it again from Settings → Team');
+          'this device was revoked, ask the owner to approve it again from Settings → Team');
       else
         update sync_devices
           set team_code = acct.team_code, approved = true, last_seen = now(),
@@ -91,7 +91,7 @@ begin
                               then portal_signin_fails.window_start else now() end;
 
   return json_build_object('ok', false, 'error',
-    'wrong username or password — or cloud sign-in is not activated for your shop yet (activate it from Settings → Team on an existing till)');
+    'wrong username or password, or cloud sign-in is not activated for your shop yet (activate it from Settings → Team on an existing till)');
 end $function$;
 
 -- =====================================================================
@@ -101,7 +101,7 @@ end $function$;
 
 select public.upsert_app_config('update_manifest_tag', 'v1.2.0', false);
 select public.upsert_app_config('update_manifest_notes',
-  '1.2.0 — owner sign-in on a fresh till (no more forced store creation), X/Z cash reports, purchase-order receiving syncs stock to every till, eTIMS-ready tax invoices (KRA PIN + buyer PIN), multi-store consolidated daily report, compact checkout rail, contrast fixes.', false);
+  '1.2.0, owner sign-in on a fresh till (no more forced store creation), X/Z cash reports, purchase-order receiving syncs stock to every till, eTIMS-ready tax invoices (KRA PIN + buyer PIN), multi-store consolidated daily report, compact checkout rail, contrast fixes.', false);
 select public.upsert_app_config('update_manifest_assets', '[
   {"name":"ledgerpos-setup-windows-x64.exe","url":"https://github.com/ssmurfgg04-gif/pos-system/releases/download/v1.2.0/ledgerpos-setup-windows-x64.exe","sha256":"59264dad693004766befd30c496ae3526370f9101f5308c10ef0bc4538f956be"},
   {"name":"ledgerpos-macos-apple-silicon.zip","url":"https://github.com/ssmurfgg04-gif/pos-system/releases/download/v1.2.0/ledgerpos-macos-apple-silicon.zip","sha256":"a275fffc034ee68f656659447312370078f0bcb6554f72c9d6df6f18bd60f790"},
@@ -127,7 +127,7 @@ select public.upsert_app_config('update_manifest_assets', '[
 
 select public.upsert_app_config('update_manifest_tag', 'v1.2.1', false);
 select public.upsert_app_config('update_manifest_notes',
-  '1.2.1 — product photos and the shop logo now sync to every till (uploaded ones backfill automatically), plus a deep money & sync review: voids refund store credit and kill gift-card codes, tab limits are enforced atomically, checkout money movements follow the team, receipts print every payment leg, offline sales are only discarded on explicit server refusal, and the installer is 8.3 MB again.', false);
+  '1.2.1, product photos and the shop logo now sync to every till (uploaded ones backfill automatically), plus a deep money & sync review: voids refund store credit and kill gift-card codes, tab limits are enforced atomically, checkout money movements follow the team, receipts print every payment leg, offline sales are only discarded on explicit server refusal, and the installer is 8.3 MB again.', false);
 select public.upsert_app_config('update_manifest_assets', '[
   {"name":"ledgerpos-setup-windows-x64.exe","url":"https://github.com/ssmurfgg04-gif/pos-system/releases/download/v1.2.1/ledgerpos-setup-windows-x64.exe","sha256":"de6a5efdbdd61d86575261b2e70d739624eea1a8cb7b0e41b3dd1bc4831a8d88"},
   {"name":"ledgerpos-macos-apple-silicon.zip","url":"https://github.com/ssmurfgg04-gif/pos-system/releases/download/v1.2.1/ledgerpos-macos-apple-silicon.zip","sha256":"c439218847950daa9f63a91c478c65c0b163e30c88c545fa101c1835c0b1d8ac"},

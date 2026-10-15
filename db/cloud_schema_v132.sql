@@ -105,7 +105,7 @@ begin
   -- brute-force dam per (username, device) — a stolen till cannot spray
   if not public.signin_dam_allow('capmint', lower(p_username), dev.device_id, 10, 15) then
     return json_build_object('ok', false, 'error',
-      'too many attempts — try again in 15 minutes');
+      'too many attempts, try again in 15 minutes');
   end if;
 
   for acct in select * from portal_accounts
@@ -311,7 +311,7 @@ begin
   if not public.signin_dam_global_ok('portal', 300, 15)
      or not public.signin_dam_allow('portal', lower(p_username), 'web', 10, 15) then
     return json_build_object('ok', false, 'error',
-      'too many attempts — try again in 15 minutes');
+      'too many attempts, try again in 15 minutes');
   end if;
 
   -- collect EVERY team whose published credential matches (multi-store
@@ -328,7 +328,7 @@ begin
     perform crypt(p_password, '$2a$10$C6UzMDM.H6dfI/f/IKcEeO7VTgxjrpU8k95Lxvtqk1PGCvXnLBDF6');
     perform public.signin_dam_fail('portal', lower(p_username), 'web', 15);
     return json_build_object('ok', false, 'error',
-      'wrong username or password — or the portal is not activated yet for your shop');
+      'wrong username or password, or the portal is not activated yet for your shop');
   end if;
 
   -- ambiguous identity: never guess. Ask the portal page which store.
@@ -340,7 +340,7 @@ begin
     if store_names is null or store_names = '[]'::jsonb then
       perform public.signin_dam_fail('portal', lower(p_username), 'web', 15);
       return json_build_object('ok', false, 'error',
-        'wrong username or password — or the portal is not activated yet for your shop');
+        'wrong username or password, or the portal is not activated yet for your shop');
     end if;
     return json_build_object('ok', false, 'needsStoreChoice', true,
         'teams', store_names);
@@ -470,7 +470,7 @@ begin
   end if;
   if public.owner_capability_check(p_owner_capability, 'store.create', dev.team_code) is null then
     return json_build_object('ok', false, 'error',
-      'owner approval required — confirm with your owner password (Settings → Team)');
+      'owner approval required, confirm with your owner password (Settings → Team)');
   end if;
   p_name  := btrim(coalesce(p_name, ''));
   p_slug  := lower(btrim(coalesce(p_slug, '')));
@@ -529,7 +529,7 @@ begin
   end if;
   if public.owner_capability_check(p_owner_capability, 'device.assign', dev.team_code) is null then
     return json_build_object('ok', false, 'error',
-      'owner approval required — confirm with your owner password (Settings → Team)');
+      'owner approval required, confirm with your owner password (Settings → Team)');
   end if;
   select * into store from sync_stores
     where team_code = p_team_code and active;
@@ -564,7 +564,7 @@ begin
   end if;
   if public.owner_capability_check(p_owner_capability, 'device.remove', dev.team_code) is null then
     return json_build_object('ok', false, 'error',
-      'owner approval required — confirm with your owner password (Settings → Team)');
+      'owner approval required, confirm with your owner password (Settings → Team)');
   end if;
   if p_target_device_id = dev.device_id then
     return json_build_object('ok', false, 'error', 'cannot remove this device while using it');
@@ -591,7 +591,7 @@ begin
   end if;
   if public.owner_capability_check(p_owner_capability, 'device.approve', dev.team_code) is null then
     return json_build_object('ok', false, 'error',
-      'owner approval required — confirm with your owner password (Settings → Team)');
+      'owner approval required, confirm with your owner password (Settings → Team)');
   end if;
   select * into tgt from sync_devices where device_id = p_target_device_id;
   if tgt.device_id is null then
@@ -624,7 +624,7 @@ begin
   end if;
   if public.owner_capability_check(p_owner_capability, 'invite.create', dev.team_code) is null then
     return json_build_object('ok', false, 'error',
-      'owner approval required — confirm with your owner password (Settings → Team)');
+      'owner approval required, confirm with your owner password (Settings → Team)');
   end if;
   p_role_name := btrim(coalesce(p_role_name, ''));
   if p_role_name = '' or length(p_role_name) > 40 then
@@ -666,7 +666,7 @@ begin
   end if;
   if public.owner_capability_check(p_owner_capability, 'invite.revoke', dev.team_code) is null then
     return json_build_object('ok', false, 'error',
-      'owner approval required — confirm with your owner password (Settings → Team)');
+      'owner approval required, confirm with your owner password (Settings → Team)');
   end if;
   update sync_invites set revoked = true
     where id = p_invite_id and team_code = dev.team_code and used_by = '';
@@ -699,7 +699,7 @@ begin
   if have_account > 0 then
     if public.owner_capability_check(p_owner_capability, 'portal.credentials.set', dev.team_code) is null then
       return json_build_object('ok', false, 'error',
-        'owner approval required — confirm with your owner password (Settings → Team)');
+        'owner approval required, confirm with your owner password (Settings → Team)');
     end if;
   end if;
   p_username := btrim(coalesce(p_username, ''));
@@ -734,7 +734,7 @@ begin
   end if;
   if public.owner_capability_check(p_owner_capability, 'pinreset.approve', dev.team_code) is null then
     return json_build_object('ok', false, 'error',
-      'owner approval required — confirm with your owner password (Settings → Team)');
+      'owner approval required, confirm with your owner password (Settings → Team)');
   end if;
   select * into req from sync_pin_resets
     where id = p_request_id and team_code = dev.team_code;
@@ -746,7 +746,7 @@ begin
   end if;
   if req.created_at < now() - interval '7 days' then
     update sync_pin_resets set status = 'cancelled' where id = req.id;
-    return json_build_object('ok', false, 'error', 'this request expired — ask them to send it again');
+    return json_build_object('ok', false, 'error', 'this request expired, ask them to send it again');
   end if;
   b := gen_random_bytes(4);
   c := lpad((((get_byte(b,0)::bigint * 16777216) + (get_byte(b,1)::bigint * 65536)

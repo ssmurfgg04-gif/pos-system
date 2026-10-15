@@ -1,4 +1,4 @@
-# Remote Owner Playbook — watch the shop from anywhere
+# Remote Owner Playbook, watch the shop from anywhere
 
 The till stays in the shop. You don't have to. This playbook gives an owner
 in Nairobi full visibility into a shop in Kiambu (or anywhere) with no code
@@ -18,14 +18,14 @@ machine doesn't.
 4. Open `http://100.x.y.z:8765` from your device (port 8765 is the desktop
    default; server mode uses whatever `PORT` is set to). The shop's server
    binds all interfaces in server mode, and Tailscale looks like just
-   another interface — nothing to configure in LedgerPOS.
+   another interface, nothing to configure in LedgerPOS.
 
 Notes:
-- The printer and cash drawer stay local-only (USB/LAN at the shop) — remote
+- The printer and cash drawer stay local-only (USB/LAN at the shop), remote
   only *views*; it never prints.
-- Tailscale is end-to-end encrypted (WireGuard, peer-to-peer — no cloud
+- Tailscale is end-to-end encrypted (WireGuard, peer-to-peer, no cloud
   relay in the data path). Do NOT expose the shop port directly to the
-  internet — LedgerPOS serves plain HTTP by design for LAN.
+  internet, LedgerPOS serves plain HTTP by design for LAN.
 
 ## 2. Create the read-only Owner role (5 minutes, once)
 
@@ -50,22 +50,22 @@ password + PIN. The first login forces rotation like everyone else.
 
 ## 4. Off-site backup without commuting (15 minutes, once)
 
-Each shop gets its **own free Supabase project** — that is the whole
+Each shop gets its **own free Supabase project**, that is the whole
 credential-exposure strategy: a leaked key opens that shop's bucket only,
 and you rotate it in the dashboard in 30 seconds.
 
-1. At supabase.com create a project (free tier: 500MB is plenty — a 20MB
+1. At supabase.com create a project (free tier: 500MB is plenty, a 20MB
    shop × 14 kept copies ≈ 300MB). Note the project URL.
 2. Storage → **New bucket** named `ledgerpos`, **private** (not public).
 3. Project Settings → API → copy the **`service_role` secret** (not anon).
 4. In the shop: Settings → System → Off-site backup → Enabled. Fill:
    Project URL, Bucket `ledgerpos`, Service role key, keep 14.
 5. Set the **backup passphrase** (any long phrase). **Write it down and keep
-   it off the shop machine** — photo it, WhatsApp it to yourself. Without
+   it off the shop machine**, photo it, WhatsApp it to yourself. Without
    it the copies cannot be opened by anyone, including you.
 6. Save, then **Back up now**. The status line should show the upload
    within a minute. From then on every nightly snapshot encrypts (AES-256)
-   and uploads itself with retries — nobody has to be around.
+   and uploads itself with retries, nobody has to be around.
 
 Why Supabase instead of raw S3: plain Bearer auth (no signing keys dance,
 immune to shop-PC clock drift which breaks SigV4), a dashboard owners can
@@ -84,5 +84,5 @@ so they never sit in shell history.
 ## 5. When to graduate past this
 
 This covers one shop beautifully. When shop #3 opens, stop adding tunnels
-and build the central relay (one cloud box all shops report to) — that's a
+and build the central relay (one cloud box all shops report to), that's a
 real project, not a playbook. Until then, tunnels + read-only logins win.

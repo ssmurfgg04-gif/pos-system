@@ -170,7 +170,7 @@ func underGoTest() bool {
 
 func guardProduction(host string) error {
         if underGoTest() && strings.Contains(host, cloudProjectRef) {
-                return fmt.Errorf("test refused to touch the production cloud — point cloudBaseURL at a fake server")
+                return fmt.Errorf("test refused to touch the production cloud, point cloudBaseURL at a fake server")
         }
         return nil
 }

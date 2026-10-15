@@ -50,7 +50,7 @@ export function printBarcodeLabels(products: Product[], storeName: string): numb
 <html>
 <head>
 <meta charset="utf-8">
-<title>Barcode labels — ${esc(storeName)}</title>
+<title>Barcode labels, ${esc(storeName)}</title>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #111; }
@@ -105,7 +105,7 @@ export function printBarcodeLabels(products: Product[], storeName: string): numb
 </html>`
 
   const w = window.open('', '_blank', 'width=840,height=680')
-  if (!w) return 0 // popup blocked — caller toasts a hint
+  if (!w) return 0 // popup blocked, caller toasts a hint
   w.document.write(html)
   w.document.close()
   return labels.length
