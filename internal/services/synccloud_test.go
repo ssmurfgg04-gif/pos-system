@@ -6,6 +6,7 @@ package services
 
 import (
         "encoding/json"
+        "fmt"
         "net/http"
         "net/http/httptest"
         "path/filepath"
@@ -37,6 +38,10 @@ type fakeSupabase struct {
         capAnswer   map[string]any          // when set, owner_mint_capability answers this body
         approveTgt  []string                // recorded sync_approve_device targets
         roster      []map[string]any        // when non-nil, sync_roster answers these rows
+
+        // v1.3.5 regression surface: the forgot-PIN recovery RPCs.
+        pinResets   map[int64]map[string]any // id -> {device_id, username, device_name, status, code}
+        pinResetSeq int64
 }
 
 func newFakeSupabase(t *testing.T) *fakeSupabase {
@@ -47,6 +52,7 @@ func newFakeSupabase(t *testing.T) *fakeSupabase {
                 nextID:      1,
                 invites:     map[string]map[string]any{},
                 invitesUsed: map[string]bool{},
+                pinResets:   map[int64]map[string]any{},
         }
         mux := http.NewServeMux()
 
@@ -278,6 +284,106 @@ func newFakeSupabase(t *testing.T) *fakeSupabase {
                         return
                 }
                 json.NewEncoder(w).Encode(map[string]any{"ok": true, "devices": f.roster})
+        })
+
+        // POST /rest/v1/rpc/sync_request_pin_reset — a locked till files a
+        // reset request (mirrors the live SQL: identity-gated, one active
+        // request per device+username, reuse when still open).
+        mux.HandleFunc("/rest/v1/rpc/sync_request_pin_reset", func(w http.ResponseWriter, r *http.Request) {
+                var in struct {
+                        DeviceID   string `json:"p_device_id"`
+                        SecretHash string `json:"p_secret_hash"`
+                        Username   string `json:"p_username"`
+                        DeviceName string `json:"p_device_name"`
+                }
+                json.NewDecoder(r.Body).Decode(&in)
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                if f.device[in.DeviceID] != in.SecretHash || !f.approved[in.DeviceID] {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "device not recognized"})
+                        return
+                }
+                for id, row := range f.pinResets {
+                        if row["device_id"] == in.DeviceID && row["username"] == in.Username && row["status"] == "pending" {
+                                json.NewEncoder(w).Encode(map[string]any{"ok": true, "request_id": id, "reused": true})
+                                return
+                        }
+                }
+                f.pinResetSeq++
+                id := f.pinResetSeq
+                f.pinResets[id] = map[string]any{
+                        "device_id": in.DeviceID, "username": in.Username,
+                        "device_name": in.DeviceName, "status": "pending",
+                }
+                json.NewEncoder(w).Encode(map[string]any{"ok": true, "request_id": id, "reused": false})
+        })
+
+        // POST /rest/v1/rpc/sync_approve_pin_reset — the owner till mints
+        // the single-use code. Mirrors the v1.3.5 live SQL: device identity
+        // is the only gate (no owner-capability challenge), the response
+        // carries the requesting device id for the WiFi hand-off.
+        mux.HandleFunc("/rest/v1/rpc/sync_approve_pin_reset", func(w http.ResponseWriter, r *http.Request) {
+                var in struct {
+                        DeviceID   string `json:"p_device_id"`
+                        SecretHash string `json:"p_secret_hash"`
+                        RequestID  int64  `json:"p_request_id"`
+                }
+                json.NewDecoder(r.Body).Decode(&in)
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                if f.device[in.DeviceID] != in.SecretHash || !f.approved[in.DeviceID] {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "device not recognized"})
+                        return
+                }
+                row, ok := f.pinResets[in.RequestID]
+                if !ok {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "reset request not found"})
+                        return
+                }
+                if row["status"] != "pending" && row["status"] != "approved" {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "this request was already handled"})
+                        return
+                }
+                f.pinResetSeq++
+                code := "4242" + fmt.Sprintf("%04d", f.pinResetSeq%10000)
+                row["status"] = "approved"
+                row["code"] = code
+                json.NewEncoder(w).Encode(map[string]any{"ok": true, "code": code,
+                        "username": row["username"], "deviceName": row["device_name"],
+                        "deviceId": row["device_id"], "expiresMinutes": 15})
+        })
+
+        // POST /rest/v1/rpc/sync_redeem_pin_reset — the locked till burns
+        // the code (device-bound, single-use).
+        mux.HandleFunc("/rest/v1/rpc/sync_redeem_pin_reset", func(w http.ResponseWriter, r *http.Request) {
+                var in struct {
+                        DeviceID  string `json:"p_device_id"`
+                        SecretHash string `json:"p_secret_hash"`
+                        RequestID int64  `json:"p_request_id"`
+                        Code      string `json:"p_code"`
+                }
+                json.NewDecoder(r.Body).Decode(&in)
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                if f.device[in.DeviceID] != in.SecretHash || !f.approved[in.DeviceID] {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "device not recognized"})
+                        return
+                }
+                row, ok := f.pinResets[in.RequestID]
+                if !ok || row["device_id"] != in.DeviceID {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "reset request not found, send a new one from this screen"})
+                        return
+                }
+                if row["status"] == "used" {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "this code was already used"})
+                        return
+                }
+                if row["status"] != "approved" || row["code"] != in.Code {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "that code is not right, check the digits and try again"})
+                        return
+                }
+                row["status"] = "used"
+                json.NewEncoder(w).Encode(map[string]any{"ok": true, "username": row["username"]})
         })
 
         f.srv = httptest.NewServer(mux)

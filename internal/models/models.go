@@ -643,6 +643,9 @@ type PinResetRequested struct {
         Username  string `json:"username"`
         CreatedAt string `json:"createdAt"`
         Reused    bool   `json:"reused"`
+        // PushedCode is a code the owner till delivered straight over the
+        // shop WiFi (pre-fill only; the cloud still verifies it on redeem).
+        PushedCode string `json:"pushedCode,omitempty"`
 }
 
 // PinResetRedeemed is the ack after the owner's code set a new PIN. UserID
