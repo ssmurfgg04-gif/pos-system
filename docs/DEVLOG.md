@@ -424,3 +424,23 @@ Work Log:
 
 Stage Summary:
 - v1.3.1 = security sweep + release-engineering honesty. Paystack untouched. OTA manifest → 1.3.1 pushes the sweep to every till via the cloud manifest (SHA-256 verified).
+
+---
+Task ID: v1.3.5
+Agent: main (Super Z)
+Task: "backup database, change salma pc (08A5QMR) pin to 8188, fix approve never showing the code, remove the confirm-it's-you challenge after approve, make tills discoverable on the same WiFi, push update + OTA."
+
+Work Log:
+- Backed up all 56 tables of the Supabase project (supabase-full-20261016-080534.json.zip) BEFORE touching anything.
+- Root-caused "tap Approve and no code ever comes": the v1.3.2 owner-capability gate requires a portal_accounts row to mint a capability, and portal_accounts was EMPTY on this deployment, so the confirm dialog could never succeed and the code could never be minted. Live SQL confirmed: sync_approve_pin_reset gated, portal_accounts = 0 rows.
+- Unblocked Salma PC immediately: minted the approved reset code for pending request #3 directly in the DB (same sha256 format as the RPC, 24h expiry), device-bound to dev-desktop-o8a5qmr. The worker taps "Forgot PIN?", types the code, sets PIN 8188.
+- Cloud migration cloud_schema_v135.sql: sync_approve_pin_reset no longer demands the owner capability (parameter kept for wire compatibility). Verified LIVE with a synthetic device: approve with no capability returns the 8-digit code, wrong secret refused, code single-use, redeem burns it.
+- LAN discovery (the "tills are segmented" complaint): desktop mode previously bound 127.0.0.1 only and disabled mDNS. Now every till broadcasts _pos-server._tcp and serves a RESTRICTED listener (port+1..+9) with exactly two endpoints: /lan/whoami (device id/name/team, nothing secret) and /lan/pin-reset-code (accepted ONLY while that till has an active reset request with the matching id; the pushed code is a pre-fill, the cloud still verifies and burns it on redeem). Full API stays localhost-only.
+- ApprovePinReset now walks the LAN (mDNS browse, 1.2s, short timeouts) and hands the code to the requesting till directly; the response carries delivered=true and the Settings UI shows "sent straight to that till over the WiFi". Fallback to read-aloud unchanged.
+- The PIN screen polls forgot-pin/status while waiting and pre-fills the delivered code with a green "the code arrived on this till over the WiFi" banner; the worker only types their new PIN.
+- Tests: 4 new Go service tests (approve needs no challenge, LAN delivery end-to-end with a real listener + fake mDNS, no-LAN fallback, foreign-request rejection), landelivery endpoint suite (whoami, matching-id acceptance, wrong id/short/alpha code refusals, rate limit, method guard), frontend suites for the PIN screen WiFi state and the Settings approve (code shown instantly, WiFi badge, NO confirm dialog). Live endpoint verification against a running server. Go suite all green, vitest 104/104, tsc clean, desktop e2e 20/20 with the new binary.
+- Release v1.3.5: go-winres stamped, all four installers built (NSIS 3.11 via apt-get download + dpkg -x + NSISDIR), committed to downloads/, GitHub release cut with assets + checksums, cloud OTA manifest flipped to v1.3.5 with GitHub release URLs, verified with the exact anon till read path: all four SHA-256s match.
+
+Stage Summary:
+- Approve is one tap again, and on one WiFi the code hand-off needs zero typing on the owner side and only the new PIN on the worker side.
+- Known gap (not new): the Netlify download site still serves 1.3.4 because the repo has no NETLIFY_AUTH_TOKEN/NETLIFY_SITE_ID secrets (CI deploy skips + fails its verify step). OTA does NOT depend on it (manifest uses GitHub release URLs). To heal the landing page: set those two secrets, or drag build/netlify-site onto Netlify.
