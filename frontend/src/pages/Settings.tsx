@@ -902,7 +902,7 @@ function TeamSyncPanel() {
   const [pinResets, setPinResets] = useState<PinResetRow[]>([])
   const [pinResetsError, setPinResetsError] = useState('')
   const [workingReset, setWorkingReset] = useState(0)
-  const [approvedCode, setApprovedCode] = useState<{ code: string; username: string; deviceName: string } | null>(null)
+  const [approvedCode, setApprovedCode] = useState<{ code: string; username: string; deviceName: string; delivered?: boolean } | null>(null)
   // Owner approval (v1.3.2): cloud owner actions verify a HUMAN, when the
   // cloud answers 'owner approval required', this dialog collects the owner's
   // portal credential once and replays the interrupted action. The username
@@ -1157,17 +1157,20 @@ function TeamSyncPanel() {
   }
 
   // Approve a locked till's PIN reset: the cloud mints a single-use
-  // 8-digit code (15 minutes, that one till only). Shown here exactly once:
-  // read it to the worker over a call or WhatsApp.
+  // 8-digit code (15 minutes, that one till only). Shown here exactly once,
+  // and when the locked till is on the same WiFi it is delivered straight
+  // to it (delivered=true) so the worker only types their new PIN.
+  // No "confirm it's you" challenge here: the owner is already signed in
+  // on their own till, and the challenge turned every approval into a
+  // dead end. Device identity at the cloud is the gate.
   const approvePinReset = async (id: number) => {
     setWorkingReset(id)
     setApprovedCode(null)
     try {
-      const r = await api.post<{ code: string; username: string; deviceName: string; expiresMins: number }>('/api/v1/team-sync/pin-resets/approve', { requestId: id })
-      setApprovedCode({ code: r.code, username: r.username, deviceName: r.deviceName })
+      const r = await api.post<{ code: string; username: string; deviceName: string; expiresMins: number; delivered?: boolean }>('/api/v1/team-sync/pin-resets/approve', { requestId: id })
+      setApprovedCode({ code: r.code, username: r.username, deviceName: r.deviceName, delivered: !!r.delivered })
       await load()
     } catch (e: any) {
-      if (ownerGuard(e, () => approvePinReset(id))) return
       toast.error('Could not approve the reset', e?.message)
     } finally {
       setWorkingReset(0)
@@ -1441,13 +1444,15 @@ function TeamSyncPanel() {
                   <div className="mb-2 rounded-input border-2 border-paid-text/40 bg-paid-bg p-3">
                     <p className="text-[12px] font-bold text-paid-text mb-1">
                       Code for <span className="font-bold">{approvedCode.username}</span>
-                      {approvedCode.deviceName ? ` on ${approvedCode.deviceName}` : ''}, read it to them now (works 15 minutes, this till only):
+                      {approvedCode.deviceName ? ` on ${approvedCode.deviceName}` : ''}, works 15 minutes, this till only:
                     </p>
                     <p className="text-2xl font-mono font-bold tracking-[0.3em] text-paid-text text-center select-all py-1">
                       {approvedCode.code}
                     </p>
                     <p className="text-[11px] text-ink-subtle mt-1">
-                      They type it on the PIN screen under “Forgot PIN?”. Shown only once, tap New code on the row for a fresh one.
+                      {approvedCode.delivered
+                        ? 'Sent straight to that till over the WiFi as well, they only type their new PIN. Shown here too, just in case.'
+                        : 'Read it to them, they type it on the PIN screen under “Forgot PIN?”. Shown only once, tap New code on the row for a fresh one.'}
                     </p>
                   </div>
                 )}

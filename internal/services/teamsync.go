@@ -138,6 +138,22 @@ func (s *Service) syncConfig() (*syncClient, bool) {
         return nil, false
 }
 
+// PublicSyncIdentity returns this till's non-secret cloud identity for the
+// LAN discovery endpoint: device id and team only — never the secret or its
+// hash. A sibling till uses the device id to find the right peer for the
+// PIN-reset code hand-off; both values are already visible to every team
+// member in the cloud roster.
+func (s *Service) PublicSyncIdentity() (deviceID, team string, ok bool) {
+        c, ok := s.syncConfig()
+        if !ok || c.device == "" {
+                return "", "", false
+        }
+        return c.device, c.team, true
+}
+
+// DeviceName exposes the roster name (hostname) for LAN discovery.
+func (s *Service) DeviceName() string { return s.deviceName() }
+
 func manualSyncClient(s *Service) *syncClient {
         endpoint := strings.TrimRight(s.settings.Get("sync_endpoint"), "/")
         key := s.settings.Get("sync_service_key")

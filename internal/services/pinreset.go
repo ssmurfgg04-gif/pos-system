@@ -26,20 +26,27 @@ package services
 //   - every step is audited locally.
 
 import (
+        "context"
         "database/sql"
         "fmt"
         "log"
         "strings"
+        "time"
 
         "posapp/internal/auth"
         "posapp/internal/hash"
+        "posapp/internal/landelivery"
         "posapp/internal/models"
 )
 
 const (
-        pinResetReqIDKey  = "pinreset_req_id"
+        pinResetReqIDKey   = "pinreset_req_id"
         pinResetReqUserKey = "pinreset_req_user"
         pinResetReqAtKey   = "pinreset_req_at"
+        // Code pre-filled over the LAN by a sibling till (see landelivery).
+        // Only a pre-fill: the cloud still verifies and burns the code on
+        // redeem, so a forged or stale push can never set a PIN.
+        pinResetPushedCodeKey = "pinreset_code_pushed"
 )
 
 // PinResetRequest is what the owner till sees in Settings → Team.
@@ -91,7 +98,9 @@ func (s *Service) RequestPinReset(username, deviceName string) (models.PinResetR
         return out, nil
 }
 
-// PendingPinReset returns this till's open request (for the PIN screen).
+// PendingPinReset returns this till's open request (for the PIN screen),
+// including a code pushed over the LAN by the owner till (empty when the
+// owner has not approved yet or the till has no LAN reachability).
 func (s *Service) PendingPinReset() (models.PinResetRequested, bool) {
         out := models.PinResetRequested{}
         id := s.settings.Get(pinResetReqIDKey)
@@ -104,6 +113,7 @@ func (s *Service) PendingPinReset() (models.PinResetRequested, bool) {
         }
         out.Username = s.settings.Get(pinResetReqUserKey)
         out.CreatedAt = s.settings.Get(pinResetReqAtKey)
+        out.PushedCode = s.settings.Get(pinResetPushedCodeKey)
         return out, true
 }
 
@@ -111,6 +121,31 @@ func (s *Service) clearPendingPinReset() {
         _ = s.settings.Set(pinResetReqIDKey, "")
         _ = s.settings.Set(pinResetReqUserKey, "")
         _ = s.settings.Set(pinResetReqAtKey, "")
+        _ = s.settings.Set(pinResetPushedCodeKey, "")
+}
+
+// StorePushedPinResetCode accepts a LAN-delivered code pre-fill. It only
+// lands when this till has an ACTIVE reset request with the exact id sent
+// — a code for anything else is refused, so the LAN listener can never
+// plant a code without a real, matching request.
+func (s *Service) StorePushedPinResetCode(requestID int64, code string) error {
+        id := s.settings.Get(pinResetReqIDKey)
+        var pending int64
+        fmt.Sscanf(id, "%d", &pending)
+        if pending <= 0 || pending != requestID {
+                return fmt.Errorf("no matching reset request on this till")
+        }
+        return s.settings.Set(pinResetPushedCodeKey, strings.TrimSpace(code))
+}
+
+// PendingPinResetRequestID returns the id of this till's open reset
+// request (0 when none) — the LAN delivery endpoint's acceptance test.
+func (s *Service) PendingPinResetRequestID() int64 {
+        req, ok := s.PendingPinReset()
+        if !ok {
+                return 0
+        }
+        return req.RequestID
 }
 
 // ListPinResetRequests shows the team's open requests (owner till).
@@ -140,12 +175,16 @@ func (s *Service) ListPinResetRequests() ([]PinResetRequest, error) {
 }
 
 // PinResetApproved is what ApprovePinReset returns — the code is shown to
-// the owner exactly once.
+// the owner exactly once. Delivered reports the bonus path: the code also
+// flew straight to the locked till over the shop WiFi (the worker then
+// only types their new PIN).
 type PinResetApproved struct {
         Code        string `json:"code"`
         Username    string `json:"username"`
         DeviceName  string `json:"deviceName"`
         ExpiresMins int    `json:"expiresMins"`
+        DeviceID    string `json:"deviceId"`
+        Delivered   bool   `json:"delivered"`
 }
 
 // ApprovePinReset mints the single-use code for one request (owner till).
@@ -161,6 +200,7 @@ func (s *Service) ApprovePinReset(requestID int64) (PinResetApproved, error) {
                 Code          string `json:"code"`
                 Username      string `json:"username"`
                 DeviceName    string `json:"deviceName"`
+                DeviceID      string `json:"deviceId"`
                 ExpiresMinute int    `json:"expiresMinutes"`
         }
         if err := rpcCall(c.base, "sync_approve_pin_reset", map[string]any{
@@ -177,10 +217,23 @@ func (s *Service) ApprovePinReset(requestID int64) (PinResetApproved, error) {
                 Code:        res.Code,
                 Username:    res.Username,
                 DeviceName:  res.DeviceName,
+                DeviceID:    res.DeviceID,
                 ExpiresMins: res.ExpiresMinute,
         }
         s.Audit(0, "system", "PIN_RESET_APPROVED", "user", res.Username,
                 fmt.Sprintf("request %d code issued", requestID))
+        // WiFi hand-off: if the locked till is on this shop's network, the
+        // code flies straight to it and the worker only types their new
+        // PIN. Fails silently — the code on screen stays the fallback.
+        if res.DeviceID != "" && res.DeviceID != c.device {
+                ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+                defer cancel()
+                out.Delivered = landelivery.PushPinResetCode(ctx, res.DeviceID, requestID, res.Code)
+                if out.Delivered {
+                        s.Audit(0, "system", "PIN_RESET_CODE_DELIVERED", "user", res.Username,
+                                fmt.Sprintf("request %d delivered over the shop WiFi", requestID))
+                }
+        }
         return out, nil
 }
 

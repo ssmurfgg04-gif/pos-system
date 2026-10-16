@@ -262,7 +262,9 @@ export function Pin() {
 
 // ---- Forgot PIN: request → owner approves elsewhere → redeem code ----
 
-function ForgotPinPanel({
+// Exported for the WiFi hand-off regression tests (the panel is mounted by
+// <Pin/> on the sign-in screen; nothing else renders it).
+export function ForgotPinPanel({
   preselect,
   state,
   setState,
@@ -281,8 +283,15 @@ function ForgotPinPanel({
   const [pin2, setPin2] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // The owner till can push the code straight over the shop WiFi the
+  // moment it approves. Poll for it: when it lands, the worker only types
+  // their new PIN.
+  const [wifiCode, setWifiCode] = useState('')
+  const seenPushRef = useRef('')
+  const pinRef = useRef<HTMLInputElement | null>(null)
 
-  // Resume an existing request (e.g. the app was closed mid-recovery).
+  // Resume an existing request (e.g. the app was closed mid-recovery) and
+  // keep listening for the owner's WiFi hand-off while this panel is up.
   useEffect(() => {
     if (state.step === 'code' || state.requestId > 0) return
     api.get<{ active: boolean; request?: { requestId: number; username: string } }>('/api/v1/auth/forgot-pin/status')
@@ -292,6 +301,33 @@ function ForgotPinPanel({
       .catch(() => undefined)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (state.step !== 'code') return
+    let alive = true
+    const poll = () => {
+      api.get<{ active: boolean; request?: { requestId: number; username: string; pushedCode?: string } }>('/api/v1/auth/forgot-pin/status')
+        .then((r) => {
+          if (!alive) return
+          const pushed = r.request?.pushedCode || ''
+          if (pushed && pushed !== seenPushRef.current) {
+            seenPushRef.current = pushed
+            setWifiCode(pushed)
+            setCode(pushed)
+            setError('')
+          }
+        })
+        .catch(() => undefined)
+    }
+    poll()
+    const t = setInterval(poll, 4000)
+    return () => { alive = false; clearInterval(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.step, state.requestId])
+
+  useEffect(() => {
+    if (wifiCode) pinRef.current?.focus()
+  }, [wifiCode])
 
   const sendRequest = async () => {
     if (busy) return
@@ -388,18 +424,25 @@ function ForgotPinPanel({
 
   return (
     <div className="bg-surface border-2 border-line-strong rounded-card shadow-brutal p-5 space-y-4">
-      <div className="bg-brand-soft border border-brand/30 rounded-input px-3 py-2.5 text-[12.5px] text-brand font-semibold">
-        Request sent. Now call or message the owner, on their till they open{' '}
-        <span className="font-bold">Settings → Team → PIN reset requests</span>, tap{' '}<span className="font-bold">Approve</span>{' '}
-        (or <span className="font-bold">New code</span> if one expired) next to "{state.username}" and read you the 8-digit code.
-      </div>
+      {wifiCode ? (
+        <div className="bg-paid-bg border-2 border-paid-text/40 rounded-input px-3 py-2.5 text-[12.5px] font-semibold text-paid-text">
+          The owner just approved you, the code arrived on this till over the WiFi.
+          Type your new PIN below and you are in.
+        </div>
+      ) : (
+        <div className="bg-brand-soft border border-brand/30 rounded-input px-3 py-2.5 text-[12.5px] text-brand font-semibold">
+          Request sent. Now call or message the owner, on their till they open{' '}
+          <span className="font-bold">Settings → Team → PIN reset requests</span>, tap{' '}<span className="font-bold">Approve</span>{' '}
+          (or <span className="font-bold">New code</span> if one expired) next to "{state.username}" and read you the 8-digit code.
+        </div>
+      )}
       <label className="block">
         <span className="block text-[12px] font-bold text-ink-muted uppercase tracking-wide mb-1">The 8-digit code</span>
         <input
           value={code}
           onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
           inputMode="numeric"
-          autoFocus
+          autoFocus={!wifiCode}
           placeholder="e.g. 48291305"
           className="w-full min-h-12 rounded-input border-2 border-line bg-surface px-3 text-lg font-mono tracking-widest text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
         />
@@ -408,6 +451,7 @@ function ForgotPinPanel({
         <label className="block">
           <span className="block text-[12px] font-bold text-ink-muted uppercase tracking-wide mb-1">New PIN</span>
           <input
+            ref={pinRef}
             value={pin}
             onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
             inputMode="numeric"

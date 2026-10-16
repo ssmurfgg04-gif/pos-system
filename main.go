@@ -23,6 +23,7 @@ import (
         "posapp/internal/config"
         "posapp/internal/database"
         "posapp/internal/handlers"
+        "posapp/internal/landelivery"
         "posapp/internal/mdns"
         "posapp/internal/offsite"
         "posapp/internal/printer"
@@ -296,9 +297,33 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
         // is a SQL UPDATE in Supabase, never a site visit. Real env wins.
         defSvc.StartCloudConfig(ctx)
 
-        // LAN discovery broadcast (best-effort, server mode only).
+        // LAN presence: broadcast this till on the shop WiFi and serve the
+        // tiny delivery endpoint sibling tills talk to (PIN-reset code
+        // hand-off). Best-effort everywhere — a blocked multicast or a
+        // firewall prompt must never take the till down; the owner can
+        // always read the code aloud as before.
         if cfg.MDNSEnabled {
-                mdns.Broadcast(ctx, st.GetString("app_name", "Point of Sale"), atoi(cfg.Port))
+                if lan, err := landelivery.Start(ctx, atoi(cfg.Port),
+                        func() landelivery.Identity {
+                                id := landelivery.Identity{
+                                        DeviceName: defSvc.DeviceName(),
+                                        AppVersion: version,
+                                }
+                                if devID, team, ok := defSvc.PublicSyncIdentity(); ok {
+                                        id.DeviceID = devID
+                                        id.Team = team
+                                }
+                                return id
+                        },
+                        func() int64 { return defSvc.PendingPinResetRequestID() },
+                        func(requestID int64, code string) error {
+                                return defSvc.StorePushedPinResetCode(requestID, code)
+                        }); err != nil {
+                        log.Printf("[lan] delivery unavailable: %v", err)
+                        mdns.Broadcast(ctx, st.GetString("app_name", "Point of Sale"), atoi(cfg.Port))
+                } else {
+                        mdns.Broadcast(ctx, st.GetString("app_name", "Point of Sale"), lan.Port)
+                }
         }
 
         srv := &http.Server{
