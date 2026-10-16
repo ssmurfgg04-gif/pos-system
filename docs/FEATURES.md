@@ -33,10 +33,12 @@ How to read the levels:
 | Critical | Join link is single-use | A second redemption of the same link must be refused with a clear message. |
 | Core | Join link self-fill | Opening a link with the app installed pre-fills the join box (fragment `#t=...&r=...&k=...`). |
 | Core | Link shape | The link contains team code, role and token only. No username anywhere. |
-| Core | Owner approval dialog | Invites, device approvals, PIN-reset approvals and store actions prompt once for the owner password, then ride for about 30 minutes. Prefilled with the signed-in owner's username. |
+| Core | Owner approval dialog | Invites, device approvals and store actions prompt once for the owner password, then ride for about 30 minutes. Prefilled with the signed-in owner's username. PIN-reset approval deliberately has NO password prompt (one tap; the v1.3.2 challenge made every approve fail on shops whose portal credential was never seeded). |
 | Critical | Unrevoke | Revoked tills stay visible in the roster with a Revoked pill. Unrevoke brings the till back (it syncs again on its next heartbeat). |
 | Core | Revoke | Revoking a till cuts it off immediately; the row stays listed as Revoked. |
-| Core | PIN reset approval | A locked-out worker requests a reset; the owner approves and reads the one-time 8-digit code; the worker sets a new PIN. |
+| Core | PIN reset approval | A locked-out worker requests a reset; the owner taps Approve and the one-time 8-digit code appears immediately (no password challenge). The worker types the code under "Forgot PIN?" and sets a new PIN. |
+| Core | WiFi code hand-off | Tills on the same WiFi find each other (mDNS + restricted LAN listener). When the owner till approves, the code is delivered straight to the waiting till, which pre-fills it and asks only for the new PIN. The code still burns at the cloud (single-use, device-bound). |
+| Core | LAN delivery fallback | If the WiFi blocks discovery (firewall prompt dismissed, AP isolation), the owner still sees the code on screen and reads it aloud; nothing else changes. First LAN listen may pop a one-time Windows allow prompt. |
 
 ## 3. Cross-till sync (two machines)
 
