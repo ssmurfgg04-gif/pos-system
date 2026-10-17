@@ -303,8 +303,8 @@ function WelcomeChoice({ onSignIn, onRegister, onPassword }: { onSignIn: () => v
         I use a username &amp; password on this till →
       </button>
       <p className="text-[11.5px] text-ink-subtle text-center pt-1">
-        Signing in brings your whole shop down from the cloud, products,
-        customers, history. Nothing is created until you choose to.
+        Your products, customers and history sync safely from the cloud when
+        you sign in. Nothing is created until you choose to.
       </p>
     </div>
   )

@@ -162,6 +162,12 @@ func (h *H) svcDefault() *services.Service {
 // launch the staged installer, quit the app so it can replace the build.
 // Shared by the manual endpoint and the auto-OTA tick (actor labels the
 // audit rows).
+//
+// The installer runs SILENT (/S): the auto path fires with nobody at the
+// keyboard, and an interactive wizard would leave the till dead. The NSIS
+// script relaunches the new build by itself in silent mode. When there is
+// no quit hook (serve mode on a Windows appliance), auto-apply refuses
+// above - the exe could never be replaced while this process holds it.
 func (h *H) ApplyStagedUpdate(actor string) error {
         staged := h.Updater.Staged()
         if staged == "" {
@@ -174,7 +180,7 @@ func (h *H) ApplyStagedUpdate(actor string) error {
         if svc := h.svcDefault(); svc != nil {
                 svc.Audit(0, actor, "UPDATE_PRE_BACKUP", "system", "update", archive)
         }
-        if err := exec.Command(staged).Start(); err != nil {
+        if err := exec.Command(staged, "/S").Start(); err != nil {
                 return err
         }
         if svc := h.svcDefault(); svc != nil {
@@ -198,6 +204,17 @@ func (h *H) ApplyStagedUpdate(actor string) error {
 // the next tick — a till that misses tonight catches the next window.
 func (h *H) AutoApplyTick(ctx context.Context) {
         if runtime.GOOS != "windows" || h.Version == "dev" {
+                return
+        }
+        // No quit hook (serve appliance): the running exe can never be replaced,
+        // so unattended install is impossible - keep the manual flow only.
+        if h.OnQuit == nil {
+                return
+        }
+        // Unattended installs require the SHA-256-verified cloud manifest; the
+        // GitHub fallback has no digest, so a tampered download must never be
+        // applied by itself (the owner can still install it manually).
+        if !h.Updater.HasVerifiedAsset() {
                 return
         }
         st := h.Updater.Status()

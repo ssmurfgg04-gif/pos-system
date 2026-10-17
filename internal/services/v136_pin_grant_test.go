@@ -13,6 +13,8 @@ import (
         "time"
 
         "posapp/internal/auth"
+        "posapp/internal/landelivery"
+        "posapp/internal/mdns"
 )
 
 func registerPair(t *testing.T) (owner, locked *Service) {
@@ -315,5 +317,63 @@ func TestHasUnfinishedWorkGatesTheOTAInstall(t *testing.T) {
         s.db.Exec(s.db.Rebind(`INSERT INTO orders (number, status, cashier_id) VALUES ('o2','PENDING',1)`))
         if !s.HasUnfinishedWork() {
                 t.Fatal("a fresh order must block the update")
+        }
+}
+
+// TestGrantApplyMemoryBlocksReapplication: the stale-claim re-serve must
+// never re-apply an old owner PIN over the worker's own rotation. Once a
+// grant id is applied, the till refuses to apply it again (2nd-round
+// review finding).
+func TestGrantApplyMemoryBlocksReapplication(t *testing.T) {
+        fake := withFakeCloud(t)
+        owner, locked := registerPair(t)
+        seedLocalUser(t, locked, "Salma PC")
+
+        req, _ := locked.RequestPinReset("Salma PC", "")
+        if _, err := owner.ApprovePinReset(req.RequestID, "8188"); err != nil {
+                t.Fatalf("approve: %v", err)
+        }
+        grant, ok := locked.PollPinGrant()
+        if !ok {
+                t.Fatal("grant not visible")
+        }
+        if _, err := locked.ClaimAndApplyPinGrant(grant.RequestID); err != nil {
+                t.Fatalf("first apply: %v", err)
+        }
+
+        // Simulate the stale-claim re-serve: the cloud offers the same
+        // grant again (claimed >30 min ago).
+        fake.mu.Lock()
+        row := fake.pinResets[req.RequestID]
+        row["status"] = "claimed"
+        row["claimed_at"] = time.Now().Add(-45 * time.Minute)
+        fake.mu.Unlock()
+
+        if _, err := locked.ClaimAndApplyPinGrant(grant.RequestID); err == nil {
+                t.Fatal("an applied grant was applied again")
+        }
+        var pinHash string
+        locked.db.QueryRow(locked.db.Rebind(`SELECT pin_hash FROM users WHERE LOWER(username) = LOWER('Salma PC')`)).Scan(&pinHash)
+        if !auth.VerifyPassword(pinHash, "8188") {
+                t.Fatal("the worker's PIN changed unexpectedly")
+        }
+}
+
+// TestPushPinResetCodeRejectsNonIPRegistry: the cloud-registered LAN
+// address is parsed strictly - no loopback, no @-trick hostnames.
+func TestPushPinResetCodeRejectsNonIPRegistry(t *testing.T) {
+        oldBrowse := mdns.Browse
+        t.Cleanup(func() { mdns.Browse = oldBrowse })
+        mdns.Browse = func(ctx context.Context, d time.Duration) []mdns.Peer { return nil }
+        // None of these may produce a delivery attempt (all refused or
+        // ignored), and none may panic.
+        if landelivery.PushPinResetCode(context.Background(), "dev-x", 1, "12345678", "127.0.0.1:8123") {
+                t.Fatal("loopback registry address was used")
+        }
+        if landelivery.PushPinResetCode(context.Background(), "dev-x", 1, "12345678", "user@evil.com:80") {
+                t.Fatal("@-trick address was used")
+        }
+        if landelivery.PushPinResetCode(context.Background(), "dev-x", 1, "12345678", "not an addr") {
+                t.Fatal("garbage address was used")
         }
 }

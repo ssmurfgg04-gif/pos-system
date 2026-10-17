@@ -1234,7 +1234,9 @@ function TeamSyncPanel() {
               <span>Last push: <span className="tabular text-ink">{status.lastPush ? new Date(status.lastPush).toLocaleString() : 'never'}</span></span>
               <span>Last pull: <span className="tabular text-ink">{status.lastPull ? new Date(status.lastPull).toLocaleString() : 'never'}</span></span>
             </div>
-            {status.lastError && (
+            {/* The awaiting-approval box above already explains this state calmly; showing
+                the raw sync error in red too read as "something is broken" (VLM round). */}
+            {status.lastError && status.approved && (
               <p className="text-[12px] font-bold text-danger-text">Last error: {status.lastError}</p>
             )}
             {!!status.failed && status.failed.length > 0 && (
