@@ -578,6 +578,7 @@ func (c *syncClient) registerCloud(s *Service, version string) error {
                 "p_secret_hash": c.secretHash,
                 "p_device_name": s.deviceName(),
                 "p_app_version": version,
+                "p_lan_addr":    s.lanAddr,
         }, &out)
         if err != nil {
                 return err

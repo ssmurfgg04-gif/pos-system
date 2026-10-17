@@ -899,19 +899,16 @@ function TeamSyncPanel() {
   const [copied, setCopied] = useState(false)
   const [workingInvite, setWorkingInvite] = useState(0)
   // Forgot-PIN recovery: open requests from locked tills across the team.
+  // Approve = type the new 4-digit PIN once: the cloud keeps only its hash,
+  // the locked till collects it by itself, the worker just types the PIN
+  // they were given. No code, no password challenge — the till being signed
+  // in IS the owner authority (v1.3.6).
   const [pinResets, setPinResets] = useState<PinResetRow[]>([])
   const [pinResetsError, setPinResetsError] = useState('')
   const [workingReset, setWorkingReset] = useState(0)
+  const [resetPins, setResetPins] = useState<Record<number, string>>({})
   const [approvedCode, setApprovedCode] = useState<{ code: string; username: string; deviceName: string; delivered?: boolean } | null>(null)
-  // Owner approval (v1.3.2): cloud owner actions verify a HUMAN, when the
-  // cloud answers 'owner approval required', this dialog collects the owner's
-  // portal credential once and replays the interrupted action. The username
-  // pre-fills from the signed-in owner: you should never have to remember
-  // which name to type, and the inviter's name must never be required.
-  const [pendingOwnerAction, setPendingOwnerAction] = useState<(() => Promise<void>) | null>(null)
-  const [ownerUser, setOwnerUser] = useState(() => useAuth.getState().user?.username || '')
-  const [ownerPass, setOwnerPass] = useState('')
-  const [ownerBusy, setOwnerBusy] = useState(false)
+  const [grantedTo, setGrantedTo] = useState<{ username: string; deviceName: string } | null>(null)
 
   const load = async () => {
     try {
@@ -931,36 +928,9 @@ function TeamSyncPanel() {
       .catch((e) => { setPinResets([]); setPinResetsError(e?.message || 'Could not load PIN reset requests') })
   }
 
-  // ownerGuard: intercepts the capability gate from any owner action. Opens
-  // the Owner-approval dialog and arms a retry of the exact interrupted
-  // action; returns true when the error was consumed.
-  const ownerGuard = (e: any, retry: () => Promise<void>) => {
-    if ((e?.message || '').includes('owner approval required')) {
-      setPendingOwnerAction(() => retry)
-      return true
-    }
-    return false
-  }
-
-  const confirmOwner = async () => {
-    if (ownerBusy) return
-    setOwnerBusy(true)
-    try {
-      const r = await api.post<{ owner: string; expiresInS: number }>('/api/v1/team-sync/owner-approval', {
-        username: ownerUser.trim(),
-        password: ownerPass,
-      })
-      const act = pendingOwnerAction
-      setPendingOwnerAction(null)
-      setOwnerPass('')
-      toast.success('Owner approved', `Thank you, ${r.owner}, approved for about ${Math.max(1, Math.round(r.expiresInS / 60))} minutes.`)
-      if (act) await act()
-    } catch (e: any) {
-      toast.error('Owner approval failed', e?.message || 'Check the username and password.')
-    } finally {
-      setOwnerBusy(false)
-    }
-  }
+  // ownerGuard is retired with the challenge: the cloud no longer answers
+  // 'owner approval required', device identity is the gate. Kept as a
+  // no-op-friendly helper is pointless — errors surface as toasts.
   useEffect(() => {
     load()
     api.get<Role[]>('/api/v1/roles').then((rs) => {
@@ -1043,7 +1013,6 @@ function TeamSyncPanel() {
       setNewStoreName('')
       await load()
     } catch (e: any) {
-      if (ownerGuard(e, () => addStore())) return
       toast.error('Could not add the store', e?.message)
     } finally {
       setAddingStore(false)
@@ -1062,7 +1031,6 @@ function TeamSyncPanel() {
       toast.success('Till assigned', `${d.deviceName || d.deviceId.slice(0, 8)} joins ${status?.stores?.find((s) => s.teamCode === teamCode)?.name || 'the store'} on its next heartbeat.`)
       await load()
     } catch (e: any) {
-      if (ownerGuard(e, () => assignDevice(d))) return
       toast.error('Could not assign the till', e?.message)
     } finally {
       setWorkingDevice('')
@@ -1078,7 +1046,6 @@ function TeamSyncPanel() {
       toast.success('Till revoked', `${label} can no longer reach this team's data.`)
       await load()
     } catch (e: any) {
-      if (ownerGuard(e, () => removeDevice(d))) return
       toast.error('Could not revoke the till', e?.message)
     } finally {
       setWorkingDevice('')
@@ -1098,7 +1065,6 @@ function TeamSyncPanel() {
       }
       await load()
     } catch (e: any) {
-      if (ownerGuard(e, () => approveDevice(d))) return
       toast.error('Could not approve the till', e?.message)
     } finally {
       setWorkingDevice('')
@@ -1123,7 +1089,6 @@ function TeamSyncPanel() {
       setInviteNote('')
       await load()
     } catch (e: any) {
-      if (ownerGuard(e, () => createInvite())) return
       toast.error('Could not create the invite', e?.message)
     } finally {
       setInviteBusy(false)
@@ -1149,26 +1114,34 @@ function TeamSyncPanel() {
       toast.success('Invite revoked')
       await load()
     } catch (e: any) {
-      if (ownerGuard(e, () => revokeInvite(id))) return
       toast.error('Could not revoke the invite', e?.message)
     } finally {
       setWorkingInvite(0)
     }
   }
 
-  // Approve a locked till's PIN reset: the cloud mints a single-use
-  // 8-digit code (15 minutes, that one till only). Shown here exactly once,
-  // and when the locked till is on the same WiFi it is delivered straight
-  // to it (delivered=true) so the worker only types their new PIN.
-  // No "confirm it's you" challenge here: the owner is already signed in
-  // on their own till, and the challenge turned every approval into a
-  // dead end. Device identity at the cloud is the gate.
+  // Approve a locked till's reset: type the new 4-digit PIN once. The cloud
+  // stores only its hash, bound to that one till; the till collects it by
+  // itself and the worker types the PIN they were given. Leave the PIN box
+  // empty to fall back to the single-use 8-digit code (read-aloud).
+  // No password challenge: the owner is already signed in on their own till.
   const approvePinReset = async (id: number) => {
+    const pin = (resetPins[id] || '').trim()
+    if (pin && !/^\d{4}$/.test(pin)) {
+      toast.error('The new PIN is 4 digits', 'Type the 4 digits you want them to sign in with.')
+      return
+    }
     setWorkingReset(id)
     setApprovedCode(null)
+    setGrantedTo(null)
     try {
-      const r = await api.post<{ code: string; username: string; deviceName: string; expiresMins: number; delivered?: boolean }>('/api/v1/team-sync/pin-resets/approve', { requestId: id })
-      setApprovedCode({ code: r.code, username: r.username, deviceName: r.deviceName, delivered: !!r.delivered })
+      const r = await api.post<{ code: string; granted?: boolean; username: string; deviceName: string; expiresMins: number; delivered?: boolean }>('/api/v1/team-sync/pin-resets/approve', { requestId: id, newPin: pin })
+      if (r.granted) {
+        setGrantedTo({ username: r.username, deviceName: r.deviceName })
+      } else {
+        setApprovedCode({ code: r.code, username: r.username, deviceName: r.deviceName, delivered: !!r.delivered })
+      }
+      setResetPins((m) => ({ ...m, [id]: '' }))
       await load()
     } catch (e: any) {
       toast.error('Could not approve the reset', e?.message)
@@ -1440,6 +1413,13 @@ function TeamSyncPanel() {
                 <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5 flex items-center gap-1.5">
                   <LifeBuoy size={13} strokeWidth={2.5} aria-hidden /> PIN reset requests
                 </p>
+                {grantedTo && (
+                  <div className="mb-2 rounded-input border-2 border-paid-text/40 bg-paid-bg p-3">
+                    <p className="text-[12.5px] font-bold text-paid-text">
+                      Done. {grantedTo.username}{grantedTo.deviceName ? ` on ${grantedTo.deviceName}` : ''} now signs in with the PIN you typed — tell them, and they are back in. Nothing to type on their till first.
+                    </p>
+                  </div>
+                )}
                 {approvedCode && (
                   <div className="mb-2 rounded-input border-2 border-paid-text/40 bg-paid-bg p-3">
                     <p className="text-[12px] font-bold text-paid-text mb-1">
@@ -1466,22 +1446,32 @@ function TeamSyncPanel() {
                     None right now. When someone forgets their PIN, they tap “Forgot PIN?” on their till and it shows up here.
                   </p>
                 ) : (
-                  <Table head={['Who', 'Till', 'Requested', '']}>
+                  <Table head={['Who', 'Till', 'Requested', 'New PIN', '']}>
                     {pinResets.map((r) => (
                       <tr key={r.id}>
                         <td className="px-3 py-2 text-[13px] font-semibold text-ink">
                           {r.username}
                           {r.status === 'approved' && (
-                            <span className="ml-2 text-[11px] font-bold text-pending-text">code issued</span>
+                            <span className="ml-2 text-[11px] font-bold text-pending-text">waiting for them</span>
                           )}
                         </td>
                         <td className="px-3 py-2 text-[12px] text-ink-muted">{r.deviceName || r.deviceId.slice(0, 8)}</td>
                         <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{new Date(r.createdAt).toLocaleString()}</td>
+                        <td className="px-3 py-2">
+                          <Input
+                            value={resetPins[r.id] ?? ''}
+                            onChange={(e) => setResetPins((m) => ({ ...m, [r.id]: e.target.value.replace(/\D/g, '').slice(0, 4) }))}
+                            inputMode="numeric"
+                            placeholder="4 digits"
+                            className="w-24"
+                            aria-label={`New PIN for ${r.username}`}
+                          />
+                        </td>
                         <td className="px-3 py-2 text-right">
                           <Button size="sm" variant="secondary" onClick={() => approvePinReset(r.id)} disabled={workingReset === r.id}
-                            title={r.status === 'approved' ? 'Mint a fresh code (the old one expired or was mistyped)' : 'Mint a single-use 8-digit code and show it to you'}>
+                            title={r.status === 'approved' ? 'Set the PIN again (replaces the last one)' : 'Type the 4 digits they should sign in with, then tap'}>
                             {workingReset === r.id ? <Spinner /> : <KeyRound size={14} strokeWidth={2.5} aria-hidden />}
-                            {r.status === 'approved' ? 'New code' : 'Approve'}
+                            {r.status === 'approved' ? 'Set again' : 'Approve'}
                           </Button>
                         </td>
                       </tr>
@@ -1489,7 +1479,7 @@ function TeamSyncPanel() {
                   </Table>
                 )}
                 <p className="text-[12px] text-ink-subtle mt-1.5">
-                  Approving never reveals or changes the old PIN, it hands out a one-time code that sets a new one. Codes expire after 15 minutes; tap New code for a fresh one.
+                  Type the 4-digit PIN you want them to use and tap Approve — their till picks it up by itself. Leave the box empty to hand out a one-time code instead.
                 </p>
               </div>
             )}
@@ -1604,36 +1594,6 @@ function TeamSyncPanel() {
         </p>
       </div>
 
-      {pendingOwnerAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
-          <form
-            onSubmit={(e) => { e.preventDefault(); confirmOwner() }}
-            className="bg-surface border border-line rounded-card shadow-brutal p-5 space-y-4 w-full max-w-sm"
-          >
-            <div>
-              <h3 className="text-ink font-bold leading-tight">Confirm it's you</h3>
-              <p className="text-[12px] text-ink-muted mt-0.5">
-                This action changes how your whole team syncs. Enter your owner username and password once, 
-                you stay approved for about 30 minutes.
-              </p>
-            </div>
-            <Field label="Owner username">
-              <Input value={ownerUser} onChange={(e) => setOwnerUser(e.target.value)} autoComplete="username" autoFocus required placeholder="e.g. jane" />
-            </Field>
-            <Field label="Owner password">
-              <Input type="password" value={ownerPass} onChange={(e) => setOwnerPass(e.target.value)} autoComplete="current-password" required placeholder="••••••••" />
-            </Field>
-            <div className="flex gap-2">
-              <Button type="submit" variant="primary" className="flex-1" disabled={ownerBusy || !ownerUser.trim() || !ownerPass}>
-                {ownerBusy ? <Spinner className="border-t-white" /> : 'Confirm & continue'}
-              </Button>
-              <Button type="button" variant="ghost" onClick={() => setPendingOwnerAction(null)} disabled={ownerBusy}>
-                Cancel
-              </Button>
-            </div>
-          </form>
-        </div>
-      )}
     </div>
   )
 }

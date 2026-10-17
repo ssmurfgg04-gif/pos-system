@@ -1,13 +1,18 @@
 package handlers
 
 import (
+        "context"
+        "errors"
         "fmt"
+        "log"
         "os/exec"
         "runtime"
         "strings"
         "time"
 
         "github.com/gin-gonic/gin"
+
+        "posapp/internal/services"
 )
 
 // ---- KRA monthly returns ----
@@ -126,28 +131,101 @@ func (h *H) UpdateInstall(c *gin.Context) {
                 h.fail(c, 501, "one-click install is Windows-only; download from the status URL")
                 return
         }
+        actor := "system"
+        if p != nil {
+                actor = p.Username
+        }
+        if err := h.ApplyStagedUpdate(actor); err != nil {
+                code := 500
+                if strings.Contains(err.Error(), "nothing staged") {
+                        code = 409
+                }
+                h.fail(c, code, err.Error())
+                return
+        }
+        h.ok(c, gin.H{"installing": true})
+}
+
+// svcDefault is the audit target for non-request work (the OTA engine).
+func (h *H) svcDefault() *services.Service {
+        if h.DefaultShop == "" || h.Shops == nil {
+                return nil
+        }
+        svc, err := h.Shops.Service(h.DefaultShop)
+        if err != nil {
+                return nil
+        }
+        return svc
+}
+
+// ApplyStagedUpdate runs the full one-click install: pre-update backup,
+// launch the staged installer, quit the app so it can replace the build.
+// Shared by the manual endpoint and the auto-OTA tick (actor labels the
+// audit rows).
+func (h *H) ApplyStagedUpdate(actor string) error {
         staged := h.Updater.Staged()
         if staged == "" {
-                h.fail(c, 409, "nothing staged, download first")
-                return
+                return errors.New("nothing staged, download first")
         }
         archive, err := h.PreUpdateSnapshot(h.Version)
         if err != nil {
-                h.fail(c, 500, "pre-update backup failed, update aborted so no work can be lost: "+err.Error())
-                return
+                return errors.New("pre-update backup failed, update aborted so no work can be lost: " + err.Error())
         }
-        h.svc(c).Audit(p.ID, p.Username, "UPDATE_PRE_BACKUP", "system", "update", archive)
+        if svc := h.svcDefault(); svc != nil {
+                svc.Audit(0, actor, "UPDATE_PRE_BACKUP", "system", "update", archive)
+        }
         if err := exec.Command(staged).Start(); err != nil {
-                h.fail(c, 500, err.Error())
-                return
+                return err
         }
-        h.svc(c).Audit(p.ID, p.Username, "UPDATE_INSTALLED", "system", "update", staged)
-        h.ok(c, gin.H{"installing": true, "backup": archive})
+        if svc := h.svcDefault(); svc != nil {
+                svc.Audit(0, actor, "UPDATE_INSTALLED", "system", "update", staged)
+        }
         if h.OnQuit != nil {
                 go func() {
                         time.Sleep(300 * time.Millisecond) // let the response flush
                         h.OnQuit()
                 }()
+        }
+        return nil
+}
+
+// AutoApplyTick is the OTA engine. Runs on a timer from main: when an
+// update is available it downloads and stages the asset in the
+// background, then installs at the first quiet moment — no payment in
+// flight and nobody selling in the last 15 minutes, across every shop on
+// this till. Windows-only (the one-click installer is the apply path);
+// other platforms keep the manual flow. Errors are logged and retried on
+// the next tick — a till that misses tonight catches the next window.
+func (h *H) AutoApplyTick(ctx context.Context) {
+        if runtime.GOOS != "windows" || h.Version == "dev" {
+                return
+        }
+        st := h.Updater.Status()
+        if !h.Updater.Available() && st["staged"] != true {
+                return
+        }
+        if h.Updater.Staged() == "" {
+                dlCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+                defer cancel()
+                if _, err := h.Updater.Download(dlCtx); err != nil {
+                        log.Printf("[ota] download failed, retried next tick: %v", err)
+                        return
+                }
+                log.Printf("[ota] update staged, waiting for a quiet moment to install")
+        }
+        for _, shopID := range h.Shops.ShopIDs() {
+                svc, err := h.Shops.Service(shopID)
+                if err != nil {
+                        return
+                }
+                if svc.HasUnfinishedWork() {
+                        log.Printf("[ota] %s is busy, install postponed", shopID)
+                        return
+                }
+        }
+        log.Printf("[ota] till idle, applying staged update %s", h.Version)
+        if err := h.ApplyStagedUpdate("auto-ota"); err != nil {
+                log.Printf("[ota] apply failed, retried next tick: %v", err)
         }
 }
 

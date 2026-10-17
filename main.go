@@ -292,6 +292,22 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
         go pw.Run(ctx)
         h.Shops.EnsureStarted(ctx, h.DefaultShop)
         go h.Updater.StartLoop(ctx)
+        // OTA engine: stage releases as they appear, install at the first
+        // quiet moment. This is how tills actually get updates — the old
+        // flow needed a human to click Install on every machine, and the
+        // fleet fell versions behind.
+        go func() {
+                tick := time.NewTicker(15 * time.Minute)
+                defer tick.Stop()
+                for {
+                        select {
+                        case <-ctx.Done():
+                                return
+                        case <-tick.C:
+                                h.AutoApplyTick(ctx)
+                        }
+                }
+        }()
         // Central key vault: pull payment/deployment config from the cloud
         // (device-gated RPC + anon public rows) and keep it fresh — rotation
         // is a SQL UPDATE in Supabase, never a site visit. Real env wins.
@@ -323,6 +339,10 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
                         mdns.Broadcast(ctx, st.GetString("app_name", "Point of Sale"), atoi(cfg.Port))
                 } else {
                         mdns.Broadcast(ctx, st.GetString("app_name", "Point of Sale"), lan.Port)
+                        // Publish the LAN delivery address on the next
+                        // heartbeat: sibling tills reach this machine directly
+                        // even on WiFi networks that block multicast.
+                        defSvc.SetLanAddr(fmt.Sprintf("%s:%d", mdns.LANIP(), lan.Port))
                 }
         }
 

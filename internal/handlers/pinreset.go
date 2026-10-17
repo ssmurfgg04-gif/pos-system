@@ -40,9 +40,20 @@ func (h *H) ForgotPinRequest(c *gin.Context) {
 }
 
 // ForgotPinStatus reports this till's open request so the PIN screen can
-// survive a restart mid-recovery.
+// survive a restart mid-recovery. It also collects a DIRECT grant: when
+// the owner already approved with a new PIN, the till applies it here and
+// the worker just types the PIN they were given — no code, nothing to
+// copy. Grant errors are swallowed (offline cloud must not break the pad;
+// the next poll retries).
 func (h *H) ForgotPinStatus(c *gin.Context) {
-        req, ok := h.svc(c).PendingPinReset()
+        svc := h.svc(c)
+        if grant, ok := svc.PollPinGrant(); ok {
+                if applied, err := svc.ClaimAndApplyPinGrant(grant.RequestID); err == nil {
+                        h.ok(c, gin.H{"active": false, "grantApplied": true, "username": applied.Username})
+                        return
+                }
+        }
+        req, ok := svc.PendingPinReset()
         if !ok {
                 h.ok(c, gin.H{"active": false})
                 return
@@ -79,17 +90,23 @@ func (h *H) ForgotPinRedeem(c *gin.Context) {
 }
 
 type pinResetApproveBody struct {
-        RequestID int64 `json:"requestId" binding:"required"`
+        RequestID int64  `json:"requestId" binding:"required"`
+        // NewPin (optional, exactly 4 digits): the DIRECT grant. The owner
+        // types the PIN the worker should use; the cloud stores only its
+        // bcrypt hash and the locked till collects it by itself. Empty = the
+        // legacy single-use 8-digit code for read-aloud delivery.
+        NewPin string `json:"newPin"`
 }
 
-// PinResetApprove (owner till): mint + reveal the one-time code.
+// PinResetApprove (owner till): grant the new PIN directly, or mint +
+// reveal the one-time code when no PIN was typed.
 func (h *H) PinResetApprove(c *gin.Context) {
         var body pinResetApproveBody
         if err := c.ShouldBindJSON(&body); err != nil {
                 h.fail(c, 400, "requestId required")
                 return
         }
-        out, err := h.svc(c).ApprovePinReset(body.RequestID)
+        out, err := h.svc(c).ApprovePinReset(body.RequestID, body.NewPin)
         if err != nil {
                 h.fail(c, 422, err.Error())
                 return

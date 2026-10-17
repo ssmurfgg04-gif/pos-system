@@ -23,6 +23,7 @@ How to read the levels:
 | Critical | Forced rotation | A fresh seed account must land on the rotation screen before anything else. |
 | Core | Register button | Login screen shows Register beside Sign in. It opens the welcome choice (sign in / register a business / join link). |
 | Core | Welcome choice | A till with zero accounts shows the welcome choice, never a dead login form. |
+| Core | Owner-set PIN lands by itself | The owner types the new 4-digit PIN in Settings → Team and taps Approve. The locked till shows "Your PIN was set by the owner" on the pad (or in the Forgot-PIN panel) with no code entry. The worker types the PIN and is in. |
 
 ## 2. Team, invites, and the owner gate
 
@@ -33,11 +34,11 @@ How to read the levels:
 | Critical | Join link is single-use | A second redemption of the same link must be refused with a clear message. |
 | Core | Join link self-fill | Opening a link with the app installed pre-fills the join box (fragment `#t=...&r=...&k=...`). |
 | Core | Link shape | The link contains team code, role and token only. No username anywhere. |
-| Core | Owner approval dialog | Invites, device approvals and store actions prompt once for the owner password, then ride for about 30 minutes. Prefilled with the signed-in owner's username. PIN-reset approval deliberately has NO password prompt (one tap; the v1.3.2 challenge made every approve fail on shops whose portal credential was never seeded). |
+| Core | Owner actions need no password | Creating a join link, approving/revoking a till, adding a store: all one tap, NO "confirm it's you" dialog (retired in v1.3.6 — device identity at the cloud is the gate). |
 | Critical | Unrevoke | Revoked tills stay visible in the roster with a Revoked pill. Unrevoke brings the till back (it syncs again on its next heartbeat). |
 | Core | Revoke | Revoking a till cuts it off immediately; the row stays listed as Revoked. |
-| Core | PIN reset approval | A locked-out worker requests a reset; the owner taps Approve and the one-time 8-digit code appears immediately (no password challenge). The worker types the code under "Forgot PIN?" and sets a new PIN. |
-| Core | WiFi code hand-off | Tills on the same WiFi find each other (mDNS + restricted LAN listener). When the owner till approves, the code is delivered straight to the waiting till, which pre-fills it and asks only for the new PIN. The code still burns at the cloud (single-use, device-bound). |
+| Core | PIN reset approval | A locked-out worker requests a reset; the owner types a 4-digit PIN next to the name, taps Approve, and is told "tell them to type it". The locked till collects the grant by itself (single-use, device-bound, cloud holds only the bcrypt hash). Leaving the PIN box empty mints the legacy one-time 8-digit code instead. |
+| Core | WiFi code hand-off | Tills on the same WiFi find each other: the cloud registry carries each till's LAN address (works on networks that block multicast), with mDNS as the second path. The legacy code still flies straight to the waiting till when delivered. |
 | Core | LAN delivery fallback | If the WiFi blocks discovery (firewall prompt dismissed, AP isolation), the owner still sees the code on screen and reads it aloud; nothing else changes. First LAN listen may pop a one-time Windows allow prompt. |
 
 ## 3. Cross-till sync (two machines)
@@ -103,6 +104,7 @@ How to read the levels:
 | Level | Feature | How to check |
 |---|---|---|
 | Critical | OTA manifest | The cloud manifest points at the new version with SHA-256 verified assets; a till on the old version sees the update and can install + roll back. |
+| Critical | Auto-OTA applies itself | A till running an older release downloads the staged update in the background and installs at the first quiet moment (no payment in flight, no sale in the last 15 minutes). Nobody has to visit the machine; the pre-update snapshot runs before the installer. |
 | Core | Installers | All four packages (Windows x64, macOS arm64, macOS Intel, Linux x64) download from the site and from the GitHub release, and checksums match. |
 | Core | Demo site | awesomeposs.netlify.app loads the demo; /join shows instructions with the copy box; /portal is the owner portal; /downloads serves the current installers. |
 

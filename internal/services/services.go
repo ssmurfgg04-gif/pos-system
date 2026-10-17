@@ -9,52 +9,58 @@
 package services
 
 import (
-	"fmt"
-	"log"
-	"os"
-	"sync"
-	"time"
+        "fmt"
+        "log"
+        "os"
+        "sync"
+        "time"
 
-	"posapp/internal/database"
-	"posapp/internal/mpesa"
-	"posapp/internal/offsite"
-	"posapp/internal/paystack"
-	"posapp/internal/printer"
-	"posapp/internal/settings"
-	"posapp/internal/ws"
+        "posapp/internal/database"
+        "posapp/internal/models"
+        "posapp/internal/mpesa"
+        "posapp/internal/offsite"
+        "posapp/internal/paystack"
+        "posapp/internal/printer"
+        "posapp/internal/settings"
+        "posapp/internal/ws"
 )
 
 type Service struct {
-	db       *database.DB
-	settings *settings.Store
-	hub      *ws.Hub
-	printer  *printer.Worker
-	offsite  *offsite.Worker
-	mock     *mpesa.Mock
+        db       *database.DB
+        settings *settings.Store
+        hub      *ws.Hub
+        printer  *printer.Worker
+        offsite  *offsite.Worker
+        mock     *mpesa.Mock
 
-	darajaKey string
-	daraja    *mpesa.Daraja
+        darajaKey string
+        daraja    *mpesa.Daraja
 
-	paystackKey string
-	paystack    *paystack.Client
+        paystackKey string
+        paystack    *paystack.Client
 
-	appVersion string
+        appVersion string
 
-	shopID string // ws broadcast scoping (set by the ShopPool)
+        // lanAddr is this till's LAN delivery address (host:port of the
+        // landelivery listener). The heartbeat publishes it so sibling tills
+        // can reach this machine directly even on WiFi that blocks multicast.
+        lanAddr string
 
-	orderSeqMu sync.Mutex
+        shopID string // ws broadcast scoping (set by the ShopPool)
 
-	// STK cancel grace: Paystack verify can report abandoned/failed while
-	// the customer is still typing their M-Pesa PIN. The first terminal
-	// verify for an STK reference starts a short window; the leg only
-	// flips to FAILED after it expires. Keyed by reference.
-	stkFailMu sync.Mutex
-	stkFailAt map[string]time.Time
+        orderSeqMu sync.Mutex
+
+        // STK cancel grace: Paystack verify can report abandoned/failed while
+        // the customer is still typing their M-Pesa PIN. The first terminal
+        // verify for an STK reference starts a short window; the leg only
+        // flips to FAILED after it expires. Keyed by reference.
+        stkFailMu sync.Mutex
+        stkFailAt map[string]time.Time
 }
 
 func New(db *database.DB, st *settings.Store, hub *ws.Hub, pw *printer.Worker) *Service {
-	return &Service{db: db, settings: st, hub: hub, printer: pw, mock: mpesa.NewMock(4*time.Second, 0),
-		stkFailAt: map[string]time.Time{}}
+        return &Service{db: db, settings: st, hub: hub, printer: pw, mock: mpesa.NewMock(4*time.Second, 0),
+                stkFailAt: map[string]time.Time{}}
 }
 
 // Settings exposes the shop's settings store (per-tenant).
@@ -68,25 +74,25 @@ func (s *Service) SetPrinter(pw *printer.Worker) { s.printer = pw }
 
 // AttachOffsite wires the encrypted-upload worker (set by main; nil = local only).
 func (s *Service) AttachOffsite(w *offsite.Worker) {
-	s.offsite = w
+        s.offsite = w
 }
 
 // enqueueOffsite schedules an encrypted push; no-op unless enabled + attached.
 func (s *Service) enqueueOffsite(snapshotPath string) {
-	if s.offsite == nil || !s.settings.GetBool("offsite_enabled", false) {
-		return
-	}
-	s.offsite.Enqueue(snapshotPath)
+        if s.offsite == nil || !s.settings.GetBool("offsite_enabled", false) {
+                return
+        }
+        s.offsite.Enqueue(snapshotPath)
 }
 
 // Audit records an action in the audit log (best-effort).
 func (s *Service) Audit(userID int64, username, action, entity, entityID, details string) {
-	_, err := s.db.Exec(s.db.Rebind(
-		`INSERT INTO audit_log (user_id, username, action, entity, entity_id, details) VALUES (?, ?, ?, ?, ?, ?)`),
-		userID, username, action, entity, entityID, details)
-	if err != nil {
-		log.Printf("[audit] write failed: %v", err)
-	}
+        _, err := s.db.Exec(s.db.Rebind(
+                `INSERT INTO audit_log (user_id, username, action, entity, entity_id, details) VALUES (?, ?, ?, ?, ?, ?)`),
+                userID, username, action, entity, entityID, details)
+        if err != nil {
+                log.Printf("[audit] write failed: %v", err)
+        }
 }
 
 // SetShopID tags this service's broadcasts with the shop (ws routing).
@@ -95,22 +101,22 @@ func (s *Service) SetShopID(id string) { s.shopID = id }
 // broadcast pushes a ws event if the hub is wired. Scoped to this shop —
 // another shop's till or browser tab must never see it.
 func (s *Service) broadcast(event string, data any) {
-	if s.hub != nil {
-		s.hub.BroadcastJSONForShop(event, data, s.shopID)
-	}
+        if s.hub != nil {
+                s.hub.BroadcastJSONForShop(event, data, s.shopID)
+        }
 }
 
 // ---- Events ----
 
 const (
-	EventOrderCreated   = "ORDER_CREATED"
-	EventOrderPaid      = "ORDER_PAID"
-	EventOrderVoided    = "ORDER_VOIDED"
-	EventDesignUpdate   = "DESIGN_JOB_UPDATED"
-	EventShiftUpdate    = "SHIFT_UPDATED"
-	EventSettingsUpdate = "SETTINGS_UPDATED"
-	EventHeldUpdate     = "HELD_SALES_UPDATED"
-	EventSyncUpdate     = "TEAM_SYNC_UPDATED"
+        EventOrderCreated   = "ORDER_CREATED"
+        EventOrderPaid      = "ORDER_PAID"
+        EventOrderVoided    = "ORDER_VOIDED"
+        EventDesignUpdate   = "DESIGN_JOB_UPDATED"
+        EventShiftUpdate    = "SHIFT_UPDATED"
+        EventSettingsUpdate = "SETTINGS_UPDATED"
+        EventHeldUpdate     = "HELD_SALES_UPDATED"
+        EventSyncUpdate     = "TEAM_SYNC_UPDATED"
 )
 
 // ---- M-Pesa provider factory ----
@@ -123,42 +129,42 @@ const (
 // nothing ever completes by itself. Incomplete Daraja credentials are a
 // loud error, never a silent fall back to fake money.
 func (s *Service) GetProvider() (mpesa.Provider, error) {
-	env := s.settings.GetString("mpesa_env", "manual")
-	switch env {
-	case "sandbox", "production":
-		key := s.settings.Get("mpesa_consumer_key")
-		secret := s.settings.Get("mpesa_consumer_secret")
-		shortcode := s.settings.Get("mpesa_shortcode")
-		passkey := s.settings.Get("mpesa_passkey")
-		callback := s.settings.Get("mpesa_callback_url")
-		if key == "" || secret == "" || shortcode == "" || passkey == "" {
-			return nil, fmt.Errorf("mpesa_env=%s but Daraja credentials are incomplete, set them (or switch M-Pesa to Paystack) in settings; refusing to simulate payments", env)
-		}
-		cacheKey := env + "|" + shortcode + "|" + key + "|" + secret + "|" + passkey + "|" + callback
-		if s.darajaKey != cacheKey {
-			s.darajaKey = cacheKey
-			s.daraja = mpesa.NewDaraja(env, shortcode, passkey, key, secret, callback)
-		}
-		return s.daraja, nil
-	case "mock":
-		// Training wheels: only with the explicit env opt-in. This is what
-		// keeps a till from "confirming" payments nobody made.
-		if os.Getenv("ALLOW_MOCK_PAYMENTS") == "true" {
-			s.applyMockConfig()
-			return s.mock, nil
-		}
-		return nil, fmt.Errorf("mock M-Pesa is disabled (ALLOW_MOCK_PAYMENTS!=true), real shops never auto-complete payments")
-	default: // "manual", "paystack", or anything else: no local STK provider.
-		// When Paystack is configured, STK rides the Paystack mobile-money
-		// charge (see InitiateSTK) and verifies through SweepPaystack.
-		return nil, nil
-	}
+        env := s.settings.GetString("mpesa_env", "manual")
+        switch env {
+        case "sandbox", "production":
+                key := s.settings.Get("mpesa_consumer_key")
+                secret := s.settings.Get("mpesa_consumer_secret")
+                shortcode := s.settings.Get("mpesa_shortcode")
+                passkey := s.settings.Get("mpesa_passkey")
+                callback := s.settings.Get("mpesa_callback_url")
+                if key == "" || secret == "" || shortcode == "" || passkey == "" {
+                        return nil, fmt.Errorf("mpesa_env=%s but Daraja credentials are incomplete, set them (or switch M-Pesa to Paystack) in settings; refusing to simulate payments", env)
+                }
+                cacheKey := env + "|" + shortcode + "|" + key + "|" + secret + "|" + passkey + "|" + callback
+                if s.darajaKey != cacheKey {
+                        s.darajaKey = cacheKey
+                        s.daraja = mpesa.NewDaraja(env, shortcode, passkey, key, secret, callback)
+                }
+                return s.daraja, nil
+        case "mock":
+                // Training wheels: only with the explicit env opt-in. This is what
+                // keeps a till from "confirming" payments nobody made.
+                if os.Getenv("ALLOW_MOCK_PAYMENTS") == "true" {
+                        s.applyMockConfig()
+                        return s.mock, nil
+                }
+                return nil, fmt.Errorf("mock M-Pesa is disabled (ALLOW_MOCK_PAYMENTS!=true), real shops never auto-complete payments")
+        default: // "manual", "paystack", or anything else: no local STK provider.
+                // When Paystack is configured, STK rides the Paystack mobile-money
+                // charge (see InitiateSTK) and verifies through SweepPaystack.
+                return nil, nil
+        }
 }
 
 // stkProviderReady reports whether a non-Paystack STK provider is usable.
 func (s *Service) stkProviderReady() bool {
-	p, err := s.GetProvider()
-	return err == nil && p != nil
+        p, err := s.GetProvider()
+        return err == nil && p != nil
 }
 
 // MpesaRoute tells the till how M-Pesa STK currently runs:
@@ -167,31 +173,62 @@ func (s *Service) stkProviderReady() bool {
 //   - "mock":     training mode (ALLOW_MOCK_PAYMENTS=true only)
 //   - "manual":   no STK — cashier enters the receipt code
 func (s *Service) MpesaRoute() string {
-	if s.paystackConfigured() && s.settings.GetBool("paystack_enabled", true) {
-		return "paystack"
-	}
-	if s.stkProviderReady() {
-		if p, _ := s.GetProvider(); p != nil {
-			return p.Name()
-		}
-	}
-	return "manual"
+        if s.paystackConfigured() && s.settings.GetBool("paystack_enabled", true) {
+                return "paystack"
+        }
+        if s.stkProviderReady() {
+                if p, _ := s.GetProvider(); p != nil {
+                        return p.Name()
+                }
+        }
+        return "manual"
 }
 
 func (s *Service) applyMockConfig() {
-	delay := time.Duration(s.settings.GetInt("mpesa_mock_delay_ms", 4000)) * time.Millisecond
-	rc := s.settings.GetInt("mpesa_mock_result_code", 0)
-	s.mock.Configure(delay, rc)
+        delay := time.Duration(s.settings.GetInt("mpesa_mock_delay_ms", 4000)) * time.Millisecond
+        rc := s.settings.GetInt("mpesa_mock_result_code", 0)
+        s.mock.Configure(delay, rc)
 }
 
 // SetVersion stamps the build version (used in team-sync heartbeats so
 // the roster shows which till runs which release). Main calls this once.
 func (s *Service) SetVersion(v string) { s.appVersion = v }
 
+// SetLanAddr publishes this till's LAN delivery address (host:port).
+// Empty strings are ignored — a till without a listener keeps whatever it
+// published before rather than wiping the roster entry.
+func (s *Service) SetLanAddr(addr string) {
+        if addr == "" {
+                return
+        }
+        s.lanAddr = addr
+}
+
+// HasUnfinishedWork reports whether an auto-update restart right now
+// could disturb money or a person actively selling: any payment still in
+// flight (money — never interrupt), or an order touched in the last 15
+// minutes (someone is mid-sale; their cart survives a restart, but the
+// interruption is rude). Open shifts are durable on disk and do NOT
+// block — a forgotten overnight shift must never wedge updates.
+func (s *Service) HasUnfinishedWork() bool {
+        var paying int
+        _ = s.db.QueryRow(`SELECT COUNT(*) FROM payments WHERE status = ?`, models.PaymentPending).Scan(&paying)
+        if paying > 0 {
+                return true
+        }
+        var recent int
+        if s.db.IsSQLite() {
+                _ = s.db.QueryRow(`SELECT COUNT(*) FROM orders WHERE created_at >= datetime('now', '-15 minutes')`).Scan(&recent)
+        } else {
+                _ = s.db.QueryRow(`SELECT COUNT(*) FROM orders WHERE created_at >= NOW() - interval '15 minutes'`).Scan(&recent)
+        }
+        return recent > 0
+}
+
 // AppVersion returns the stamped build version ("dev" when unset).
 func (s *Service) AppVersion() string {
-	if s.appVersion == "" {
-		return "dev"
-	}
-	return s.appVersion
+        if s.appVersion == "" {
+                return "dev"
+        }
+        return s.appVersion
 }
