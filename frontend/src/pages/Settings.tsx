@@ -1225,8 +1225,8 @@ function TeamSyncPanel() {
               <div className="flex items-start gap-2 bg-pending-bg border-2 border-pending-text/30 rounded-input p-3 text-[13px] font-bold text-pending-text">
                 <AlertTriangle size={15} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
                 <span>
-                  This till is registered but awaiting approval, it cannot push or pull events until another
-                  approved device on the team accepts it{status.autoApprove ? ' (auto-approve is on, this should clear shortly)' : ''}.
+                  This till is waiting for the owner to approve it. It joins the team on its own the moment an
+                  approved till accepts it{status.autoApprove ? ' (auto-approve is on, this clears shortly)' : ''}. Nothing to type here.
                 </span>
               </div>
             )}
