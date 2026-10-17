@@ -43,7 +43,7 @@ PORTAL_TEMPLATE = os.path.join(ROOT, "scripts", "assets", "portal-page.html")
 JOIN_TEMPLATE = os.path.join(ROOT, "scripts", "assets", "join-page.html")
 
 RELEASES_PAGE = "https://github.com/ssmurfgg04-gif/pos-system/releases"
-VERSION = "1.3.4"
+VERSION = "1.3.6"
 
 INSTALLERS = [
     "ledgerpos-setup-windows-x64.exe",
