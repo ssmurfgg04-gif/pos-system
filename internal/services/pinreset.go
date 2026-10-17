@@ -174,36 +174,135 @@ func (s *Service) ListPinResetRequests() ([]PinResetRequest, error) {
         return res.Requests, nil
 }
 
-// PinResetApproved is what ApprovePinReset returns — the code is shown to
-// the owner exactly once. Delivered reports the bonus path: the code also
-// flew straight to the locked till over the shop WiFi (the worker then
-// only types their new PIN).
+// PinResetApproved is what ApprovePinReset returns. When the owner typed a
+// new PIN (Granted), there is no code at all — the cloud holds a hash the
+// locked till collects by itself, and the worker just types the PIN they
+// were given. Otherwise Code is the single-use 8-digit fallback (shown to
+// the owner exactly once), and Delivered reports the bonus path: the code
+// also flew straight to the locked till over the shop WiFi.
 type PinResetApproved struct {
+        Granted     bool   `json:"granted"`
         Code        string `json:"code"`
         Username    string `json:"username"`
         DeviceName  string `json:"deviceName"`
         ExpiresMins int    `json:"expiresMins"`
         DeviceID    string `json:"deviceId"`
+        LANAddr     string `json:"lanAddr"`
         Delivered   bool   `json:"delivered"`
 }
 
-// ApprovePinReset mints the single-use code for one request (owner till).
-func (s *Service) ApprovePinReset(requestID int64) (PinResetApproved, error) {
+// ApprovePinReset closes one request (owner till). With newPin (exactly 4
+// digits) the cloud stores a grant: the locked till collects the PIN hash
+// by itself and the worker only types the PIN they were told. Without one,
+// the legacy single-use 8-digit code is minted for read-aloud delivery.
+func (s *Service) ApprovePinReset(requestID int64, newPin string) (PinResetApproved, error) {
         out := PinResetApproved{}
         c, err := s.ownerClient()
         if err != nil {
                 return out, err
         }
+        newPin = strings.TrimSpace(newPin)
         var res struct {
                 OK            bool   `json:"ok"`
                 Error         string `json:"error"`
+                Granted       bool   `json:"granted"`
                 Code          string `json:"code"`
                 Username      string `json:"username"`
                 DeviceName    string `json:"deviceName"`
                 DeviceID      string `json:"deviceId"`
+                LANAddr       string `json:"lanAddr"`
                 ExpiresMinute int    `json:"expiresMinutes"`
         }
         if err := rpcCall(c.base, "sync_approve_pin_reset", map[string]any{
+                "p_device_id":   c.device,
+                "p_secret_hash": c.secretHash,
+                "p_request_id":  requestID,
+                "p_new_pin":     newPin,
+        }, &res); err != nil {
+                return out, fmt.Errorf("could not reach the LedgerPOS cloud, check the internet and try again")
+        }
+        if !res.OK {
+                return out, fmt.Errorf("%s", res.Error)
+        }
+        out = PinResetApproved{
+                Granted:     res.Granted,
+                Code:        res.Code,
+                Username:    res.Username,
+                DeviceName:  res.DeviceName,
+                DeviceID:    res.DeviceID,
+                LANAddr:     res.LANAddr,
+                ExpiresMins: res.ExpiresMinute,
+        }
+        if out.Granted {
+                s.Audit(0, "system", "PIN_RESET_GRANTED", "user", res.Username,
+                        fmt.Sprintf("request %d: PIN set by the owner, till collects it by itself", requestID))
+                return out, nil
+        }
+        s.Audit(0, "system", "PIN_RESET_APPROVED", "user", res.Username,
+                fmt.Sprintf("request %d code issued", requestID))
+        // WiFi hand-off: if the locked till is on this shop's network, the
+        // code flies straight to it and the worker only types their new
+        // PIN. The cloud-registered LAN address is tried first (works on
+        // WiFi that blocks multicast), then mDNS. Fails silently — the code
+        // on screen stays the fallback.
+        if res.DeviceID != "" && res.DeviceID != c.device {
+                ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+                defer cancel()
+                out.Delivered = landelivery.PushPinResetCode(ctx, res.DeviceID, requestID, res.Code, res.LANAddr)
+                if out.Delivered {
+                        s.Audit(0, "system", "PIN_RESET_CODE_DELIVERED", "user", res.Username,
+                                fmt.Sprintf("request %d delivered over the shop WiFi", requestID))
+                }
+        }
+        return out, nil
+}
+
+// PollPinGrant asks the cloud whether an approved PIN grant is waiting for
+// THIS till (the worker is sitting locked out; the owner already typed the
+// new PIN on their own till). Best-effort: any error means "no grant yet".
+type PinGrant struct {
+        RequestID int64
+        Username  string
+}
+
+func (s *Service) PollPinGrant() (PinGrant, bool) {
+        out := PinGrant{}
+        c, err := s.ownerClient()
+        if err != nil {
+                return out, false
+        }
+        var res struct {
+                OK        bool   `json:"ok"`
+                Error     string `json:"error"`
+                Grant     bool   `json:"grant"`
+                RequestID int64  `json:"requestId"`
+                Username  string `json:"username"`
+        }
+        if err := rpcCall(c.base, "sync_poll_pin_grant", map[string]any{
+                "p_device_id":   c.device,
+                "p_secret_hash": c.secretHash,
+        }, &res); err != nil || !res.OK || !res.Grant {
+                return out, false
+        }
+        return PinGrant{RequestID: res.RequestID, Username: res.Username}, true
+}
+
+// ClaimAndApplyPinGrant collects the waiting grant (single-use, bound to
+// this device) and applies the PIN locally. The PIN itself never travels —
+// the cloud hands over the bcrypt hash it stored at approve time.
+func (s *Service) ClaimAndApplyPinGrant(requestID int64) (models.PinResetRedeemed, error) {
+        out := models.PinResetRedeemed{}
+        c, err := s.ownerClient()
+        if err != nil {
+                return out, fmt.Errorf("PIN recovery needs the shop's cloud link, join the team first")
+        }
+        var res struct {
+                OK       bool   `json:"ok"`
+                Error    string `json:"error"`
+                Username string `json:"username"`
+                PinHash  string `json:"pinHash"`
+        }
+        if err := rpcCall(c.base, "sync_claim_pin_grant", map[string]any{
                 "p_device_id":   c.device,
                 "p_secret_hash": c.secretHash,
                 "p_request_id":  requestID,
@@ -213,32 +312,54 @@ func (s *Service) ApprovePinReset(requestID int64) (PinResetApproved, error) {
         if !res.OK {
                 return out, fmt.Errorf("%s", res.Error)
         }
-        out = PinResetApproved{
-                Code:        res.Code,
-                Username:    res.Username,
-                DeviceName:  res.DeviceName,
-                DeviceID:    res.DeviceID,
-                ExpiresMins: res.ExpiresMinute,
+        if !strings.HasPrefix(res.PinHash, "$2") {
+                return out, fmt.Errorf("the cloud sent an unreadable PIN, ask the owner to approve again")
         }
-        s.Audit(0, "system", "PIN_RESET_APPROVED", "user", res.Username,
-                fmt.Sprintf("request %d code issued", requestID))
-        // WiFi hand-off: if the locked till is on this shop's network, the
-        // code flies straight to it and the worker only types their new
-        // PIN. Fails silently — the code on screen stays the fallback.
-        if res.DeviceID != "" && res.DeviceID != c.device {
-                ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-                defer cancel()
-                out.Delivered = landelivery.PushPinResetCode(ctx, res.DeviceID, requestID, res.Code)
-                if out.Delivered {
-                        s.Audit(0, "system", "PIN_RESET_CODE_DELIVERED", "user", res.Username,
-                                fmt.Sprintf("request %d delivered over the shop WiFi", requestID))
-                }
+        applied, err := s.applyPinHash(res.Username, res.PinHash)
+        if err != nil {
+                return out, err
         }
+        s.clearPendingPinReset()
+        s.Audit(applied.UserID, applied.Username, "PIN_RESET_GRANTED_APPLIED", "user", applied.Username,
+                fmt.Sprintf("request %d: owner-set PIN applied on this till", requestID))
+        log.Printf("[auth] owner-set PIN applied for %s (request %d)", applied.Username, requestID)
+        return applied, nil
+}
+
+// applyPinHash sets a bcrypt PIN hash on the named active account and
+// clears any lockout. Shared by the redeem and grant paths.
+func (s *Service) applyPinHash(username, pinHash string) (models.PinResetRedeemed, error) {
+        out := models.PinResetRedeemed{}
+        var userID int64
+        var uname string
+        err := s.db.QueryRow(s.db.Rebind(`SELECT id, username FROM users WHERE LOWER(username) = LOWER(?) AND is_active = 1`), username).Scan(&userID, &uname)
+        if err == sql.ErrNoRows {
+                s.clearPendingPinReset()
+                return out, fmt.Errorf("no active account named %s on this till anymore, send a fresh request or ask the owner to add you back", username)
+        }
+        if err != nil {
+                return out, fmt.Errorf("could not look up the account: %v", err)
+        }
+        res2, err := s.db.Exec(s.db.Rebind(`
+                UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '',
+                        must_rotate = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND is_active = 1`), pinHash, userID)
+        if err != nil {
+                return out, fmt.Errorf("could not update the account: %v", err)
+        }
+        if n, _ := res2.RowsAffected(); n == 0 {
+                // Lost a race with a deactivation between check and update.
+                s.clearPendingPinReset()
+                return out, fmt.Errorf("no active account named %s on this till, ask the owner", username)
+        }
+        out.Username = uname
+        out.UserID = userID
         return out, nil
 }
 
 // RedeemPinReset verifies the owner's code with the cloud and, on success,
 // sets the new PIN on this till's local account and clears any lockout.
+// (The legacy read-aloud path; new approvals carry a direct grant instead.)
 func (s *Service) RedeemPinReset(requestID int64, code, newPin string) (models.PinResetRedeemed, error) {
         out := models.PinResetRedeemed{}
         if !auth.ValidPIN(newPin) {
@@ -270,37 +391,17 @@ func (s *Service) RedeemPinReset(requestID int64, code, newPin string) (models.P
         // moment we redeem it, so a till that can't actually apply the reset
         // (account renamed/deactivated meanwhile) must find out FIRST —
         // otherwise the code is consumed and the flow dead-ends.
-        var userID int64
-        var uname string
-        err = s.db.QueryRow(s.db.Rebind(`SELECT id, username FROM users WHERE LOWER(username) = LOWER(?) AND is_active = 1`), res.Username).Scan(&userID, &uname)
-        if err == sql.ErrNoRows {
-                s.clearPendingPinReset()
-                return out, fmt.Errorf("no active account named %s on this till anymore, send a fresh request or ask the owner to add you back", res.Username)
-        }
-        if err != nil {
-                return out, fmt.Errorf("could not look up the account: %v", err)
-        }
         pinHash, err := hash.Password(newPin)
         if err != nil {
                 return out, err
         }
-        res2, err := s.db.Exec(s.db.Rebind(`
-                UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '',
-                        must_rotate = 0, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND is_active = 1`), pinHash, userID)
+        out, err = s.applyPinHash(res.Username, pinHash)
         if err != nil {
-                return out, fmt.Errorf("could not update the account: %v", err)
-        }
-        if n, _ := res2.RowsAffected(); n == 0 {
-                // Lost a race with a deactivation between check and update.
-                s.clearPendingPinReset()
-                return out, fmt.Errorf("no active account named %s on this till, ask the owner", res.Username)
+                return out, err
         }
         s.clearPendingPinReset()
-        s.Audit(userID, uname, "PIN_RESET_REDEEMED", "user", uname, fmt.Sprintf("request %d", requestID))
-        log.Printf("[auth] PIN reset redeemed for %s (request %d)", uname, requestID)
-        out.Username = uname
-        out.UserID = userID
+        s.Audit(out.UserID, out.Username, "PIN_RESET_REDEEMED", "user", out.Username, fmt.Sprintf("request %d", requestID))
+        log.Printf("[auth] PIN reset redeemed for %s (request %d)", out.Username, requestID)
         // Best-effort: also nudge the password so "Password sign-in instead"
         // never dead-ends for the same person. The password stays untouched —
         // only the PIN changed; the user can rotate the password after signing

@@ -57,7 +57,7 @@ func TestApproveNeedsNoOwnerCapabilityChallenge(t *testing.T) {
                 t.Fatalf("file reset request: %v", err)
         }
 
-        out, err := owner.ApprovePinReset(req.RequestID)
+        out, err := owner.ApprovePinReset(req.RequestID, "")
         if err != nil {
                 t.Fatalf("approve without capability: %v", err)
         }
@@ -132,7 +132,7 @@ func TestApproveDeliversCodeOverLAN(t *testing.T) {
                 return []mdns.Peer{{Addr: "127.0.0.1", Port: srv.Port}}
         }
 
-        out, err := owner.ApprovePinReset(req.RequestID)
+        out, err := owner.ApprovePinReset(req.RequestID, "")
         if err != nil {
                 t.Fatalf("approve: %v", err)
         }
@@ -193,7 +193,7 @@ func TestApproveWithoutLANStillShowsCode(t *testing.T) {
         t.Cleanup(func() { mdns.Browse = oldBrowse })
         mdns.Browse = func(ctx context.Context, d time.Duration) []mdns.Peer { return nil }
 
-        out, err := owner.ApprovePinReset(req.RequestID)
+        out, err := owner.ApprovePinReset(req.RequestID, "")
         if err != nil {
                 t.Fatalf("approve: %v", err)
         }

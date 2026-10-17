@@ -24,6 +24,7 @@ export function Pin() {
   const [pin, setPin] = useState('')
   const [busy, setBusy] = useState(false)
   const [recover, setRecover] = useState<null | { step: 'request' | 'code'; requestId: number; username: string }>(null)
+  const [grantNote, setGrantNote] = useState('')
   const busyRef = useRef(false)
   // The 4th digit auto-submits after a short beat; any other submit path
   // (Enter) or reset (Backspace/Escape/Clear/switch user) cancels it —
@@ -41,6 +42,28 @@ export function Pin() {
   useEffect(() => {
     api.get<PinUser[]>('/api/v1/auth/pin-users').then(setUsers).catch(() => setUsers([]))
   }, [])
+
+  // Owner-set PIN arrives by itself: while someone is picked on the pad,
+  // listen for the grant. When it lands, the till applies it and the
+  // worker just types the PIN they were given — no code, no panel.
+  useEffect(() => {
+    if (!userId || recover) return
+    let alive = true
+    const poll = () => {
+      api.get<{ active: boolean; grantApplied?: boolean; username?: string }>('/api/v1/auth/forgot-pin/status')
+        .then((r) => {
+          if (!alive || !r.grantApplied) return
+          setGrantNote(r.username ? `Your PIN was set by the owner. Type it to sign in, ${r.username}.` : 'Your PIN was set by the owner. Type it to sign in.')
+          setRecover(null)
+          setPin('')
+          setError('')
+        })
+        .catch(() => undefined)
+    }
+    poll()
+    const t = setInterval(poll, 6000)
+    return () => { alive = false; clearInterval(t) }
+  }, [userId, recover])
 
   const submit = async (code: string) => {
     // busyRef: synchronous guard — whichever submit path wins (auto or
@@ -202,6 +225,11 @@ export function Pin() {
                     </span>
                   ))}
                 </div>
+                {grantNote && (
+                  <div className="bg-paid-bg border-2 border-paid-text/40 rounded-input px-3 py-2.5 text-[12.5px] font-semibold text-paid-text mb-3">
+                    {grantNote}
+                  </div>
+                )}
                 {error && (
                   <p role="alert" className="text-center text-danger-text text-sm font-semibold mb-3">
                     {error}
@@ -277,15 +305,16 @@ export function ForgotPinPanel({
   onDone: (userId: number, newPin: string) => void
   onCancel: () => void
 }) {
-  const [username, setUsername] = useState(preselect?.fullName || '')
+  const [username, setUsername] = useState(preselect?.username || preselect?.fullName || '')
   const [code, setCode] = useState('')
   const [pin, setPin] = useState('')
   const [pin2, setPin2] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  // The owner till can push the code straight over the shop WiFi the
-  // moment it approves. Poll for it: when it lands, the worker only types
-  // their new PIN.
+  // The owner can simply SET your PIN from their till: when the grant
+  // lands, this panel steps aside — the worker goes back to the pad and
+  // types the PIN they were given. No code, nothing to copy.
+  const [grantDone, setGrantDone] = useState(false)
   const [wifiCode, setWifiCode] = useState('')
   const seenPushRef = useRef('')
   const pinRef = useRef<HTMLInputElement | null>(null)
@@ -306,9 +335,13 @@ export function ForgotPinPanel({
     if (state.step !== 'code') return
     let alive = true
     const poll = () => {
-      api.get<{ active: boolean; request?: { requestId: number; username: string; pushedCode?: string } }>('/api/v1/auth/forgot-pin/status')
+      api.get<{ active: boolean; grantApplied?: boolean; username?: string; request?: { requestId: number; username: string; pushedCode?: string } }>('/api/v1/auth/forgot-pin/status')
         .then((r) => {
           if (!alive) return
+          if (r.grantApplied) {
+            setGrantDone(true)
+            return
+          }
           const pushed = r.request?.pushedCode || ''
           if (pushed && pushed !== seenPushRef.current) {
             seenPushRef.current = pushed
@@ -384,19 +417,21 @@ export function ForgotPinPanel({
     return (
       <div className="bg-surface border-2 border-line-strong rounded-card shadow-brutal p-5 space-y-4">
         <p className="text-[13px] text-ink-muted">
-          Check the login name shown above your PIN pad ({state.username ? <span className="font-bold text-ink">{state.username}</span> : 'pick your name first'}),
-          then send a reset request. The owner approves it from any other till and reads you a short code.
+          Send a reset request for <span className="font-bold text-ink">{username}</span>, then the owner sets your
+          new PIN from their till. Your till picks it up by itself.
         </p>
-        <label className="block">
-          <span className="block text-[12px] font-bold text-ink-muted uppercase tracking-wide mb-1">Your login name</span>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoFocus
-            placeholder="e.g. salma-pc"
-            className="w-full min-h-11 rounded-input border-2 border-line bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
-          />
-        </label>
+        {!(preselect?.username) && (
+          <label className="block">
+            <span className="block text-[12px] font-bold text-ink-muted uppercase tracking-wide mb-1">Your login name</span>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoFocus
+              placeholder="exactly as it appears on your sign-in button"
+              className="w-full min-h-11 rounded-input border-2 border-line bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
+            />
+          </label>
+        )}
         {error && (
           <p role="alert" className="text-danger-text text-sm font-semibold bg-danger-bg border border-danger-text/30 rounded-input px-3 py-2">
             {error}
@@ -410,13 +445,29 @@ export function ForgotPinPanel({
           {busy ? <Spinner className="border-t-brand-ink" /> : 'Send reset request'}
         </button>
         <p className="text-[11.5px] text-ink-subtle">
-          Nothing is deleted and no money is touched, this only lets the owner hand you a code.
+          Nothing is deleted and no money is touched, this only lets the owner set you a fresh PIN.
         </p>
         <button
           onClick={onCancel}
           className="w-full text-center text-sm font-semibold text-ink-muted hover:text-ink underline decoration-line hover:decoration-line-strong"
         >
           ← Back to the PIN pad
+        </button>
+      </div>
+    )
+  }
+
+  if (grantDone) {
+    return (
+      <div className="bg-surface border-2 border-line-strong rounded-card shadow-brutal p-5 space-y-4">
+        <div className="bg-paid-bg border-2 border-paid-text/40 rounded-input px-3 py-2.5 text-[12.5px] font-semibold text-paid-text">
+          The owner just set your PIN. Go back and type it — you are in.
+        </div>
+        <button
+          onClick={onCancel}
+          className="w-full min-h-12 rounded-input bg-brand border-2 border-brand-strong text-brand-ink font-bold text-sm shadow-brutal-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-transform duration-75"
+        >
+          Back to my PIN pad
         </button>
       </div>
     )
@@ -431,9 +482,9 @@ export function ForgotPinPanel({
         </div>
       ) : (
         <div className="bg-brand-soft border border-brand/30 rounded-input px-3 py-2.5 text-[12.5px] text-brand font-semibold">
-          Request sent. Now call or message the owner, on their till they open{' '}
-          <span className="font-bold">Settings → Team → PIN reset requests</span>, tap{' '}<span className="font-bold">Approve</span>{' '}
-          (or <span className="font-bold">New code</span> if one expired) next to "{state.username}" and read you the 8-digit code.
+          Request sent. Now call or message the owner — on their till they open{' '}
+          <span className="font-bold">Settings → Team → PIN reset requests</span>, type a 4-digit PIN next to your name and tap{' '}<span className="font-bold">Approve</span>.
+          Your till picks it up by itself.
         </div>
       )}
       <label className="block">

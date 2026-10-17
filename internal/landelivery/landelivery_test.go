@@ -135,7 +135,7 @@ func TestPushPinResetCodeFindsRightTill(t *testing.T) {
 	mdns.Browse = func(ctx context.Context, d time.Duration) []mdns.Peer {
 		return []mdns.Peer{{Addr: "127.0.0.1", Port: other.Port}, {Addr: "127.0.0.1", Port: target.Port}}
 	}
-	if !PushPinResetCode(context.Background(), "dev-target", 7, "91827364") {
+	if !PushPinResetCode(context.Background(), "dev-target", 7, "91827364", "") {
 		t.Fatal("push to a LAN-present till reported failure")
 	}
 	if stored[7] != "91827364" {
@@ -144,7 +144,7 @@ func TestPushPinResetCodeFindsRightTill(t *testing.T) {
 
 	// wrong device id → nothing delivered
 	stored = map[int64]string{}
-	if PushPinResetCode(context.Background(), "dev-missing", 7, "11112222") {
+	if PushPinResetCode(context.Background(), "dev-missing", 7, "11112222", "") {
 		t.Fatal("push to an absent till reported success")
 	}
 	if len(stored) != 0 {
@@ -153,7 +153,7 @@ func TestPushPinResetCodeFindsRightTill(t *testing.T) {
 
 	// no peers discovered → false, no panic
 	mdns.Browse = func(ctx context.Context, d time.Duration) []mdns.Peer { return nil }
-	if PushPinResetCode(context.Background(), "dev-target", 7, "33334444") {
+	if PushPinResetCode(context.Background(), "dev-target", 7, "33334444", "") {
 		t.Fatal("push with no LAN peers reported success")
 	}
 }

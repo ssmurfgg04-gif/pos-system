@@ -13,7 +13,11 @@ import (
         "strings"
         "sync"
         "testing"
+        "time"
 
+        "golang.org/x/crypto/bcrypt"
+
+        "posapp/internal/auth"
         "posapp/internal/database"
         "posapp/internal/settings"
 )
@@ -42,6 +46,8 @@ type fakeSupabase struct {
         // v1.3.5 regression surface: the forgot-PIN recovery RPCs.
         pinResets   map[int64]map[string]any // id -> {device_id, username, device_name, status, code}
         pinResetSeq int64
+        // v1.3.6 regression surface: direct PIN grants + LAN registry.
+        lanAddrs map[string]string // device_id -> p_lan_addr from sync_register
 }
 
 func newFakeSupabase(t *testing.T) *fakeSupabase {
@@ -53,6 +59,7 @@ func newFakeSupabase(t *testing.T) *fakeSupabase {
                 invites:     map[string]map[string]any{},
                 invitesUsed: map[string]bool{},
                 pinResets:   map[int64]map[string]any{},
+                lanAddrs:    map[string]string{},
         }
         mux := http.NewServeMux()
 
@@ -94,10 +101,12 @@ func newFakeSupabase(t *testing.T) *fakeSupabase {
                         SecretHash string `json:"p_secret_hash"`
                         Name       string `json:"p_device_name"`
                         Version    string `json:"p_app_version"`
+                        LanAddr    string `json:"p_lan_addr"`
                 }
                 json.NewDecoder(r.Body).Decode(&in)
                 f.mu.Lock()
                 defer f.mu.Unlock()
+                f.lanAddrs[in.DeviceID] = in.LanAddr
                 if len(in.DeviceID) < 8 || len(in.SecretHash) < 32 {
                         json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "invalid identity"})
                         return
@@ -318,15 +327,17 @@ func newFakeSupabase(t *testing.T) *fakeSupabase {
                 json.NewEncoder(w).Encode(map[string]any{"ok": true, "request_id": id, "reused": false})
         })
 
-        // POST /rest/v1/rpc/sync_approve_pin_reset — the owner till mints
-        // the single-use code. Mirrors the v1.3.5 live SQL: device identity
-        // is the only gate (no owner-capability challenge), the response
-        // carries the requesting device id for the WiFi hand-off.
+        // POST /rest/v1/rpc/sync_approve_pin_reset — the owner till either
+        // sets a DIRECT PIN GRANT (p_new_pin, v1.3.6) or mints the legacy
+        // single-use code. Mirrors the live SQL: device identity is the only
+        // gate, the response carries the requesting device id + its
+        // cloud-registered LAN address.
         mux.HandleFunc("/rest/v1/rpc/sync_approve_pin_reset", func(w http.ResponseWriter, r *http.Request) {
                 var in struct {
                         DeviceID   string `json:"p_device_id"`
                         SecretHash string `json:"p_secret_hash"`
                         RequestID  int64  `json:"p_request_id"`
+                        NewPin     string `json:"p_new_pin"`
                 }
                 json.NewDecoder(r.Body).Decode(&in)
                 f.mu.Lock()
@@ -340,17 +351,113 @@ func newFakeSupabase(t *testing.T) *fakeSupabase {
                         json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "reset request not found"})
                         return
                 }
-                if row["status"] != "pending" && row["status"] != "approved" {
+                if row["status"] == "used" || row["status"] == "cancelled" {
                         json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "this request was already handled"})
+                        return
+                }
+                if in.NewPin != "" {
+                        if !auth.ValidPIN(in.NewPin) {
+                                json.NewEncoder(w).Encode(map[string]any{"ok": false, "error":
+                                        "choose a 4-digit PIN that isn't an obvious pattern like 0000 or 1234"})
+                                return
+                        }
+                        row["status"] = "approved"
+                        if h2, herr := bcrypt.GenerateFromPassword([]byte(in.NewPin), bcrypt.MinCost); herr == nil {
+                                row["pin_hash"] = string(h2)
+                        } else {
+                                row["pin_hash"] = "$2a$10$fakestandinforbcrypt" + in.NewPin
+                        }
+                        row["code"] = ""
+                        row["granted_at"] = time.Now()
+                        json.NewEncoder(w).Encode(map[string]any{"ok": true, "granted": true, "code": "",
+                                "username": row["username"], "deviceName": row["device_name"],
+                                "deviceId": row["device_id"], "lanAddr": f.lanAddrs[row["device_id"].(string)],
+                                "expiresMinutes": 1440})
                         return
                 }
                 f.pinResetSeq++
                 code := "4242" + fmt.Sprintf("%04d", f.pinResetSeq%10000)
                 row["status"] = "approved"
                 row["code"] = code
-                json.NewEncoder(w).Encode(map[string]any{"ok": true, "code": code,
+                row["pin_hash"] = ""
+                json.NewEncoder(w).Encode(map[string]any{"ok": true, "granted": false, "code": code,
                         "username": row["username"], "deviceName": row["device_name"],
-                        "deviceId": row["device_id"], "expiresMinutes": 15})
+                        "deviceId": row["device_id"], "lanAddr": f.lanAddrs[row["device_id"].(string)],
+                        "expiresMinutes": 15})
+        })
+
+        // POST /rest/v1/rpc/sync_poll_pin_grant — the locked till asks
+        // whether a grant waits for it (approved, or claimed >30 min ago).
+        mux.HandleFunc("/rest/v1/rpc/sync_poll_pin_grant", func(w http.ResponseWriter, r *http.Request) {
+                var in struct {
+                        DeviceID   string `json:"p_device_id"`
+                        SecretHash string `json:"p_secret_hash"`
+                }
+                json.NewDecoder(r.Body).Decode(&in)
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                if f.device[in.DeviceID] != in.SecretHash || !f.approved[in.DeviceID] {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "device not recognized"})
+                        return
+                }
+                bestID := int64(0)
+                var best map[string]any
+                for id, row := range f.pinResets {
+                        if row["device_id"] != in.DeviceID || row["pin_hash"] == "" {
+                                continue
+                        }
+                        if row["status"] == "claimed" {
+                                claimedAt, _ := row["claimed_at"].(time.Time)
+                                if claimedAt.IsZero() || time.Since(claimedAt) < 30*time.Minute {
+                                        continue
+                                }
+                        } else if row["status"] != "approved" {
+                                continue
+                        }
+                        if id > bestID {
+                                bestID, best = id, row
+                        }
+                }
+                if best == nil {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": true, "grant": false})
+                        return
+                }
+                json.NewEncoder(w).Encode(map[string]any{"ok": true, "grant": true,
+                        "requestId": bestID, "username": best["username"]})
+        })
+
+        // POST /rest/v1/rpc/sync_claim_pin_grant — single-use collection of
+        // the grant (device-bound). Mirrors the live stale-claim re-serve.
+        mux.HandleFunc("/rest/v1/rpc/sync_claim_pin_grant", func(w http.ResponseWriter, r *http.Request) {
+                var in struct {
+                        DeviceID   string `json:"p_device_id"`
+                        SecretHash string `json:"p_secret_hash"`
+                        RequestID  int64  `json:"p_request_id"`
+                }
+                json.NewDecoder(r.Body).Decode(&in)
+                f.mu.Lock()
+                defer f.mu.Unlock()
+                if f.device[in.DeviceID] != in.SecretHash || !f.approved[in.DeviceID] {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "device not recognized"})
+                        return
+                }
+                row, ok := f.pinResets[in.RequestID]
+                if !ok || row["device_id"] != in.DeviceID || row["pin_hash"] == "" ||
+                        (row["status"] != "approved" && row["status"] != "claimed") {
+                        json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "no grant for this till"})
+                        return
+                }
+                if row["status"] == "claimed" {
+                        claimedAt, _ := row["claimed_at"].(time.Time)
+                        if claimedAt.IsZero() || time.Since(claimedAt) < 30*time.Minute {
+                                json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "this grant was already collected"})
+                                return
+                        }
+                }
+                row["status"] = "claimed"
+                row["claimed_at"] = time.Now()
+                json.NewEncoder(w).Encode(map[string]any{"ok": true,
+                        "username": row["username"], "pinHash": row["pin_hash"]})
         })
 
         // POST /rest/v1/rpc/sync_redeem_pin_reset — the locked till burns
