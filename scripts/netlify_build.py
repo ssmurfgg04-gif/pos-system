@@ -86,7 +86,8 @@ def verify_installers() -> dict:
         if not os.path.isfile(p):
             die(f"downloads/{name} is missing from the repo")
         if name in expected and sha256_of(p) != expected[name]:
-            die(f"downloads/{name} does not match checksums.txt — do NOT deploy")
+            die(f"downloads/{name} does not match checksums.txt — do NOT deploy "
+                f"(rebuilt the installers? run: python3 scripts/write_checksums.py, then commit it with them)")
         sizes[name] = human_mb(p)
     total = sum(os.path.getsize(os.path.join(DL_SRC, n)) for n in INSTALLERS)
     print(f"installers verified — {len(INSTALLERS)} packages, {total/1e6:.1f} MB total")
