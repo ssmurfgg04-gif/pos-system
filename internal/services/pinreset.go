@@ -37,6 +37,7 @@ import (
         "posapp/internal/hash"
         "posapp/internal/landelivery"
         "posapp/internal/models"
+        "posapp/internal/settings"
 )
 
 const (
@@ -290,8 +291,14 @@ func (s *Service) PollPinGrant() (PinGrant, bool) {
 // ClaimAndApplyPinGrant collects the waiting grant (single-use, bound to
 // this device) and applies the PIN locally. The PIN itself never travels —
 // the cloud hands over the bcrypt hash it stored at approve time.
+// Already-applied grant ids are remembered locally: without this, the
+// stale-claim re-serve would re-apply an old owner PIN every 30 minutes
+// and silently revert the worker's own rotation (2nd-round review).
 func (s *Service) ClaimAndApplyPinGrant(requestID int64) (models.PinResetRedeemed, error) {
         out := models.PinResetRedeemed{}
+        if grantApplied(s.settings, requestID) {
+                return out, fmt.Errorf("this PIN was already set on this till")
+        }
         c, err := s.ownerClient()
         if err != nil {
                 return out, fmt.Errorf("PIN recovery needs the shop's cloud link, join the team first")
@@ -320,10 +327,38 @@ func (s *Service) ClaimAndApplyPinGrant(requestID int64) (models.PinResetRedeeme
                 return out, err
         }
         s.clearPendingPinReset()
+        rememberGrantApplied(s.settings, requestID)
         s.Audit(applied.UserID, applied.Username, "PIN_RESET_GRANTED_APPLIED", "user", applied.Username,
                 fmt.Sprintf("request %d: owner-set PIN applied on this till", requestID))
         log.Printf("[auth] owner-set PIN applied for %s (request %d)", applied.Username, requestID)
         return applied, nil
+}
+
+const pinGrantsAppliedKey = "pinreset_applied_grants"
+
+// grantApplied reports whether this till already applied a grant id.
+func grantApplied(st *settings.Store, requestID int64) bool {
+        for _, id := range strings.Split(st.Get(pinGrantsAppliedKey), ",") {
+                if id == fmt.Sprint(requestID) {
+                        return true
+                }
+        }
+        return false
+}
+
+// rememberGrantApplied records a grant id (newest first, capped).
+func rememberGrantApplied(st *settings.Store, requestID int64) {
+        id := fmt.Sprint(requestID)
+        ids := []string{id}
+        for _, prev := range strings.Split(st.Get(pinGrantsAppliedKey), ",") {
+                if prev != "" && prev != id {
+                        ids = append(ids, prev)
+                }
+                if len(ids) >= 20 {
+                        break
+                }
+        }
+        _ = st.Set(pinGrantsAppliedKey, strings.Join(ids, ","))
 }
 
 // applyPinHash sets a bcrypt PIN hash on the named active account and

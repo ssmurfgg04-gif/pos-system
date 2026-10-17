@@ -24,6 +24,7 @@ import (
         "log"
         "net"
         "net/http"
+	"net/url"
         "strings"
         "time"
 
@@ -183,12 +184,18 @@ func PushPinResetCode(ctx context.Context, deviceID string, requestID int64, cod
         client := &http.Client{Timeout: 800 * time.Millisecond}
         tried := map[string]bool{}
         // The cloud knows where this till last answered: host:port of its LAN
-        // listener. A direct unicast needs no multicast at all.
-        if addr := strings.TrimSpace(lanAddr); addr != "" && !strings.HasPrefix(addr, "127.0.0.1") {
-                if deliverTo(ctx, client, "http://"+addr, deviceID, requestID, code) {
-                        return true
+        // listener. A direct unicast needs no multicast at all. Parse strictly:
+        // lan_addr is registry text, so anything that is not a bare host:port
+        // with an IP host (the @-trick, hostnames, paths) is refused.
+        if addr := strings.TrimSpace(lanAddr); addr != "" {
+                if u, err := url.Parse("http://" + addr); err == nil && u.Path == "" && u.User == nil {
+                        if ip := net.ParseIP(u.Hostname()); ip != nil && u.Port() != "" && !ip.IsLoopback() {
+                                if deliverTo(ctx, client, "http://"+addr, deviceID, requestID, code) {
+                                        return true
+                                }
+                                tried[addr] = true
+                        }
                 }
-                tried[addr] = true
         }
         peers := mdns.Browse(ctx, 1200*time.Millisecond)
         if len(peers) == 0 {

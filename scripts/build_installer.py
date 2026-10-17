@@ -68,6 +68,13 @@ Section "Install"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\__APP__" "Publisher" "__APP__"
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\__APP__" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\__APP__" "NoRepair" 1
+  ; Silent mode (/S) is the auto-OTA path: the till installs unattended,
+  ; so it must bring the new build back up by itself. Interactive installs
+  ; use the finish page's Launch checkbox instead.
+  ${If} ${Silent}
+    Sleep 400
+    Exec '"$INSTDIR\__APP__.exe"'
+  ${EndIf}
 SectionEnd
 
 Section "Uninstall"

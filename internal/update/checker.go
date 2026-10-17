@@ -66,6 +66,15 @@ func (c *Checker) Available() bool {
         return c.available
 }
 
+// HasVerifiedAsset reports whether the picked asset carries a cloud
+// manifest SHA-256. Unattended (auto-OTA) installs require it; GitHub
+// fallback assets are manual-install only.
+func (c *Checker) HasVerifiedAsset() bool {
+        c.mu.Lock()
+        defer c.mu.Unlock()
+        return c.assetSHA != ""
+}
+
 // Refresh checks once. The cloud manifest (app_config in the fleet
 // project) is the primary channel — the owner publishes/pulls updates
 // with a SQL UPDATE; GitHub Releases is the fallback when the cloud has
