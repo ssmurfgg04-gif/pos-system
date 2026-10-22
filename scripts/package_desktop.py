@@ -255,6 +255,7 @@ def main():
     tpl = open(os.path.join(SCRIPTS, "assets", "download-page.html")).read()
     tpl = (tpl
            .replace("{{VERSION}}", VERSION)
+           .replace("{{RELEASE_BASE}}", f"{RELEASES_PAGE}/download/v{VERSION}")
            .replace("{{BUILD_DATE}}", date.today().strftime("%b %Y"))
            .replace("{{RELEASES_PAGE}}", RELEASES_PAGE)
             .replace("{{WIN_SIZE_MB}}", human_mb(os.path.join(dl, "ledgerpos-setup-windows-x64.exe")))
