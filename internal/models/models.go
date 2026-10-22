@@ -824,7 +824,7 @@ type PaymentConfig struct {
         } `json:"paystack"`
         Mpesa struct {
                 Env     string `json:"env"`
-                Route   string `json:"route"` // paystack | daraja | mock | manual
+                Route   string `json:"route"` // buni | paystack | daraja | mock | manual
                 Till    string `json:"till"`
                 Paybill string `json:"paybill"`
         } `json:"mpesa"`

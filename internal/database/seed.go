@@ -44,6 +44,12 @@ var DefaultSettings = map[string]string{
         "mpesa_callback_url":    "",
         "mpesa_mock_delay_ms":   "4000",
         "mpesa_mock_result_code": "0",
+        // Buni (KCB M-Pesa Express) — the MAIN M-Pesa rail. Keys never live
+        // on the till: the cloud config row buni_via_cloud switches the
+        // route on and the Edge Functions hold the secrets. buni_enabled is
+        // the local kill-switch (default ON so the vault row alone rolls it
+        // out; owners turn it off here if they want Paystack/Daraja only).
+        "buni_enabled": "true",
         "printer_target":        "", // e.g. tcp://192.168.1.200:9100 or file:///dev/usb/lp0
         "printer_width":         "80",
         "auto_print_receipts":   "true",

@@ -36,6 +36,13 @@ type Service struct {
         darajaKey string
         daraja    *mpesa.Daraja
 
+        buniKey     string
+        buni        *mpesa.BuniCloud
+
+        // claimBuniEventsForTest, when set, replaces the cloud claim call
+        // (tests only — never wired in production).
+        claimBuniEventsForTest func([]string) []buniClaimedEvent
+
         paystackKey string
         paystack    *paystack.Client
 
@@ -168,11 +175,17 @@ func (s *Service) stkProviderReady() bool {
 }
 
 // MpesaRoute tells the till how M-Pesa STK currently runs:
-//   - "paystack": real STK through the shop's Paystack integration
+//   - "buni":     real STK through the KCB Buni cloud route (MAIN RAIL —
+//                 keys live in Edge Function secrets, never in the binary)
+//   - "paystack": real STK through the shop's Paystack integration (FALLBACK
+//                 — demoted below Buni, still first for shops without Buni)
 //   - "daraja":   real STK through Safaricom Daraja credentials
 //   - "mock":     training mode (ALLOW_MOCK_PAYMENTS=true only)
 //   - "manual":   no STK — cashier enters the receipt code
 func (s *Service) MpesaRoute() string {
+        if s.buniUsable() {
+                return "buni"
+        }
         if s.paystackConfigured() && s.settings.GetBool("paystack_enabled", true) {
                 return "paystack"
         }

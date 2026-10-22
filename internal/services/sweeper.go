@@ -48,17 +48,24 @@ func (sw *Sweeper) tick(ctx context.Context) {
         s := sw.svc
         // Paystack checkouts ride the same loop with their own longer timeout.
         s.SweepPaystack(ctx)
+        // Buni checkouts are callback-driven (no query API): claim verified
+        // cloud events for pending/recently-failed legs; the relay funnels
+        // them through the same fail-closed completion guard.
+        s.SweepBuni()
         // Collect pending STK payments (rows closed before any provider
         // calls). Method-filtered: paystack checkouts have their own
         // sweeper (SweepPaystack) with a longer timeout — feeding them to
-        // the Daraja query would falsely fail them mid-payment.
+        // the Daraja query would falsely fail them mid-payment. Buni legs
+        // ("BUNI-" prefixed checkouts) are excluded for the same reason:
+        // Buni has no query API and the claim sweep above owns them.
         type pending struct {
                 id         int64
                 checkoutID string
                 createdAt  time.Time
         }
         rows, err := s.db.Query(`SELECT id, checkout_request_id, created_at FROM payments
-                WHERE status = 'PENDING' AND method = 'mpesa' AND checkout_request_id != ''`)
+                WHERE status = 'PENDING' AND method = 'mpesa' AND checkout_request_id != ''
+                  AND checkout_request_id NOT LIKE 'BUNI-%'`)
         if err != nil {
                 return
         }

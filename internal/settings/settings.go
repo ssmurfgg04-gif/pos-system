@@ -266,6 +266,7 @@ var internalKeys = map[string]bool{
         "brand_logo_data":          true, // synced logo data URL (can be huge)
         "paystack_via_cloud":       true, // cloud route bookkeeping
         "paystack_enabled_touched": true, // one-time migration marker
+        "buni_via_cloud":           true, // cloud route bookkeeping (Buni main rail switch)
 }
 
 // IsInternalKey reports whether a settings key is runtime bookkeeping that

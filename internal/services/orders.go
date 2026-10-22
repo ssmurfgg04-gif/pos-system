@@ -1001,7 +1001,13 @@ func (s *Service) InitiateSTK(ctx context.Context, orderID int64, p *auth.Princi
         if pay.Phone == "" {
                 return nil, errors.New("payment has no phone number; collect the customer's number and retry")
         }
-        // REAL MONEY ROUTE: when the shop's Paystack integration is live,
+        // REAL MONEY ROUTE: Buni (KCB M-Pesa Express) is the MAIN rail when
+        // the shop's cloud link enables it — the prompt rides buni-stkpush
+        // and completes only from verified callback events.
+        if s.MpesaRoute() == "buni" {
+                return s.buniMpesaSTK(ctx, order, pay, p)
+        }
+        // Paystack route: when the shop's Paystack integration is live,
         // M-Pesa STK rides Paystack's mobile-money charge — a real prompt on
         // the customer's phone, completed only after server-side verify.
         if s.MpesaRoute() == "paystack" {
@@ -1024,6 +1030,7 @@ func (s *Service) InitiateSTK(ctx context.Context, orderID int64, p *auth.Princi
                 AmountCents:      pay.AmountCents,
                 AccountReference: order.Number,
                 Description:      "Payment " + order.Number,
+                ClientUUID:       order.ClientUUID,
         })
         if err != nil {
                 s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
@@ -1462,10 +1469,14 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
         return order, nil
 }
 
-// HandleCallback processes a Daraja webhook (public endpoint).
+// HandleCallback processes a provider webhook (public endpoint): Daraja
+// posts directly; Buni results arrive through the cloud relay with the
+// same shape. Buni legs store a "BUNI-" prefixed checkout id, so both
+// forms resolve here.
 func (s *Service) HandleCallback(cb mpesa.CallbackResult) (*models.Order, error) {
         var paymentID, storedCents, callbackOrderID int64
-        err := s.db.QueryRow(s.db.Rebind(`SELECT id, amount_cents, order_id FROM payments WHERE checkout_request_id = ?`), cb.CheckoutRequestID).Scan(&paymentID, &storedCents, &callbackOrderID)
+        err := s.db.QueryRow(s.db.Rebind(`SELECT id, amount_cents, order_id FROM payments WHERE checkout_request_id IN (?, ?)`),
+                cb.CheckoutRequestID, mpesa.BuniCheckoutPrefixFor(cb.CheckoutRequestID)).Scan(&paymentID, &storedCents, &callbackOrderID)
         if err != nil {
                 return nil, fmt.Errorf("callback for unknown checkout %s: %w", cb.CheckoutRequestID, err)
         }

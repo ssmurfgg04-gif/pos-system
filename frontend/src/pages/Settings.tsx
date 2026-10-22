@@ -317,13 +317,14 @@ export function Settings() {
                 <p className="text-[12px] mt-1.5">
                   Current route:{' '}
                   <strong className={
-                    payConfig.mpesa.route === 'paystack' || payConfig.mpesa.route === 'daraja'
+                    payConfig.mpesa.route === 'paystack' || payConfig.mpesa.route === 'daraja' || payConfig.mpesa.route === 'buni'
                       ? 'text-paid-text'
                       : payConfig.mpesa.route === 'mock'
                         ? 'text-pending-text'
                         : 'text-ink-muted'
                   }>
-                    {payConfig.mpesa.route === 'paystack' ? 'Automatic STK push (real money)'
+                    {payConfig.mpesa.route === 'buni' ? 'KCB Buni M-Pesa STK push (real money)'
+                      : payConfig.mpesa.route === 'paystack' ? 'Automatic STK push (real money)'
                       : payConfig.mpesa.route === 'daraja' ? 'Safaricom Daraja (real money)'
                       : payConfig.mpesa.route === 'mock' ? 'Training mode, no real money (ALLOW_MOCK_PAYMENTS)'
                       : 'Manual receipt code, no STK configured'}
