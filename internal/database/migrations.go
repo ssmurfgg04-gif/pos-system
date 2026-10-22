@@ -1219,10 +1219,21 @@ func nowStampV13() string {
 
 // Migrate applies pending migrations in order.
 func (d *DB) Migrate() error {
-        if _, err := d.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+        // Dialect note: the default applied_at used to be SQLite's
+        // datetime('now') on BOTH dialects — server-mode Postgres could
+        // never run Migrate at all ("function datetime(unknown) does not
+        // exist"), which the CI postgres job caught on its first run.
+        schemaDDL := `CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )`); err != nil {
+        )`
+        if !d.IsSQLite() {
+                schemaDDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
+                        version INTEGER PRIMARY KEY,
+                        applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )`
+        }
+        if _, err := d.Exec(schemaDDL); err != nil {
                 return fmt.Errorf("create schema_migrations: %w", err)
         }
         var current int
