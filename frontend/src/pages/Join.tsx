@@ -5,7 +5,7 @@
 // team in the background. No admin onboarding, no keys, nothing to type.
 
 import { useEffect, useState } from 'react'
-import { api, TeamJoinResult } from '../lib/api'
+import { api, TeamJoinResult, setToken } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
 import { navigate, homeFor } from '../lib/router'
@@ -58,7 +58,7 @@ export function Join() {
       const res = await api.post<TeamJoinResult>('/api/v1/auth/team-join', {
         link: link.trim(), name: name.trim(), pin,
       })
-      localStorage.setItem('pos_token', res.token)
+      setToken(res.token)
       await useAuth.getState().refresh()
       await useBranding.getState().load()
       reconnectWs()

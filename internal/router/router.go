@@ -19,6 +19,7 @@ import (
 func New(h *handlers.H, frontend fs.FS) *gin.Engine {
         r := gin.New()
         r.Use(gin.Recovery())
+        r.Use(secureHeaders())
         r.Use(corsMiddleware())
 
         // Auth middleware: Bearer token → shop from claim → fresh principal
@@ -359,6 +360,38 @@ func serveStatic(frontend fs.FS, c *gin.Context) bool {
         }
         http.FileServer(http.FS(frontend)).ServeHTTP(c.Writer, c.Request)
         return true
+}
+
+// secureHeaders sets the browser-facing defense headers on every
+// response. The CSP is the XSS backstop for the desktop webview AND any
+// browser tab on the LAN: scripts may only come from this origin plus the
+// Paystack popup toolkit (which runs in its own frame and cannot read
+// this origin's storage — the reason the session token in localStorage is
+// acceptable). Inline handlers and third-party packages are refused;
+// style-src keeps 'unsafe-inline' because React style attributes need it.
+func secureHeaders() gin.HandlerFunc {
+        csp := strings.Join([]string{
+                "default-src 'self'",
+                "script-src 'self' https://js.paystack.co",
+                "script-src-elem 'self' https://js.paystack.co",
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data: blob:",
+                "font-src 'self' data:",
+                "connect-src 'self' https://api.paystack.co https://*.supabase.co ws: wss:",
+                "frame-src https://js.paystack.co",
+                "frame-ancestors 'self'",
+                "object-src 'none'",
+                "base-uri 'self'",
+                "form-action 'self'",
+        }, "; ")
+        return func(c *gin.Context) {
+                c.Header("Content-Security-Policy", csp)
+                c.Header("X-Content-Type-Options", "nosniff")
+                c.Header("X-Frame-Options", "SAMEORIGIN")
+                c.Header("Referrer-Policy", "no-referrer")
+                c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+                c.Next()
+        }
 }
 
 func corsMiddleware() gin.HandlerFunc {

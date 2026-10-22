@@ -26,28 +26,26 @@ package services
 // network errors, and every apply is idempotent.
 
 import (
-        "bytes"
-        "context"
-        "database/sql"
-        "encoding/json"
-        "fmt"
-        "io"
-        "log"
-        "net/http"
-        "net/url"
-        "os"
-        "strings"
-        "sync"
-        "time"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"time"
 
-        "posapp/internal/models"
-        "posapp/internal/settings"
+	"posapp/internal/models"
 )
 
 const (
-        syncInterval    = 20 * time.Second
-        syncHTTPTimeout = 30 * time.Second
-        syncBatchSize   = 200
+	syncInterval    = 20 * time.Second
+	syncHTTPTimeout = 30 * time.Second
+	syncBatchSize   = 200
 )
 
 // Emit appends one change to the sync outbox (best-effort: sync must
@@ -57,85 +55,88 @@ const (
 // (or joining a store after running standalone) replays everything that
 // happened meanwhile instead of silently dropping it. The enabled gate
 // lives in syncConfig, i.e. on the push/pull path where it belongs.
+
 func (s *Service) Emit(entity, op string, payload any) {
-        raw, err := json.Marshal(payload)
-        if err != nil {
-                log.Printf("[sync] marshal %s: %v", entity, err)
-                s.noteOutboxFailure("marshal " + entity)
-                return
-        }
-        _, err = s.db.Exec(s.db.Rebind(`INSERT INTO sync_outbox (entity, op, client_uuid, payload) VALUES (?, ?, ?, ?)`),
-                entity, op, randToken(12), string(raw))
-        if err != nil {
-                // Any error here just means one missed event — count it and let the
-                // reconciliation backfill re-emit the row's current state later.
-                log.Printf("[sync] outbox write: %v", err)
-                s.noteOutboxFailure(err.Error())
-        }
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[sync] marshal %s: %v", entity, err)
+		s.noteOutboxFailure("marshal " + entity)
+		return
+	}
+	_, err = s.db.Exec(s.db.Rebind(`INSERT INTO sync_outbox (entity, op, client_uuid, payload) VALUES (?, ?, ?, ?)`),
+		entity, op, randToken(12), string(raw))
+	if err != nil {
+		// Any error here just means one missed event — count it and let the
+		// reconciliation backfill re-emit the row's current state later.
+		log.Printf("[sync] outbox write: %v", err)
+		s.noteOutboxFailure(err.Error())
+	}
 }
 
 // noteOutboxFailure persists a persistent-visible counter for the Settings
 // → Team panel: an outbox write that failed must NEVER stay silent (the
 // committed mutation would otherwise be invisible to the cloud until the
 // backfill catches it).
+
 func (s *Service) noteOutboxFailure(cause string) {
-        var n int64
-        _ = s.db.QueryRow(`SELECT CAST(value AS INTEGER) FROM sync_state WHERE key = 'sync_outbox_failures'`).Scan(&n)
-        _, _ = s.db.Exec(s.db.Rebind(`INSERT INTO sync_state (key, value) VALUES ('sync_outbox_failures', ?)
+	var n int64
+	_ = s.db.QueryRow(`SELECT CAST(value AS INTEGER) FROM sync_state WHERE key = 'sync_outbox_failures'`).Scan(&n)
+	_, _ = s.db.Exec(s.db.Rebind(`INSERT INTO sync_state (key, value) VALUES ('sync_outbox_failures', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`), fmt.Sprintf("%d", n+1))
-        _, _ = s.db.Exec(s.db.Rebind(`INSERT INTO sync_state (key, value) VALUES ('sync_outbox_last_error', ?)
+	_, _ = s.db.Exec(s.db.Rebind(`INSERT INTO sync_state (key, value) VALUES ('sync_outbox_last_error', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`), truncStr(cause, 200))
 }
 
 // ---- PostgREST client ----
 
 type syncClient struct {
-        base       string
-        key        string
-        team       string
-        device     string
-        secretHash string
-        mode       string // "rest" = direct PostgREST tables (manual key), "rpc" = cloud identity
-        hc         *http.Client
+	base       string
+	key        string
+	team       string
+	device     string
+	secretHash string
+	mode       string // "rest" = direct PostgREST tables (manual key), "rpc" = cloud identity
+	hc         *http.Client
 }
 
 // syncConfig resolves the team link. Cloud identity is the default: a till
 // that finds its team in the sync_bootstrap row is linked — no settings
 // screen, no join codes. Explicit manual configuration still wins.
+
 func (s *Service) syncConfig() (*syncClient, bool) {
-        // An owner's explicit OFF must win over everything: the zero-config
-        // bootstrap used to fall through and keep syncing (with the Team
-        // panel claiming sync was disabled) — a silent data leak.
-        if s.settings.Get("sync_disabled") == "1" {
-                return nil, false
-        }
-        if !s.settings.GetBool("sync_enabled", false) {
-                if s.ensureCloudBootstrap() == nil {
-                        return nil, false
-                }
-        }
-        if s.settings.Get("sync_source") == "manual" {
-                if c := manualSyncClient(s); c != nil {
-                        return c, true
-                }
-                return nil, false
-        }
-        if bs := s.ensureCloudBootstrap(); bs != nil {
-                return &syncClient{
-                        base:       strings.TrimRight(bs.ProjectURL, "/"),
-                        key:        cloudAnonKey,
-                        team:       bs.TeamCode,
-                        device:     s.deviceID(),
-                        secretHash: secretHash(s.deviceSecret()),
-                        mode:       "rpc",
-                        hc:         &http.Client{Timeout: syncHTTPTimeout},
-                }, true
-        }
-        // Legacy fallback: manual values saved before cloud mode existed.
-        if c := manualSyncClient(s); c != nil {
-                return c, true
-        }
-        return nil, false
+	// An owner's explicit OFF must win over everything: the zero-config
+	// bootstrap used to fall through and keep syncing (with the Team
+	// panel claiming sync was disabled) — a silent data leak.
+	if s.settings.Get("sync_disabled") == "1" {
+		return nil, false
+	}
+	if !s.settings.GetBool("sync_enabled", false) {
+		if s.ensureCloudBootstrap() == nil {
+			return nil, false
+		}
+	}
+	if s.settings.Get("sync_source") == "manual" {
+		if c := manualSyncClient(s); c != nil {
+			return c, true
+		}
+		return nil, false
+	}
+	if bs := s.ensureCloudBootstrap(); bs != nil {
+		return &syncClient{
+			base:       strings.TrimRight(bs.ProjectURL, "/"),
+			key:        cloudAnonKey,
+			team:       bs.TeamCode,
+			device:     s.deviceID(),
+			secretHash: secretHash(s.deviceSecret()),
+			mode:       "rpc",
+			hc:         &http.Client{Timeout: syncHTTPTimeout},
+		}, true
+	}
+	// Legacy fallback: manual values saved before cloud mode existed.
+	if c := manualSyncClient(s); c != nil {
+		return c, true
+	}
+	return nil, false
 }
 
 // PublicSyncIdentity returns this till's non-secret cloud identity for the
@@ -143,232 +144,242 @@ func (s *Service) syncConfig() (*syncClient, bool) {
 // hash. A sibling till uses the device id to find the right peer for the
 // PIN-reset code hand-off; both values are already visible to every team
 // member in the cloud roster.
+
 func (s *Service) PublicSyncIdentity() (deviceID, team string, ok bool) {
-        c, ok := s.syncConfig()
-        if !ok || c.device == "" {
-                return "", "", false
-        }
-        return c.device, c.team, true
+	c, ok := s.syncConfig()
+	if !ok || c.device == "" {
+		return "", "", false
+	}
+	return c.device, c.team, true
 }
 
 // DeviceName exposes the roster name (hostname) for LAN discovery.
+
 func (s *Service) DeviceName() string { return s.deviceName() }
 
 func manualSyncClient(s *Service) *syncClient {
-        endpoint := strings.TrimRight(s.settings.Get("sync_endpoint"), "/")
-        key := s.settings.Get("sync_service_key")
-        team := strings.TrimSpace(s.settings.Get("sync_team_code"))
-        if endpoint == "" || key == "" || team == "" {
-                return nil
-        }
-        return &syncClient{
-                base:   endpoint + "/rest/v1",
-                key:    key,
-                team:   team,
-                device: s.deviceID(),
-                mode:   "rest",
-                hc:     &http.Client{Timeout: syncHTTPTimeout},
-        }
+	endpoint := strings.TrimRight(s.settings.Get("sync_endpoint"), "/")
+	key := s.settings.Get("sync_service_key")
+	team := strings.TrimSpace(s.settings.Get("sync_team_code"))
+	if endpoint == "" || key == "" || team == "" {
+		return nil
+	}
+	return &syncClient{
+		base:   endpoint + "/rest/v1",
+		key:    key,
+		team:   team,
+		device: s.deviceID(),
+		mode:   "rest",
+		hc:     &http.Client{Timeout: syncHTTPTimeout},
+	}
 }
 
 func (c *syncClient) headers() http.Header {
-        h := http.Header{}
-        h.Set("apikey", c.key)
-        h.Set("Authorization", "Bearer "+c.key)
-        h.Set("Content-Type", "application/json")
-        return h
+	h := http.Header{}
+	h.Set("apikey", c.key)
+	h.Set("Authorization", "Bearer "+c.key)
+	h.Set("Content-Type", "application/json")
+	return h
 }
 
 type wireEvent struct {
-        TeamCode   string          `json:"team_code"`
-        DeviceID   string          `json:"device_id"`
-        Entity     string          `json:"entity"`
-        Op         string          `json:"op"`
-        ClientUUID string          `json:"client_uuid"`
-        Payload    json.RawMessage `json:"payload"`
+	TeamCode   string          `json:"team_code"`
+	DeviceID   string          `json:"device_id"`
+	Entity     string          `json:"entity"`
+	Op         string          `json:"op"`
+	ClientUUID string          `json:"client_uuid"`
+	Payload    json.RawMessage `json:"payload"`
 }
 
 // outboxRow is one pending outbox entry queued for push.
+
 type outboxRow struct {
-        seq        int64
-        entity     string
-        op         string
-        clientUUID string
-        payload    string
-        attempts   int
+	seq        int64
+	entity     string
+	op         string
+	clientUUID string
+	payload    string
+	attempts   int
 }
 
 const maxPushAttempts = 5 // a poison row is quarantined after this many failed cycles
 
 func (s *Service) loadPendingOutbox(limit int) ([]outboxRow, error) {
-        rows, err := s.db.Query(s.db.Rebind(`
+	rows, err := s.db.Query(s.db.Rebind(`
                 SELECT seq, entity, op, client_uuid, payload, COALESCE(attempts,0) FROM sync_outbox
                 WHERE pushed_at = '' ORDER BY seq LIMIT ?`), limit)
-        if err != nil {
-                return nil, err
-        }
-        defer rows.Close()
-        var batch []outboxRow
-        for rows.Next() {
-                var r outboxRow
-                if err := rows.Scan(&r.seq, &r.entity, &r.op, &r.clientUUID, &r.payload, &r.attempts); err != nil {
-                        return nil, err
-                }
-                batch = append(batch, r)
-        }
-        return batch, rows.Err()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var batch []outboxRow
+	for rows.Next() {
+		var r outboxRow
+		if err := rows.Scan(&r.seq, &r.entity, &r.op, &r.clientUUID, &r.payload, &r.attempts); err != nil {
+			return nil, err
+		}
+		batch = append(batch, r)
+	}
+	return batch, rows.Err()
 }
 
 // markPushed stamps the given outbox rows as pushed.
+
 func (s *Service) markPushed(seqs []int64) {
-        now := nowStamp()
-        for _, seq := range seqs {
-                s.db.Exec(s.db.Rebind(`UPDATE sync_outbox SET pushed_at = ? WHERE seq = ?`), now, seq)
-        }
+	now := nowStamp()
+	for _, seq := range seqs {
+		s.db.Exec(s.db.Rebind(`UPDATE sync_outbox SET pushed_at = ? WHERE seq = ?`), now, seq)
+	}
 }
 
 // quarantineOutboxRow moves a poison row (repeatedly failed to push) out of
 // the outbox into the dead-letter table so it can never wedge the stream.
 // The payload is preserved — the Team panel lists it and a retry can
 // re-emit it once the root cause (e.g. a corrupt payload) is fixed.
+
 func (s *Service) quarantineOutboxRow(r outboxRow, cause string) {
-        s.db.Exec(s.db.Rebind(`DELETE FROM sync_outbox WHERE seq = ?`), r.seq)
-        s.db.Exec(s.db.Rebind(`
+	s.db.Exec(s.db.Rebind(`DELETE FROM sync_outbox WHERE seq = ?`), r.seq)
+	s.db.Exec(s.db.Rebind(`
                 INSERT INTO sync_dead_letter (direction, event_id, entity, op, client_uuid, payload, error, attempts, created_at, updated_at)
                 VALUES ('push', 0, ?, ?, ?, ?, ?, ?, ?, ?)`),
-                r.entity, r.op, r.clientUUID, r.payload, truncStr(cause, 300), r.attempts+1, nowStamp(), nowStamp())
-        log.Printf("[sync] quarantined poison event %s/%s after %d attempts: %s", r.entity, r.op, r.attempts+1, cause)
+		r.entity, r.op, r.clientUUID, r.payload, truncStr(cause, 300), r.attempts+1, nowStamp(), nowStamp())
+	log.Printf("[sync] quarantined poison event %s/%s after %d attempts: %s", r.entity, r.op, r.attempts+1, cause)
 }
 
 // push uploads pending outbox rows (oldest first) and marks them pushed.
 // A row the server rejects wedges nothing: the batch is bisected until the
 // offender is isolated; after maxPushAttempts failed cycles it is
 // quarantined to the dead-letter table and the stream resumes.
+
 func (c *syncClient) push(s *Service) (int, error) {
-        batch, err := s.loadPendingOutbox(syncBatchSize)
-        if err != nil {
-                return 0, err
-        }
-        if len(batch) == 0 {
-                return 0, nil
-        }
-        return c.pushRows(s, batch)
+	batch, err := s.loadPendingOutbox(syncBatchSize)
+	if err != nil {
+		return 0, err
+	}
+	if len(batch) == 0 {
+		return 0, nil
+	}
+	return c.pushRows(s, batch)
 }
 
 // pushRows pushes a set of outbox rows, bisecting on failure.
+
 func (c *syncClient) pushRows(s *Service, batch []outboxRow) (int, error) {
-        if len(batch) == 0 {
-                return 0, nil
-        }
-        pushed, err := c.pushBatch(s, batch)
-        if err == nil {
-                return pushed, nil
-        }
-        if len(batch) == 1 {
-                r := batch[0]
-                if r.attempts+1 >= maxPushAttempts {
-                        s.quarantineOutboxRow(r, err.Error())
-                        return 0, nil // quarantined: the stream is unstuck
-                }
-                s.db.Exec(s.db.Rebind(`UPDATE sync_outbox SET attempts = attempts + 1, last_error = ? WHERE seq = ?`),
-                        truncStr(err.Error(), 300), r.seq)
-                return 0, err
-        }
-        // Split: push each half independently so one bad row cannot block
-        // the good ones behind it.
-        mid := len(batch) / 2
-        n1, err1 := c.pushRows(s, batch[:mid])
-        n2, err2 := c.pushRows(s, batch[mid:])
-        if err1 != nil && err2 != nil {
-                return n1 + n2, err1
-        }
-        if err1 != nil {
-                return n1 + n2, err1
-        }
-        if err2 != nil {
-                return n1 + n2, err2
-        }
-        return n1 + n2, nil
+	if len(batch) == 0 {
+		return 0, nil
+	}
+	pushed, err := c.pushBatch(s, batch)
+	if err == nil {
+		return pushed, nil
+	}
+	if len(batch) == 1 {
+		r := batch[0]
+		if r.attempts+1 >= maxPushAttempts {
+			s.quarantineOutboxRow(r, err.Error())
+			return 0, nil // quarantined: the stream is unstuck
+		}
+		s.db.Exec(s.db.Rebind(`UPDATE sync_outbox SET attempts = attempts + 1, last_error = ? WHERE seq = ?`),
+			truncStr(err.Error(), 300), r.seq)
+		return 0, err
+	}
+	// Split: push each half independently so one bad row cannot block
+	// the good ones behind it.
+	mid := len(batch) / 2
+	n1, err1 := c.pushRows(s, batch[:mid])
+	n2, err2 := c.pushRows(s, batch[mid:])
+	if err1 != nil && err2 != nil {
+		return n1 + n2, err1
+	}
+	if err1 != nil {
+		return n1 + n2, err1
+	}
+	if err2 != nil {
+		return n1 + n2, err2
+	}
+	return n1 + n2, nil
 }
 
 // pushBatch is one wire attempt for the given rows (REST or RPC transport).
+
 func (c *syncClient) pushBatch(s *Service, batch []outboxRow) (int, error) {
-        if c.mode == "rpc" {
-                return c.pushBatchRPC(s, batch)
-        }
-        events := make([]wireEvent, len(batch))
-        for i, b := range batch {
-                events[i] = wireEvent{TeamCode: c.team, DeviceID: c.device, Entity: b.entity, Op: b.op,
-                        ClientUUID: b.clientUUID, Payload: json.RawMessage(b.payload)}
-        }
-        body, _ := json.Marshal(events)
-        req, err := http.NewRequest("POST", c.base+"/sync_events", bytes.NewReader(body))
-        if err != nil {
-                return 0, err
-        }
-        req.Header = c.headers()
-        req.Header.Set("Prefer", "resolution=ignore-duplicates,return=minimal")
-        resp, err := c.hc.Do(req)
-        if err != nil {
-                return 0, err
-        }
-        io.Copy(io.Discard, resp.Body)
-        resp.Body.Close()
-        if resp.StatusCode != 201 && resp.StatusCode != 200 && resp.StatusCode != 409 {
-                return 0, fmt.Errorf("push: status %d", resp.StatusCode)
-        }
-        seqs := make([]int64, len(batch))
-        for i, b := range batch {
-                seqs[i] = b.seq
-        }
-        s.markPushed(seqs)
-        return len(batch), nil
+	if c.mode == "rpc" {
+		return c.pushBatchRPC(s, batch)
+	}
+	events := make([]wireEvent, len(batch))
+	for i, b := range batch {
+		events[i] = wireEvent{TeamCode: c.team, DeviceID: c.device, Entity: b.entity, Op: b.op,
+			ClientUUID: b.clientUUID, Payload: json.RawMessage(b.payload)}
+	}
+	body, _ := json.Marshal(events)
+	req, err := http.NewRequest("POST", c.base+"/sync_events", bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header = c.headers()
+	req.Header.Set("Prefer", "resolution=ignore-duplicates,return=minimal")
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 201 && resp.StatusCode != 200 && resp.StatusCode != 409 {
+		return 0, fmt.Errorf("push: status %d", resp.StatusCode)
+	}
+	seqs := make([]int64, len(batch))
+	for i, b := range batch {
+		seqs[i] = b.seq
+	}
+	s.markPushed(seqs)
+	return len(batch), nil
 }
 
 // pushBatchRPC uploads rows through the identity-checked RPC. The server
 // stamps team_code + device_id from the validated identity, so events
 // carry no spoofable identity fields.
+
 func (c *syncClient) pushBatchRPC(s *Service, batch []outboxRow) (int, error) {
-        type rpcEvent struct {
-                Entity     string          `json:"entity"`
-                Op         string          `json:"op"`
-                ClientUUID string          `json:"client_uuid"`
-                Payload    json.RawMessage `json:"payload"`
-        }
-        events := make([]rpcEvent, len(batch))
-        for i, b := range batch {
-                events[i] = rpcEvent{Entity: b.entity, Op: b.op, ClientUUID: b.clientUUID,
-                        Payload: json.RawMessage(b.payload)}
-        }
-        var out struct {
-                OK     bool   `json:"ok"`
-                Error  string `json:"error"`
-                Pushed int    `json:"pushed"`
-        }
-        if err := rpcCall(c.base, "sync_push", map[string]any{
-                "p_device_id": c.device, "p_secret_hash": c.secretHash, "p_events": events,
-        }, &out); err != nil {
-                return 0, err
-        }
-        if !out.OK {
-                return 0, fmt.Errorf("push: %s", out.Error)
-        }
-        seqs := make([]int64, len(batch))
-        for i, b := range batch {
-                seqs[i] = b.seq
-        }
-        s.markPushed(seqs)
-        return out.Pushed, nil
+	type rpcEvent struct {
+		Entity     string          `json:"entity"`
+		Op         string          `json:"op"`
+		ClientUUID string          `json:"client_uuid"`
+		Payload    json.RawMessage `json:"payload"`
+	}
+	events := make([]rpcEvent, len(batch))
+	for i, b := range batch {
+		events[i] = rpcEvent{Entity: b.entity, Op: b.op, ClientUUID: b.clientUUID,
+			Payload: json.RawMessage(b.payload)}
+	}
+	var out struct {
+		OK     bool   `json:"ok"`
+		Error  string `json:"error"`
+		Pushed int    `json:"pushed"`
+	}
+	if err := rpcCall(c.base, "sync_push", map[string]any{
+		"p_device_id": c.device, "p_secret_hash": c.secretHash, "p_events": events,
+	}, &out); err != nil {
+		return 0, err
+	}
+	if !out.OK {
+		return 0, fmt.Errorf("push: %s", out.Error)
+	}
+	seqs := make([]int64, len(batch))
+	for i, b := range batch {
+		seqs[i] = b.seq
+	}
+	s.markPushed(seqs)
+	return out.Pushed, nil
 }
 
 // pulledEvent is the wire shape of a remote change (both transports).
+
 type pulledEvent struct {
-        ID         int64           `json:"id"`
-        DeviceID   string          `json:"device_id"`
-        Entity     string          `json:"entity"`
-        Op         string          `json:"op"`
-        ClientUUID string          `json:"client_uuid"`
-        Payload    json.RawMessage `json:"payload"`
+	ID         int64           `json:"id"`
+	DeviceID   string          `json:"device_id"`
+	Entity     string          `json:"entity"`
+	Op         string          `json:"op"`
+	ClientUUID string          `json:"client_uuid"`
+	Payload    json.RawMessage `json:"payload"`
 }
 
 // applyPulled applies a batch, always advancing the cursor past every event
@@ -377,187 +388,194 @@ type pulledEvent struct {
 // lost). Receiver-side exactly-once: every applied cloud event id is
 // recorded in sync_applied, so a cursor regression (restored backup, wiped
 // sync_state) replays safely instead of double-applying stock and ledger.
+
 func applyPulled(s *Service, team string, events []pulledEvent) int {
-        applied := 0
-        own := s.deviceID()
-        for _, ev := range events {
-                if ev.DeviceID == own {
-                        continue // never replay own events
-                }
-                if s.isSyncApplied(ev.ID) {
-                        continue // already applied (cursor regression / redelivery)
-                }
-                if err := s.applyEvent(ev.Entity, ev.Op, ev.Payload); err != nil {
-                        log.Printf("[sync] apply %s/%s: %v", ev.Entity, ev.Op, err)
-                        s.deadLetterApply(ev, err)
-                } else {
-                        s.markSyncApplied(ev.ID)
-                        applied++
-                }
-                s.syncSetInt("last_event_"+team, ev.ID)
-        }
-        return applied
+	applied := 0
+	own := s.deviceID()
+	for _, ev := range events {
+		if ev.DeviceID == own {
+			continue // never replay own events
+		}
+		if s.isSyncApplied(ev.ID) {
+			continue // already applied (cursor regression / redelivery)
+		}
+		if err := s.applyEvent(ev.Entity, ev.Op, ev.Payload); err != nil {
+			log.Printf("[sync] apply %s/%s: %v", ev.Entity, ev.Op, err)
+			s.deadLetterApply(ev, err)
+		} else {
+			s.markSyncApplied(ev.ID)
+			applied++
+		}
+		s.syncSetInt("last_event_"+team, ev.ID)
+	}
+	return applied
 }
 
 // isSyncApplied reports whether a cloud event id was already applied.
+
 func (s *Service) isSyncApplied(eventID int64) bool {
-        if eventID <= 0 {
-                return false
-        }
-        var one int
-        s.db.QueryRow(s.db.Rebind(`SELECT 1 FROM sync_applied WHERE event_id = ?`), eventID).Scan(&one)
-        return one == 1
+	if eventID <= 0 {
+		return false
+	}
+	var one int
+	s.db.QueryRow(s.db.Rebind(`SELECT 1 FROM sync_applied WHERE event_id = ?`), eventID).Scan(&one)
+	return one == 1
 }
 
 func (s *Service) markSyncApplied(eventID int64) {
-        if eventID <= 0 {
-                return
-        }
-        s.db.Exec(s.db.Rebind(`INSERT INTO sync_applied (event_id, applied_at) VALUES (?, ?) ON CONFLICT (event_id) DO NOTHING`),
-                eventID, nowStamp())
+	if eventID <= 0 {
+		return
+	}
+	s.db.Exec(s.db.Rebind(`INSERT INTO sync_applied (event_id, applied_at) VALUES (?, ?) ON CONFLICT (event_id) DO NOTHING`),
+		eventID, nowStamp())
 }
 
 // deadLetterApply quarantines an event that could not be applied (unknown
 // product, unknown customer…). The apply loop retries it on later cycles —
 // e.g. a ledger row whose customer has not synced yet applies itself once
 // the customer event lands, instead of being dropped forever.
+
 func (s *Service) deadLetterApply(ev pulledEvent, cause error) {
-        // One row per event id: a re-delivery of a still-failing event
-        // updates the existing quarantine entry instead of duplicating it.
-        s.db.Exec(s.db.Rebind(`DELETE FROM sync_dead_letter WHERE direction = 'apply' AND event_id = ?`), ev.ID)
-        s.db.Exec(s.db.Rebind(`
+	// One row per event id: a re-delivery of a still-failing event
+	// updates the existing quarantine entry instead of duplicating it.
+	s.db.Exec(s.db.Rebind(`DELETE FROM sync_dead_letter WHERE direction = 'apply' AND event_id = ?`), ev.ID)
+	s.db.Exec(s.db.Rebind(`
                 INSERT INTO sync_dead_letter (direction, event_id, entity, op, client_uuid, payload, error, attempts, created_at, updated_at)
                 VALUES ('apply', ?, ?, ?, ?, ?, ?, 1, ?, ?)`),
-                ev.ID, ev.Entity, ev.Op, ev.ClientUUID, string(ev.Payload), truncStr(cause.Error(), 300), nowStamp(), nowStamp())
+		ev.ID, ev.Entity, ev.Op, ev.ClientUUID, string(ev.Payload), truncStr(cause.Error(), 300), nowStamp(), nowStamp())
 }
 
 // retryFailedApplies re-runs quarantined apply events. Returns how many
 // recovered. Called automatically once per sync cycle and from the
 // Team panel's "retry failed" button.
+
 func (s *Service) retryFailedApplies() int {
-        rows, err := s.db.Query(s.db.Rebind(`
+	rows, err := s.db.Query(s.db.Rebind(`
                 SELECT id, event_id, entity, op, client_uuid, payload, attempts FROM sync_dead_letter
                 WHERE direction = 'apply' ORDER BY id LIMIT 200`))
-        if err != nil {
-                return 0
-        }
-        type dlRow struct {
-                id       int64
-                eventID  int64
-                entity   string
-                op       string
-                uuid     string
-                payload  string
-                attempts int
-        }
-        var pending []dlRow
-        for rows.Next() {
-                var r dlRow
-                if err := rows.Scan(&r.id, &r.eventID, &r.entity, &r.op, &r.uuid, &r.payload, &r.attempts); err == nil {
-                        pending = append(pending, r)
-                }
-        }
-        rows.Close()
-        recovered := 0
-        for _, r := range pending {
-                if err := s.applyEvent(r.entity, r.op, json.RawMessage(r.payload)); err != nil {
-                        s.db.Exec(s.db.Rebind(`UPDATE sync_dead_letter SET attempts = attempts + 1, error = ?, updated_at = ? WHERE id = ?`),
-                                truncStr(err.Error(), 300), nowStamp(), r.id)
-                        continue
-                }
-                s.db.Exec(s.db.Rebind(`DELETE FROM sync_dead_letter WHERE id = ?`), r.id)
-                if r.eventID > 0 {
-                        s.markSyncApplied(r.eventID)
-                }
-                recovered++
-                log.Printf("[sync] dead-letter recovered %s/%s", r.entity, r.op)
-        }
-        return recovered
+	if err != nil {
+		return 0
+	}
+	type dlRow struct {
+		id       int64
+		eventID  int64
+		entity   string
+		op       string
+		uuid     string
+		payload  string
+		attempts int
+	}
+	var pending []dlRow
+	for rows.Next() {
+		var r dlRow
+		if err := rows.Scan(&r.id, &r.eventID, &r.entity, &r.op, &r.uuid, &r.payload, &r.attempts); err == nil {
+			pending = append(pending, r)
+		}
+	}
+	rows.Close()
+	recovered := 0
+	for _, r := range pending {
+		if err := s.applyEvent(r.entity, r.op, json.RawMessage(r.payload)); err != nil {
+			s.db.Exec(s.db.Rebind(`UPDATE sync_dead_letter SET attempts = attempts + 1, error = ?, updated_at = ? WHERE id = ?`),
+				truncStr(err.Error(), 300), nowStamp(), r.id)
+			continue
+		}
+		s.db.Exec(s.db.Rebind(`DELETE FROM sync_dead_letter WHERE id = ?`), r.id)
+		if r.eventID > 0 {
+			s.markSyncApplied(r.eventID)
+		}
+		recovered++
+		log.Printf("[sync] dead-letter recovered %s/%s", r.entity, r.op)
+	}
+	return recovered
 }
 
 // pullRPC fetches other approved devices' events through the RPC gateway.
+
 func (c *syncClient) pullRPC(s *Service) (int, error) {
-        cursor := s.syncGetInt("last_event_" + c.team)
-        var out struct {
-                OK     bool          `json:"ok"`
-                Error  string        `json:"error"`
-                Events []pulledEvent `json:"events"`
-        }
-        if err := rpcCall(c.base, "sync_pull", map[string]any{
-                "p_device_id": c.device, "p_secret_hash": c.secretHash,
-                "p_since_id": cursor, "p_limit": syncBatchSize,
-        }, &out); err != nil {
-                return 0, err
-        }
-        if !out.OK {
-                return 0, fmt.Errorf("pull: %s", out.Error)
-        }
-        return applyPulled(s, c.team, out.Events), nil
+	cursor := s.syncGetInt("last_event_" + c.team)
+	var out struct {
+		OK     bool          `json:"ok"`
+		Error  string        `json:"error"`
+		Events []pulledEvent `json:"events"`
+	}
+	if err := rpcCall(c.base, "sync_pull", map[string]any{
+		"p_device_id": c.device, "p_secret_hash": c.secretHash,
+		"p_since_id": cursor, "p_limit": syncBatchSize,
+	}, &out); err != nil {
+		return 0, err
+	}
+	if !out.OK {
+		return 0, fmt.Errorf("pull: %s", out.Error)
+	}
+	return applyPulled(s, c.team, out.Events), nil
 }
 
 // pull fetches other devices' events past the cursor and applies them.
+
 func (c *syncClient) pull(s *Service) (int, error) {
-        if c.mode == "rpc" {
-                return c.pullRPC(s)
-        }
-        cursor := s.syncGetInt("last_event_" + c.team)
-        q := url.Values{}
-        q.Set("team_code", "eq."+c.team)
-        q.Set("device_id", "neq."+c.device)
-        q.Set("id", fmt.Sprintf("gt.%d", cursor))
-        q.Set("order", "id.asc")
-        q.Set("limit", fmt.Sprint(syncBatchSize))
-        req, err := http.NewRequest("GET", c.base+"/sync_events?"+q.Encode(), nil)
-        if err != nil {
-                return 0, err
-        }
-        req.Header = c.headers()
-        resp, err := c.hc.Do(req)
-        if err != nil {
-                return 0, err
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != 200 {
-                io.Copy(io.Discard, resp.Body)
-                return 0, fmt.Errorf("pull: status %d", resp.StatusCode)
-        }
-        var events []pulledEvent
-        if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
-                return 0, err
-        }
-        return applyPulled(s, c.team, events), nil
+	if c.mode == "rpc" {
+		return c.pullRPC(s)
+	}
+	cursor := s.syncGetInt("last_event_" + c.team)
+	q := url.Values{}
+	q.Set("team_code", "eq."+c.team)
+	q.Set("device_id", "neq."+c.device)
+	q.Set("id", fmt.Sprintf("gt.%d", cursor))
+	q.Set("order", "id.asc")
+	q.Set("limit", fmt.Sprint(syncBatchSize))
+	req, err := http.NewRequest("GET", c.base+"/sync_events?"+q.Encode(), nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header = c.headers()
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		io.Copy(io.Discard, resp.Body)
+		return 0, fmt.Errorf("pull: status %d", resp.StatusCode)
+	}
+	var events []pulledEvent
+	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
+		return 0, err
+	}
+	return applyPulled(s, c.team, events), nil
 }
 
 // heartbeat registers this device (upsert) so the team list is live.
+
 func (c *syncClient) heartbeat(s *Service, version string) error {
-        if c.mode == "rpc" {
-                return c.registerCloud(s, version)
-        }
-        host, _ := os.Hostname()
-        row := map[string]any{
-                "device_id":   c.device,
-                "team_code":   c.team,
-                "device_name": host,
-                "app_version": version,
-                "last_seen":   time.Now().UTC().Format(time.RFC3339),
-        }
-        body, _ := json.Marshal([]map[string]any{row})
-        req, err := http.NewRequest("POST", c.base+"/sync_devices", bytes.NewReader(body))
-        if err != nil {
-                return err
-        }
-        req.Header = c.headers()
-        req.Header.Set("Prefer", "resolution=merge-duplicates,return=minimal")
-        resp, err := c.hc.Do(req)
-        if err != nil {
-                return err
-        }
-        io.Copy(io.Discard, resp.Body)
-        resp.Body.Close()
-        if resp.StatusCode != 201 && resp.StatusCode != 200 {
-                return fmt.Errorf("heartbeat: status %d", resp.StatusCode)
-        }
-        return nil
+	if c.mode == "rpc" {
+		return c.registerCloud(s, version)
+	}
+	host, _ := os.Hostname()
+	row := map[string]any{
+		"device_id":   c.device,
+		"team_code":   c.team,
+		"device_name": host,
+		"app_version": version,
+		"last_seen":   time.Now().UTC().Format(time.RFC3339),
+	}
+	body, _ := json.Marshal([]map[string]any{row})
+	req, err := http.NewRequest("POST", c.base+"/sync_devices", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header = c.headers()
+	req.Header.Set("Prefer", "resolution=merge-duplicates,return=minimal")
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 201 && resp.StatusCode != 200 {
+		return fmt.Errorf("heartbeat: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // registerCloud identifies this till to the database (device id + secret
@@ -565,42 +583,43 @@ func (c *syncClient) heartbeat(s *Service, version string) error {
 // In a multi-store cloud a fresh till registers as pending and learns its
 // store when the owner assigns it — the assignment lands on the next
 // heartbeat, when the RPC returns this device's team_code.
+
 func (c *syncClient) registerCloud(s *Service, version string) error {
-        var out struct {
-                OK       bool   `json:"ok"`
-                Error    string `json:"error"`
-                Approved bool   `json:"approved"`
-                TeamCode string `json:"team_code"`
-                Pending  bool   `json:"pending"`
-        }
-        err := rpcCall(c.base, "sync_register", map[string]any{
-                "p_device_id":   c.device,
-                "p_secret_hash": c.secretHash,
-                "p_device_name": s.deviceName(),
-                "p_app_version": version,
-                "p_lan_addr":    s.lanAddr,
-        }, &out)
-        if err != nil {
-                return err
-        }
-        if !out.OK {
-                return fmt.Errorf("register: %s", out.Error)
-        }
-        _ = s.settings.Set("sync_registered", "true")
-        _ = s.settings.Set("sync_approved", boolStr(out.Approved))
-        if out.TeamCode != "" {
-                _ = s.settings.Set("sync_team_code", out.TeamCode)
-                _ = s.settings.Set("sync_store_pending", "false")
-        } else if out.Pending {
-                _ = s.settings.Set("sync_store_pending", "true")
-        }
-        if !out.Approved {
-                if out.Pending {
-                        return fmt.Errorf("registered, waiting for the owner to assign this till to a store")
-                }
-                return fmt.Errorf("awaiting approval in the cloud device list")
-        }
-        return nil
+	var out struct {
+		OK       bool   `json:"ok"`
+		Error    string `json:"error"`
+		Approved bool   `json:"approved"`
+		TeamCode string `json:"team_code"`
+		Pending  bool   `json:"pending"`
+	}
+	err := rpcCall(c.base, "sync_register", map[string]any{
+		"p_device_id":   c.device,
+		"p_secret_hash": c.secretHash,
+		"p_device_name": s.deviceName(),
+		"p_app_version": version,
+		"p_lan_addr":    s.lanAddr,
+	}, &out)
+	if err != nil {
+		return err
+	}
+	if !out.OK {
+		return fmt.Errorf("register: %s", out.Error)
+	}
+	_ = s.settings.Set("sync_registered", "true")
+	_ = s.settings.Set("sync_approved", boolStr(out.Approved))
+	if out.TeamCode != "" {
+		_ = s.settings.Set("sync_team_code", out.TeamCode)
+		_ = s.settings.Set("sync_store_pending", "false")
+	} else if out.Pending {
+		_ = s.settings.Set("sync_store_pending", "true")
+	}
+	if !out.Approved {
+		if out.Pending {
+			return fmt.Errorf("registered, waiting for the owner to assign this till to a store")
+		}
+		return fmt.Errorf("awaiting approval in the cloud device list")
+	}
+	return nil
 }
 
 // ---- Status / config API ----
@@ -608,518 +627,167 @@ func (c *syncClient) registerCloud(s *Service, version string) error {
 var syncMu sync.Mutex // serialize sync cycles per process
 
 // TeamSyncNow runs one push+pull+heartbeat cycle immediately.
+
 func (s *Service) TeamSyncNow(version string) (pushed, applied int, err error) {
-        syncMu.Lock()
-        defer syncMu.Unlock()
-        c, ok := s.syncConfig()
-        if !ok {
-                return 0, 0, fmt.Errorf("team sync is not configured/enabled")
-        }
-        if err := c.heartbeat(s, version); err != nil {
-                s.syncError(err)
-                return 0, 0, fmt.Errorf("heartbeat: %w", err)
-        }
-        if pushed, err = c.push(s); err != nil {
-                s.syncError(err)
-                return pushed, 0, fmt.Errorf("push: %w", err)
-        }
-        if applied, err = c.pull(s); err != nil {
-                s.syncError(err)
-                return pushed, applied, fmt.Errorf("pull: %w", err)
-        }
-        // Give quarantined events a second chance once per cycle (cheap:
-        // the table is normally empty; the root cause — an out-of-order
-        // event — has usually landed by the next tick).
-        if recovered := s.retryFailedApplies(); recovered > 0 {
-                applied += recovered
-        }
-        // Reconciliation backfill: re-emit committed business rows whose outbox
-        // event never landed (Emit is best-effort; this closes the gap without
-        // manual database work). Bounded + idempotent by stable UUID.
-        if n := s.BackfillMissingEvents(); n > 0 {
-                log.Printf("[sync] backfill re-emitted %d missing event(s)", n)
-        }
-        s.settings.Set("sync_last_push", nowStamp())
-        s.settings.Set("sync_last_pull", nowStamp())
-        s.settings.Set("sync_last_error", "")
-        return pushed, applied, nil
+	syncMu.Lock()
+	defer syncMu.Unlock()
+	c, ok := s.syncConfig()
+	if !ok {
+		return 0, 0, fmt.Errorf("team sync is not configured/enabled")
+	}
+	if err := c.heartbeat(s, version); err != nil {
+		s.syncError(err)
+		return 0, 0, fmt.Errorf("heartbeat: %w", err)
+	}
+	if pushed, err = c.push(s); err != nil {
+		s.syncError(err)
+		return pushed, 0, fmt.Errorf("push: %w", err)
+	}
+	if applied, err = c.pull(s); err != nil {
+		s.syncError(err)
+		return pushed, applied, fmt.Errorf("pull: %w", err)
+	}
+	// Give quarantined events a second chance once per cycle (cheap:
+	// the table is normally empty; the root cause — an out-of-order
+	// event — has usually landed by the next tick).
+	if recovered := s.retryFailedApplies(); recovered > 0 {
+		applied += recovered
+	}
+	// Reconciliation backfill: re-emit committed business rows whose outbox
+	// event never landed (Emit is best-effort; this closes the gap without
+	// manual database work). Bounded + idempotent by stable UUID.
+	if n := s.BackfillMissingEvents(); n > 0 {
+		log.Printf("[sync] backfill re-emitted %d missing event(s)", n)
+	}
+	s.settings.Set("sync_last_push", nowStamp())
+	s.settings.Set("sync_last_pull", nowStamp())
+	s.settings.Set("sync_last_error", "")
+	return pushed, applied, nil
 }
 
 func (s *Service) syncError(err error) {
-        msg := truncStr(err.Error(), 200)
-        log.Printf("[sync] %s", msg)
-        s.settings.Set("sync_last_error", msg)
+	msg := truncStr(err.Error(), 200)
+	log.Printf("[sync] %s", msg)
+	s.settings.Set("sync_last_error", msg)
 }
 
 // TeamSyncStatus reports config + devices for the Settings → Team tab.
+
 func (s *Service) TeamSyncStatus(version string) (*models.TeamSyncStatus, error) {
-        source := s.settings.Get("sync_source")
-        if source == "" && s.settings.Get("sync_endpoint") != "" {
-                source = "manual"
-        }
-        st := &models.TeamSyncStatus{
-                Enabled:     s.settings.GetBool("sync_enabled", false),
-                TeamCode:    s.settings.Get("sync_team_code"),
-                DeviceID:    s.deviceID(),
-                DeviceName:  s.deviceName(),
-                LastPush:    s.settings.Get("sync_last_push"),
-                LastPull:    s.settings.Get("sync_last_pull"),
-                LastError:   s.settings.Get("sync_last_error"),
-                Devices:     []models.TeamDevice{},
-                Source:      source,
-                Registered:  s.settings.GetBool("sync_registered", false),
-                Approved:    s.settings.GetBool("sync_approved", false),
-                AutoApprove: s.settings.GetBool("sync_auto_approve", true),
-        }
-        var pending int64
-        s.db.QueryRow(`SELECT COUNT(*) FROM sync_outbox WHERE pushed_at = ''`).Scan(&pending)
-        st.Pending = pending
-        var failed int64
-        s.db.QueryRow(`SELECT COUNT(*) FROM sync_dead_letter`).Scan(&failed)
-        st.FailedEvents = failed
-        var outboxFails int64
-        s.db.QueryRow(`SELECT CAST(COALESCE(value,'0') AS INTEGER) FROM sync_state WHERE key = 'sync_outbox_failures'`).Scan(&outboxFails)
-        st.OutboxFailures = outboxFails
-        st.OutboxLastError = s.settings.Get("sync_outbox_last_error")
-        if failed > 0 {
-                rows, err := s.db.Query(`SELECT direction, entity, op, error, attempts, updated_at FROM sync_dead_letter ORDER BY id DESC LIMIT 10`)
-                if err == nil {
-                        for rows.Next() {
-                                var f models.SyncFailedEvent
-                                if err := rows.Scan(&f.Direction, &f.Entity, &f.Op, &f.Error, &f.Attempts, &f.UpdatedAt); err == nil {
-                                        st.Failed = append(st.Failed, f)
-                                }
-                        }
-                        rows.Close()
-                }
-        } else {
-                st.Failed = []models.SyncFailedEvent{}
-        }
-        if c, ok := s.syncConfig(); ok {
-                if devs, err := c.fetchDevices(s); err == nil {
-                        st.Devices = devs
-                }
-                // Multi-store owner view: the store registry + unassigned devices.
-                // Cloud-identity approved tills only; failures are tolerated (the
-                // panel still renders the local state).
-                if c.mode == "rpc" && s.settings.GetBool("sync_approved", false) {
-                        if stores, err := c.fetchStoresRPC(); err == nil {
-                                st.Stores = stores
-                                st.MultiStore = len(stores) > 1
-                        }
-                        if pdevs, err := c.fetchPendingRPC(s); err == nil {
-                                st.PendingDevices = pdevs
-                        }
-                }
-        }
-        st.StorePending = s.settings.GetBool("sync_store_pending", false)
-        return st, nil
+	source := s.settings.Get("sync_source")
+	if source == "" && s.settings.Get("sync_endpoint") != "" {
+		source = "manual"
+	}
+	st := &models.TeamSyncStatus{
+		Enabled:     s.settings.GetBool("sync_enabled", false),
+		TeamCode:    s.settings.Get("sync_team_code"),
+		DeviceID:    s.deviceID(),
+		DeviceName:  s.deviceName(),
+		LastPush:    s.settings.Get("sync_last_push"),
+		LastPull:    s.settings.Get("sync_last_pull"),
+		LastError:   s.settings.Get("sync_last_error"),
+		Devices:     []models.TeamDevice{},
+		Source:      source,
+		Registered:  s.settings.GetBool("sync_registered", false),
+		Approved:    s.settings.GetBool("sync_approved", false),
+		AutoApprove: s.settings.GetBool("sync_auto_approve", true),
+	}
+	var pending int64
+	s.db.QueryRow(`SELECT COUNT(*) FROM sync_outbox WHERE pushed_at = ''`).Scan(&pending)
+	st.Pending = pending
+	var failed int64
+	s.db.QueryRow(`SELECT COUNT(*) FROM sync_dead_letter`).Scan(&failed)
+	st.FailedEvents = failed
+	var outboxFails int64
+	s.db.QueryRow(`SELECT CAST(COALESCE(value,'0') AS INTEGER) FROM sync_state WHERE key = 'sync_outbox_failures'`).Scan(&outboxFails)
+	st.OutboxFailures = outboxFails
+	st.OutboxLastError = s.settings.Get("sync_outbox_last_error")
+	if failed > 0 {
+		rows, err := s.db.Query(`SELECT direction, entity, op, error, attempts, updated_at FROM sync_dead_letter ORDER BY id DESC LIMIT 10`)
+		if err == nil {
+			for rows.Next() {
+				var f models.SyncFailedEvent
+				if err := rows.Scan(&f.Direction, &f.Entity, &f.Op, &f.Error, &f.Attempts, &f.UpdatedAt); err == nil {
+					st.Failed = append(st.Failed, f)
+				}
+			}
+			rows.Close()
+		}
+	} else {
+		st.Failed = []models.SyncFailedEvent{}
+	}
+	if c, ok := s.syncConfig(); ok {
+		if devs, err := c.fetchDevices(s); err == nil {
+			st.Devices = devs
+		}
+		// Multi-store owner view: the store registry + unassigned devices.
+		// Cloud-identity approved tills only; failures are tolerated (the
+		// panel still renders the local state).
+		if c.mode == "rpc" && s.settings.GetBool("sync_approved", false) {
+			if stores, err := c.fetchStoresRPC(); err == nil {
+				st.Stores = stores
+				st.MultiStore = len(stores) > 1
+			}
+			if pdevs, err := c.fetchPendingRPC(s); err == nil {
+				st.PendingDevices = pdevs
+			}
+		}
+	}
+	st.StorePending = s.settings.GetBool("sync_store_pending", false)
+	return st, nil
 }
 
 func (s *Service) deviceName() string {
-        name, _ := os.Hostname()
-        if name == "" {
-                name = "till"
-        }
-        return name
+	name, _ := os.Hostname()
+	if name == "" {
+		name = "till"
+	}
+	return name
 }
 
 // fetchDevicesRPC pulls the team roster through the identity-checked RPC.
 // Revoked rows are included (the owner is the authority: the roster must
 // show them, with an Unrevoke action, or a mistaken revoke is invisible and
 // only fixable by hand in the database).
-func (c *syncClient) fetchDevicesRPC(s *Service) ([]models.TeamDevice, error) {
-        var out struct {
-                OK      bool   `json:"ok"`
-                Error   string `json:"error"`
-                Devices []struct {
-                        DeviceID   string `json:"device_id"`
-                        DeviceName string `json:"device_name"`
-                        AppVersion string `json:"app_version"`
-                        LastSeen   string `json:"last_seen"`
-                        Approved   bool   `json:"approved"`
-                        Revoked    bool   `json:"revoked"`
-                        ThisDevice bool   `json:"this_device"`
-                } `json:"devices"`
-        }
-        if err := rpcCall(c.base, "sync_roster", map[string]any{
-                "p_device_id": c.device, "p_secret_hash": c.secretHash,
-        }, &out); err != nil {
-                return nil, err
-        }
-        if !out.OK {
-                return nil, fmt.Errorf("roster: %s", out.Error)
-        }
-        roster := make([]models.TeamDevice, 0, len(out.Devices))
-        for _, d := range out.Devices {
-                roster = append(roster, models.TeamDevice{
-                        DeviceID:   d.DeviceID,
-                        DeviceName: d.DeviceName,
-                        AppVersion: d.AppVersion,
-                        LastSeen:   d.LastSeen,
-                        Approved:   d.Approved,
-                        Revoked:    d.Revoked,
-                        ThisDevice: d.ThisDevice || d.DeviceID == c.device,
-                })
-        }
-        return roster, nil
-}
 
-// fetchStoresRPC reads the store registry (slug, name, team code, device
-// counts) through the identity-checked RPC.
-func (c *syncClient) fetchStoresRPC() ([]models.TeamStore, error) {
-        var out struct {
-                OK     bool   `json:"ok"`
-                Error  string `json:"error"`
-                Stores []struct {
-                        Slug     string `json:"slug"`
-                        Name     string `json:"name"`
-                        TeamCode string `json:"team_code"`
-                        Devices  int    `json:"devices"`
-                } `json:"stores"`
-        }
-        if err := rpcCall(c.base, "sync_list_stores", map[string]any{
-                "p_device_id": c.device, "p_secret_hash": c.secretHash,
-        }, &out); err != nil {
-                return nil, err
-        }
-        if !out.OK {
-                return nil, fmt.Errorf("stores: %s", out.Error)
-        }
-        stores := make([]models.TeamStore, 0, len(out.Stores))
-        for _, st := range out.Stores {
-                stores = append(stores, models.TeamStore{
-                        Slug: st.Slug, Name: st.Name,
-                        TeamCode: st.TeamCode, Devices: st.Devices,
-                })
-        }
-        return stores, nil
-}
-
-// fetchPendingRPC lists devices registered but not yet assigned to a store.
-func (c *syncClient) fetchPendingRPC(s *Service) ([]models.TeamDevice, error) {
-        var out struct {
-                OK      bool   `json:"ok"`
-                Error   string `json:"error"`
-                Devices []struct {
-                        DeviceID   string `json:"device_id"`
-                        DeviceName string `json:"device_name"`
-                        AppVersion string `json:"app_version"`
-                        LastSeen   string `json:"last_seen"`
-                } `json:"devices"`
-        }
-        if err := rpcCall(c.base, "sync_list_pending", map[string]any{
-                "p_device_id": c.device, "p_secret_hash": c.secretHash,
-        }, &out); err != nil {
-                return nil, err
-        }
-        if !out.OK {
-                return nil, fmt.Errorf("pending: %s", out.Error)
-        }
-        devs := make([]models.TeamDevice, 0, len(out.Devices))
-        for _, d := range out.Devices {
-                devs = append(devs, models.TeamDevice{
-                        DeviceID: d.DeviceID, DeviceName: d.DeviceName,
-                        AppVersion: d.AppVersion, LastSeen: d.LastSeen,
-                })
-        }
-        return devs, nil
-}
-
-// ---- Multi-store owner operations ----
-
-// rpcOwnerCall runs an owner RPC with this till's identity and surfaces the
-// RPC's error string (owner actions must report WHY, not just fail).
-// v1.3.2: cloud owner RPCs additionally verify an owner-level HUMAN via a
-// short-lived capability (minted from the owner's portal credential in the
-// Owner-approval dialog). A cached capability rides along automatically;
-// without one the RPC answers 'owner approval required' and the UI prompts.
-func (c *syncClient) rpcOwnerCall(fn string, args map[string]any) (ok bool, errMsg string, err error) {
-        var out struct {
-                OK    bool   `json:"ok"`
-                Error string `json:"error"`
-        }
-        full := map[string]any{
-                "p_device_id":   c.device,
-                "p_secret_hash": c.secretHash,
-        }
-        for k, v := range args {
-                full[k] = v
-        }
-        return rpcOwnerCallArgs(c, fn, full, &out)
-}
-
-// rpcOwnerCallArgs is the capability-aware core (split out so tests can
-// observe the exact args the RPC receives).
-func rpcOwnerCallArgs(c *syncClient, fn string, full map[string]any, out *struct {
-        OK    bool   `json:"ok"`
-        Error string `json:"error"`
-}) (ok bool, errMsg string, err error) {
-        if tok := ownerCapabilityTokenFor(c); tok != "" {
-                full["p_owner_capability"] = tok
-        }
-        if err := rpcCall(c.base, fn, full, out); err != nil {
-                return false, "", err
-        }
-        return out.OK, out.Error, nil
-}
-
-// ownerCapabilityTokenFor resolves the cached capability for this client.
-// Package-level indirection keeps the cache test-swappable.
-var ownerCapabilityTokenFor = func(c *syncClient) string {
-        ocMu.Lock()
-        defer ocMu.Unlock()
-        if !oc.valid() {
-                return ""
-        }
-        if c.team != "" && oc.team != "" && oc.team != c.team {
-                return "" // minted for a different team — never reuse
-        }
-        return oc.token
-}
-
-func (s *Service) ownerClient() (*syncClient, error) {
-        c, ok := s.syncConfig()
-        if !ok || c.mode != "rpc" {
-                return nil, fmt.Errorf("adding stores needs the LedgerPOS cloud link (Settings → Team)")
-        }
-        if !s.settings.GetBool("sync_approved", false) {
-                return nil, fmt.Errorf("this till is not approved by the cloud yet")
-        }
-        return c, nil
-}
-
-// TeamCreateStore adds a store under this owner's cloud project. The team
-// code is minted by the database — the client never invents one. The store's
-// business timezone ("sales today" boundary on the owner portal) rides
-// along: explicit setting first, else this till's local zone.
-func (s *Service) TeamCreateStore(name, slug string) (models.TeamStore, error) {
-        out := models.TeamStore{Slug: slug, Name: name}
-        c, err := s.ownerClient()
-        if err != nil {
-                return out, err
-        }
-        tz := strings.TrimSpace(s.settings.Get("business_timezone"))
-        if tz == "" {
-                tz = time.Local.String()
-        }
-        _, locErr := time.LoadLocation(tz)
-        if locErr != nil || tz == "Local" {
-                tz = "Africa/Nairobi"
-        }
-        ok, errMsg, err := c.rpcOwnerCall("sync_create_store", map[string]any{
-                "p_name": name, "p_slug": slug, "p_business_tz": tz,
-        })
-        if err != nil {
-                return out, err
-        }
-        if !ok {
-                return out, fmt.Errorf("%s", errMsg)
-        }
-        s.Audit(0, "system", "TEAM_STORE_CREATED", "settings", "",
-                truncStr(name, 80))
-        // Refresh from the registry so the caller gets the minted team code.
-        if stores, err := c.fetchStoresRPC(); err == nil {
-                for _, st := range stores {
-                        if st.Name == name || (slug != "" && st.Slug == slug) {
-                                return st, nil
-                        }
-                }
-        }
-        return out, nil
-}
-
-// TeamAssignDevice assigns a pending (or previously assigned) device to a
-// store team.
-func (s *Service) TeamAssignDevice(deviceID, teamCode string) error {
-        c, err := s.ownerClient()
-        if err != nil {
-                return err
-        }
-        ok, errMsg, err := c.rpcOwnerCall("sync_assign_device", map[string]any{
-                "p_target_device_id": deviceID, "p_team_code": teamCode,
-        })
-        if err != nil {
-                return err
-        }
-        if !ok {
-                return fmt.Errorf("%s", errMsg)
-        }
-        s.Audit(0, "system", "TEAM_DEVICE_ASSIGNED", "settings", "",
-                truncStr(deviceID, 80))
-        return nil
-}
-
-// TeamRemoveDevice revokes a device outright (kill switch from Settings →
-// Team). The database keeps the row so a stolen till can never rejoin.
-func (s *Service) TeamRemoveDevice(deviceID string) error {
-        c, err := s.ownerClient()
-        if err != nil {
-                return err
-        }
-        ok, errMsg, err := c.rpcOwnerCall("sync_remove_device", map[string]any{
-                "p_target_device_id": deviceID,
-        })
-        if err != nil {
-                return err
-        }
-        if !ok {
-                return fmt.Errorf("%s", errMsg)
-        }
-        s.Audit(0, "system", "TEAM_DEVICE_REVOKED", "settings", "",
-                truncStr(deviceID, 80))
-        return nil
-}
-
-func (c *syncClient) fetchDevices(s *Service) ([]models.TeamDevice, error) {
-        if c.mode == "rpc" {
-                return c.fetchDevicesRPC(s)
-        }
-        q := url.Values{}
-        q.Set("team_code", "eq."+c.team)
-        q.Set("order", "last_seen.desc")
-        req, err := http.NewRequest("GET", c.base+"/sync_devices?"+q.Encode(), nil)
-        if err != nil {
-                return nil, err
-        }
-        req.Header = c.headers()
-        resp, err := c.hc.Do(req)
-        if err != nil {
-                return nil, err
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != 200 {
-                return nil, fmt.Errorf("devices: status %d", resp.StatusCode)
-        }
-        var rows []struct {
-                DeviceID   string `json:"device_id"`
-                DeviceName string `json:"device_name"`
-                AppVersion string `json:"app_version"`
-                LastSeen   string `json:"last_seen"`
-        }
-        if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
-                return nil, err
-        }
-        out := make([]models.TeamDevice, 0, len(rows))
-        for _, r := range rows {
-                out = append(out, models.TeamDevice{
-                        DeviceID: r.DeviceID, DeviceName: r.DeviceName,
-                        AppVersion: r.AppVersion, LastSeen: r.LastSeen,
-                        ThisDevice: r.DeviceID == c.device,
-                })
-        }
-        return out, nil
-}
-
-// TeamSyncConfigure toggles the team link. Manual secret entry (project
-// URL / service key / team code) was removed for security: the
-// service_role key bypasses all row-level security and must never be
-// typed into a till — anyone with it owns the entire cloud database. A
-// till links itself via the cloud bootstrap row instead. Legacy fields
-// sent by old clients are acknowledged but never stored; tills that were
-// hand-configured before cloud identity keep working until switched to
-// cloud (Settings → Team → Switch to LedgerPOS Cloud).
-func (s *Service) TeamSyncConfigure(req models.TeamSyncConfigRequest) error {
-        if req.ProjectURL != "" || (req.ServiceKey != "" && req.ServiceKey != settings.MaskToken) || req.TeamCode != "" {
-                s.Audit(0, "system", "TEAM_SYNC_MANUAL_IGNORED", "settings", "",
-                        "manual sync keys are no longer accepted, tills link via cloud identity")
-        }
-        if req.Enabled == nil {
-                return nil
-        }
-        if !*req.Enabled {
-                _ = s.settings.Set("sync_enabled", "false")
-                // Distinct marker so the zero-config bootstrap cannot silently
-                // re-enable itself (sync_enabled doubles as "not configured yet"
-                // on fresh tills — it can't carry the explicit-OFF meaning).
-                _ = s.settings.Set("sync_disabled", "1")
-                return nil
-        }
-        _ = s.settings.Set("sync_disabled", "")
-        if s.ensureCloudBootstrap() != nil {
-                _ = s.settings.Set("sync_enabled", "true")
-                return nil
-        }
-        // Legacy manual configuration (saved before cloud identity existed).
-        if s.settings.Get("sync_endpoint") != "" && s.settings.Get("sync_service_key") != "" && s.settings.Get("sync_team_code") != "" {
-                _ = s.settings.Set("sync_enabled", "true")
-                return nil
-        }
-        return fmt.Errorf("no team link yet, this till joins its team automatically once it can reach the internet")
-}
-
-func boolStr(b bool) string {
-        if b {
-                return "true"
-        }
-        return "false"
-}
-
-// TeamSyncCreate mints a fresh team code and enables sync (first device).
-// In cloud mode the team already exists in the database — this just returns
-// it and enables sync (keeps the Settings button meaningful).
-func (s *Service) TeamSyncCreate() (string, error) {
-        if bs := s.ensureCloudBootstrap(); bs != nil {
-                _ = s.settings.Set("sync_enabled", "true")
-                return bs.TeamCode, nil
-        }
-        code := "TEAM-" + strings.ToUpper(randToken(3))
-        _ = s.settings.Set("sync_team_code", code)
-        if s.settings.Get("sync_endpoint") == "" || s.settings.Get("sync_service_key") == "" {
-                return "", fmt.Errorf("save the Supabase endpoint and service key first")
-        }
-        _ = s.settings.Set("sync_enabled", "true")
-        return code, nil
-}
-
-// TeamSyncUseCloud reverts a manually-configured till to automatic cloud
-// identity (the sync_bootstrap row). Manual secrets are kept but unused.
-func (s *Service) TeamSyncUseCloud() error {
-        _ = s.settings.Set("sync_source", "")
-        _ = s.settings.Set("sync_registered", "false")
-        if s.ensureCloudBootstrap() == nil {
-                return fmt.Errorf("could not reach the cloud, check internet and try again")
-        }
-        return nil
-}
-
-// TeamSyncLoop runs until ctx closes, syncing every interval when enabled.
 func (s *Service) TeamSyncLoop(ctx context.Context, version string) {
-        t := time.NewTicker(syncInterval)
-        defer t.Stop()
-        ticks := 0
-        for {
-                select {
-                case <-ctx.Done():
-                        return
-                case <-t.C:
-                        if _, _, err := s.TeamSyncNow(version); err != nil {
-                                // logged in syncError; keep ticking
-                        }
-                        // Photos uploaded before image-sync shipped (or while a
-                        // backfill is mid-flight) drain at a rate-limited pace.
-                        s.backfillProductImages()
-                        ticks++
-                        if ticks%30 == 0 { // ~every 10 minutes
-                                s.pruneSyncTables()
-                        }
-                }
-        }
+	t := time.NewTicker(syncInterval)
+	defer t.Stop()
+	ticks := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if _, _, err := s.TeamSyncNow(version); err != nil {
+				// logged in syncError; keep ticking
+			}
+			// Photos uploaded before image-sync shipped (or while a
+			// backfill is mid-flight) drain at a rate-limited pace.
+			s.backfillProductImages()
+			ticks++
+			if ticks%30 == 0 { // ~every 10 minutes
+				s.pruneSyncTables()
+			}
+		}
+	}
 }
 
 // pruneSyncTables keeps the sync bookkeeping bounded: pushed outbox rows
 // older than 7 days and applied-event ids older than 30 days are removed
 // (both are audit-irrelevant — the cloud log is the permanent record).
+
 func (s *Service) pruneSyncTables() {
-        pushCutoff := time.Now().UTC().AddDate(0, 0, -7).Format("2006-01-02T15:04:05.000Z")
-        s.db.Exec(s.db.Rebind(`DELETE FROM sync_outbox WHERE pushed_at != '' AND pushed_at < ?`), pushCutoff)
-        applyCutoff := time.Now().UTC().AddDate(0, 0, -30).Format("2006-01-02T15:04:05.000Z")
-        s.db.Exec(s.db.Rebind(`DELETE FROM sync_applied WHERE applied_at != '' AND applied_at < ?`), applyCutoff)
+	pushCutoff := time.Now().UTC().AddDate(0, 0, -7).Format("2006-01-02T15:04:05.000Z")
+	s.db.Exec(s.db.Rebind(`DELETE FROM sync_outbox WHERE pushed_at != '' AND pushed_at < ?`), pushCutoff)
+	applyCutoff := time.Now().UTC().AddDate(0, 0, -30).Format("2006-01-02T15:04:05.000Z")
+	s.db.Exec(s.db.Rebind(`DELETE FROM sync_applied WHERE applied_at != '' AND applied_at < ?`), applyCutoff)
 }
 
 // RetryFailedSync re-applies quarantined events now (Team panel button).
+
 func (s *Service) RetryFailedSync() int {
-        return s.retryFailedApplies()
+	return s.retryFailedApplies()
 }
 
 // QuarantineOutboxForTeamChange moves every not-yet-pushed outbox event
@@ -1131,1149 +799,66 @@ func (s *Service) RetryFailedSync() int {
 // that v1.3.0 lets revoked tills rejoin via a fresh invite). Quarantined
 // rows keep their payloads for inspection and retry only by explicit
 // action — they are never auto-pushed to the wrong team.
+
 func (s *Service) QuarantineOutboxForTeamChange(oldTeam, newTeam string) {
-        rows, err := s.db.Query(`SELECT seq, entity, op, client_uuid, payload, COALESCE(attempts,0) FROM sync_outbox ORDER BY seq`)
-        if err != nil {
-                log.Printf("[sync] team-change quarantine read: %v", err)
-                return
-        }
-        type ev struct {
-                seq                      int64
-                entity, op, uuid, payload string
-                attempts                 int64
-        }
-        var pending []ev
-        for rows.Next() {
-                var e ev
-                if rows.Scan(&e.seq, &e.entity, &e.op, &e.uuid, &e.payload, &e.attempts) == nil {
-                        pending = append(pending, e)
-                }
-        }
-        rows.Close()
-        if len(pending) == 0 {
-                return
-        }
-        cause := fmt.Sprintf("till moved from team %s to %s, events belong to the old team", truncStr(oldTeam, 40), truncStr(newTeam, 40))
-        tx, err := s.db.Begin()
-        if err != nil {
-                return
-        }
-        defer tx.Rollback()
-        moved := 0
-        for _, e := range pending {
-                if _, err := tx.Exec(s.db.Rebind(`
+	rows, err := s.db.Query(`SELECT seq, entity, op, client_uuid, payload, COALESCE(attempts,0) FROM sync_outbox ORDER BY seq`)
+	if err != nil {
+		log.Printf("[sync] team-change quarantine read: %v", err)
+		return
+	}
+	type ev struct {
+		seq                       int64
+		entity, op, uuid, payload string
+		attempts                  int64
+	}
+	var pending []ev
+	for rows.Next() {
+		var e ev
+		if rows.Scan(&e.seq, &e.entity, &e.op, &e.uuid, &e.payload, &e.attempts) == nil {
+			pending = append(pending, e)
+		}
+	}
+	rows.Close()
+	if len(pending) == 0 {
+		return
+	}
+	cause := fmt.Sprintf("till moved from team %s to %s, events belong to the old team", truncStr(oldTeam, 40), truncStr(newTeam, 40))
+	tx, err := s.db.Begin()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	moved := 0
+	for _, e := range pending {
+		if _, err := tx.Exec(s.db.Rebind(`
                         INSERT INTO sync_dead_letter (direction, event_id, entity, op, client_uuid, payload, error, attempts, created_at, updated_at)
                         VALUES ('push', 0, ?, ?, ?, ?, ?, ?, ?, ?)`),
-                        e.entity, e.op, e.uuid, e.payload, truncStr(cause, 300), e.attempts, nowStamp(), nowStamp()); err != nil {
-                        log.Printf("[sync] team-change quarantine write: %v", err)
-                        return
-                }
-                if _, err := tx.Exec(s.db.Rebind(`DELETE FROM sync_outbox WHERE seq = ?`), e.seq); err != nil {
-                        log.Printf("[sync] team-change quarantine delete: %v", err)
-                        return
-                }
-                moved++
-        }
-        if err := tx.Commit(); err != nil {
-                log.Printf("[sync] team-change quarantine commit: %v", err)
-                return
-        }
-        log.Printf("[sync] team change %s→%s: quarantined %d pending event(s), review Settings → Team before re-pushing", oldTeam, newTeam, moved)
+			e.entity, e.op, e.uuid, e.payload, truncStr(cause, 300), e.attempts, nowStamp(), nowStamp()); err != nil {
+			log.Printf("[sync] team-change quarantine write: %v", err)
+			return
+		}
+		if _, err := tx.Exec(s.db.Rebind(`DELETE FROM sync_outbox WHERE seq = ?`), e.seq); err != nil {
+			log.Printf("[sync] team-change quarantine delete: %v", err)
+			return
+		}
+		moved++
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("[sync] team-change quarantine commit: %v", err)
+		return
+	}
+	log.Printf("[sync] team change %s→%s: quarantined %d pending event(s), review Settings → Team before re-pushing", oldTeam, newTeam, moved)
 }
 
 // syncGetInt / syncSetInt — integer values in sync_state.
+
 func (s *Service) syncGetInt(key string) int64 {
-        v := s.settings.Get("syncstate_" + key)
-        var n int64
-        fmt.Sscanf(v, "%d", &n)
-        return n
+	v := s.settings.Get("syncstate_" + key)
+	var n int64
+	fmt.Sscanf(v, "%d", &n)
+	return n
 }
 
 func (s *Service) syncSetInt(key string, n int64) {
-        s.settings.Set("syncstate_"+key, fmt.Sprint(n))
-}
-
-// ---- Event application ----
-
-func (s *Service) applyEvent(entity, op string, payload json.RawMessage) error {
-        switch entity {
-        case "category":
-                if op == "delete" {
-                        return s.applyCategoryDelete(payload)
-                }
-                return s.applyCategory(payload)
-        case "product":
-                if op == "image" {
-                        return s.applyProductImage(payload)
-                }
-                return s.applyProduct(payload)
-        case "stock":
-                return s.applyStockDelta(payload)
-        case "customer":
-                return s.applyCustomer(payload)
-        case "ledger":
-                return s.applyLedger(payload)
-        case "order":
-                return s.applyOrder(payload)
-        case "quote":
-                return s.applyQuote(payload)
-        case "void":
-                return s.applyVoid(payload)
-        case "design":
-                return s.applyDesign(payload)
-        case "config":
-                return s.applyConfig(payload)
-        case "voidreason":
-                if op == "delete" {
-                        return s.applyVoidReasonDelete(payload)
-                }
-                return s.applyVoidReason(payload)
-        default:
-                return nil // unknown entity types are skipped (forward compatibility)
-        }
-}
-
-// ---- Config sync ("updates over the air") ----
-
-// configSyncWhitelist is the set of settings that propagate to every team
-// device through the sync log — the "update via database, not reinstall"
-// story: a price list change, tax tweak, loyalty rule, or branding refresh
-// made on one till lands on the others within a sync tick. Secrets
-// (keys, passkeys, JWT, storage) and per-device preferences (printer,
-// device id) are deliberately absent — they must never leave the machine
-// they were entered on.
-var configSyncWhitelist = map[string]bool{
-        "app_name": true, "store_name": true, "store_address": true,
-        "store_phone": true, "receipt_footer": true,
-        "currency_code": true, "currency_symbol": true,
-        "tax_percent": true, "tax_included": true, "brand_color": true,
-        "payment_mode": true, "till_number": true, "paybill_number": true,
-        "loyalty_enabled": true, "loyalty_earn_per_cents": true,
-        "loyalty_point_cents": true, "loyalty_max_percent": true,
-        "credit_enabled": true, "low_stock_threshold": true,
-        "paystack_enabled": true, "paystack_public_key": true,
-        "paystack_currency": true, "paystack_callback_url": true,
-        brandLogoDataKey: true, // synced logo — applyBrandLogoData materialises the file
-}
-
-// EmitConfig queues a config delta (called from the settings API with the
-// keys that actually changed).
-func (s *Service) EmitConfig(keys []string) {
-        if len(keys) == 0 {
-                return
-        }
-        values := map[string]string{}
-        for _, k := range keys {
-                if configSyncWhitelist[k] {
-                        values[k] = s.settings.Get(k)
-                }
-        }
-        if len(values) == 0 {
-                return
-        }
-        s.Emit("config", "upsert", map[string]any{"values": values, "updatedAt": nowStamp()})
-}
-
-// applyConfig merges a remote config delta. Only whitelisted keys apply;
-// tax_percent is re-validated (defence in depth against a poisoned event).
-func (s *Service) applyConfig(payload json.RawMessage) error {
-        var cfg struct {
-                Values map[string]string `json:"values"`
-        }
-        if err := json.Unmarshal(payload, &cfg); err != nil {
-                return err
-        }
-        for k, v := range cfg.Values {
-                if !configSyncWhitelist[k] {
-                        continue
-                }
-                if k == "tax_percent" {
-                        var f float64
-                        // Affirmative range test only: NaN slips through
-                        // `f < 0 || f > 100` (every NaN compare is false)
-                        // and then poisons tax math on every checkout.
-                        if _, err := fmt.Sscanf(v, "%g", &f); err != nil || !(f >= 0 && f <= 100) {
-                                continue
-                        }
-                }
-                if err := s.settings.Set(k, v); err != nil {
-                        return err
-                }
-                if k == brandLogoDataKey {
-                        s.applyBrandLogoData(v) // write file + flag so /settings/logo serves it
-                }
-        }
-        s.broadcast(EventSettingsUpdate, s.settings.Branding())
-        return nil
-}
-
-// ---- Void-reason catalog sync ----
-
-// EmitVoidReason queues a reason catalog change so every till offers the
-// same void reasons (audit consistency).
-func (s *Service) EmitVoidReason(label string, active bool, sortOrder int) {
-        s.Emit("voidreason", "upsert", map[string]any{
-                "label": label, "active": active, "sortOrder": sortOrder, "updatedAt": nowStamp(),
-        })
-}
-
-func (s *Service) applyVoidReason(payload json.RawMessage) error {
-        var r struct {
-                Label     string `json:"label"`
-                Active    bool   `json:"active"`
-                SortOrder int    `json:"sortOrder"`
-        }
-        if err := json.Unmarshal(payload, &r); err != nil {
-                return err
-        }
-        if strings.TrimSpace(r.Label) == "" || len(r.Label) > 120 {
-                return fmt.Errorf("void reason label invalid")
-        }
-        var id int64
-        err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM void_reasons WHERE label = ?`), r.Label).Scan(&id)
-        if err == nil {
-                _, err = s.db.Exec(s.db.Rebind(`UPDATE void_reasons SET is_active = ?, sort_order = ? WHERE id = ?`),
-                        btoi(r.Active), r.SortOrder, id)
-                return err
-        }
-        if err != sql.ErrNoRows {
-                return err
-        }
-        _, err = s.db.Exec(s.db.Rebind(`INSERT INTO void_reasons (label, is_active, sort_order) VALUES (?, ?, ?)`),
-                r.Label, btoi(r.Active), r.SortOrder)
-        return err
-}
-
-func (s *Service) applyVoidReasonDelete(payload json.RawMessage) error {
-        var r struct {
-                Label string `json:"label"`
-        }
-        if err := json.Unmarshal(payload, &r); err != nil {
-                return err
-        }
-        _, err := s.db.Exec(s.db.Rebind(`DELETE FROM void_reasons WHERE label = ?`), r.Label)
-        return err
-}
-
-func (s *Service) applyCategory(payload json.RawMessage) error {
-        var cat struct {
-                Name string `json:"name"`
-                Slug string `json:"slug"`
-        }
-        if err := json.Unmarshal(payload, &cat); err != nil {
-                return err
-        }
-        if cat.Slug == "" || cat.Name == "" {
-                return fmt.Errorf("category event missing name/slug")
-        }
-        var id int64
-        err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM categories WHERE slug = ?`), cat.Slug).Scan(&id)
-        if err == nil {
-                _, err = s.db.Exec(s.db.Rebind(`UPDATE categories SET name = ? WHERE id = ?`), cat.Name, id)
-                return err
-        }
-        if err != sql.ErrNoRows {
-                return err
-        }
-        _, err = s.db.Exec(s.db.Rebind(`INSERT INTO categories (name, slug, sort_order) VALUES (?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM categories))`), cat.Name, cat.Slug)
-        return err
-}
-
-func (s *Service) applyCategoryDelete(payload json.RawMessage) error {
-        var cat struct {
-                Slug string `json:"slug"`
-        }
-        if err := json.Unmarshal(payload, &cat); err != nil {
-                return err
-        }
-        var count int
-        if err := s.db.QueryRow(s.db.Rebind(`SELECT COUNT(*) FROM products WHERE category_id = (SELECT id FROM categories WHERE slug = ?)`), cat.Slug).Scan(&count); err != nil {
-                return err
-        }
-        if count > 0 {
-                return nil // local products reference it — keep the category
-        }
-        _, err := s.db.Exec(s.db.Rebind(`DELETE FROM categories WHERE slug = ?`), cat.Slug)
-        return err
-}
-
-func (s *Service) applyProduct(payload json.RawMessage) error {
-        var pr struct {
-                SKU          string `json:"sku"`
-                Barcode      string `json:"barcode"`
-                Name         string `json:"name"`
-                CategorySlug string `json:"categorySlug"`
-                PriceCents   int64  `json:"priceCents"`
-                CostCents    int64  `json:"costCents"`
-                StockQty     int    `json:"stockQty"`
-                StockSet     bool   `json:"stockSet"`
-                TrackStock   bool   `json:"trackStock"`
-                Active       bool   `json:"active"`
-                IsGiftCard   bool   `json:"isGiftCard"`
-                UpdatedAt    string `json:"updatedAt"`
-        }
-        if err := json.Unmarshal(payload, &pr); err != nil {
-                return err
-        }
-        if pr.SKU == "" && pr.Barcode == "" {
-                return fmt.Errorf("product event has no sku/barcode")
-        }
-        // Resolve category by slug (create on demand — categories sync first).
-        var catID int64
-        if pr.CategorySlug != "" {
-                err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM categories WHERE slug = ?`), pr.CategorySlug).Scan(&catID)
-                if err != nil {
-                        s.db.Exec(s.db.Rebind(`INSERT INTO categories (name, slug) VALUES (?, ?)`), pr.CategorySlug, pr.CategorySlug)
-                        s.db.QueryRow(s.db.Rebind(`SELECT id FROM categories WHERE slug = ?`), pr.CategorySlug).Scan(&catID)
-                }
-        }
-        if catID == 0 {
-                s.db.QueryRow(`SELECT id FROM categories ORDER BY sort_order, id LIMIT 1`).Scan(&catID)
-        }
-        var localID int64
-        var localUpdated string
-        q := `SELECT id, COALESCE(updated_at,'') FROM products WHERE sku = ?`
-        args := []any{pr.SKU}
-        if pr.SKU == "" {
-                q = `SELECT id, COALESCE(updated_at,'') FROM products WHERE barcode = ?`
-                args = []any{pr.Barcode}
-        }
-        err := s.db.QueryRow(s.db.Rebind(q), args...).Scan(&localID, &localUpdated)
-        if err == nil {
-                // LWW on catalog fields; stock only when explicitly set (admin edit).
-                if pr.UpdatedAt != "" && localUpdated != "" && pr.UpdatedAt < localUpdated {
-                        return nil // stale
-                }
-                if _, err := s.db.Exec(s.db.Rebind(`
-                        UPDATE products SET barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
-                                track_stock = ?, is_active = ?, is_gift_card = ?, updated_at = ?
-                        WHERE id = ?`),
-                        pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.UpdatedAt, localID); err != nil {
-                        return err
-                }
-                if pr.StockSet {
-                        _, err = s.db.Exec(s.db.Rebind(`UPDATE products SET stock_qty = ? WHERE id = ?`), pr.StockQty, localID)
-                }
-                return err
-        }
-        if err != sql.ErrNoRows {
-                return err
-        }
-        sku := pr.SKU
-        if sku == "" {
-                sku = "SKU-SYNC-" + randToken(4)
-        }
-        _, err = s.db.Exec(s.db.Rebind(`
-                INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-                sku, pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, pr.StockQty, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.UpdatedAt)
-        return err
-}
-
-func (s *Service) applyStockDelta(payload json.RawMessage) error {
-        var d struct {
-                SKU   string `json:"sku"`
-                Delta int    `json:"delta"`
-        }
-        if err := json.Unmarshal(payload, &d); err != nil {
-                return err
-        }
-        if d.SKU == "" || d.Delta == 0 {
-                return nil
-        }
-        // Zero rows MUST be an error, not a silent success: a delta that
-        // matches nothing (the SKU was renamed on another till while this one
-        // was offline) has to land in dead-letter and retry until the rename
-        // arrives — consuming it here would silently lose the movement.
-        // updated_at is deliberately NOT stamped: the LWW clock belongs to
-        // catalog edits only (an apply-time stamp made every remote sale
-        // beat later local price edits on this device).
-        res, err := s.db.Exec(s.db.Rebind(`
-                UPDATE products SET stock_qty = MAX(0, stock_qty + ?) WHERE sku = ?`),
-                d.Delta, d.SKU)
-        if err != nil {
-                return err
-        }
-        if n, _ := res.RowsAffected(); n == 0 {
-                return fmt.Errorf("stock delta for unknown product %q (catalog not synced yet?)", d.SKU)
-        }
-        return nil
-}
-
-func (s *Service) applyCustomer(payload json.RawMessage) error {
-        var cu struct {
-                Phone       string `json:"phone"`
-                Name        string `json:"name"`
-                Email       string `json:"email"`
-                Notes       string `json:"notes"`
-                CreditLimit int64  `json:"creditLimitCents"`
-                Active      bool   `json:"active"`
-                UpdatedAt   string `json:"updatedAt"`
-        }
-        if err := json.Unmarshal(payload, &cu); err != nil {
-                return err
-        }
-        if cu.Name == "" {
-                return fmt.Errorf("customer event has no name")
-        }
-        var id int64
-        var updated string
-        var err error
-        if cu.Phone != "" {
-                err = s.db.QueryRow(s.db.Rebind(`SELECT id, COALESCE(updated_at,'') FROM customers WHERE phone = ?`), cu.Phone).Scan(&id, &updated)
-        } else {
-                err = s.db.QueryRow(s.db.Rebind(`SELECT id, COALESCE(updated_at,'') FROM customers WHERE name = ? AND (phone = '' OR phone IS NULL)`), cu.Name).Scan(&id, &updated)
-        }
-        if err == nil {
-                if cu.UpdatedAt != "" && updated != "" && cu.UpdatedAt < updated {
-                        return nil // stale
-                }
-                _, err = s.db.Exec(s.db.Rebind(`
-                        UPDATE customers SET name = ?, email = ?, notes = ?, credit_limit_cents = ?, is_active = ?, updated_at = ? WHERE id = ?`),
-                        cu.Name, cu.Email, cu.Notes, cu.CreditLimit, btoi(cu.Active), cu.UpdatedAt, id)
-                return err
-        }
-        if err != sql.ErrNoRows {
-                return err
-        }
-        _, err = s.db.Exec(s.db.Rebind(`
-                INSERT INTO customers (name, phone, email, notes, credit_limit_cents, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`),
-                cu.Name, cu.Phone, cu.Email, cu.Notes, cu.CreditLimit, btoi(cu.Active), cu.UpdatedAt)
-        return err
-}
-
-func (s *Service) applyLedger(payload json.RawMessage) error {
-        var le struct {
-                Phone     string `json:"phone"`
-                Name      string `json:"name"`
-                Kind      string `json:"kind"`
-                Amount    int64  `json:"amountCents"`
-                Points    int64  `json:"pointsDelta"`
-                Note      string `json:"note"`
-                CreatedAt string `json:"createdAt"`
-        }
-        if err := json.Unmarshal(payload, &le); err != nil {
-                return err
-        }
-        var custID int64
-        var err error
-        if le.Phone != "" {
-                err = s.db.QueryRow(s.db.Rebind(`SELECT id FROM customers WHERE phone = ?`), le.Phone).Scan(&custID)
-        } else if le.Name != "" {
-                err = s.db.QueryRow(s.db.Rebind(`SELECT id FROM customers WHERE name = ?`), le.Name).Scan(&custID)
-        } else {
-                return fmt.Errorf("ledger event has no customer key")
-        }
-        if err == sql.ErrNoRows {
-                // Customer row hasn't landed yet (or was captured on a device whose
-                // customer event is still behind this one). Create the identity now —
-                // an unknown customer must NOT dead-letter the money movement; the
-                // customer upsert event arrives behind it and fills in the rest.
-                name := le.Name
-                if name == "" {
-                        name = "Customer " + le.Phone
-                }
-                ins, ierr := s.db.Exec(s.db.Rebind(`INSERT INTO customers (name, phone, balance_cents, loyalty_points, updated_at) VALUES (?, ?, 0, 0, ?)`),
-                        name, le.Phone, nowStamp())
-                if ierr != nil {
-                        return ierr
-                }
-                custID, _ = ins.LastInsertId()
-        } else if err != nil {
-                return err
-        }
-        _, err = s.db.Exec(s.db.Rebind(`
-                INSERT INTO customer_ledger (customer_id, order_id, kind, amount_cents, points_delta, note, created_by, created_at)
-                VALUES (?, 0, ?, ?, ?, ?, 0, ?)`),
-                custID, le.Kind, le.Amount, le.Points, le.Note, le.CreatedAt)
-        if err != nil {
-                return err
-        }
-        if le.Kind == models.LedgerCreditTopup || le.Kind == models.LedgerCreditRedeem {
-                _, err = s.db.Exec(s.db.Rebind(`UPDATE customers SET store_credit_cents = store_credit_cents + ?, updated_at = ? WHERE id = ?`),
-                        le.Amount, nowStamp(), custID)
-                return err
-        }
-        _, err = s.db.Exec(s.db.Rebind(`UPDATE customers SET balance_cents = balance_cents + ?, loyalty_points = loyalty_points + ?, updated_at = ? WHERE id = ?`),
-                le.Amount, le.Points, nowStamp(), custID)
-        return err
-}
-
-// orderEvent is the wire form of a synced order.
-type orderEvent struct {
-        ClientUUID     string  `json:"clientUuid"`
-        Number         string  `json:"number"`
-        Status         string  `json:"status"`
-        SubtotalCents  int64   `json:"subtotalCents"`
-        DiscountCents  int64   `json:"discountCents"`
-        DiscountLabel  string  `json:"discountLabel"`
-        PointsRedeemed int64   `json:"pointsRedeemed"`
-        TaxCents       int64   `json:"taxCents"`
-        TotalCents     int64   `json:"totalCents"`
-        TaxPercent     float64 `json:"taxPercent"`
-        TaxIncluded    bool    `json:"taxIncluded"`
-        CashierName    string  `json:"cashierName"`
-        CustomerName   string  `json:"customerName"`
-        CustomerPhone  string  `json:"customerPhone"`
-        Note           string  `json:"note"`
-        BuyerPin       string  `json:"buyerPin"`
-        InvoiceNumber  string  `json:"invoiceNumber"`
-        CreatedAt      string  `json:"createdAt"`
-        PaidAt         string  `json:"paidAt"`
-        Items          []struct {
-                SKU       string `json:"sku"`
-                Name      string `json:"name"`
-                Qty       int    `json:"qty"`
-                UnitPrice int64  `json:"unitPriceCents"`
-                LineTotal int64  `json:"lineTotalCents"`
-        } `json:"items"`
-        Payments []struct {
-                Method      string `json:"method"`
-                Amount      int64  `json:"amountCents"`
-                Status      string `json:"status"`
-                Receipt     string `json:"mpesaReceipt"`
-                Phone       string `json:"phone"`
-                CreatedAt   string `json:"createdAt"`
-                CompletedAt string `json:"completedAt"`
-        } `json:"payments"`
-}
-
-func (s *Service) applyOrder(payload json.RawMessage) error {
-        var oe orderEvent
-        if err := json.Unmarshal(payload, &oe); err != nil {
-                return err
-        }
-        if oe.ClientUUID == "" {
-                return fmt.Errorf("order event missing clientUuid")
-        }
-        var existing int64
-        err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM orders WHERE client_uuid = ?`), oe.ClientUUID).Scan(&existing)
-        if err == nil {
-                // Known order: the only meaningful transition to replay is a
-                // remote completion (PENDING → PAID, e.g. a tab settled or an
-                // M-Pesa push finished on another till).
-                var status string
-                if err := s.db.QueryRow(`SELECT status FROM orders WHERE id = ?`, existing).Scan(&status); err != nil {
-                        return err
-                }
-                if status == models.OrderPending && oe.Status == models.OrderPaid {
-                        return s.remoteComplete(existing, oe)
-                }
-                return nil
-        }
-        if err != sql.ErrNoRows {
-                return err
-        }
-
-        // Resolve the customer by phone (ids differ across devices).
-        var custID int64
-        if oe.CustomerPhone != "" {
-                s.db.QueryRow(s.db.Rebind(`SELECT id FROM customers WHERE phone = ?`), oe.CustomerPhone).Scan(&custID)
-        }
-
-        // Order number collision (two tills allocated the same sequence):
-        // suffix with a short device tag and retry until unique — a single
-        // failed insert must never eat the order on this device.
-        number := oe.Number
-        for attempt := 0; ; attempt++ {
-                var n int
-                s.db.QueryRow(s.db.Rebind(`SELECT COUNT(*) FROM orders WHERE number = ?`), number).Scan(&n)
-                if n == 0 {
-                        break
-                }
-                if attempt >= 8 {
-                        return fmt.Errorf("order number %s: cannot allocate a free suffix", oe.Number)
-                }
-                number = fmt.Sprintf("%s-%s", oe.Number, strings.ToUpper(randToken(2+attempt/3)))
-        }
-
-        tx, err := s.db.Begin()
-        if err != nil {
-                return err
-        }
-        defer tx.Rollback()
-        taxInc := 0
-        if oe.TaxIncluded {
-                taxInc = 1
-        }
-        paidAt := oe.PaidAt
-        status := oe.Status
-        if status == models.OrderVoided {
-                return nil // void events carry their own payload; skip dead orders
-        }
-        // cashier_id is NOT NULL + FK to users(id) — the old hardwired 0 made
-        // EVERY cross-device order insert fail (and the cursor still advanced,
-        // silently dropping synced orders). Resolve a local user: the same
-        // username when it exists here, else any local staff account.
-        cashierID := s.resolveLocalCashierID(tx, oe.CashierName)
-        res, err := tx.Exec(s.db.Rebind(`
-                INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent, tax_included,
-                        discount_cents, discount_label, points_redeemed, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id, buyer_pin, invoice_number)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-                number, status, oe.SubtotalCents, oe.TaxCents, oe.TotalCents, oe.TaxPercent, taxInc,
-                oe.DiscountCents, oe.DiscountLabel, oe.PointsRedeemed, cashierID, oe.CustomerName, oe.Note, oe.ClientUUID, oe.CreatedAt, paidAt, custID, oe.BuyerPin, oe.InvoiceNumber)
-        if err != nil {
-                return err
-        }
-        orderID, _ := res.LastInsertId()
-        // Stock does NOT move here: the checkout already emitted per-line
-        // stock-delta events (the canonical movers — they are applied exactly
-        // once via sync_applied). Deducting inline as well would move stock
-        // twice on every receiving device.
-        for _, it := range oe.Items {
-                var pid int64
-                if it.SKU != "" {
-                        s.db.QueryRow(s.db.Rebind(`SELECT id FROM products WHERE sku = ?`), it.SKU).Scan(&pid)
-                }
-                if _, err := tx.Exec(s.db.Rebind(`
-                        INSERT INTO order_items (order_id, product_id, name, sku, qty, unit_price_cents, line_total_cents)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)`),
-                        orderID, pid, it.Name, it.SKU, it.Qty, it.UnitPrice, it.LineTotal); err != nil {
-                        return err
-                }
-        }
-        for _, pm := range oe.Payments {
-                if _, err := tx.Exec(s.db.Rebind(`
-                        INSERT INTO payments (order_id, method, mode, amount_cents, status, phone, mpesa_receipt, created_at, completed_at)
-                        VALUES (?, ?, '', ?, ?, ?, ?, ?, ?)`),
-                        orderID, pm.Method, pm.Amount, pm.Status, pm.Phone, pm.Receipt, pm.CreatedAt, pm.CompletedAt); err != nil {
-                        return err
-                }
-        }
-        if err := tx.Commit(); err != nil {
-                return err
-        }
-        s.broadcast(EventOrderCreated, map[string]any{"number": number, "synced": true})
-        return nil
-}
-
-// remoteComplete replays a remote PENDING→PAID transition: adopt the
-// completed payments exactly once. Stock is NOT deducted here — the
-// checkout emitted per-line stock deltas (applied exactly once), so an
-// inline deduction would double-move stock on this device.
-func (s *Service) remoteComplete(orderID int64, oe orderEvent) error {
-        tx, err := s.db.Begin()
-        if err != nil {
-                return err
-        }
-        defer tx.Rollback()
-        res, err := tx.Exec(`UPDATE orders SET status = 'PAID', paid_at = ? WHERE id = ? AND status = 'PENDING'`,
-                oe.PaidAt, orderID)
-        if err != nil {
-                return err
-        }
-        if n, _ := res.RowsAffected(); n != 1 {
-                return nil // someone else completed it first
-        }
-        for _, pm := range oe.Payments {
-                tx.Exec(s.db.Rebind(`UPDATE payments SET status = ?, completed_at = COALESCE(NULLIF(?,''), completed_at) WHERE order_id = ? AND method = ? AND status = 'PENDING'`),
-                        pm.Status, pm.CompletedAt, orderID, pm.Method)
-        }
-        if err := tx.Commit(); err != nil {
-                return err
-        }
-        if order, err := s.GetOrder(orderID); err == nil {
-                s.broadcast(EventOrderPaid, order)
-        }
-        return nil
-}
-
-func (s *Service) applyVoid(payload json.RawMessage) error {
-        var v struct {
-                OrderUUID   string `json:"orderClientUuid"`
-                OrderNumber string `json:"orderNumber"`
-                VoidedAt    string `json:"voidedAt"`
-                Reason      string `json:"reason"`
-        }
-        if err := json.Unmarshal(payload, &v); err != nil {
-                return err
-        }
-        var orderID int64
-        var err error
-        if v.OrderUUID != "" {
-                err = s.db.QueryRow(s.db.Rebind(`SELECT id FROM orders WHERE client_uuid = ?`), v.OrderUUID).Scan(&orderID)
-        } else if v.OrderNumber != "" {
-                err = s.db.QueryRow(s.db.Rebind(`SELECT id FROM orders WHERE number = ?`), v.OrderNumber).Scan(&orderID)
-        } else {
-                return fmt.Errorf("void event has no order reference")
-        }
-        if err != nil {
-                return nil // order unknown here (never synced) — nothing to void
-        }
-        var status string
-        if err := s.db.QueryRow(`SELECT status FROM orders WHERE id = ?`, orderID).Scan(&status); err != nil {
-                return err
-        }
-        if status == models.OrderVoided {
-                return nil
-        }
-        tx, err := s.db.Begin()
-        if err != nil {
-                return err
-        }
-        defer tx.Rollback()
-        res, err := tx.Exec(`UPDATE orders SET status = 'VOIDED', voided_at = ?, void_reason = ? WHERE id = ? AND status != 'VOIDED'`,
-                v.VoidedAt, v.Reason, orderID)
-        if err != nil {
-                return err
-        }
-        if n, _ := res.RowsAffected(); n != 1 {
-                return nil
-        }
-        items, err := s.loadItemsTx(tx, orderID)
-        if err != nil {
-                return err
-        }
-        // Restore stock for EVERY non-voided status, PENDING included: this
-        // device (a receiver) applied the checkout's per-line stock deltas
-        // regardless of when the money landed — the ORIGIN, which deducts
-        // async orders only at completion, keeps its own PAID-only restore.
-        // Restoring only PAID here would strand the deltas of a voided
-        // pending tab/M-Pesa order (stock vanishing fleet-wide).
-        for _, it := range items {
-                var track int
-                tx.QueryRow(`SELECT COALESCE(track_stock,1) FROM products WHERE id = ?`, it.ProductID).Scan(&track)
-                if track != 1 {
-                        continue
-                }
-                if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty + ? WHERE id = ?`), it.Qty, it.ProductID); err != nil {
-                        return err
-                }
-        }
-        if _, err := tx.Exec(`UPDATE payments SET status = 'VOIDED', result_desc = ? WHERE order_id = ? AND status IN ('PENDING','COMPLETED')`,
-                "synced void: "+truncStr(v.Reason, 160), orderID); err != nil {
-                return err
-        }
-        // Gift cards minted by this sale die with it (same rule as the local
-        // Void — an ACTIVE code behind a vanished sale is free money).
-        if status == models.OrderPaid {
-                if _, err := tx.Exec(`UPDATE gift_cards SET status = 'VOID', remaining_cents = 0, redeemed_at = ? WHERE order_id = ? AND status = 'ACTIVE'`,
-                        nowStamp(), orderID); err != nil {
-                        return err
-                }
-        }
-        // Reverse tab charges + refund points/credit (mirrors local Void).
-        var custID, tabTotal int64
-        var tabCount int
-        if err := tx.QueryRow(`SELECT COALESCE(customer_id,0), total_cents FROM orders WHERE id = ?`, orderID).
-                Scan(&custID, &tabTotal); err != nil {
-                return err
-        }
-        if custID != 0 {
-                tx.QueryRow(`SELECT COUNT(*) FROM payments WHERE order_id = ? AND method = 'account'`, orderID).Scan(&tabCount)
-                if tabCount > 0 {
-                        if err := recordLedgerTx(tx, s.db.Rebind, custID, orderID, models.LedgerAdjust, -tabTotal, 0, "void reversal (synced)", 0); err != nil {
-                                return err
-                        }
-                }
-                var pts int64
-                tx.QueryRow(`SELECT COALESCE(points_redeemed,0) FROM orders WHERE id = ?`, orderID).Scan(&pts)
-                if pts > 0 {
-                        if err := recordLedgerTx(tx, s.db.Rebind, custID, orderID, models.LedgerLoyalty, 0, pts, "points refund (synced void)", 0); err != nil {
-                                return err
-                        }
-                }
-                // Refund the store credit this sale spent. The flip above set
-                // every PENDING/COMPLETED leg to VOIDED but left amount_cents
-                // intact — sum the VOIDED credit legs (the old PENDING/COMPLETED
-                // filter always read 0 after the flip, silently confiscating
-                // the customer's prepaid credit on every synced void).
-                var creditUsed int64
-                tx.QueryRow(`SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE order_id = ? AND method = 'credit' AND status = 'VOIDED'`, orderID).Scan(&creditUsed)
-                if creditUsed > 0 {
-                        if err := recordLedgerTx(tx, s.db.Rebind, custID, orderID, models.LedgerCreditTopup, creditUsed, 0, "store credit refund (synced void)", 0); err != nil {
-                                return err
-                        }
-                }
-                // Reverse the loyalty points EARNED on this PAID order — the
-                // local Void() does this (orders.go) but applyVoid never did,
-                // so every synced void of a paid sale minted phantom points
-                // fleet-wide (the earn row arrives via emitLedgerForOrder,
-                // the reversal was simply missing here). Only positive earn
-                // entries are reversed; redemptions are refunded above.
-                if status == models.OrderPaid {
-                        var ptsEarned int64
-                        tx.QueryRow(s.db.Rebind(`SELECT COALESCE(SUM(points_delta),0) FROM customer_ledger
-                                WHERE order_id = ? AND kind = ? AND points_delta > 0`), orderID, models.LedgerLoyalty).Scan(&ptsEarned)
-                        if ptsEarned > 0 {
-                                if err := recordLedgerTx(tx, s.db.Rebind, custID, orderID, models.LedgerLoyalty,
-                                        0, -ptsEarned, "loyalty reversal (synced void)", 0); err != nil {
-                                        return err
-                                }
-                        }
-                }
-        }
-        if err := tx.Commit(); err != nil {
-                return err
-        }
-        if order, err := s.GetOrder(orderID); err == nil {
-                s.broadcast(EventOrderVoided, order)
-        }
-        return nil
-}
-
-func (s *Service) applyDesign(payload json.RawMessage) error {
-        var dj struct {
-                Title        string `json:"title"`
-                ProductName  string `json:"productName"`
-                CustomerName string `json:"customerName"`
-                Notes        string `json:"notes"`
-                Status       string `json:"status"`
-                UpdatedAt    string `json:"updatedAt"`
-        }
-        if err := json.Unmarshal(payload, &dj); err != nil {
-                return err
-        }
-        // Design jobs sync best-effort by (title, customer) — enough for the
-        // production board to stay aligned without a global id.
-        var id int64
-        err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM design_jobs WHERE title = ? AND customer_name = ?`),
-                dj.Title, dj.CustomerName).Scan(&id)
-        if err == nil {
-                _, err = s.db.Exec(s.db.Rebind(`UPDATE design_jobs SET status = ?, notes = ?, updated_at = ? WHERE id = ?`),
-                        dj.Status, dj.Notes, dj.UpdatedAt, id)
-                return err
-        }
-        if err != sql.ErrNoRows {
-                return err
-        }
-        _, err = s.db.Exec(s.db.Rebind(`
-                INSERT INTO design_jobs (title, product_name, customer_name, notes, status, created_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'synced', ?, ?)`),
-                dj.Title, dj.ProductName, dj.CustomerName, dj.Notes, dj.Status, dj.UpdatedAt, dj.UpdatedAt)
-        return err
-}
-
-// ---- Emit payload builders ----
-
-// EmitOrder builds and queues the full order event (checkout + completions).
-func (s *Service) EmitOrder(orderID int64) {
-        order, err := s.GetOrder(orderID)
-        if err != nil {
-                return
-        }
-        phone := ""
-        if order.CustomerID != 0 {
-                if c, err := s.GetCustomer(order.CustomerID); err == nil {
-                        phone = c.Phone
-                }
-        }
-        oe := orderEvent{
-                ClientUUID: order.ClientUUID, Number: order.Number, Status: order.Status,
-                SubtotalCents: order.SubtotalCents, DiscountCents: order.DiscountCents,
-                DiscountLabel: order.DiscountLabel, PointsRedeemed: order.PointsRedeemed,
-                TaxCents: order.TaxCents, TotalCents: order.TotalCents,
-                TaxPercent: order.TaxPercent, TaxIncluded: order.TaxIncluded,
-                CashierName: order.CashierName, CustomerName: order.CustomerName,
-                CustomerPhone: phone, Note: order.Note, BuyerPin: order.BuyerPIN,
-                InvoiceNumber: order.InvoiceNumber,
-                CreatedAt: order.CreatedAt, PaidAt: order.PaidAt,
-                Items: []struct {
-                        SKU       string `json:"sku"`
-                        Name      string `json:"name"`
-                        Qty       int    `json:"qty"`
-                        UnitPrice int64  `json:"unitPriceCents"`
-                        LineTotal int64  `json:"lineTotalCents"`
-                }{},
-                Payments: []struct {
-                        Method      string `json:"method"`
-                        Amount      int64  `json:"amountCents"`
-                        Status      string `json:"status"`
-                        Receipt     string `json:"mpesaReceipt"`
-                        Phone       string `json:"phone"`
-                        CreatedAt   string `json:"createdAt"`
-                        CompletedAt string `json:"completedAt"`
-                }{},
-        }
-        for _, it := range order.Items {
-                oe.Items = append(oe.Items, struct {
-                        SKU       string `json:"sku"`
-                        Name      string `json:"name"`
-                        Qty       int    `json:"qty"`
-                        UnitPrice int64  `json:"unitPriceCents"`
-                        LineTotal int64  `json:"lineTotalCents"`
-                }{it.SKU, it.Name, it.Qty, it.UnitPriceCents, it.LineTotalCents})
-        }
-        for _, pm := range order.Payments {
-                oe.Payments = append(oe.Payments, struct {
-                        Method      string `json:"method"`
-                        Amount      int64  `json:"amountCents"`
-                        Status      string `json:"status"`
-                        Receipt     string `json:"mpesaReceipt"`
-                        Phone       string `json:"phone"`
-                        CreatedAt   string `json:"createdAt"`
-                        CompletedAt string `json:"completedAt"`
-                }{pm.Method, pm.AmountCents, pm.Status, pm.MpesaReceipt, pm.Phone, pm.CreatedAt, pm.CompletedAt})
-        }
-        s.Emit("order", "upsert", oe)
-}
-
-// EmitVoid queues a void event for cross-device cancellation.
-func (s *Service) EmitVoid(orderID int64, reason string) {
-        var uuid, number string
-        s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(client_uuid,''), number FROM orders WHERE id = ?`), orderID).Scan(&uuid, &number)
-        s.Emit("void", "upsert", map[string]any{
-                "orderClientUuid": uuid,
-                "orderNumber":     number,
-                "voidedAt":        nowStamp(),
-                "reason":          reason,
-        })
-}
-
-// EmitProduct queues the full catalog row (admin edits; stock_set marks
-// absolute stock changes so other devices follow the last admin write).
-func (s *Service) EmitProduct(productID int64, stockSet bool) {
-        var pr struct {
-                SKU     string
-                Barcode string
-                Name    string
-                Slug    string
-                Price   int64
-                Cost    int64
-                Stock   int
-                Track   int
-                Active  int
-                Gift    int
-        }
-        err := s.db.QueryRow(s.db.Rebind(`
-                SELECT COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, COALESCE(c.slug,''),
-                        p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), COALESCE(p.is_gift_card,0)
-                FROM products p LEFT JOIN categories c ON c.id = p.category_id WHERE p.id = ?`), productID).
-                Scan(&pr.SKU, &pr.Barcode, &pr.Name, &pr.Slug, &pr.Price, &pr.Cost, &pr.Stock, &pr.Track, &pr.Active, &pr.Gift)
-        if err != nil {
-                return
-        }
-        s.Emit("product", "upsert", map[string]any{
-                "sku": pr.SKU, "barcode": pr.Barcode, "name": pr.Name, "categorySlug": pr.Slug,
-                "priceCents": pr.Price, "costCents": pr.Cost, "stockQty": pr.Stock,
-                "stockSet": stockSet, "trackStock": pr.Track == 1, "active": pr.Active == 1,
-                "isGiftCard": pr.Gift == 1, "updatedAt": nowStamp(),
-        })
-}
-
-// EmitStockDelta queues a signed stock movement (sales use per-line deltas
-// inside the order event; this covers adjusts, PO receives, stock takes).
-func (s *Service) EmitStockDelta(sku string, delta int) {
-        if sku == "" || delta == 0 {
-                return
-        }
-        s.Emit("stock", "upsert", map[string]any{"sku": sku, "delta": delta})
-}
-
-// EmitCustomer queues the identity row (balances ride on ledger events).
-func (s *Service) EmitCustomer(customerID int64) {
-        var name, phone, email, notes string
-        var limit int64
-        var active int
-        err := s.db.QueryRow(s.db.Rebind(`SELECT name, COALESCE(phone,''), COALESCE(email,''), COALESCE(notes,''), credit_limit_cents, COALESCE(is_active,1) FROM customers WHERE id = ?`), customerID).
-                Scan(&name, &phone, &email, &notes, &limit, &active)
-        if err != nil {
-                return
-        }
-        s.Emit("customer", "upsert", map[string]any{
-                "name": name, "phone": phone, "email": email, "notes": notes,
-                "creditLimitCents": limit, "active": active == 1, "updatedAt": nowStamp(),
-        })
-}
-
-// emitLedgerForOrder pushes every not-yet-synced ledger movement recorded
-// for an order (checkout tab charges, credit/loyalty redemptions, the
-// completion earn). customer_ledger.synced_at makes each row emit exactly
-// once — a duplicate would double-apply money on every receiving till.
-// Void reversals are deliberately NOT emitted: applyVoid recomputes them
-// on the receiver (emitting them too would double-reverse).
-func (s *Service) emitLedgerForOrder(orderID int64) {
-        rows, err := s.db.Query(s.db.Rebind(`SELECT id, customer_id, kind, amount_cents, points_delta, COALESCE(note,'')
-                FROM customer_ledger WHERE order_id = ? AND COALESCE(synced_at,'') = ''`), orderID)
-        if err != nil {
-                return
-        }
-        type lr struct {
-                custID           int64
-                kind, note       string
-                amount, points   int64
-        }
-        var pending []lr
-        var ids []int64
-        for rows.Next() {
-                var r lr
-                var id int64
-                if rows.Scan(&id, &r.custID, &r.kind, &r.amount, &r.points, &r.note) == nil {
-                        pending = append(pending, r)
-                        ids = append(ids, id)
-                }
-        }
-        rows.Close()
-        for i, r := range pending {
-                s.EmitLedger(r.custID, r.kind, r.amount, r.points, r.note)
-                s.db.Exec(s.db.Rebind(`UPDATE customer_ledger SET synced_at = ? WHERE id = ?`), nowStamp(), ids[i])
-        }
-}
-
-// EmitLedger queues a balance-moving ledger row.
-func (s *Service) EmitLedger(customerID int64, kind string, amount, points int64, note string) {
-        var phone, name string
-        s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(phone,''), name FROM customers WHERE id = ?`), customerID).Scan(&phone, &name)
-        s.Emit("ledger", "upsert", map[string]any{
-                "phone": phone, "name": name, "kind": kind,
-                "amountCents": amount, "pointsDelta": points, "note": note, "createdAt": nowStamp(),
-        })
-}
-
-// EmitCategory queues a category upsert/delete.
-func (s *Service) EmitCategory(name, slug string, delete bool) {
-        if delete {
-                s.Emit("category", "delete", map[string]any{"slug": slug, "name": name})
-                return
-        }
-        s.Emit("category", "upsert", map[string]any{"slug": slug, "name": name})
-}
-
-// EmitDesign queues a design-board change.
-func (s *Service) EmitDesign(title, productName, customerName, notes, status string) {
-        s.Emit("design", "upsert", map[string]any{
-                "title": title, "productName": productName, "customerName": customerName,
-                "notes": notes, "status": status, "updatedAt": nowStamp(),
-        })
-}
-
-// ---- Quote sync ----
-
-// quoteEvent is the wire form of a synced quote.
-type quoteEvent struct {
-        ClientUUID     string            `json:"clientUuid"`
-        QuoteNo        string            `json:"quoteNo"`
-        CustomerID     int64             `json:"customerId"`
-        CustomerName   string            `json:"customerName"`
-        CustomerPhone  string            `json:"customerPhone"`
-        Status         string            `json:"status"`
-        Items          []models.QuoteItem `json:"items"`
-        SubtotalCents  int64             `json:"subtotalCents"`
-        DiscountCents  int64             `json:"discountCents"`
-        DiscountLabel  string            `json:"discountLabel"`
-        TaxCents       int64             `json:"taxCents"`
-        TotalCents     int64             `json:"totalCents"`
-        Notes          string            `json:"notes"`
-        ValidUntil     string            `json:"validUntil"`
-        CreatedByName  string            `json:"createdByName"`
-        ConvertedHeld  int64             `json:"convertedHeldSaleId"`
-        CreatedAt      string            `json:"createdAt"`
-        UpdatedAt      string            `json:"updatedAt"`
-}
-
-// EmitQuote queues the full quote document (create/update/status moves).
-// synced_at emit-once bookkeeping is unnecessary here: the emit reads the
-// CURRENT row, so a burst of edits collapses into the latest state and the
-// apply side is idempotent by client_uuid + LWW anyway.
-func (s *Service) EmitQuote(quoteID int64) {
-        qy, err := s.GetQuote(quoteID)
-        if err != nil {
-                return
-        }
-        items := qy.Items
-        if items == nil {
-                items = []models.QuoteItem{}
-        }
-        s.Emit("quote", "upsert", quoteEvent{
-                ClientUUID: qy.ClientUUID, QuoteNo: qy.QuoteNo,
-                CustomerID: qy.CustomerID, CustomerName: qy.CustomerName, CustomerPhone: qy.CustomerPhone,
-                Status: qy.Status, Items: items,
-                SubtotalCents: qy.SubtotalCents, DiscountCents: qy.DiscountCents, DiscountLabel: qy.DiscountLabel,
-                TaxCents: qy.TaxCents, TotalCents: qy.TotalCents,
-                Notes: qy.Notes, ValidUntil: qy.ValidUntil,
-                CreatedByName: qy.CreatedByName, ConvertedHeld: qy.ConvertedHeldSaleID,
-                CreatedAt: qy.CreatedAt, UpdatedAt: qy.UpdatedAt,
-        })
-}
-
-// applyQuote merges a remote quote. Identity is client_uuid (insert exactly
-// once, like orders); a re-delivered event is an LWW merge on updated_at so
-// late status moves still land. Quote numbers are display-only across
-// devices: on collision the local copy is renumbered with a short suffix.
-func (s *Service) applyQuote(payload json.RawMessage) error {
-        var qe quoteEvent
-        if err := json.Unmarshal(payload, &qe); err != nil {
-                return err
-        }
-        if qe.ClientUUID == "" {
-                return fmt.Errorf("quote event missing clientUuid")
-        }
-        raw, err := json.Marshal(qe.Items)
-        if err != nil {
-                return err
-        }
-        if raw == nil {
-                raw = []byte("[]")
-        }
-        // Resolve the customer by phone (ids differ across devices).
-        var custID int64
-        if qe.CustomerPhone != "" {
-                s.db.QueryRow(s.db.Rebind(`SELECT id FROM customers WHERE phone = ?`), qe.CustomerPhone).Scan(&custID)
-        }
-        var existing int64
-        err = s.db.QueryRow(s.db.Rebind(`SELECT id FROM quotes WHERE client_uuid = ?`), qe.ClientUUID).Scan(&existing)
-        if err == nil {
-                // Known quote: apply only when the event is newer (LWW).
-                var localUpdated string
-                if err := s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(updated_at,'') FROM quotes WHERE id = ?`), existing).Scan(&localUpdated); err != nil {
-                        return err
-                }
-                if qe.UpdatedAt <= localUpdated {
-                        return nil
-                }
-                _, err := s.db.Exec(s.db.Rebind(`
-                        UPDATE quotes SET customer_id = ?, customer_name = ?, customer_phone = ?, status = ?,
-                                items_json = ?, subtotal_cents = ?, discount_cents = ?, discount_label = ?,
-                                tax_cents = ?, total_cents = ?, notes = ?, valid_until = ?,
-                                converted_held_sale_id = ?, updated_at = ?
-                        WHERE id = ?`),
-                        custID, qe.CustomerName, qe.CustomerPhone, qe.Status, string(raw),
-                        qe.SubtotalCents, qe.DiscountCents, qe.DiscountLabel, qe.TaxCents, qe.TotalCents,
-                        qe.Notes, qe.ValidUntil, qe.ConvertedHeld, qe.UpdatedAt, existing)
-                return err
-        }
-        if err != sql.ErrNoRows {
-                return err
-        }
-        // Quote number collision across tills: suffix until unique.
-        qno := qe.QuoteNo
-        for attempt := 0; ; attempt++ {
-                var n int
-                s.db.QueryRow(s.db.Rebind(`SELECT COUNT(*) FROM quotes WHERE quote_no = ?`), qno).Scan(&n)
-                if n == 0 {
-                        break
-                }
-                if attempt >= 8 {
-                        return fmt.Errorf("quote number %s: cannot allocate a free suffix", qe.QuoteNo)
-                }
-                qno = fmt.Sprintf("%s-%s", qe.QuoteNo, strings.ToUpper(randToken(2+attempt/3)))
-        }
-        _, err = s.db.Exec(s.db.Rebind(`
-                INSERT INTO quotes (quote_no, client_uuid, customer_id, customer_name, customer_phone,
-                        status, items_json, subtotal_cents, discount_cents, discount_label, tax_cents,
-                        total_cents, notes, valid_until, created_by, created_by_name, converted_held_sale_id,
-                        created_at, updated_at, synced_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`),
-                qno, qe.ClientUUID, custID, qe.CustomerName, qe.CustomerPhone,
-                qe.Status, string(raw), qe.SubtotalCents, qe.DiscountCents, qe.DiscountLabel,
-                qe.TaxCents, qe.TotalCents, qe.Notes, qe.ValidUntil, qe.CreatedByName,
-                qe.ConvertedHeld, qe.CreatedAt, qe.UpdatedAt, nowStamp())
-        return err
-}
-
-// resolveLocalCashierID finds a users.id for a synced order's cashier:
-// the same username when this device knows it, else any active user
-// (the receiving till owns the record — attribution stays informative).
-func (s *Service) resolveLocalCashierID(tx *sql.Tx, username string) int64 {
-        if username != "" {
-                var id int64
-                if err := tx.QueryRow(`SELECT id FROM users WHERE username = ?`, username).Scan(&id); err == nil {
-                        return id
-                }
-        }
-        var id int64
-        if err := tx.QueryRow(`SELECT id FROM users ORDER BY id LIMIT 1`).Scan(&id); err == nil {
-                return id
-        }
-        return 0
+	s.settings.Set("syncstate_"+key, fmt.Sprint(n))
 }

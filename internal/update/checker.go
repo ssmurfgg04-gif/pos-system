@@ -83,7 +83,7 @@ func (c *Checker) Refresh(ctx context.Context) {
         if c.store.Get("update_channel") == "off" {
                 return
         }
-        rel, err := CheckCloudManifest(ctx, "")
+        rel, err := c.checkSignedCloudManifest(ctx)
         if err != nil {
                 log.Printf("[update] cloud manifest: %v, falling back to GitHub", err)
                 apiBase := c.store.Get("update_api_base")
@@ -109,6 +109,29 @@ func (c *Checker) Refresh(ctx context.Context) {
                 c.assetName = asset.Name
                 c.assetSHA = asset.SHA256
         }
+}
+
+// checkSignedCloudManifest fetches the cloud manifest and enforces the
+// ed25519 signature when a public key is compiled in. A bad/missing
+// signature is a hard error (→ GitHub fallback, which is manual-install
+// only): an attacker who can write app_config rows can otherwise steer
+// every till at an arbitrary binary whose sha256 they also chose.
+// Transition note: a fleet binary WITHOUT an embedded key skips
+// verification loudly — that mode exists only for pre-signing fleets.
+func (c *Checker) checkSignedCloudManifest(ctx context.Context) (Release, error) {
+        m, err := FetchCloudManifest(ctx, "")
+        if err != nil {
+                return Release{}, err
+        }
+        pub, ok := UpdateSigningPubKey()
+        if !ok {
+                log.Printf("[update] WARNING: no signing key embedded — accepting UNSIGNED cloud manifest (transition mode)")
+                return m.Rel, nil
+        }
+        if !VerifyManifestSignature(pub, m.Tag, m.AssetsJSON, m.Sig) {
+                return Release{}, fmt.Errorf("%w (tag %s)", ErrUnsignedManifest, m.Tag)
+        }
+        return m.Rel, nil
 }
 
 // StartLoop refreshes at boot and every 6h until ctx ends. The short

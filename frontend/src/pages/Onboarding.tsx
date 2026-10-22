@@ -3,7 +3,7 @@
 // uses. Finishing flips onboarding_done; the rotation gate stays as backup.
 
 import { useEffect, useRef, useState } from 'react'
-import { api, Role } from '../lib/api'
+import { api, Role, setToken } from '../lib/api'
 import { navigate } from '../lib/router'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
@@ -250,13 +250,13 @@ function StaffStep({ adminId, onNext, onBack, busy, setBusy }: { adminId: number
           username: me.username,
           password,
         })
-        localStorage.setItem('pos_token', res.token)
+        setToken(res.token)
         await api.put(`/api/v1/users/${adminId}/pin`, { pin })
         const fresh = await api.post<{ token: string }>('/api/v1/auth/login', {
           username: me.username,
           password,
         })
-        localStorage.setItem('pos_token', fresh.token)
+        setToken(fresh.token)
       }
       if (cashierName.trim() && cashierRole) {
         await api.post('/api/v1/users', {

@@ -107,8 +107,29 @@ export async function getDesktopStatus(): Promise<DesktopStatus> {
   return status
 }
 
+// ---- session token storage (single choke point) ----
+// Every sign-in / sign-out site used to touch localStorage directly (6
+// files). They all route through here now, so a future httpOnly-cookie
+// session (server-set, CSRF-protected) is a change to THIS adapter only.
+//
+// localStorage persistence is deliberate, not an oversight: a cashier must
+// survive a tab/webview refresh without re-signing in. The classic
+// "XSS steals the localStorage token" path needs an injected SCRIPT
+// origin; the CSP (router.go secureHeaders + netlify.toml) refuses every
+// script origin except the Paystack popup toolkit, which cannot read this
+// origin's storage.
+const TOKEN_KEY = 'pos_token'
+
 export function token(): string | null {
-  return localStorage.getItem('pos_token')
+  return localStorage.getItem(TOKEN_KEY)
+}
+
+export function setToken(t: string): void {
+  localStorage.setItem(TOKEN_KEY, t)
+}
+
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY)
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -136,7 +157,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     // token (the guard previously checked '/auth/', which never matches the
     // '/api/v1/auth/…' paths and so was dead code).
     if (res.status === 401 && token() && !path.startsWith('/api/v1/auth/')) {
-      localStorage.removeItem('pos_token')
+      clearToken()
       if (!location.pathname.startsWith('/login') && !location.pathname.startsWith('/pin')) {
         location.href = '/login'
       }

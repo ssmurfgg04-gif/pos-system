@@ -8,7 +8,7 @@ import { startHeartbeat, flushQueue } from '../offline/heartbeat'
 import { connectWs, disconnectWs, onWsEvent, onWsReconnect } from '../ws/client'
 import { toast } from '../stores/toasts'
 import { useNet } from '../offline/heartbeat'
-import { backendMode, isDemoSync, getDesktopStatus, api, type DesktopStatus } from '../lib/api'
+import { backendMode, isDemoSync, getDesktopStatus, api, type DesktopStatus, setToken } from '../lib/api'
 import {
   ShoppingCart, ReceiptText, Palette, Package, Coins, BarChart3, Users, Settings,
   LogOut, RefreshCw, FlaskConical, Power, PowerOff, BookUser, Truck, Search, AlertTriangle, FileText,
@@ -149,7 +149,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
               if (!sid || sid === user?.shopId) return
               try {
                 const res = await api.post<{ token: string }>('/api/v1/auth/switch', { shopId: sid })
-                localStorage.setItem('pos_token', res.token)
+                setToken(res.token)
                 location.reload()
               } catch (err: any) {
                 toast.error('Switch failed', err?.message)

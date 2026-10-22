@@ -5,7 +5,7 @@ import { Button, Input, Field, Spinner } from '../components/ui'
 import { navigate, homeFor } from '../lib/router'
 import { reconnectWs } from '../ws/client'
 import { toast } from '../stores/toasts'
-import { api, backendMode } from '../lib/api'
+import { api, backendMode, setToken } from '../lib/api'
 import { ShieldCheck, User, Palette, KeyRound, LifeBuoy, LogIn, Store, Users, Hash } from 'lucide-react'
 
 const DEMO_ACCOUNTS = [
@@ -328,7 +328,7 @@ function OwnerCloudSignin({ onDone, onBack }: { onDone: () => void; onBack: () =
         '/api/v1/auth/owner-signin',
         { username: username.trim(), password, deviceName: 'till' },
       )
-      localStorage.setItem('pos_token', res.token)
+      setToken(res.token)
       await useAuth.getState().refresh()
       await useBranding.getState().load()
       toast.success(`Welcome back, ${username.trim()}`,
@@ -412,7 +412,7 @@ function SetupOwner({ onDone, onCancel }: { onDone: () => void; onCancel?: () =>
         '/api/v1/auth/bootstrap',
         { username: username.trim(), fullName: fullName.trim(), password, pin },
       )
-      localStorage.setItem('pos_token', res.token)
+      setToken(res.token)
       await useAuth.getState().refresh()
       setRecoveryCode(res.recoveryCode)
     } catch (err: any) {

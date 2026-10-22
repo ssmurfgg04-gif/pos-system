@@ -24,3 +24,16 @@
   # Aligned with CI's test + deploy jobs (node 24 is where the vitest
   # suite is green; jsdom+undici break on the older 20.x image).
   NODE_VERSION = "24"
+
+# Browser-facing defense headers. The CSP mirrors the desktop app's
+# (internal/router/router.go secureHeaders): scripts only from this origin
+# plus the Paystack popup toolkit; the /portal/ page additionally talks to
+# the fleet Supabase project. No inline handlers, no third-party packages.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self' https://js.paystack.co; script-src-elem 'self' https://js.paystack.co; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://*.supabase.co; frame-src https://js.paystack.co; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "SAMEORIGIN"
+    Referrer-Policy = "no-referrer"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"

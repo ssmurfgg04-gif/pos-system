@@ -2,7 +2,7 @@
 // the shop, its admin, and logs straight in. Usernames are unique per box.
 
 import { useState } from 'react'
-import { api } from '../lib/api'
+import { api, setToken } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { navigate } from '../lib/router'
 import { Button, Field, Input, Spinner } from '../components/ui'
@@ -30,7 +30,7 @@ export function Signup() {
         password,
         shopName: shopName.trim(),
       })
-      localStorage.setItem('pos_token', res.token)
+      setToken(res.token)
       if (pin) {
         await api.put(`/api/v1/users/${res.user.id}/pin`, { pin })
       }

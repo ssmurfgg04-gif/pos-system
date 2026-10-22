@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, User } from '../lib/api'
+import { api, User, clearToken, setToken, token } from '../lib/api'
 import { cartResetForUser } from './cart'
 
 interface AuthState {
@@ -21,23 +21,23 @@ export const useAuth = create<AuthState>((set, get) => ({
       password,
       ...(shopId ? { shopId } : {}),
     })
-    localStorage.setItem('pos_token', res.token)
+    setToken(res.token)
     cartResetForUser(res.user.id) // a different staff member never inherits a basket
     set({ user: res.user, ready: true })
   },
   pinLogin: async (userId, pin, shopId) => {
     const res = await api.post<{ token: string; user: User }>('/api/v1/auth/pin', { userId, pin, ...(shopId ? { shopId } : {}) })
-    localStorage.setItem('pos_token', res.token)
+    setToken(res.token)
     cartResetForUser(res.user.id)
     set({ user: res.user, ready: true })
   },
   logout: () => {
-    localStorage.removeItem('pos_token')
+    clearToken()
     cartResetForUser(null) // shift handoff starts a clean basket
     set({ user: null, ready: true })
   },
   refresh: async () => {
-    if (!localStorage.getItem('pos_token')) {
+    if (!token()) {
       set({ user: null, ready: true })
       return
     }
@@ -45,7 +45,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       const user = await api.get<User>('/api/v1/me')
       set({ user, ready: true })
     } catch {
-      localStorage.removeItem('pos_token')
+      clearToken()
       set({ user: null, ready: true })
     }
   },

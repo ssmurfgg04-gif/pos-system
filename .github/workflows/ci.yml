@@ -49,6 +49,21 @@ jobs:
   tests:
     name: go vet + go test + vitest
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ledgerpos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -70,8 +85,18 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      - name: go test
+      - name: go test (sqlite default)
         run: go test ./... -count=1
+
+      # The Postgres DDL is a hand-maintained copy of the sqlite schema —
+      # server-mode deployments break when a column lands in one and not
+      # the other. A real postgres runs the migration chain here; the test
+      # skips locally when POSTGRES_TEST_DSN is unset.
+      - name: go test (postgres dialect)
+        env:
+          POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/ledgerpos_test?sslmode=disable
+        run: go test ./internal/database/ -run TestPostgresMigrations -count=1 -v
+
 
       - name: frontend tests
         working-directory: frontend

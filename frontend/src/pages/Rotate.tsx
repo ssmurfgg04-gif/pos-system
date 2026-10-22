@@ -2,7 +2,7 @@
 // while me.mustRotate is true: set a personal password + PIN, then reload.
 
 import { useState } from 'react'
-import { api } from '../lib/api'
+import { api, setToken } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { Button, Card, Field, Input, Spinner } from '../components/ui'
 import { toast } from '../stores/toasts'
@@ -27,13 +27,13 @@ export function Rotate({ onDone }: { onDone: () => void }) {
         username: user.username,
         password,
       })
-      localStorage.setItem('pos_token', res.token)
+      setToken(res.token)
       await api.put(`/api/v1/users/${user.id}/pin`, { pin })
       const fresh = await api.post<{ token: string }>('/api/v1/auth/login', {
         username: user.username,
         password,
       })
-      localStorage.setItem('pos_token', fresh.token)
+      setToken(fresh.token)
       toast.success('Credentials updated')
       onDone()
     } catch (e: any) {
