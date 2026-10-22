@@ -51,12 +51,12 @@ func p0OpenTill(t *testing.T, dbPath string) *Service {
 // TestP0OfflineOrderJourney — the client's exact acceptance scenario:
 // offline sale → app restart → reconnection → exactly-once on device B.
 func TestP0OfflineOrderJourney(t *testing.T) {
-        fake := newAgent3Cloud(t)
+        fake := newVaultCloud(t)
         dir := t.TempDir()
         dbPath := filepath.Join(dir, "tillA.db")
 
         // 1. Till A boots with the cloud UNREACHABLE (offline).
-        agent3Link(t, "http://127.0.0.1:1")
+        vaultLink(t, "http://127.0.0.1:1")
         tillA1 := p0OpenTill(t, dbPath)
         if _, ok := tillA1.syncConfig(); ok {
                 t.Fatal("precondition: cloud should be unreachable")
@@ -74,7 +74,7 @@ func TestP0OfflineOrderJourney(t *testing.T) {
         if order.Status != models.OrderPaid {
                 t.Fatalf("offline order status = %s, want PAID", order.Status)
         }
-        if got := agent3Stock(tillA1, "SKU-P0"); got != 9 {
+        if got := vaultStock(tillA1, "SKU-P0"); got != 9 {
                 t.Fatalf("stock after offline sale = %d, want 9", got)
         }
 
@@ -95,7 +95,7 @@ func TestP0OfflineOrderJourney(t *testing.T) {
         // 3. Reconnection: the cloud is reachable again. Till A registers
         //    and drains its outbox; the SAME restart-proof secret registers
         //    (device id + secret live in the DB, so identity survives too).
-        agent3Link(t, fake.srv.URL)
+        vaultLink(t, fake.srv.URL)
         cA, ok := tillA2.syncConfig()
         if !ok {
                 t.Fatal("cloud link did not resolve after reconnection")
@@ -106,7 +106,7 @@ func TestP0OfflineOrderJourney(t *testing.T) {
         tillA2.TeamSyncNow("p0-test")
 
         // 4. Another AUTHORIZED device pulls the order: exactly once.
-        agent3Link(t, fake.srv.URL)
+        vaultLink(t, fake.srv.URL)
         tillB := p0OpenTill(t, filepath.Join(dir, "tillB.db"))
         var catB int64
         tillB.db.QueryRow(`SELECT id FROM categories LIMIT 1`).Scan(&catB)
@@ -126,7 +126,7 @@ func TestP0OfflineOrderJourney(t *testing.T) {
         if n != 1 {
                 t.Fatalf("order on device B = %d, want exactly 1", n)
         }
-        if got := agent3Stock(tillB, "SKU-P0"); got != 9 {
+        if got := vaultStock(tillB, "SKU-P0"); got != 9 {
                 t.Fatalf("stock on device B = %d, want 9 (deducted once)", got)
         }
 
@@ -138,7 +138,7 @@ func TestP0OfflineOrderJourney(t *testing.T) {
         if n != 1 {
                 t.Fatalf("order on device B after replays = %d, want exactly 1", n)
         }
-        if got := agent3Stock(tillB, "SKU-P0"); got != 9 {
+        if got := vaultStock(tillB, "SKU-P0"); got != 9 {
                 t.Fatalf("stock on device B after replays = %d, want 9", got)
         }
 }
@@ -164,12 +164,12 @@ func p0Checkout(t *testing.T, f *p0Fixture, uuid string) *models.Order {
 // the movement immediately; the customer upsert event that follows fills in
 // name/details. Balance ends exactly where the origin put it, applied once.
 func TestP0DeadLetterRetryRecoversLedger(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s1 := agent3NewService(t)
-        s2 := agent3NewService(t)
-        c1 := agent3Register(t, s1)
-        c2 := agent3Register(t, s2)
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s1 := vaultProbeNewService(t)
+        s2 := vaultProbeNewService(t)
+        c1 := vaultProbeRegister(t, s1)
+        c2 := vaultProbeRegister(t, s2)
 
         // Ledger event arrives BEFORE its customer event (out-of-order).
         s1.Emit("ledger", "upsert", map[string]any{
@@ -220,7 +220,7 @@ func TestP0DeadLetterRetryRecoversLedger(t *testing.T) {
 // TestP0OutboxPrunedAndCursorBounded — pushed outbox rows and applied ids
 // are pruned so the hardening bookkeeping never grows unbounded.
 func TestP0OutboxPrunedAndCursorBounded(t *testing.T) {
-        s := agent3NewService(t)
+        s := vaultProbeNewService(t)
         s.db.Exec(s.db.Rebind(`INSERT INTO sync_outbox (entity, op, client_uuid, payload, pushed_at)
                 VALUES ('product','upsert','prune-1','{}','2020-01-01T00:00:00.000Z')`))
         s.db.Exec(s.db.Rebind(`INSERT INTO sync_outbox (entity, op, client_uuid, payload, pushed_at)

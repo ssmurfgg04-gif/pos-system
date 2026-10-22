@@ -87,7 +87,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Same major as the tests job + netlify.toml NODE_VERSION — one
+          # node line everywhere (jsdom+undici need 24 for the vitest suite).
+          node-version: "24"
 
       - name: Build the site (landing + demo + checksums; installers link to Releases)
         working-directory: frontend

@@ -76,15 +76,15 @@ func newFakePaystack(t *testing.T) *fakePaystack {
         return f
 }
 
-func recoveryOrder(t *testing.T, r *agent1Rig, ref string) *models.Order {
+func recoveryOrder(t *testing.T, r *paystackRig, ref string) *models.Order {
         t.Helper()
-        o := agent1Checkout(t, r, models.CheckoutRequest{PaymentMethod: models.MethodPaystack})
-        agent1AttachRef(t, r, o.ID, ref)
+        o := paystackCheckout(t, r, models.CheckoutRequest{PaymentMethod: models.MethodPaystack})
+        paystackAttachRef(t, r, o.ID, ref)
         o, _ = r.Svc.GetOrder(o.ID)
         return o
 }
 
-func recoveryOrderStatus(t *testing.T, r *agent1Rig, orderID int64) (string, string) {
+func recoveryOrderStatus(t *testing.T, r *paystackRig, orderID int64) (string, string) {
         t.Helper()
         o, err := r.Svc.GetOrder(orderID)
         if err != nil {
@@ -97,7 +97,7 @@ func recoveryOrderStatus(t *testing.T, r *agent1Rig, orderID int64) (string, str
 // The field bug, replayed: sweep times the leg out (15 min, final verify
 // pending), the customer pays anyway, the deep sweep recovers it.
 func TestSweepFailedPaystackRecoversLatePayment(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
+        r := newPaystackRig(t, paystackTestSecret)
         f := newFakePaystack(t)
         o := recoveryOrder(t, r, "LP-ORD-REC1-ab12")
 
@@ -120,7 +120,7 @@ func TestSweepFailedPaystackRecoversLatePayment(t *testing.T) {
 
 // backdate rewinds a payment leg's created_at — stands in for waiting out
 // the real 15-minute timeout the way the field sale did.
-func backdate(t *testing.T, r *agent1Rig, orderID int64, ref string, age time.Duration) {
+func backdate(t *testing.T, r *paystackRig, orderID int64, ref string, age time.Duration) {
         t.Helper()
         st := time.Now().UTC().Add(-age).Format(time.RFC3339)
         if _, err := r.DB.Exec(`UPDATE payments SET created_at = ? WHERE order_id = ? AND checkout_request_id = ?`, st, orderID, ref); err != nil {
@@ -131,9 +131,9 @@ func backdate(t *testing.T, r *agent1Rig, orderID int64, ref string, age time.Du
 // Money double-counting guard: an order paid via manual receipt entry must
 // never be re-completed by a late verify of the same physical payment.
 func TestSweepFailedPaystackSkipsPaidOrders(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
+        r := newPaystackRig(t, paystackTestSecret)
         f := newFakePaystack(t)
-        p := agent1Principal()
+        p := paystackPrincipal()
         o := recoveryOrder(t, r, "LP-ORD-REC2-cd34")
 
         // The leg times out, then the cashier keys the M-Pesa code manually.
@@ -161,9 +161,9 @@ func TestSweepFailedPaystackSkipsPaidOrders(t *testing.T) {
 // The cashier's button: verifies pending + recent failed refs, completes on
 // success, and answers idempotently on a paid order.
 func TestRecheckPaymentCompletesAndStaysIdempotent(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
+        r := newPaystackRig(t, paystackTestSecret)
         f := newFakePaystack(t)
-        p := agent1Principal()
+        p := paystackPrincipal()
         o := recoveryOrder(t, r, "LP-ORD-REC3-ef56")
 
         // No money yet — must return a message, leave the order untouched.
@@ -202,9 +202,9 @@ func TestRecheckPaymentCompletesAndStaysIdempotent(t *testing.T) {
 // A superseded push the customer still answered is recovered by the recheck
 // (the live ref is abandoned; the money is on the failed one).
 func TestRecheckPaymentRecoversSupersededPush(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
+        r := newPaystackRig(t, paystackTestSecret)
         f := newFakePaystack(t)
-        p := agent1Principal()
+        p := paystackPrincipal()
         o := recoveryOrder(t, r, "LP-ORD-REC4-gh78")
 
         // Cashier retried: old leg failed 'superseded', a fresh pending leg is minted.
@@ -232,7 +232,7 @@ func TestRecheckPaymentRecoversSupersededPush(t *testing.T) {
 // The fake provider must actually be consulted by the sweeper (guard
 // against a silent no-op refactor) and "abandoned" must stay abandoned.
 func TestSweepPaystackBaselineStillWorks(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
+        r := newPaystackRig(t, paystackTestSecret)
         f := newFakePaystack(t)
         o := recoveryOrder(t, r, "LP-ORD-REC5-ij90")
 

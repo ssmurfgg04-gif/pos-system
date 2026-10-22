@@ -1,6 +1,6 @@
 package handlers_test
 
-// agent1_paystack_probe_test.go — Task T1 (payments / money-flow) probe.
+// paystack_paystack_probe_test.go — Task T1 (payments / money-flow) probe.
 //
 // Goal: try to break the Paystack stack WITHOUT any network access. The
 // Paystack client hardcodes https://api.paystack.co, so the API-calling
@@ -49,23 +49,23 @@ import (
         "posapp/internal/ws"
 )
 
-// agent1TestSecret is a structurally-valid test secret (sk_ + >20 chars).
+// paystackTestSecret is a structurally-valid test secret (sk_ + >20 chars).
 // It never leaves the process; the client is only used for HMAC checks.
-const agent1TestSecret = "sk_test_agent1probe0000000001"
+const paystackTestSecret = "sk_test_paystackprobe0000000001"
 
-const agent1TestPublic = "pk_test_agent1probe0000000001"
+const paystackTestPublic = "pk_test_paystackprobe0000000001"
 
 // ---- rig helpers -------------------------------------------------------
 
-type agent1Rig struct {
+type paystackRig struct {
         Svc *services.Service
         DB  *database.DB
         ST  *settings.Store
 }
 
-// newAgent1Rig builds a bare service (no HTTP) on a fresh temp DB.
+// newPaystackRig builds a bare service (no HTTP) on a fresh temp DB.
 // paystackKey "" means no Paystack configured.
-func newAgent1Rig(t *testing.T, paystackKey string) *agent1Rig {
+func newPaystackRig(t *testing.T, paystackKey string) *paystackRig {
         t.Helper()
         dir := t.TempDir()
         db, err := database.Open("sqlite", filepath.Join(dir, "probe.db"), "")
@@ -90,13 +90,13 @@ func newAgent1Rig(t *testing.T, paystackKey string) *agent1Rig {
         }
         pw := printer.NewWorker(db, st)
         svc := services.New(db, st, nil, pw)
-        return &agent1Rig{Svc: svc, DB: db, ST: st}
+        return &paystackRig{Svc: svc, DB: db, ST: st}
 }
 
-func agent1Principal() *auth.Principal {
+func paystackPrincipal() *auth.Principal {
         return &auth.Principal{
                 ID:       1,
-                Username: "agent1",
+                Username: "paystack",
                 Permissions: map[string]bool{
                         "pos.sell": true, "pos.void": true, "payments.manual": true,
                         "payments.override_price": true, "payments.apply_discount": true,
@@ -105,8 +105,8 @@ func agent1Principal() *auth.Principal {
         }
 }
 
-// agent1ProductID resolves the first seeded product by SKU.
-func agent1ProductID(t *testing.T, r *agent1Rig) int64 {
+// paystackProductID resolves the first seeded product by SKU.
+func paystackProductID(t *testing.T, r *paystackRig) int64 {
         t.Helper()
         var id int64
         if err := r.DB.QueryRow(`SELECT id FROM products WHERE sku = 'TS-001'`).Scan(&id); err != nil {
@@ -115,7 +115,7 @@ func agent1ProductID(t *testing.T, r *agent1Rig) int64 {
         return id
 }
 
-func agent1Stock(t *testing.T, r *agent1Rig, productID int64) int {
+func paystackStock(t *testing.T, r *paystackRig, productID int64) int {
         t.Helper()
         var n int
         if err := r.DB.QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, productID).Scan(&n); err != nil {
@@ -124,24 +124,24 @@ func agent1Stock(t *testing.T, r *agent1Rig, productID int64) int {
         return n
 }
 
-func agent1Checkout(t *testing.T, r *agent1Rig, req models.CheckoutRequest) *models.Order {
+func paystackCheckout(t *testing.T, r *paystackRig, req models.CheckoutRequest) *models.Order {
         t.Helper()
         if req.PaymentMethod == "" {
                 req.PaymentMethod = models.MethodPaystack
         }
         if len(req.Items) == 0 {
-                req.Items = []models.CheckoutItem{{ProductID: agent1ProductID(t, r), Qty: 2}}
+                req.Items = []models.CheckoutItem{{ProductID: paystackProductID(t, r), Qty: 2}}
         }
-        o, err := r.Svc.Checkout(context.Background(), agent1Principal(), req)
+        o, err := r.Svc.Checkout(context.Background(), paystackPrincipal(), req)
         if err != nil {
                 t.Fatalf("checkout: %v", err)
         }
         return o
 }
 
-// agent1AttachRef points the pending paystack payment at a reference
+// paystackAttachRef points the pending paystack payment at a reference
 // (stands in for the PaystackInit UPDATE, which needs the real API).
-func agent1AttachRef(t *testing.T, r *agent1Rig, orderID int64, ref string) {
+func paystackAttachRef(t *testing.T, r *paystackRig, orderID int64, ref string) {
         t.Helper()
         res, err := r.DB.Exec(r.DB.Rebind(`UPDATE payments SET checkout_request_id = ?
                 WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), ref, orderID)
@@ -153,7 +153,7 @@ func agent1AttachRef(t *testing.T, r *agent1Rig, orderID int64, ref string) {
         }
 }
 
-func agent1AttachAnyRef(t *testing.T, r *agent1Rig, orderID int64, ref, method string) {
+func paystackAttachAnyRef(t *testing.T, r *paystackRig, orderID int64, ref, method string) {
         t.Helper()
         res, err := r.DB.Exec(r.DB.Rebind(`UPDATE payments SET checkout_request_id = ?
                 WHERE order_id = ? AND method = ? AND status = 'PENDING'`), ref, orderID, method)
@@ -165,7 +165,7 @@ func agent1AttachAnyRef(t *testing.T, r *agent1Rig, orderID int64, ref, method s
         }
 }
 
-type agent1PayRow struct {
+type paystackPayRow struct {
         ID       int64
         Method   string
         Status   string
@@ -175,7 +175,7 @@ type agent1PayRow struct {
         Checkout string
 }
 
-func agent1Payments(t *testing.T, r *agent1Rig, orderID int64) []agent1PayRow {
+func paystackPayments(t *testing.T, r *paystackRig, orderID int64) []paystackPayRow {
         t.Helper()
         rows, err := r.DB.Query(`SELECT id, method, status, amount_cents,
                 COALESCE(mpesa_receipt,''), COALESCE(result_desc,''), COALESCE(checkout_request_id,'')
@@ -184,9 +184,9 @@ func agent1Payments(t *testing.T, r *agent1Rig, orderID int64) []agent1PayRow {
                 t.Fatalf("payments: %v", err)
         }
         defer rows.Close()
-        var out []agent1PayRow
+        var out []paystackPayRow
         for rows.Next() {
-                var p agent1PayRow
+                var p paystackPayRow
                 if err := rows.Scan(&p.ID, &p.Method, &p.Status, &p.Amount, &p.Receipt, &p.Desc, &p.Checkout); err != nil {
                         t.Fatalf("scan: %v", err)
                 }
@@ -198,7 +198,7 @@ func agent1Payments(t *testing.T, r *agent1Rig, orderID int64) []agent1PayRow {
         return out
 }
 
-func agent1OrderStatus(t *testing.T, r *agent1Rig, orderID int64) (string, bool) {
+func paystackOrderStatus(t *testing.T, r *paystackRig, orderID int64) (string, bool) {
         t.Helper()
         var status string
         var disc int
@@ -208,14 +208,14 @@ func agent1OrderStatus(t *testing.T, r *agent1Rig, orderID int64) (string, bool)
         return status, disc == 1
 }
 
-func agent1Sign(t *testing.T, secret string, body []byte) string {
+func paystackSign(t *testing.T, secret string, body []byte) string {
         t.Helper()
         mac := hmac.New(sha512.New, []byte(secret))
         mac.Write(body)
         return hex.EncodeToString(mac.Sum(nil))
 }
 
-func agent1ChargeBody(event, ref, status string, amount int64) []byte {
+func paystackChargeBody(event, ref, status string, amount int64) []byte {
         b, _ := json.Marshal(map[string]any{
                 "event": event,
                 "data": map[string]any{
@@ -232,28 +232,28 @@ func agent1ChargeBody(event, ref, status string, amount int64) []byte {
 // reference is the ONLY thing that turns a paystack order PAID offline,
 // and it must deduct stock exactly once and stamp the reference as the
 // payment receipt.
-func TestAgent1WebhookCompletesPendingPaystackOrder(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
-        pid := agent1ProductID(t, r)
-        o := agent1Checkout(t, r, models.CheckoutRequest{})
+func TestPaystackProbeWebhookCompletesPendingPaystackOrder(t *testing.T) {
+        r := newPaystackRig(t, paystackTestSecret)
+        pid := paystackProductID(t, r)
+        o := paystackCheckout(t, r, models.CheckoutRequest{})
         ref := "LP-AGENT1-COMPLETE-1"
-        agent1AttachRef(t, r, o.ID, ref)
+        paystackAttachRef(t, r, o.ID, ref)
 
-        if before := agent1Stock(t, r, pid); before != 40 {
+        if before := paystackStock(t, r, pid); before != 40 {
                 t.Fatalf("pre-completion stock must be untouched (fake-money guard): %d", before)
         }
-        body := agent1ChargeBody("charge.success", ref, "success", o.TotalCents)
-        if err := r.Svc.HandlePaystackWebhook(body, agent1Sign(t, agent1TestSecret, body)); err != nil {
+        body := paystackChargeBody("charge.success", ref, "success", o.TotalCents)
+        if err := r.Svc.HandlePaystackWebhook(body, paystackSign(t, paystackTestSecret, body)); err != nil {
                 t.Fatalf("webhook: %v", err)
         }
-        status, disc := agent1OrderStatus(t, r, o.ID)
+        status, disc := paystackOrderStatus(t, r, o.ID)
         if status != models.OrderPaid || disc {
                 t.Fatalf("order must be PAID without discrepancy, got %s disc=%v", status, disc)
         }
-        if after := agent1Stock(t, r, pid); after != 38 {
+        if after := paystackStock(t, r, pid); after != 38 {
                 t.Fatalf("stock must deduct exactly 2, got %d", after)
         }
-        pays := agent1Payments(t, r, o.ID)
+        pays := paystackPayments(t, r, o.ID)
         if len(pays) != 1 || pays[0].Status != models.PaymentCompleted ||
                 pays[0].Receipt != ref || pays[0].Method != models.MethodPaystack {
                 t.Fatalf("payment must complete with ref as receipt: %+v", pays)
@@ -263,23 +263,23 @@ func TestAgent1WebhookCompletesPendingPaystackOrder(t *testing.T) {
 // INVARIANT: webhook redelivery (Paystack retries on timeout, operators
 // re-send, sweeper races the webhook) must be exactly-once: no double
 // stock deduction, no duplicate completion side effects, and no error.
-func TestAgent1WebhookReplayIsExactlyOnce(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
-        pid := agent1ProductID(t, r)
-        o := agent1Checkout(t, r, models.CheckoutRequest{})
+func TestPaystackProbeWebhookReplayIsExactlyOnce(t *testing.T) {
+        r := newPaystackRig(t, paystackTestSecret)
+        pid := paystackProductID(t, r)
+        o := paystackCheckout(t, r, models.CheckoutRequest{})
         ref := "LP-AGENT1-REPLAY-1"
-        agent1AttachRef(t, r, o.ID, ref)
-        body := agent1ChargeBody("charge.success", ref, "success", o.TotalCents)
-        sig := agent1Sign(t, agent1TestSecret, body)
+        paystackAttachRef(t, r, o.ID, ref)
+        body := paystackChargeBody("charge.success", ref, "success", o.TotalCents)
+        sig := paystackSign(t, paystackTestSecret, body)
         for i := 0; i < 3; i++ {
                 if err := r.Svc.HandlePaystackWebhook(body, sig); err != nil {
                         t.Fatalf("replay %d: %v", i, err)
                 }
         }
-        if after := agent1Stock(t, r, pid); after != 38 {
+        if after := paystackStock(t, r, pid); after != 38 {
                 t.Fatalf("stock must deduct once across replays, got %d", after)
         }
-        pays := agent1Payments(t, r, o.ID)
+        pays := paystackPayments(t, r, o.ID)
         if len(pays) != 1 || pays[0].Status != models.PaymentCompleted {
                 t.Fatalf("exactly one completed payment expected: %+v", pays)
         }
@@ -288,61 +288,61 @@ func TestAgent1WebhookReplayIsExactlyOnce(t *testing.T) {
 // INVARIANT: an unsigned / wrongly-signed webhook must fail closed and
 // change nothing — this is the only thing standing between the public
 // endpoint and free money.
-func TestAgent1WebhookRejectsBadSignature(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
-        pid := agent1ProductID(t, r)
-        o := agent1Checkout(t, r, models.CheckoutRequest{})
+func TestPaystackProbeWebhookRejectsBadSignature(t *testing.T) {
+        r := newPaystackRig(t, paystackTestSecret)
+        pid := paystackProductID(t, r)
+        o := paystackCheckout(t, r, models.CheckoutRequest{})
         ref := "LP-AGENT1-BADSIG-1"
-        agent1AttachRef(t, r, o.ID, ref)
-        body := agent1ChargeBody("charge.success", ref, "success", o.TotalCents)
+        paystackAttachRef(t, r, o.ID, ref)
+        body := paystackChargeBody("charge.success", ref, "success", o.TotalCents)
 
         cases := map[string]string{
-                "wrong secret": agent1Sign(t, "sk_test_attacker_key_000000000", body),
+                "wrong secret": paystackSign(t, "sk_test_attacker_key_000000000", body),
                 "empty":        "",
                 "garbage":      "zz-not-hex",
-                "truncated":    agent1Sign(t, agent1TestSecret, body)[:40],
+                "truncated":    paystackSign(t, paystackTestSecret, body)[:40],
         }
         for name, sig := range cases {
                 if err := r.Svc.HandlePaystackWebhook(body, sig); err == nil {
                         t.Fatalf("%s: must be rejected", name)
                 }
         }
-        if status, _ := agent1OrderStatus(t, r, o.ID); status != models.OrderPending {
+        if status, _ := paystackOrderStatus(t, r, o.ID); status != models.OrderPending {
                 t.Fatalf("order must stay PENDING, got %s", status)
         }
-        if n := agent1Stock(t, r, pid); n != 40 {
+        if n := paystackStock(t, r, pid); n != 40 {
                 t.Fatalf("stock must be untouched, got %d", n)
         }
 }
 
 // INVARIANT: only a definitive, signature-checked charge.success moves
 // money. Anything else is acknowledged and ignored.
-func TestAgent1WebhookIgnoresNonSuccessAndUnknownRefs(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
-        pid := agent1ProductID(t, r)
-        o := agent1Checkout(t, r, models.CheckoutRequest{})
+func TestPaystackProbeWebhookIgnoresNonSuccessAndUnknownRefs(t *testing.T) {
+        r := newPaystackRig(t, paystackTestSecret)
+        pid := paystackProductID(t, r)
+        o := paystackCheckout(t, r, models.CheckoutRequest{})
         ref := "LP-AGENT1-IGNORE-1"
-        agent1AttachRef(t, r, o.ID, ref)
+        paystackAttachRef(t, r, o.ID, ref)
 
         cases := []struct {
                 name string
                 body []byte
         }{
-                {"unknown reference", agent1ChargeBody("charge.success", "LP-AGENT1-DOES-NOT-EXIST", "success", 99000)},
-                {"other event", agent1ChargeBody("transfer.success", ref, "success", o.TotalCents)},
-                {"charge.failed", agent1ChargeBody("charge.success", ref, "failed", o.TotalCents)},
-                {"charge.abandoned", agent1ChargeBody("charge.success", ref, "abandoned", o.TotalCents)},
-                {"empty reference", agent1ChargeBody("charge.success", "", "success", o.TotalCents)},
+                {"unknown reference", paystackChargeBody("charge.success", "LP-AGENT1-DOES-NOT-EXIST", "success", 99000)},
+                {"other event", paystackChargeBody("transfer.success", ref, "success", o.TotalCents)},
+                {"charge.failed", paystackChargeBody("charge.success", ref, "failed", o.TotalCents)},
+                {"charge.abandoned", paystackChargeBody("charge.success", ref, "abandoned", o.TotalCents)},
+                {"empty reference", paystackChargeBody("charge.success", "", "success", o.TotalCents)},
         }
         for _, tc := range cases {
-                if err := r.Svc.HandlePaystackWebhook(tc.body, agent1Sign(t, agent1TestSecret, tc.body)); err != nil {
+                if err := r.Svc.HandlePaystackWebhook(tc.body, paystackSign(t, paystackTestSecret, tc.body)); err != nil {
                         t.Fatalf("%s must be acked with no error, got %v", tc.name, err)
                 }
         }
-        if status, _ := agent1OrderStatus(t, r, o.ID); status != models.OrderPending {
+        if status, _ := paystackOrderStatus(t, r, o.ID); status != models.OrderPending {
                 t.Fatalf("order must stay PENDING, got %s", status)
         }
-        if n := agent1Stock(t, r, pid); n != 40 {
+        if n := paystackStock(t, r, pid); n != 40 {
                 t.Fatalf("stock must be untouched, got %d", n)
         }
 }
@@ -350,23 +350,23 @@ func TestAgent1WebhookIgnoresNonSuccessAndUnknownRefs(t *testing.T) {
 // INVARIANT: a webhook reference must belong to a paystack-method payment.
 // A Daraja checkout id (or any other provider's token) pasted into a
 // charge.success must never complete an M-Pesa payment.
-func TestAgent1WebhookDoesNotCompleteNonPaystackPayment(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
-        pid := agent1ProductID(t, r)
-        o := agent1Checkout(t, r, models.CheckoutRequest{PaymentMethod: models.MethodMpesa, PaymentMode: models.ModeManual})
-        agent1AttachAnyRef(t, r, o.ID, "LP-AGENT1-MPESA-1", models.MethodMpesa)
+func TestPaystackProbeWebhookDoesNotCompleteNonPaystackPayment(t *testing.T) {
+        r := newPaystackRig(t, paystackTestSecret)
+        pid := paystackProductID(t, r)
+        o := paystackCheckout(t, r, models.CheckoutRequest{PaymentMethod: models.MethodMpesa, PaymentMode: models.ModeManual})
+        paystackAttachAnyRef(t, r, o.ID, "LP-AGENT1-MPESA-1", models.MethodMpesa)
 
-        body := agent1ChargeBody("charge.success", "LP-AGENT1-MPESA-1", "success", o.TotalCents)
-        if err := r.Svc.HandlePaystackWebhook(body, agent1Sign(t, agent1TestSecret, body)); err != nil {
+        body := paystackChargeBody("charge.success", "LP-AGENT1-MPESA-1", "success", o.TotalCents)
+        if err := r.Svc.HandlePaystackWebhook(body, paystackSign(t, paystackTestSecret, body)); err != nil {
                 t.Fatalf("webhook: %v", err)
         }
-        if status, _ := agent1OrderStatus(t, r, o.ID); status != models.OrderPending {
+        if status, _ := paystackOrderStatus(t, r, o.ID); status != models.OrderPending {
                 t.Fatalf("mpesa order must stay PENDING, got %s", status)
         }
-        if n := agent1Stock(t, r, pid); n != 40 {
+        if n := paystackStock(t, r, pid); n != 40 {
                 t.Fatalf("stock must be untouched, got %d", n)
         }
-        pays := agent1Payments(t, r, o.ID)
+        pays := paystackPayments(t, r, o.ID)
         if len(pays) != 1 || pays[0].Status != models.PaymentPending {
                 t.Fatalf("mpesa payment must stay PENDING: %+v", pays)
         }
@@ -375,26 +375,26 @@ func TestAgent1WebhookDoesNotCompleteNonPaystackPayment(t *testing.T) {
 // INVARIANT: money moved after a void is a refund problem, never a sale.
 // The webhook must acknowledge (Paystack stops retrying), leave the order
 // VOIDED, and not resurrect anything.
-func TestAgent1WebhookRefusesVoidedOrder(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
-        pid := agent1ProductID(t, r)
-        o := agent1Checkout(t, r, models.CheckoutRequest{})
+func TestPaystackProbeWebhookRefusesVoidedOrder(t *testing.T) {
+        r := newPaystackRig(t, paystackTestSecret)
+        pid := paystackProductID(t, r)
+        o := paystackCheckout(t, r, models.CheckoutRequest{})
         ref := "LP-AGENT1-VOID-1"
-        agent1AttachRef(t, r, o.ID, ref)
-        if _, err := r.Svc.Void(o.ID, "agent1 probe", agent1Principal()); err != nil {
+        paystackAttachRef(t, r, o.ID, ref)
+        if _, err := r.Svc.Void(o.ID, "paystack probe", paystackPrincipal()); err != nil {
                 t.Fatalf("void: %v", err)
         }
-        body := agent1ChargeBody("charge.success", ref, "success", o.TotalCents)
-        if err := r.Svc.HandlePaystackWebhook(body, agent1Sign(t, agent1TestSecret, body)); err != nil {
+        body := paystackChargeBody("charge.success", ref, "success", o.TotalCents)
+        if err := r.Svc.HandlePaystackWebhook(body, paystackSign(t, paystackTestSecret, body)); err != nil {
                 t.Fatalf("voided-order webhook must ack, got %v", err)
         }
-        if status, _ := agent1OrderStatus(t, r, o.ID); status != models.OrderVoided {
+        if status, _ := paystackOrderStatus(t, r, o.ID); status != models.OrderVoided {
                 t.Fatalf("order must stay VOIDED, got %s", status)
         }
-        if n := agent1Stock(t, r, pid); n != 40 {
+        if n := paystackStock(t, r, pid); n != 40 {
                 t.Fatalf("stock must be untouched, got %d", n)
         }
-        for _, p := range agent1Payments(t, r, o.ID) {
+        for _, p := range paystackPayments(t, r, o.ID) {
                 if p.Status == models.PaymentCompleted {
                         t.Fatalf("payment must not complete on a voided order: %+v", p)
                 }
@@ -404,16 +404,16 @@ func TestAgent1WebhookRefusesVoidedOrder(t *testing.T) {
 // Documents the deliberate "flag, don't block" amount policy: a signed
 // webhook whose amount differs from the payment row still completes the
 // order, but the discrepancy flag must be set for staff review.
-func TestAgent1WebhookAmountMismatchFlagsDiscrepancy(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
-        o := agent1Checkout(t, r, models.CheckoutRequest{})
+func TestPaystackProbeWebhookAmountMismatchFlagsDiscrepancy(t *testing.T) {
+        r := newPaystackRig(t, paystackTestSecret)
+        o := paystackCheckout(t, r, models.CheckoutRequest{})
         ref := "LP-AGENT1-MISMATCH-1"
-        agent1AttachRef(t, r, o.ID, ref)
-        body := agent1ChargeBody("charge.success", ref, "success", o.TotalCents-1)
-        if err := r.Svc.HandlePaystackWebhook(body, agent1Sign(t, agent1TestSecret, body)); err != nil {
+        paystackAttachRef(t, r, o.ID, ref)
+        body := paystackChargeBody("charge.success", ref, "success", o.TotalCents-1)
+        if err := r.Svc.HandlePaystackWebhook(body, paystackSign(t, paystackTestSecret, body)); err != nil {
                 t.Fatalf("webhook: %v", err)
         }
-        status, disc := agent1OrderStatus(t, r, o.ID)
+        status, disc := paystackOrderStatus(t, r, o.ID)
         if status != models.OrderPaid || !disc {
                 t.Fatalf("paid with discrepancy expected, got %s disc=%v", status, disc)
         }
@@ -422,10 +422,10 @@ func TestAgent1WebhookAmountMismatchFlagsDiscrepancy(t *testing.T) {
 // Mixed tender: the cash leg is banked at checkout, the paystack leg is
 // the only async money. The webhook must complete the sale with ONE stock
 // deduction, and replays must not re-deduct.
-func TestAgent1SplitCashPlusPaystackWebhook(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
-        pid := agent1ProductID(t, r)
-        o := agent1Checkout(t, r, models.CheckoutRequest{
+func TestPaystackProbeSplitCashPlusPaystackWebhook(t *testing.T) {
+        r := newPaystackRig(t, paystackTestSecret)
+        pid := paystackProductID(t, r)
+        o := paystackCheckout(t, r, models.CheckoutRequest{
                 PaymentMethod: models.MethodCash,
                 SplitPayments: []models.SplitLeg{
                         {Method: models.MethodCash, AmountCents: 10000},
@@ -436,32 +436,32 @@ func TestAgent1SplitCashPlusPaystackWebhook(t *testing.T) {
                 t.Fatalf("split with async leg must be PENDING, got %s", o.Status)
         }
         ref := "LP-AGENT1-SPLIT-1"
-        agent1AttachRef(t, r, o.ID, ref)
+        paystackAttachRef(t, r, o.ID, ref)
 
-        pays := agent1Payments(t, r, o.ID)
+        pays := paystackPayments(t, r, o.ID)
         if len(pays) != 2 || pays[0].Method != models.MethodCash || pays[0].Status != models.PaymentCompleted ||
                 pays[1].Method != models.MethodPaystack || pays[1].Status != models.PaymentPending || pays[1].Amount != 100000 {
                 t.Fatalf("split legs wrong: %+v", pays)
         }
-        if n := agent1Stock(t, r, pid); n != 40 {
+        if n := paystackStock(t, r, pid); n != 40 {
                 t.Fatalf("stock must wait for the async leg, got %d", n)
         }
 
-        body := agent1ChargeBody("charge.success", ref, "success", 100000)
-        sig := agent1Sign(t, agent1TestSecret, body)
+        body := paystackChargeBody("charge.success", ref, "success", 100000)
+        sig := paystackSign(t, paystackTestSecret, body)
         for i := 0; i < 2; i++ {
                 if err := r.Svc.HandlePaystackWebhook(body, sig); err != nil {
                         t.Fatalf("split webhook %d: %v", i, err)
                 }
         }
-        status, _ := agent1OrderStatus(t, r, o.ID)
+        status, _ := paystackOrderStatus(t, r, o.ID)
         if status != models.OrderPaid {
                 t.Fatalf("split order must be PAID, got %s", status)
         }
-        if n := agent1Stock(t, r, pid); n != 38 {
+        if n := paystackStock(t, r, pid); n != 38 {
                 t.Fatalf("stock must deduct exactly once, got %d", n)
         }
-        for _, p := range agent1Payments(t, r, o.ID) {
+        for _, p := range paystackPayments(t, r, o.ID) {
                 if p.Status != models.PaymentCompleted {
                         t.Fatalf("both legs must be COMPLETED: %+v", p)
                 }
@@ -473,23 +473,23 @@ func TestAgent1SplitCashPlusPaystackWebhook(t *testing.T) {
 // arrives as an unknown reference and is silently dropped — real money
 // captured, order left PENDING, nothing but a log line. This test encodes
 // current behavior; flipping it requires a reconciliation decision.
-func TestAgent1WebhookForSupersededReferenceCurrentlyDropped(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
-        pid := agent1ProductID(t, r)
-        o := agent1Checkout(t, r, models.CheckoutRequest{})
-        agent1AttachRef(t, r, o.ID, "LP-AGENT1-OLDREF")
+func TestPaystackProbeWebhookForSupersededReferenceCurrentlyDropped(t *testing.T) {
+        r := newPaystackRig(t, paystackTestSecret)
+        pid := paystackProductID(t, r)
+        o := paystackCheckout(t, r, models.CheckoutRequest{})
+        paystackAttachRef(t, r, o.ID, "LP-AGENT1-OLDREF")
         // Simulate re-init minting a fresh reference over the same row.
         if _, err := r.DB.Exec(r.DB.Rebind(`UPDATE payments SET checkout_request_id = 'LP-AGENT1-NEWREF' WHERE order_id = ?`), o.ID); err != nil {
                 t.Fatalf("re-init: %v", err)
         }
-        body := agent1ChargeBody("charge.success", "LP-AGENT1-OLDREF", "success", o.TotalCents)
-        if err := r.Svc.HandlePaystackWebhook(body, agent1Sign(t, agent1TestSecret, body)); err != nil {
+        body := paystackChargeBody("charge.success", "LP-AGENT1-OLDREF", "success", o.TotalCents)
+        if err := r.Svc.HandlePaystackWebhook(body, paystackSign(t, paystackTestSecret, body)); err != nil {
                 t.Fatalf("current behavior: unknown ref acks, got %v", err)
         }
-        if status, _ := agent1OrderStatus(t, r, o.ID); status != models.OrderPending {
+        if status, _ := paystackOrderStatus(t, r, o.ID); status != models.OrderPending {
                 t.Fatalf("current behavior: order stays PENDING, got %s", status)
         }
-        if n := agent1Stock(t, r, pid); n != 40 {
+        if n := paystackStock(t, r, pid); n != 40 {
                 t.Fatalf("stock untouched: %d", n)
         }
 }
@@ -499,17 +499,17 @@ func TestAgent1WebhookForSupersededReferenceCurrentlyDropped(t *testing.T) {
 // INVARIANT: with no Paystack secret anywhere, a paystack checkout must
 // stay PENDING forever on its own: no provider, no sweeper, no completion,
 // and the till reports unconfigured + manual M-Pesa route.
-func TestAgent1PaystackWithoutKeysNeverCompletes(t *testing.T) {
+func TestPaystackProbePaystackWithoutKeysNeverCompletes(t *testing.T) {
         t.Setenv("PAYSTACK_SECRET_KEY", "")
-        r := newAgent1Rig(t, "")
-        pid := agent1ProductID(t, r)
-        o := agent1Checkout(t, r, models.CheckoutRequest{})
+        r := newPaystackRig(t, "")
+        pid := paystackProductID(t, r)
+        o := paystackCheckout(t, r, models.CheckoutRequest{})
 
         r.Svc.SweepPaystack(context.Background()) // must be a safe no-op
-        if status, _ := agent1OrderStatus(t, r, o.ID); status != models.OrderPending {
+        if status, _ := paystackOrderStatus(t, r, o.ID); status != models.OrderPending {
                 t.Fatalf("order must stay PENDING without keys, got %s", status)
         }
-        if n := agent1Stock(t, r, pid); n != 40 {
+        if n := paystackStock(t, r, pid); n != 40 {
                 t.Fatalf("stock must be untouched, got %d", n)
         }
         cfg := r.Svc.PaymentConfig()
@@ -525,15 +525,15 @@ func TestAgent1PaystackWithoutKeysNeverCompletes(t *testing.T) {
 // (applyCloudConfig → settings.Set). The configured/enabled flags and the
 // M-Pesa route must react immediately, including cache invalidation when
 // the key is removed, and an explicit paystack_enabled=false must win.
-func TestAgent1PaymentConfigFollowsSettingsKeys(t *testing.T) {
+func TestPaystackProbePaymentConfigFollowsSettingsKeys(t *testing.T) {
         t.Setenv("PAYSTACK_SECRET_KEY", "")
-        r := newAgent1Rig(t, "")
+        r := newPaystackRig(t, "")
 
         cfg := r.Svc.PaymentConfig()
         if cfg.Paystack.Configured || cfg.Paystack.Enabled {
                 t.Fatalf("pre-config: flags must be false: %+v", cfg.Paystack)
         }
-        if err := r.ST.Set("paystack_secret_key", agent1TestSecret); err != nil {
+        if err := r.ST.Set("paystack_secret_key", paystackTestSecret); err != nil {
                 t.Fatalf("cloud-config write: %v", err)
         }
         cfg = r.Svc.PaymentConfig()
@@ -567,9 +567,9 @@ func TestAgent1PaymentConfigFollowsSettingsKeys(t *testing.T) {
 // Env-provided keys (deployment path) must also light the till up — and
 // FromEnv must say so, so the UI renders "(server keys)" instead of
 // pretending the key came from the cloud vault.
-func TestAgent1PaymentConfigEnvOverrideAndFromEnvGap(t *testing.T) {
-        t.Setenv("PAYSTACK_SECRET_KEY", agent1TestSecret)
-        r := newAgent1Rig(t, "")
+func TestPaystackProbePaymentConfigEnvOverrideAndFromEnvGap(t *testing.T) {
+        t.Setenv("PAYSTACK_SECRET_KEY", paystackTestSecret)
+        r := newPaystackRig(t, "")
         cfg := r.Svc.PaymentConfig()
         if !cfg.Paystack.Configured || !cfg.Paystack.Enabled {
                 t.Fatalf("env key must configure the till: %+v", cfg.Paystack)
@@ -585,25 +585,25 @@ func TestAgent1PaymentConfigEnvOverrideAndFromEnvGap(t *testing.T) {
 // ---- pre-network guards on init / verify / sweeper ----------------------
 
 // Init on a non-PENDING order must fail closed before any API call.
-func TestAgent1InitOnPaidOrVoidedOrderFailsClosed(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
-        o := agent1Checkout(t, r, models.CheckoutRequest{})
-        agent1AttachRef(t, r, o.ID, "LP-AGENT1-INITGUARD-1")
-        body := agent1ChargeBody("charge.success", "LP-AGENT1-INITGUARD-1", "success", o.TotalCents)
-        if err := r.Svc.HandlePaystackWebhook(body, agent1Sign(t, agent1TestSecret, body)); err != nil {
+func TestPaystackProbeInitOnPaidOrVoidedOrderFailsClosed(t *testing.T) {
+        r := newPaystackRig(t, paystackTestSecret)
+        o := paystackCheckout(t, r, models.CheckoutRequest{})
+        paystackAttachRef(t, r, o.ID, "LP-AGENT1-INITGUARD-1")
+        body := paystackChargeBody("charge.success", "LP-AGENT1-INITGUARD-1", "success", o.TotalCents)
+        if err := r.Svc.HandlePaystackWebhook(body, paystackSign(t, paystackTestSecret, body)); err != nil {
                 t.Fatalf("webhook: %v", err)
         }
-        if _, _, err := r.Svc.PaystackInit(o.ID, "", "", agent1Principal()); err == nil {
+        if _, _, err := r.Svc.PaystackInit(o.ID, "", "", paystackPrincipal()); err == nil {
                 t.Fatal("init on PAID order must fail")
         } else if !strings.Contains(err.Error(), "already paid") {
                 t.Fatalf("wrong error: %v", err)
         }
 
-        o2 := agent1Checkout(t, r, models.CheckoutRequest{})
-        if _, err := r.Svc.Void(o2.ID, "agent1", agent1Principal()); err != nil {
+        o2 := paystackCheckout(t, r, models.CheckoutRequest{})
+        if _, err := r.Svc.Void(o2.ID, "paystack", paystackPrincipal()); err != nil {
                 t.Fatalf("void: %v", err)
         }
-        if _, _, err := r.Svc.PaystackInit(o2.ID, "", "", agent1Principal()); err == nil {
+        if _, _, err := r.Svc.PaystackInit(o2.ID, "", "", paystackPrincipal()); err == nil {
                 t.Fatal("init on VOIDED order must fail")
         }
 }
@@ -611,38 +611,38 @@ func TestAgent1InitOnPaidOrVoidedOrderFailsClosed(t *testing.T) {
 // Verify must reject junk references (and unconfigured shops) before it
 // would ever reach the network; a well-formed but unknown reference is a
 // clean not-found.
-func TestAgent1PaystackVerifyRejectsBadReferences(t *testing.T) {
+func TestPaystackProbePaystackVerifyRejectsBadReferences(t *testing.T) {
         t.Setenv("PAYSTACK_SECRET_KEY", "")
-        rNoKey := newAgent1Rig(t, "")
-        o := agent1Checkout(t, rNoKey, models.CheckoutRequest{})
-        if _, err := rNoKey.Svc.PaystackVerify(o.ID, "LP-X", agent1Principal()); err == nil {
+        rNoKey := newPaystackRig(t, "")
+        o := paystackCheckout(t, rNoKey, models.CheckoutRequest{})
+        if _, err := rNoKey.Svc.PaystackVerify(o.ID, "LP-X", paystackPrincipal()); err == nil {
                 t.Fatal("verify without keys must fail closed")
         }
 
-        r := newAgent1Rig(t, agent1TestSecret)
-        o2 := agent1Checkout(t, r, models.CheckoutRequest{})
-        if _, err := r.Svc.PaystackVerify(o2.ID, "", agent1Principal()); err == nil {
+        r := newPaystackRig(t, paystackTestSecret)
+        o2 := paystackCheckout(t, r, models.CheckoutRequest{})
+        if _, err := r.Svc.PaystackVerify(o2.ID, "", paystackPrincipal()); err == nil {
                 t.Fatal("empty reference must fail")
         }
-        if _, err := r.Svc.PaystackVerify(o2.ID, strings.Repeat("x", 121), agent1Principal()); err == nil {
+        if _, err := r.Svc.PaystackVerify(o2.ID, strings.Repeat("x", 121), paystackPrincipal()); err == nil {
                 t.Fatal("over-long reference must fail")
         }
-        if _, err := r.Svc.PaystackVerify(o2.ID, "LP-AGENT1-UNKNOWN-REF", agent1Principal()); err == nil {
+        if _, err := r.Svc.PaystackVerify(o2.ID, "LP-AGENT1-UNKNOWN-REF", paystackPrincipal()); err == nil {
                 t.Fatal("unknown reference must fail (DB lookup precedes any API call)")
         }
-        if status, _ := agent1OrderStatus(t, r, o2.ID); status != models.OrderPending {
+        if status, _ := paystackOrderStatus(t, r, o2.ID); status != models.OrderPending {
                 t.Fatalf("order must stay PENDING, got %s", status)
         }
 }
 
 // The sweeper without a configured client must not touch pending rows.
-func TestAgent1SweepWithoutClientIsNoop(t *testing.T) {
+func TestPaystackProbeSweepWithoutClientIsNoop(t *testing.T) {
         t.Setenv("PAYSTACK_SECRET_KEY", "")
-        r := newAgent1Rig(t, "")
-        o := agent1Checkout(t, r, models.CheckoutRequest{})
-        agent1AttachRef(t, r, o.ID, "LP-AGENT1-SWEEP-1")
+        r := newPaystackRig(t, "")
+        o := paystackCheckout(t, r, models.CheckoutRequest{})
+        paystackAttachRef(t, r, o.ID, "LP-AGENT1-SWEEP-1")
         r.Svc.SweepPaystack(context.Background())
-        pays := agent1Payments(t, r, o.ID)
+        pays := paystackPayments(t, r, o.ID)
         if len(pays) != 1 || pays[0].Status != models.PaymentPending {
                 t.Fatalf("sweep without client must leave the payment alone: %+v", pays)
         }
@@ -650,17 +650,17 @@ func TestAgent1SweepWithoutClientIsNoop(t *testing.T) {
 
 // ---- full-stack HTTP probes ---------------------------------------------
 
-// agent1Server mirrors the handlers_test wiring but also exposes the shop
+// paystackServer mirrors the handlers_test wiring but also exposes the shop
 // service so probes can stage reference rows (PaystackInit needs the real
 // API, which is off-limits here).
-type agent1Server struct {
+type paystackServer struct {
         engine  *gin.Engine
         svc     *services.Service
         admin   string
         cashier string
 }
 
-func newAgent1Server(t *testing.T) *agent1Server {
+func newAgent1Server(t *testing.T) *paystackServer {
         t.Helper()
         gin.SetMode(gin.TestMode)
         dir := t.TempDir()
@@ -719,17 +719,17 @@ func newAgent1Server(t *testing.T) *agent1Server {
         cashier := login(t, engine, "cashier", "cashier123")
         rotateFresh(t, engine, cashier)
         cashier = login(t, engine, "cashier", rotatedPassword)
-        return &agent1Server{engine: engine, svc: svc, admin: admin, cashier: cashier}
+        return &paystackServer{engine: engine, svc: svc, admin: admin, cashier: cashier}
 }
 
 // Cloud-config equivalence: keys written through the settings API light
 // up PaymentConfig without ever leaking the secret back out.
-func TestAgent1ConfigViaSettingsAPINoSecretLeak(t *testing.T) {
+func TestPaystackProbeConfigViaSettingsAPINoSecretLeak(t *testing.T) {
         s := newAgent1Server(t)
         w := do(t, s.engine, "PUT", "/api/v1/settings", s.admin, map[string]any{
                 "values": map[string]string{
-                        "paystack_secret_key": agent1TestSecret,
-                        "paystack_public_key": agent1TestPublic,
+                        "paystack_secret_key": paystackTestSecret,
+                        "paystack_public_key": paystackTestPublic,
                 },
         })
         if w.Code != 200 {
@@ -739,14 +739,14 @@ func TestAgent1ConfigViaSettingsAPINoSecretLeak(t *testing.T) {
         if w.Code != 200 {
                 t.Fatalf("config: %d", w.Code)
         }
-        if strings.Contains(w.Body.String(), agent1TestSecret) || strings.Contains(w.Body.String(), "sk_") {
+        if strings.Contains(w.Body.String(), paystackTestSecret) || strings.Contains(w.Body.String(), "sk_") {
                 t.Fatalf("payment config leaked a secret-shaped value: %s", w.Body.String())
         }
         cfg := dataMap(t, w)["paystack"].(map[string]any)
         if cfg["configured"] != true || cfg["enabled"] != true {
                 t.Fatalf("flags must flip on after the key lands: %v", cfg)
         }
-        if cfg["publicKey"] != agent1TestPublic {
+        if cfg["publicKey"] != paystackTestPublic {
                 t.Fatalf("public key must be echoed for the popup: %v", cfg["publicKey"])
         }
         // Snapshot masks the secret.
@@ -760,15 +760,15 @@ func TestAgent1ConfigViaSettingsAPINoSecretLeak(t *testing.T) {
 // End-to-end through the real router: settings-staged key → paystack
 // checkout → signed public webhook → PAID; bad signature → 401; replay →
 // 200 and idempotent; oversized body → 4xx before any money moves.
-func TestAgent1WebhookEndToEndViaRouter(t *testing.T) {
+func TestPaystackProbeWebhookEndToEndViaRouter(t *testing.T) {
         s := newAgent1Server(t)
         do(t, s.engine, "PUT", "/api/v1/settings", s.admin, map[string]any{
-                "values": map[string]string{"paystack_secret_key": agent1TestSecret},
+                "values": map[string]string{"paystack_secret_key": paystackTestSecret},
         })
         w := do(t, s.engine, "POST", "/api/v1/orders/checkout", s.cashier, map[string]any{
                 "items":         []map[string]any{{"productId": 1, "qty": 2}},
                 "paymentMethod": "paystack",
-                "clientUuid":    "agent1-e2e-1",
+                "clientUuid":    "paystack-e2e-1",
         })
         if w.Code != 201 {
                 t.Fatalf("checkout: %d %s", w.Code, w.Body.String())
@@ -783,8 +783,8 @@ func TestAgent1WebhookEndToEndViaRouter(t *testing.T) {
                 t.Fatalf("stage ref: %d rows", n)
         }
 
-        body := agent1ChargeBody("charge.success", ref, "success", 110000)
-        sig := agent1Sign(t, agent1TestSecret, body)
+        body := paystackChargeBody("charge.success", ref, "success", 110000)
+        sig := paystackSign(t, paystackTestSecret, body)
 
         post := func(b []byte, signature string) *httptest.ResponseRecorder {
                 req := httptest.NewRequest("POST", "/api/v1/payments/paystack/webhook", strings.NewReader(string(b)))
@@ -827,13 +827,13 @@ func TestAgent1WebhookEndToEndViaRouter(t *testing.T) {
 // guard against accidental float money math sneaking into the completion
 // path: totals are int64 cents end-to-end (this mirrors the backend rule;
 // kept tiny since the compiler enforces int64 signatures anyway).
-func TestAgent1AmountsAreIntegerCents(t *testing.T) {
-        r := newAgent1Rig(t, agent1TestSecret)
-        o := agent1Checkout(t, r, models.CheckoutRequest{})
+func TestPaystackProbeAmountsAreIntegerCents(t *testing.T) {
+        r := newPaystackRig(t, paystackTestSecret)
+        o := paystackCheckout(t, r, models.CheckoutRequest{})
         if o.TotalCents != 110000 { // 2 × TS-001 @ 550.00 KES, VAT-inclusive
                 t.Fatalf("total must be exact minor units, got %d", o.TotalCents)
         }
-        pays := agent1Payments(t, r, o.ID)
+        pays := paystackPayments(t, r, o.ID)
         if pays[0].Amount != o.TotalCents {
                 t.Fatalf("paystack payment must equal payable cents: %+v vs %d", pays[0], o.TotalCents)
         }

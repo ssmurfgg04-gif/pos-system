@@ -1,6 +1,6 @@
 package main
 
-// agent2_adoption_probe_test.go — T2 adversarial probe: shop adoption
+// adoption_probe_test.go — adversarial probe: shop adoption: shop adoption
 // (ensureDefaultShop, the orphaned-pos.db recovery) and desktop data-dir
 // stability across updates. These live in package main because that is
 // where the boot-time recovery logic runs.
@@ -23,10 +23,10 @@ import (
 	"posapp/internal/tenants"
 )
 
-// agent2LegacyDB opens pos.db at dir, migrates it (v1 schema) and — when
+// adoptionLegacyDB opens pos.db at dir, migrates it (v1 schema) and — when
 // populated — seeds demo users + catalog, i.e. what an old pre-tenancy
 // install looks like on disk.
-func agent2LegacyDB(t *testing.T, dir string, populate bool) (*database.DB, string) {
+func adoptionLegacyDB(t *testing.T, dir string, populate bool) (*database.DB, string) {
 	t.Helper()
 	path := filepath.Join(dir, "pos.db")
 	db, err := database.Open("sqlite", path, "")
@@ -45,7 +45,7 @@ func agent2LegacyDB(t *testing.T, dir string, populate bool) (*database.DB, stri
 	return db, path
 }
 
-func agent2ProductCount(t *testing.T, db *database.DB) int64 {
+func adoptionProductCount(t *testing.T, db *database.DB) int64 {
 	t.Helper()
 	var n int64
 	if err := db.QueryRow(`SELECT COUNT(*) FROM products`).Scan(&n); err != nil {
@@ -57,10 +57,10 @@ func agent2ProductCount(t *testing.T, db *database.DB) int64 {
 // Registry points at a deleted file, but the legacy pos.db still holds the
 // inventory: adoption must recover it as its own shop, re-register its
 // users, and the inventory must be reachable through the pool.
-func TestAgent2AdoptionRecoversOrphanWhenRegistryDangling(t *testing.T) {
+func TestAdoptionProbeRecoversOrphanWhenRegistryDangling(t *testing.T) {
 	dir := t.TempDir()
-	db, posPath := agent2LegacyDB(t, dir, true)
-	before := agent2ProductCount(t, db)
+	db, posPath := adoptionLegacyDB(t, dir, true)
+	before := adoptionProductCount(t, db)
 	if before == 0 {
 		t.Fatal("setup: legacy pos.db should hold demo inventory")
 	}
@@ -102,21 +102,21 @@ func TestAgent2AdoptionRecoversOrphanWhenRegistryDangling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open recovered shop: %v", err)
 	}
-	if n := agent2ProductCount(t, reopened); n != before {
+	if n := adoptionProductCount(t, reopened); n != before {
 		t.Errorf("recovered shop lost inventory: %d products, want %d", n, before)
 	}
 	// The dangling shop opens (recreated) EMPTY — no cross-contamination.
 	if dangling, err := pool.Open(ghost.ID); err != nil {
 		t.Errorf("dangling shop should reopen cleanly, got %v", err)
-	} else if n := agent2ProductCount(t, dangling); n != 0 {
+	} else if n := adoptionProductCount(t, dangling); n != 0 {
 		t.Errorf("dangling shop must stay empty, has %d products", n)
 	}
 }
 
 // Fresh box upgrade: no shops.json at all, legacy pos.db with data.
-func TestAgent2AdoptionFreshRegistryAdoptsLegacyDB(t *testing.T) {
+func TestAdoptionProbeFreshRegistryAdoptsLegacyDB(t *testing.T) {
 	dir := t.TempDir()
-	db, posPath := agent2LegacyDB(t, dir, true)
+	db, posPath := adoptionLegacyDB(t, dir, true)
 
 	reg, err := tenants.Load(dir)
 	if err != nil {
@@ -139,9 +139,9 @@ func TestAgent2AdoptionFreshRegistryAdoptsLegacyDB(t *testing.T) {
 }
 
 // Already referenced → adoption is a no-op (no duplicate shops).
-func TestAgent2AdoptionNoopWhenAlreadyReferenced(t *testing.T) {
+func TestAdoptionProbeNoopWhenAlreadyReferenced(t *testing.T) {
 	dir := t.TempDir()
-	db, posPath := agent2LegacyDB(t, dir, true)
+	db, posPath := adoptionLegacyDB(t, dir, true)
 
 	reg, err := tenants.Load(dir)
 	if err != nil {
@@ -162,9 +162,9 @@ func TestAgent2AdoptionNoopWhenAlreadyReferenced(t *testing.T) {
 }
 
 // Empty pos.db with named shops → left alone, no junk shop created.
-func TestAgent2AdoptionSkipsEmptyLegacyDBWhenShopsExist(t *testing.T) {
+func TestAdoptionProbeSkipsEmptyLegacyDBWhenShopsExist(t *testing.T) {
 	dir := t.TempDir()
-	db, posPath := agent2LegacyDB(t, dir, false) // migrate only: 0 products, 0 users
+	db, posPath := adoptionLegacyDB(t, dir, false) // migrate only: 0 products, 0 users
 
 	reg, err := tenants.Load(dir)
 	if err != nil {
@@ -190,9 +190,9 @@ func TestAgent2AdoptionSkipsEmptyLegacyDBWhenShopsExist(t *testing.T) {
 
 // Multi-shop box: orphan pos.db WITH data + two named shops → recovered as
 // its own shop, named shops untouched.
-func TestAgent2AdoptionMultiShopRecovery(t *testing.T) {
+func TestAdoptionProbeMultiShopRecovery(t *testing.T) {
 	dir := t.TempDir()
-	db, posPath := agent2LegacyDB(t, dir, true)
+	db, posPath := adoptionLegacyDB(t, dir, true)
 
 	reg, err := tenants.Load(dir)
 	if err != nil {
@@ -221,7 +221,7 @@ func TestAgent2AdoptionMultiShopRecovery(t *testing.T) {
 // Desktop data dir: deterministic per OS user, independent of cwd and of
 // transient env — an updated exe at the same location must resolve the SAME
 // directory (and therefore the SAME pos.db).
-func TestAgent2UserDataDirDeterministicAcrossUpdates(t *testing.T) {
+func TestUserDataDirDeterministicAcrossUpdates(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", base)
 

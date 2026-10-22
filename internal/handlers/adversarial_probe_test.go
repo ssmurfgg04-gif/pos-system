@@ -14,7 +14,7 @@ package handlers_test
 // order-number allocation under load, multi-unit stock drain, concurrent
 // void races, store-credit overdraft races, ws hub auth/leaks/stalls,
 // CSV formula injection + hostile imports, payload type confusion, and
-// several money-integrity bug reproductions (named TestAgent5Bug*).
+// several money-integrity bug reproductions (named TestAdversarialProbeBug*).
 
 import (
         "bytes"
@@ -169,7 +169,7 @@ func a5ReadEvent(t *testing.T, conn *websocket.Conn, within time.Duration) (stri
 
 // ---- 1. JWT & token attacks ----
 
-func TestAgent5JWTTampering(t *testing.T) {
+func TestAdversarialProbeJWTTampering(t *testing.T) {
         engine, admin, _, _ := newTestServer(t)
 
         // Baseline: a valid token works.
@@ -247,7 +247,7 @@ func TestAgent5JWTTampering(t *testing.T) {
 
 // ---- 2. RBAC + self-service IDOR battery (extends TestRBACGates) ----
 
-func TestAgent5PermissionBypassBattery(t *testing.T) {
+func TestAdversarialProbePermissionBypassBattery(t *testing.T) {
         engine, admin, cashier, designer := newTestServer(t)
 
         me := do(t, engine, "GET", "/api/v1/me", admin, nil)
@@ -338,7 +338,7 @@ func TestAgent5PermissionBypassBattery(t *testing.T) {
 // throttled globally, so password spraying across a user list is unthrottled
 // (each account still limited to 10/min). This pins the per-username half;
 // the cross-username gap is reported in the worklog, not asserted away.
-func TestAgent5LoginSprayPerUsernameOnly(t *testing.T) {
+func TestAdversarialProbeLoginSprayPerUsernameOnly(t *testing.T) {
         engine, _, _, _ := newTestServer(t)
         // 12 distinct usernames, one bad password each: all must be plain 401s.
         for i := 0; i < 12; i++ {
@@ -356,7 +356,7 @@ func TestAgent5LoginSprayPerUsernameOnly(t *testing.T) {
         sawLimit := false
         for i := 0; i < 11; i++ {
                 w := do(t, engine, "POST", "/api/v1/auth/login", "", map[string]any{
-                        "username": "sprayagent0", "password": "guess-2",
+                        "username": "sprayuser0", "password": "guess-2",
                 })
                 if w.Code == 429 {
                         sawLimit = true
@@ -369,7 +369,7 @@ func TestAgent5LoginSprayPerUsernameOnly(t *testing.T) {
 
 // Extends TestPinLoginAndLockout: the lock survives further wrong attempts,
 // blocks the CORRECT pin, and an admin PIN reset clears it.
-func TestAgent5PINLockoutPersistenceAndReset(t *testing.T) {
+func TestAdversarialProbePINLockoutPersistenceAndReset(t *testing.T) {
         engine, admin, _, _ := newTestServer(t)
         w := do(t, engine, "GET", "/api/v1/auth/pin-users", "", nil)
         if w.Code != 200 {
@@ -418,7 +418,7 @@ func TestAgent5PINLockoutPersistenceAndReset(t *testing.T) {
 
 // ---- 4. Concurrency: order numbers, stock drain, void races, credit ----
 
-func TestAgent5OrderNumberUniquenessUnderLoad(t *testing.T) {
+func TestAdversarialProbeOrderNumberUniquenessUnderLoad(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         pid := a5CreateProduct(t, engine, admin, map[string]any{
                 "sku": "A5-SEQ", "name": "A5 Seq", "categoryId": 1,
@@ -471,7 +471,7 @@ func TestAgent5OrderNumberUniquenessUnderLoad(t *testing.T) {
         }
 }
 
-func TestAgent5ParallelDrainNoNegativeStock(t *testing.T) {
+func TestAdversarialProbeParallelDrainNoNegativeStock(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         const stock = 10
         const racers = 30
@@ -515,7 +515,7 @@ func TestAgent5ParallelDrainNoNegativeStock(t *testing.T) {
         }
 }
 
-func TestAgent5ConcurrentVoidSingleRestore(t *testing.T) {
+func TestAdversarialProbeConcurrentVoidSingleRestore(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         a5CreateProduct(t, engine, admin, map[string]any{
                 "sku": "A5-VOID", "name": "A5 Void", "categoryId": 1,
@@ -566,7 +566,7 @@ func TestAgent5ConcurrentVoidSingleRestore(t *testing.T) {
         }
 }
 
-func TestAgent5CreditOverdrawUnderConcurrency(t *testing.T) {
+func TestAdversarialProbeCreditOverdrawUnderConcurrency(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         a5CreateProduct(t, engine, admin, map[string]any{
                 "sku": "A5-CRED", "name": "A5 Cred", "categoryId": 1,
@@ -629,14 +629,14 @@ func TestAgent5CreditOverdrawUnderConcurrency(t *testing.T) {
         }
 }
 
-// ---- 5. Money-integrity bug reproductions (TestAgent5Bug*) ----
+// ---- 5. Money-integrity bug reproductions (TestAdversarialProbeBug*) ----
 
 // BUG: the M-Pesa callback path completes a payment on an already-VOIDED
 // order. completePayment only guards the ORDER transition (status='PENDING')
 // but flips the payment row to COMPLETED unconditionally (guard is
 // status != 'COMPLETED', which a VOIDED payment passes), mints gift cards,
 // and broadcasts ORDER_PAID — with no discrepancy flag and no re-open.
-func TestAgent5BugCallbackCompletesVoidedOrder(t *testing.T) {
+func TestAdversarialProbeBugCallbackCompletesVoidedOrder(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         a5SetSetting(t, engine, admin, "mpesa_mock_delay_ms", "60000")
         w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
@@ -693,7 +693,7 @@ func TestAgent5BugCallbackCompletesVoidedOrder(t *testing.T) {
 // BUG: loyalty points EARNED on a paid order survive voiding it. The void
 // refunds redeemed points but never claws back earned ones, so repeated
 // buy→void cycles mint spendable points with zero net sales.
-func TestAgent5BugLoyaltyKeptOnVoid(t *testing.T) {
+func TestAdversarialProbeBugLoyaltyKeptOnVoid(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         a5SetSetting(t, engine, admin, "loyalty_earn_per_cents", "100") // 1 pt / KES 1
         w := do(t, engine, "POST", "/api/v1/customers", admin, map[string]any{"name": "A5 Loyalty"})
@@ -733,7 +733,7 @@ func TestAgent5BugLoyaltyKeptOnVoid(t *testing.T) {
 // points even for a customer-bearing order — the earn only lives inside
 // completePayment (async paths), contradicting the code comment claiming
 // "cash, M-Pesa, credit, and tab settles alike".
-func TestAgent5BugCashCheckoutEarnsNoLoyalty(t *testing.T) {
+func TestAdversarialProbeBugCashCheckoutEarnsNoLoyalty(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         a5SetSetting(t, engine, admin, "loyalty_earn_per_cents", "100")
         w := do(t, engine, "POST", "/api/v1/customers", admin, map[string]any{"name": "A5 Cash Cust"})
@@ -756,7 +756,7 @@ func TestAgent5BugCashCheckoutEarnsNoLoyalty(t *testing.T) {
 // BUG: a 0.00-priced product can never be sold — the discount sanity check
 // (discount >= subtotal → reject) fires on subtotal 0 with discount 0,
 // producing "discount out of range (0 to -1)".
-func TestAgent5BugZeroPriceCheckoutRejected(t *testing.T) {
+func TestAdversarialProbeBugZeroPriceCheckoutRejected(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         pid := a5CreateProduct(t, engine, admin, map[string]any{
                 "sku": "A5-FREE", "name": "A5 Freebie", "categoryId": 1,
@@ -774,7 +774,7 @@ func TestAgent5BugZeroPriceCheckoutRejected(t *testing.T) {
 
 // Money-integrity guardrails that DO hold: discount boundaries and the
 // overpayment/negative-payment walls.
-func TestAgent5DiscountAndRefundBoundaries(t *testing.T) {
+func TestAdversarialProbeDiscountAndRefundBoundaries(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         a5CreateProduct(t, engine, admin, map[string]any{
                 "sku": "A5-DISC", "name": "A5 Disc", "categoryId": 1,
@@ -848,7 +848,7 @@ func TestAgent5DiscountAndRefundBoundaries(t *testing.T) {
 
 // ---- 6. CSV formula injection + hostile imports ----
 
-func TestAgent5CSVFormulaInjectionExport(t *testing.T) {
+func TestAdversarialProbeCSVFormulaInjectionExport(t *testing.T) {
         engine, admin, _, _ := newTestServer(t)
         names := []string{"=1+1", "+SUM(A1)", "-2", "@xplo"}
         for i, n := range names {
@@ -880,7 +880,7 @@ func TestAgent5CSVFormulaInjectionExport(t *testing.T) {
         }
 }
 
-func TestAgent5CSVImportHostility(t *testing.T) {
+func TestAdversarialProbeCSVImportHostility(t *testing.T) {
         engine, admin, _, _ := newTestServer(t)
         header := "sku,barcode,name,category,price,cost,stock,track_stock,active\n"
         row := "IMP-1,4001234500999,Import Widget,Cats,10.00,5.00,3,true,true\n"
@@ -934,7 +934,7 @@ func TestAgent5CSVImportHostility(t *testing.T) {
 
 // ---- 7. Payload hostility: sizes, types, filters, unicode ----
 
-func TestAgent5PayloadTypeConfusionAndLimits(t *testing.T) {
+func TestAdversarialProbePayloadTypeConfusionAndLimits(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         a5CreateProduct(t, engine, admin, map[string]any{
                 "sku": "A5-TYPE", "name": "A5 Type", "categoryId": 1,
@@ -1001,7 +1001,7 @@ func TestAgent5PayloadTypeConfusionAndLimits(t *testing.T) {
         }
 }
 
-func TestAgent5UnicodeHomoglyphUsernames(t *testing.T) {
+func TestAdversarialProbeUnicodeHomoglyphUsernames(t *testing.T) {
         t.Setenv("ALLOW_SIGNUP", "true")
         engine, _, _, _ := newTestServer(t)
         bad := []string{
@@ -1033,14 +1033,14 @@ func TestAgent5UnicodeHomoglyphUsernames(t *testing.T) {
         }
         // Positive control still works.
         w := do(t, engine, "POST", "/api/v1/auth/signup", "", map[string]any{
-                "username": "agent5-ok", "password": "valid-pass-1", "shopName": "Valid Shop",
+                "username": "adversarial-ok", "password": "valid-pass-1", "shopName": "Valid Shop",
         })
         if w.Code != 201 {
                 t.Errorf("valid ASCII username must 201, got %d", w.Code)
         }
 }
 
-func TestAgent5OrdersFilterHostility(t *testing.T) {
+func TestAdversarialProbeOrdersFilterHostility(t *testing.T) {
         engine, _, cashier, _ := newTestServer(t)
         if c := a5Code(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
                 "items":         []map[string]any{{"productId": 1, "qty": 1}},
@@ -1074,7 +1074,7 @@ func TestAgent5OrdersFilterHostility(t *testing.T) {
 
 // ---- 8. WebSocket hub: auth handshake, cross-shop leak, slow clients ----
 
-func TestAgent5WSAuthHandshake(t *testing.T) {
+func TestAdversarialProbeWSAuthHandshake(t *testing.T) {
         engine, _, cashier, _ := newTestServer(t)
         srv := httptest.NewServer(engine)
         defer srv.Close()
@@ -1115,7 +1115,7 @@ func TestAgent5WSAuthHandshake(t *testing.T) {
 // shop's ORDER_PAID / ORDER_VOIDED broadcasts (customer names, totals,
 // payment phone numbers). Shop A's cashier watching shop B's sales is a
 // cross-tenant data leak on a multi-shop box.
-func TestAgent5BugWSCrossShopEventLeak(t *testing.T) {
+func TestAdversarialProbeBugWSCrossShopEventLeak(t *testing.T) {
         t.Setenv("ALLOW_SIGNUP", "true")
         engine, _, _, _ := newTestServer(t)
         tokA, _ := signup(t, engine, "wsa5", "wsa5pass1", "WS Shop A")
@@ -1157,7 +1157,7 @@ func TestAgent5BugWSCrossShopEventLeak(t *testing.T) {
 // Broadcasts with a stalled (non-reading) client must never stall the HTTP
 // request path — big orders are pushed, the buffer fills, the hub drops the
 // client, and checkouts keep completing.
-func TestAgent5WSBroadcastNeverStalls(t *testing.T) {
+func TestAdversarialProbeWSBroadcastNeverStalls(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         pid := a5CreateProduct(t, engine, admin, map[string]any{
                 "sku": "A5-STALL", "name": "A5 Stall", "categoryId": 1,
@@ -1211,7 +1211,7 @@ func TestAgent5WSBroadcastNeverStalls(t *testing.T) {
 // foreign stock mutation, held-sale discards, search-scoping, and daily
 // report isolation. Database-per-tenant says every one of these fails
 // closed (4xx) and every report shows ONLY this shop's numbers.
-func TestAgent5CrossShopWriteBattery(t *testing.T) {
+func TestAdversarialProbeCrossShopWriteBattery(t *testing.T) {
         t.Setenv("ALLOW_SIGNUP", "true")
         engine, admin, _, _ := newTestServer(t)
         tokB, _ := signup(t, engine, "a5cswb", "a5cswbpass1", "A5 CSW Shop B")
@@ -1380,7 +1380,7 @@ func TestAgent5CrossShopWriteBattery(t *testing.T) {
 // Void must be exactly-once for BOTH side effects: stock restore and
 // redeemed-points refund. Second void on the same order is rejected and
 // must move nothing.
-func TestAgent5VoidExactlyOnceStockAndPoints(t *testing.T) {
+func TestAdversarialProbeVoidExactlyOnceStockAndPoints(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         a5SetSetting(t, engine, admin, "loyalty_earn_per_cents", "100") // 1 pt / KES 1
         pid := a5CreateProduct(t, engine, admin, map[string]any{
@@ -1467,7 +1467,7 @@ func TestAgent5VoidExactlyOnceStockAndPoints(t *testing.T) {
 // (zero-amount evidence) must never silently complete a payment as clean.
 // completePayment only flags discrepancy when amountCents > 0 and differs —
 // zero slips through the check entirely.
-func TestAgent5BugZeroAmountCallbackMarksPaidSilently(t *testing.T) {
+func TestAdversarialProbeBugZeroAmountCallbackMarksPaidSilently(t *testing.T) {
         engine, admin, cashier, _ := newTestServer(t)
         a5SetSetting(t, engine, admin, "mpesa_mock_delay_ms", "60000")
         w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{

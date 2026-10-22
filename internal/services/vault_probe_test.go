@@ -1,11 +1,11 @@
 package services
 
-// agent3_vault_probe_test.go — T3 adversarial probes for the cloud config
+// vault_probe_test.go — adversarial probes for the cloud config
 // vault (cloudconfig.go), the team sync engine (teamsync.go) and device
 // identity (synccloud.go / teamjoin.go) against a FAKE Supabase.
 //
 // Conventions follow synccloud_test.go (fakeSupabase) but the fake here is
-// self-contained (agent3FakeCloud) so it can model revocation, partial
+// self-contained (vaultFakeCloud) so it can model revocation, partial
 // push commits, poison events and the sync_device_config RPC contract.
 
 import (
@@ -32,14 +32,14 @@ import (
 // Fake cloud
 // ---------------------------------------------------------------------------
 
-type agent3PushEvent struct {
+type vaultPushEvent struct {
         Entity     string          `json:"entity"`
         Op         string          `json:"op"`
         ClientUUID string          `json:"client_uuid"`
         Payload    json.RawMessage `json:"payload"`
 }
 
-type agent3Cloud struct {
+type vaultCloud struct {
         mu      sync.Mutex
         srv     *httptest.Server
         selfURL string
@@ -70,8 +70,8 @@ type agent3Cloud struct {
         joinCalls     int
 }
 
-func newAgent3Cloud(t *testing.T) *agent3Cloud {
-        f := &agent3Cloud{
+func newVaultCloud(t *testing.T) *vaultCloud {
+        f := &vaultCloud{
                 team:        "VAULT-TEAM",
                 autoApprove: true,
                 device:      map[string]string{},
@@ -134,24 +134,24 @@ func newAgent3Cloud(t *testing.T) *agent3Cloud {
                 defer f.mu.Unlock()
                 f.registerCalls++
                 if len(in.DeviceID) < 8 || len(in.SecretHash) < 32 {
-                        agent3RPC(w, map[string]any{"ok": false, "error": "invalid identity"})
+                        vaultRPC(w, map[string]any{"ok": false, "error": "invalid identity"})
                         return
                 }
                 if f.registerBlocked {
-                        agent3RPC(w, map[string]any{"ok": false, "error": "no store is registered in the cloud yet"})
+                        vaultRPC(w, map[string]any{"ok": false, "error": "no store is registered in the cloud yet"})
                         return
                 }
                 if hash, ok := f.device[in.DeviceID]; ok && hash != in.SecretHash {
-                        agent3RPC(w, map[string]any{"ok": false, "error": "identity mismatch"})
+                        vaultRPC(w, map[string]any{"ok": false, "error": "identity mismatch"})
                         return
                 }
                 if f.revoked[in.DeviceID] {
-                        agent3RPC(w, map[string]any{"ok": false, "error": "device revoked"})
+                        vaultRPC(w, map[string]any{"ok": false, "error": "device revoked"})
                         return
                 }
                 f.device[in.DeviceID] = in.SecretHash
                 f.approved[in.DeviceID] = f.autoApprove || f.approved[in.DeviceID]
-                agent3RPC(w, map[string]any{"ok": true, "approved": f.approved[in.DeviceID],
+                vaultRPC(w, map[string]any{"ok": true, "approved": f.approved[in.DeviceID],
                         "team_code": f.team, "pending": !f.approved[in.DeviceID]})
         })
 
@@ -161,19 +161,19 @@ func newAgent3Cloud(t *testing.T) *agent3Cloud {
                 var in struct {
                         DeviceID   string            `json:"p_device_id"`
                         SecretHash string            `json:"p_secret_hash"`
-                        Events     []agent3PushEvent `json:"p_events"`
+                        Events     []vaultPushEvent `json:"p_events"`
                 }
                 json.NewDecoder(r.Body).Decode(&in)
                 f.mu.Lock()
                 defer f.mu.Unlock()
                 f.pushCalls++
                 if f.device[in.DeviceID] != in.SecretHash || !f.approved[in.DeviceID] || f.revoked[in.DeviceID] {
-                        agent3RPC(w, map[string]any{"ok": false, "error": "device not recognized"})
+                        vaultRPC(w, map[string]any{"ok": false, "error": "device not recognized"})
                         return
                 }
                 for _, ev := range in.Events {
                         if f.poisonEntity != "" && ev.Entity == f.poisonEntity {
-                                agent3RPC(w, map[string]any{"ok": false, "error": "poison entity rejected"})
+                                vaultRPC(w, map[string]any{"ok": false, "error": "poison entity rejected"})
                                 return
                         }
                 }
@@ -192,10 +192,10 @@ func newAgent3Cloud(t *testing.T) *agent3Cloud {
                 }
                 if f.failPushNext > 0 {
                         f.failPushNext-- // events ARE committed; the response is lost
-                        agent3RPC(w, map[string]any{"ok": false, "error": "connection reset mid-push"})
+                        vaultRPC(w, map[string]any{"ok": false, "error": "connection reset mid-push"})
                         return
                 }
-                agent3RPC(w, map[string]any{"ok": true, "pushed": fresh})
+                vaultRPC(w, map[string]any{"ok": true, "pushed": fresh})
         })
 
         // POST /rest/v1/rpc/sync_pull
@@ -210,7 +210,7 @@ func newAgent3Cloud(t *testing.T) *agent3Cloud {
                 defer f.mu.Unlock()
                 f.pullCalls++
                 if f.device[in.DeviceID] != in.SecretHash || !f.approved[in.DeviceID] || f.revoked[in.DeviceID] {
-                        agent3RPC(w, map[string]any{"ok": false, "error": "device not recognized"})
+                        vaultRPC(w, map[string]any{"ok": false, "error": "device not recognized"})
                         return
                 }
                 out := []map[string]any{}
@@ -220,7 +220,7 @@ func newAgent3Cloud(t *testing.T) *agent3Cloud {
                                 out = append(out, ev)
                         }
                 }
-                agent3RPC(w, map[string]any{"ok": true, "events": out})
+                vaultRPC(w, map[string]any{"ok": true, "events": out})
         })
 
         // POST /rest/v1/rpc/sync_device_config — the key vault RPC.
@@ -234,10 +234,10 @@ func newAgent3Cloud(t *testing.T) *agent3Cloud {
                 defer f.mu.Unlock()
                 f.configCalls++
                 if f.device[in.DeviceID] != in.SecretHash || !f.approved[in.DeviceID] || f.revoked[in.DeviceID] {
-                        agent3RPC(w, map[string]any{"ok": false, "error": "device not recognized"})
+                        vaultRPC(w, map[string]any{"ok": false, "error": "device not recognized"})
                         return
                 }
-                agent3RPC(w, map[string]any{"ok": true, "config": f.configRows})
+                vaultRPC(w, map[string]any{"ok": true, "config": f.configRows})
         })
 
         // POST /rest/v1/rpc/sync_join_team
@@ -257,10 +257,10 @@ func newAgent3Cloud(t *testing.T) *agent3Cloud {
                         for k, v := range invite {
                                 out[k] = v
                         }
-                        agent3RPC(w, out)
+                        vaultRPC(w, out)
                         return
                 }
-                agent3RPC(w, map[string]any{"ok": false, "error": "invite unknown, used or expired"})
+                vaultRPC(w, map[string]any{"ok": false, "error": "invite unknown, used or expired"})
         })
 
         f.srv = httptest.NewServer(mux)
@@ -269,12 +269,12 @@ func newAgent3Cloud(t *testing.T) *agent3Cloud {
         return f
 }
 
-func agent3RPC(w http.ResponseWriter, body map[string]any) {
+func vaultRPC(w http.ResponseWriter, body map[string]any) {
         w.Header().Set("Content-Type", "application/json")
         json.NewEncoder(w).Encode(body)
 }
 
-func (f *agent3Cloud) setPublic(kv map[string]string) {
+func (f *vaultCloud) setPublic(kv map[string]string) {
         f.mu.Lock()
         defer f.mu.Unlock()
         for k, v := range kv {
@@ -283,28 +283,28 @@ func (f *agent3Cloud) setPublic(kv map[string]string) {
         }
 }
 
-func (f *agent3Cloud) revoke(deviceID string) {
+func (f *vaultCloud) revoke(deviceID string) {
         f.mu.Lock()
         defer f.mu.Unlock()
         f.revoked[deviceID] = true
         f.approved[deviceID] = false
 }
 
-func (f *agent3Cloud) registerCount() int {
+func (f *vaultCloud) registerCount() int {
         f.mu.Lock()
         defer f.mu.Unlock()
         return f.registerCalls
 }
 
-// agent3Link points a test at the fake cloud and restores the global on exit.
-func agent3Link(t *testing.T, url string) {
+// vaultLink points a test at the fake cloud and restores the global on exit.
+func vaultLink(t *testing.T, url string) {
         t.Helper()
         old := cloudBaseURL
         cloudBaseURL = url
         t.Cleanup(func() { cloudBaseURL = old })
 }
 
-func agent3NewService(t *testing.T) *Service {
+func vaultProbeNewService(t *testing.T) *Service {
         t.Helper()
         dir := t.TempDir()
         db, err := database.Open("sqlite", filepath.Join(dir, "test.db"), "")
@@ -319,13 +319,13 @@ func agent3NewService(t *testing.T) *Service {
         if err != nil {
                 t.Fatalf("settings: %v", err)
         }
-        s := &Service{db: db, settings: st, appVersion: "agent3-test", printer: printer.NewWorker(db, st)}
+        s := &Service{db: db, settings: st, appVersion: "vault-probe-test", printer: printer.NewWorker(db, st)}
         return s
 }
 
-// agent3Register walks a service through bootstrap + registration and
+// vaultProbeRegister walks a service through bootstrap + registration and
 // returns the ready rpc client.
-func agent3Register(t *testing.T, s *Service) *syncClient {
+func vaultProbeRegister(t *testing.T, s *Service) *syncClient {
         t.Helper()
         c, ok := s.syncConfig()
         if !ok {
@@ -337,7 +337,7 @@ func agent3Register(t *testing.T, s *Service) *syncClient {
         return c
 }
 
-func agent3JSON(t *testing.T, v any) json.RawMessage {
+func vaultProbeJSON(t *testing.T, v any) json.RawMessage {
         t.Helper()
         b, err := json.Marshal(v)
         if err != nil {
@@ -346,13 +346,13 @@ func agent3JSON(t *testing.T, v any) json.RawMessage {
         return b
 }
 
-func agent3Pending(s *Service) int64 {
+func vaultProbePending(s *Service) int64 {
         var n int64
         s.db.QueryRow(`SELECT COUNT(*) FROM sync_outbox WHERE pushed_at = ''`).Scan(&n)
         return n
 }
 
-func agent3Stock(s *Service, sku string) int {
+func vaultStock(s *Service, sku string) int {
         var q int
         s.db.QueryRow(`SELECT stock_qty FROM products WHERE sku = ?`, sku).Scan(&q)
         return q
@@ -362,9 +362,9 @@ func agent3Stock(s *Service, sku string) int {
 // 1. Vault: public rows apply while the device is still unknown
 // ---------------------------------------------------------------------------
 
-func TestAgent3VaultPublicRowsBeforeRegistration(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
+func TestVaultProbePublicRowsBeforeRegistration(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
         fake.setPublic(map[string]string{
                 "paystack_public_key": "pk_live_public_first_0001",
                 "paystack_currency":   "KES",
@@ -376,7 +376,7 @@ func TestAgent3VaultPublicRowsBeforeRegistration(t *testing.T) {
         fake.configRows["paystack_secret_key"] = "sk_live_secret_must_not_leak"
         fake.mu.Unlock()
 
-        s := agent3NewService(t)
+        s := vaultProbeNewService(t)
         err := s.RefreshCloudConfig()
 
         // Public config must land even though the device is unknown...
@@ -407,9 +407,9 @@ func TestAgent3VaultPublicRowsBeforeRegistration(t *testing.T) {
 // 2. Vault: RPC path after registration + precedence/guard rules
 // ---------------------------------------------------------------------------
 
-func TestAgent3VaultRPCConfigAfterRegistration(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
+func TestVaultProbeRPCConfigAfterRegistration(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
         const cloudSecret = "sk_live_cloudvaultkey0000000001"
         fake.mu.Lock()
         fake.configRows = map[string]string{
@@ -423,7 +423,7 @@ func TestAgent3VaultRPCConfigAfterRegistration(t *testing.T) {
         }
         fake.mu.Unlock()
 
-        s := agent3NewService(t)
+        s := vaultProbeNewService(t)
         s.SetVersion("test")
         _ = s.Settings().Set("jwt_secret", "local-root-secret")
         _ = s.Settings().Set("sync_device_secret", "local-device-secret")
@@ -480,15 +480,15 @@ func TestAgent3VaultRPCConfigAfterRegistration(t *testing.T) {
         }
 }
 
-func TestAgent3VaultEnvWinsAtReadTime(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
+func TestVaultProbeEnvWinsAtReadTime(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
         const cloudSecret = "sk_live_cloudvaultkey0000000001"
         fake.mu.Lock()
         fake.configRows = map[string]string{"paystack_secret_key": cloudSecret}
         fake.mu.Unlock()
 
-        s := agent3NewService(t)
+        s := vaultProbeNewService(t)
         t.Setenv("PAYSTACK_SECRET_KEY", "") // reserve slot; applyCloudConfig will inject
         if err := s.RefreshCloudConfig(); err != nil {
                 t.Fatalf("RefreshCloudConfig: %v", err)
@@ -535,10 +535,10 @@ func TestAgent3VaultEnvWinsAtReadTime(t *testing.T) {
 // 3. Vault: offline / hostile network must never break boot
 // ---------------------------------------------------------------------------
 
-func TestAgent3VaultOfflineNeverCrashesBoot(t *testing.T) {
+func TestVaultProbeOfflineNeverCrashesBoot(t *testing.T) {
         // Unreachable cloud (connection refused).
-        agent3Link(t, "http://127.0.0.1:1")
-        s := agent3NewService(t)
+        vaultLink(t, "http://127.0.0.1:1")
+        s := vaultProbeNewService(t)
         _ = s.Settings().Set("paystack_public_key", "pk_live_keepme_00000001")
 
         var panicked any
@@ -559,14 +559,14 @@ func TestAgent3VaultOfflineNeverCrashesBoot(t *testing.T) {
         }
 
         // StartCloudConfig must not block startup even against a slow cloud.
-        slow := newAgent3Cloud(t)
-        agent3Link(t, slow.srv.URL)
+        slow := newVaultCloud(t)
+        vaultLink(t, slow.srv.URL)
         slow.mu.Lock()
         slow.publicRows["paystack_currency"] = "KES"
         slow.mu.Unlock()
         // Replace the app_config handler response time by exercising through a
         // fresh service: the boot fetch runs in a goroutine.
-        s2 := agent3NewService(t)
+        s2 := vaultProbeNewService(t)
         ctx, cancel := context.WithCancel(context.Background())
         start := time.Now()
         s2.StartCloudConfig(ctx) // must return immediately
@@ -579,10 +579,10 @@ func TestAgent3VaultOfflineNeverCrashesBoot(t *testing.T) {
         time.Sleep(300 * time.Millisecond)
 }
 
-func TestAgent3VaultLoopRespectsContextCancel(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s := agent3NewService(t)
+func TestVaultProbeLoopRespectsContextCancel(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s := vaultProbeNewService(t)
 
         ctx, cancel := context.WithCancel(context.Background())
         done := make(chan struct{})
@@ -610,18 +610,18 @@ func TestAgent3VaultLoopRespectsContextCancel(t *testing.T) {
 // 4. Team sync: push retry after a partial server commit
 // ---------------------------------------------------------------------------
 
-func TestAgent3SyncPushRetryAfterPartialCommit(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s1 := agent3NewService(t)
-        s2 := agent3NewService(t)
-        c1 := agent3Register(t, s1)
-        c2 := agent3Register(t, s2)
+func TestVaultSyncPushRetryAfterPartialCommit(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s1 := vaultProbeNewService(t)
+        s2 := vaultProbeNewService(t)
+        c1 := vaultProbeRegister(t, s1)
+        c2 := vaultProbeRegister(t, s2)
 
         for _, sku := range []string{"SKU-P1", "SKU-P2", "SKU-P3"} {
                 s1.Emit("product", "upsert", map[string]any{"sku": sku, "name": sku})
         }
-        if n := agent3Pending(s1); n != 3 {
+        if n := vaultProbePending(s1); n != 3 {
                 t.Fatalf("outbox pending = %d, want 3", n)
         }
 
@@ -639,7 +639,7 @@ func TestAgent3SyncPushRetryAfterPartialCommit(t *testing.T) {
         if _, err := c1.push(s1); err != nil {
                 t.Fatalf("retry push: %v", err)
         }
-        if n := agent3Pending(s1); n != 0 {
+        if n := vaultProbePending(s1); n != 0 {
                 t.Fatalf("outbox not drained after retry: %d", n)
         }
         fake.mu.Lock()
@@ -667,11 +667,11 @@ func TestAgent3SyncPushRetryAfterPartialCommit(t *testing.T) {
 // 5. Team sync: poison event head-of-line blocking (event loss probe)
 // ---------------------------------------------------------------------------
 
-func TestAgent3SyncPoisonEventQuarantinedAndStreamUnblocked(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s1 := agent3NewService(t)
-        _ = agent3Register(t, s1)
+func TestVaultSyncPoisonEventQuarantinedAndStreamUnblocked(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s1 := vaultProbeNewService(t)
+        _ = vaultProbeRegister(t, s1)
         c1, _ := s1.syncConfig()
 
         fake.mu.Lock()
@@ -704,7 +704,7 @@ func TestAgent3SyncPoisonEventQuarantinedAndStreamUnblocked(t *testing.T) {
         if dl != 1 {
                 t.Fatalf("dead letter rows = %d, want 1 (the quarantined poison event)", dl)
         }
-        if n := agent3Pending(s1); n != 0 {
+        if n := vaultProbePending(s1); n != 0 {
                 t.Fatalf("pending = %d, want 0 (poison quarantined, healthy pushed)", n)
         }
         var entity string
@@ -718,18 +718,18 @@ func TestAgent3SyncPoisonEventQuarantinedAndStreamUnblocked(t *testing.T) {
 // 6. Team sync: emit-while-disabled keeps events (they push once enabled)
 // ---------------------------------------------------------------------------
 
-func TestAgent3SyncEmitWhileOfflineKeepsEvents(t *testing.T) {
-        agent3Link(t, "http://127.0.0.1:1") // no cloud reachable -> sync stays off
-        s := agent3NewService(t)
+func TestVaultSyncEmitWhileOfflineKeepsEvents(t *testing.T) {
+        vaultLink(t, "http://127.0.0.1:1") // no cloud reachable -> sync stays off
+        s := vaultProbeNewService(t)
         s.Emit("product", "upsert", map[string]any{"sku": "PRE-SYNC", "name": "kept-too"})
         // Hardened Emit: the outbox is written even while sync is off — a till
         // that runs standalone and joins a team later replays its history
         // instead of silently dropping it.
-        if n := agent3Pending(s); n != 1 {
+        if n := vaultProbePending(s); n != 1 {
                 t.Fatalf("offline emit must be queued, pending=%d", n)
         }
         s.Emit("product", "upsert", map[string]any{"sku": "POST-SYNC", "name": "kept"})
-        if n := agent3Pending(s); n != 2 {
+        if n := vaultProbePending(s); n != 2 {
                 t.Fatalf("pending = %d, want 2", n)
         }
 }
@@ -738,13 +738,13 @@ func TestAgent3SyncEmitWhileOfflineKeepsEvents(t *testing.T) {
 // 7. Team sync: cursor regression double-applies stock + ledger
 // ---------------------------------------------------------------------------
 
-func TestAgent3SyncCursorRegressionDoubleApply(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s1 := agent3NewService(t)
-        s2 := agent3NewService(t)
-        c1 := agent3Register(t, s1)
-        c2 := agent3Register(t, s2)
+func TestVaultSyncCursorRegressionDoubleApply(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s1 := vaultProbeNewService(t)
+        s2 := vaultProbeNewService(t)
+        c1 := vaultProbeRegister(t, s1)
+        c2 := vaultProbeRegister(t, s2)
 
         // Receiver-side fixtures: product + customer exist locally.
         s2.db.Exec(s2.db.Rebind(`INSERT INTO categories (name, slug) VALUES ('C','c')`))
@@ -763,7 +763,7 @@ func TestAgent3SyncCursorRegressionDoubleApply(t *testing.T) {
         if applied, err := c2.pull(s2); err != nil || applied != 2 {
                 t.Fatalf("first pull: applied=%d err=%v", applied, err)
         }
-        if got := agent3Stock(s2, "SKU-A"); got != 7 {
+        if got := vaultStock(s2, "SKU-A"); got != 7 {
                 t.Fatalf("stock after first apply = %d, want 7", got)
         }
         var credit int64
@@ -780,7 +780,7 @@ func TestAgent3SyncCursorRegressionDoubleApply(t *testing.T) {
         if applied, err := c2.pull(s2); err != nil || applied != 0 {
                 t.Fatalf("pull after cursor reset must not re-apply: applied=%d err=%v", applied, err)
         }
-        if got := agent3Stock(s2, "SKU-A"); got != 7 {
+        if got := vaultStock(s2, "SKU-A"); got != 7 {
                 t.Fatalf("stock re-applied after cursor reset: %d (want 7)", got)
         }
         s2.db.QueryRow(`SELECT store_credit_cents FROM customers WHERE phone='0700000001'`).Scan(&credit)
@@ -798,13 +798,13 @@ func TestAgent3SyncCursorRegressionDoubleApply(t *testing.T) {
 // 8. Team sync: pull-cursor written under a different team key than read
 // ---------------------------------------------------------------------------
 
-func TestAgent3SyncCursorKeyMismatchProbe(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s1 := agent3NewService(t)
-        s2 := agent3NewService(t)
-        c1 := agent3Register(t, s1)
-        _ = agent3Register(t, s2)
+func TestVaultSyncCursorKeyMismatchProbe(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s1 := vaultProbeNewService(t)
+        s2 := vaultProbeNewService(t)
+        c1 := vaultProbeRegister(t, s1)
+        _ = vaultProbeRegister(t, s2)
 
         s1.Emit("stock", "upsert", map[string]any{"sku": "SKU-K", "delta": -2})
         c1.push(s1)
@@ -836,7 +836,7 @@ func TestAgent3SyncCursorKeyMismatchProbe(t *testing.T) {
         if applied, err := c2.pull(s2); err != nil || applied != 0 {
                 t.Fatalf("second pull must be a no-op (cursor keys unified): applied=%d err=%v", applied, err)
         }
-        if got := agent3Stock(s2, "SKU-K"); got != 8 {
+        if got := vaultStock(s2, "SKU-K"); got != 8 {
                 t.Fatalf("stock after first apply = %d, want 8 (10-2, no re-apply)", got)
         }
 }
@@ -845,18 +845,18 @@ func TestAgent3SyncCursorKeyMismatchProbe(t *testing.T) {
 // 9. Team sync: order events that cannot apply are quarantined and recover
 // ---------------------------------------------------------------------------
 
-func TestAgent3SyncOrderFKDropQuarantinedThenRecovered(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s1 := agent3NewService(t)
-        s2 := agent3NewService(t)
-        c1 := agent3Register(t, s1)
-        c2 := agent3Register(t, s2)
+func TestVaultSyncOrderFKDropQuarantinedThenRecovered(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s1 := vaultProbeNewService(t)
+        s2 := vaultProbeNewService(t)
+        c1 := vaultProbeRegister(t, s1)
+        c2 := vaultProbeRegister(t, s2)
 
         // A synced order whose item SKU is unknown locally (and whose cashier
         // cannot resolve — this store has no staff yet) violates FK constraints
         // on the default foreign_keys(ON) SQLite store.
-        orderPayload := agent3JSON(t, map[string]any{
+        orderPayload := vaultProbeJSON(t, map[string]any{
                 "clientUuid": "ord-fk-1", "number": "9001", "status": "PAID",
                 "subtotalCents": 100, "totalCents": 100, "createdAt": nowStamp(),
                 "items":    []map[string]any{{"sku": "GHOST-SKU", "name": "Ghost", "qty": 1, "unitPriceCents": 100, "lineTotalCents": 100}},
@@ -917,13 +917,13 @@ func TestAgent3SyncOrderFKDropQuarantinedThenRecovered(t *testing.T) {
 // 10. Team sync: void replay + silent drops for unknown references
 // ---------------------------------------------------------------------------
 
-func TestAgent3SyncVoidReplayAndDrops(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s1 := agent3NewService(t)
-        s2 := agent3NewService(t)
-        c1 := agent3Register(t, s1)
-        c2 := agent3Register(t, s2)
+func TestVaultSyncVoidReplayAndDrops(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s1 := vaultProbeNewService(t)
+        s2 := vaultProbeNewService(t)
+        c1 := vaultProbeRegister(t, s1)
+        c2 := vaultProbeRegister(t, s2)
 
         // Receiver-side: simulate a till that already has the order locally
         // (PAID, 2 units sold, pending payment row).
@@ -965,7 +965,7 @@ func TestAgent3SyncVoidReplayAndDrops(t *testing.T) {
         if status != "VOIDED" {
                 t.Fatalf("order status after synced void = %s", status)
         }
-        if got := agent3Stock(s2, "SKU-V"); got != 10 {
+        if got := vaultStock(s2, "SKU-V"); got != 10 {
                 t.Fatalf("stock after void replay = %d, want 10", got)
         }
         var payStatus string
@@ -978,7 +978,7 @@ func TestAgent3SyncVoidReplayAndDrops(t *testing.T) {
         if applied, err := c2.pull(s2); err != nil || applied != 0 {
                 t.Fatalf("void replay must be a no-op: applied=%d err=%v", applied, err)
         }
-        if got := agent3Stock(s2, "SKU-V"); got != 10 {
+        if got := vaultStock(s2, "SKU-V"); got != 10 {
                 t.Fatalf("double void restored stock twice: %d", got)
         }
 
@@ -1002,7 +1002,7 @@ func TestAgent3SyncVoidReplayAndDrops(t *testing.T) {
         //    product hadn't synced yet vanished from stock accounting
         //    forever. Now the delta dead-letters and retries (the catalog
         //    rename/creation that precedes it lands on a later cycle).
-        before := agent3Stock(s2, "SKU-V")
+        before := vaultStock(s2, "SKU-V")
         s1.Emit("stock", "upsert", map[string]any{"sku": "SKU-GHOST", "delta": -5})
         c1.push(s1)
         if applied, err := c2.pull(s2); err != nil || applied != 0 {
@@ -1013,7 +1013,7 @@ func TestAgent3SyncVoidReplayAndDrops(t *testing.T) {
         if dl != 1 {
                 t.Fatalf("ghost delta not quarantined (rows=%d)", dl)
         }
-        if got := agent3Stock(s2, "SKU-V"); got != before {
+        if got := vaultStock(s2, "SKU-V"); got != before {
                 t.Fatalf("unrelated stock moved: %d -> %d", before, got)
         }
         var ghost int
@@ -1046,14 +1046,14 @@ func TestAgent3SyncVoidReplayAndDrops(t *testing.T) {
 // 11. Device identity: approval gating + revocation stops sync AND config
 // ---------------------------------------------------------------------------
 
-func TestAgent3DeviceApprovalGating(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
+func TestDeviceApprovalGating(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
         fake.mu.Lock()
         fake.autoApprove = false
         fake.mu.Unlock()
 
-        s := agent3NewService(t)
+        s := vaultProbeNewService(t)
         c, ok := s.syncConfig()
         if !ok {
                 t.Fatal("bootstrap failed")
@@ -1088,11 +1088,11 @@ func TestAgent3DeviceApprovalGating(t *testing.T) {
         }
 }
 
-func TestAgent3DeviceRevocationStopsSyncAndConfig(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s := agent3NewService(t)
-        c := agent3Register(t, s)
+func TestDeviceRevocationStopsSyncAndConfig(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s := vaultProbeNewService(t)
+        c := vaultProbeRegister(t, s)
 
         // Config arrives while approved.
         fake.mu.Lock()
@@ -1130,7 +1130,7 @@ func TestAgent3DeviceRevocationStopsSyncAndConfig(t *testing.T) {
                 t.Fatalf("revoked device's config snapshot was mutated: %q", got)
         }
         // The event emitted after revocation stays local (never leaks upstream).
-        if n := agent3Pending(s); n != 1 {
+        if n := vaultProbePending(s); n != 1 {
                 t.Fatalf("revoked device outbox pending = %d, want 1", n)
         }
 
@@ -1148,8 +1148,8 @@ func TestAgent3DeviceRevocationStopsSyncAndConfig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAgent3JoinLinkLifecycle(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
         fake.mu.Lock()
         fake.joinTokens["VAULTTOKEN123456"] = map[string]any{
                 "team_code": "VAULT-TEAM", "store_name": "Vault Store",
@@ -1157,7 +1157,7 @@ func TestAgent3JoinLinkLifecycle(t *testing.T) {
         }
         fake.mu.Unlock()
 
-        s := agent3NewService(t)
+        s := vaultProbeNewService(t)
 
         // Weak PIN is refused before any network call.
         if _, err := s.TeamJoinWithLink("https://ledgerpos.app/join#k=VAULTTOKEN123456", "Jane Worker", "1234"); err == nil {
@@ -1216,13 +1216,13 @@ func TestAgent3JoinLinkLifecycle(t *testing.T) {
 // 13. Clock skew poisons product LWW (string comparison of timestamps)
 // ---------------------------------------------------------------------------
 
-func TestAgent3SyncClockSkewLWWProbe(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s1 := agent3NewService(t)
-        s2 := agent3NewService(t)
-        c1 := agent3Register(t, s1)
-        c2 := agent3Register(t, s2)
+func TestVaultSyncClockSkewLWWProbe(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s1 := vaultProbeNewService(t)
+        s2 := vaultProbeNewService(t)
+        c1 := vaultProbeRegister(t, s1)
+        c2 := vaultProbeRegister(t, s2)
 
         s2.db.Exec(s2.db.Rebind(`INSERT INTO categories (name, slug) VALUES ('C','c')`))
 
@@ -1268,11 +1268,11 @@ func TestAgent3SyncClockSkewLWWProbe(t *testing.T) {
 // 14. Vault hardening: malformed cloud answers never crash the till
 // ---------------------------------------------------------------------------
 
-func TestAgent3VaultMalformedResponses(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s := agent3NewService(t)
-        _ = agent3Register(t, s)
+func TestVaultProbeMalformedResponses(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s := vaultProbeNewService(t)
+        _ = vaultProbeRegister(t, s)
 
         // RPC returning ok=true with a nil config map
         // (empty configRows — applyCloudConfig(nil) must not panic).
@@ -1324,16 +1324,16 @@ func TestAgent3GuardProductionStillArmed(t *testing.T) {
 // This test asserts the CURRENT (buggy) behaviour as a tripwire: when the
 // fix lands, the final two asserts fail with "BUG T3-1 appears fixed" and
 // should be flipped to assert rotation wins.
-func TestAgent3VaultRotationAfterEnvInjection(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
+func TestVaultProbeRotationAfterEnvInjection(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
         const v1 = "sk_live_vaultv1key00000000001"
         const v2 = "sk_live_vaultv2key00000000002"
         fake.mu.Lock()
         fake.configRows["paystack_secret_key"] = v1
         fake.mu.Unlock()
 
-        s := agent3NewService(t)
+        s := vaultProbeNewService(t)
         t.Setenv("PAYSTACK_SECRET_KEY", "") // reserve the slot; applyCloudConfig will inject
         if err := s.RefreshCloudConfig(); err != nil {
                 t.Fatalf("first refresh: %v", err)
@@ -1386,14 +1386,14 @@ func TestAgent3VaultRotationAfterEnvInjection(t *testing.T) {
 // a compromised key by CLEARING the vault row never reaches the tills —
 // they keep charging on the compromised key indefinitely (no local expiry,
 // no negative signal). Only overwriting with a NEW value propagates.
-func TestAgent3VaultCloudCannotRevokeSecret(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
+func TestVaultProbeCloudCannotRevokeSecret(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
         const v1 = "sk_live_compromisedkey00000001"
         fake.mu.Lock()
         fake.configRows["paystack_secret_key"] = v1
         fake.mu.Unlock()
-        s := agent3NewService(t)
+        s := vaultProbeNewService(t)
         t.Setenv("PAYSTACK_SECRET_KEY", "")
         if err := s.RefreshCloudConfig(); err != nil {
                 t.Fatalf("first refresh: %v", err)
@@ -1429,13 +1429,13 @@ func TestAgent3VaultCloudCannotRevokeSecret(t *testing.T) {
 // Stock contract: the checkout emits per-line stock DELTA events (applied
 // exactly once) — remoteComplete only adopts payments. This test replays
 // the delta too, exactly as a real checkout on till A would.
-func TestAgent3SyncOrderReplayExactlyOnce(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s1 := agent3NewService(t)
-        s2 := agent3NewService(t)
-        c1 := agent3Register(t, s1)
-        c2 := agent3Register(t, s2)
+func TestVaultSyncOrderReplayExactlyOnce(t *testing.T) {
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s1 := vaultProbeNewService(t)
+        s2 := vaultProbeNewService(t)
+        c1 := vaultProbeRegister(t, s1)
+        c2 := vaultProbeRegister(t, s2)
 
         s2.db.Exec(s2.db.Rebind(`INSERT INTO categories (name, slug) VALUES ('C','c')`))
         var catID int64
@@ -1486,7 +1486,7 @@ func TestAgent3SyncOrderReplayExactlyOnce(t *testing.T) {
         if applied, err := c2.pull(s2); err != nil || applied != 2 {
                 t.Fatalf("completion pull: applied=%d err=%v", applied, err)
         }
-        if got := agent3Stock(s2, "SKU-R"); got != 8 {
+        if got := vaultStock(s2, "SKU-R"); got != 8 {
                 t.Fatalf("stock after remote completion = %d, want 8", got)
         }
         var status string
@@ -1510,7 +1510,7 @@ func TestAgent3SyncOrderReplayExactlyOnce(t *testing.T) {
         if applied, err := c2.pull(s2); err != nil || applied != 0 {
                 t.Fatalf("replay pull must not re-apply: applied=%d err=%v", applied, err)
         }
-        if got := agent3Stock(s2, "SKU-R"); got != 8 {
+        if got := vaultStock(s2, "SKU-R"); got != 8 {
                 t.Fatalf("replay double-deducted stock: %d, want 8", got)
         }
         s2.db.QueryRow(`SELECT COUNT(*) FROM orders WHERE client_uuid='ord-dedupe-1'`).Scan(&orders)
@@ -1531,10 +1531,10 @@ func TestAgent3SyncOrderReplayExactlyOnce(t *testing.T) {
 // the outbox, TeamSyncNow records the error without panicking, and the
 // outbox survives for a later retry.
 func TestAgent3SaleSurvivesSyncOutage(t *testing.T) {
-        fake := newAgent3Cloud(t)
-        agent3Link(t, fake.srv.URL)
-        s := agent3NewService(t)
-        _ = agent3Register(t, s) // sync_enabled=true, endpoint cached
+        fake := newVaultCloud(t)
+        vaultLink(t, fake.srv.URL)
+        s := vaultProbeNewService(t)
+        _ = vaultProbeRegister(t, s) // sync_enabled=true, endpoint cached
         if !s.Settings().GetBool("sync_enabled", false) {
                 t.Fatal("precondition: sync not enabled after registration")
         }
@@ -1574,51 +1574,51 @@ func TestAgent3SaleSurvivesSyncOutage(t *testing.T) {
         if elapsed > 2*time.Second {
                 t.Fatalf("checkout blocked on sync for %v (Emit must be offline-local)", elapsed)
         }
-        if got := agent3Stock(s, "SKU-SALE"); got != 8 {
+        if got := vaultStock(s, "SKU-SALE"); got != 8 {
                 t.Fatalf("stock after sale = %d, want 8", got)
         }
-        if n := agent3Pending(s); n < 1 {
+        if n := vaultProbePending(s); n < 1 {
                 t.Fatalf("outbox empty after sale (%d pending) — Emit dropped sale events", n)
         }
 
         // Idempotent double-submit while offline: same sale, no duplicate.
-        if again, err := s.Checkout(context.Background(), &auth.Principal{ID: 1, Username: "agent3", Active: true},
+        if again, err := s.Checkout(context.Background(), &auth.Principal{ID: 1, Username: "vaultProbe", Active: true},
                 models.CheckoutRequest{
                         Items:         []models.CheckoutItem{{ProductID: prodID, Qty: 2}},
                         PaymentMethod: models.MethodCash, ClientUUID: "sale-outage-1",
                 }); err != nil || again.ID != order.ID {
                 t.Fatalf("offline replay: order=%+v err=%v", again, err)
         }
-        if got := agent3Stock(s, "SKU-SALE"); got != 8 {
+        if got := vaultStock(s, "SKU-SALE"); got != 8 {
                 t.Fatalf("double-submit double-deducted: %d", got)
         }
 
         // Sync cycle against the dead cloud: error is recorded, nothing is
         // marked pushed, and calling it again neither panics nor wedges.
         for i := 0; i < 2; i++ {
-                if _, _, err := s.TeamSyncNow("agent3-test"); err == nil {
+                if _, _, err := s.TeamSyncNow("vault-probe-test"); err == nil {
                         t.Fatalf("TeamSyncNow #%d succeeded against a dead cloud", i+1)
                 }
         }
         if s.Settings().Get("sync_last_error") == "" {
                 t.Fatal("sync_last_error not recorded for the outage")
         }
-        if n := agent3Pending(s); n < 1 {
+        if n := vaultProbePending(s); n < 1 {
                 t.Fatal("outbox was cleared despite a failed push — events would be lost")
         }
 
         // Cloud comes back (same team, fresh server): the till must re-resolve
         // past its cached endpoint, register, and drain the backlog.
-        back := newAgent3Cloud(t)
+        back := newVaultCloud(t)
         back.team = fake.team
-        agent3Link(t, back.srv.URL)
+        vaultLink(t, back.srv.URL)
         // Expire the 6h bootstrap cache so syncConfig re-resolves against the
         // live cloud instead of retrying the dead URL until the cache ages out.
         _ = s.Settings().Set("sync_bootstrap_at", "2000-01-01T00:00:00Z")
-        if _, _, err := s.TeamSyncNow("agent3-test"); err != nil {
+        if _, _, err := s.TeamSyncNow("vault-probe-test"); err != nil {
                 t.Fatalf("sync did not recover with the cloud back: %v", err)
         }
-        if n := agent3Pending(s); n != 0 {
+        if n := vaultProbePending(s); n != 0 {
                 t.Fatalf("outbox did not drain after recovery: %d pending", n)
         }
 }

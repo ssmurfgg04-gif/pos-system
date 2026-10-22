@@ -44,9 +44,9 @@ func imgSyncOutboxPayloads(t *testing.T, s *Service, entity, op string) []string
         return out
 }
 
-func imgSyncDrain(t *testing.T, s *Service, cloud *agent3Cloud) {
+func imgSyncDrain(t *testing.T, s *Service, cloud *vaultCloud) {
         t.Helper()
-        agent3Link(t, cloud.srv.URL)
+        vaultLink(t, cloud.srv.URL)
         c, ok := s.syncConfig()
         if !ok {
                 t.Fatal("sync config did not resolve")
@@ -99,7 +99,7 @@ func bigNoisyPNG(t *testing.T, w, h int) []byte {
 // across machines because the images don't sync". A photo set on till A
 // must appear on till B AND on a fresh till C (from replayed history).
 func TestImageSyncPhotoJourney(t *testing.T) {
-        fake := newAgent3Cloud(t)
+        fake := newVaultCloud(t)
         dir := t.TempDir()
 
         // Till A: upload a photo for the fixture product (big enough to need
@@ -186,7 +186,7 @@ func TestImageSyncPhotoJourney(t *testing.T) {
 // no queued image event; the per-tick backfill must drain them exactly once
 // (rate-limited, no duplicates).
 func TestImageSyncBackfill(t *testing.T) {
-        fake := newAgent3Cloud(t)
+        fake := newVaultCloud(t)
         dir := t.TempDir()
         tillA := imgSyncTill(t, filepath.Join(dir, "a.db"))
 
@@ -230,7 +230,7 @@ func TestImageSyncBackfill(t *testing.T) {
 // edit (applyProduct) never wipes a synced photo; and a poisoned non-image
 // payload is rejected instead of stored.
 func TestImageSyncClearAndStale(t *testing.T) {
-        fake := newAgent3Cloud(t)
+        fake := newVaultCloud(t)
         dir := t.TempDir()
         tillA := imgSyncTill(t, filepath.Join(dir, "a.db"))
         pid := mustProductID(t, tillA, "SKU-P0")
@@ -285,7 +285,7 @@ func TestImageSyncClearAndStale(t *testing.T) {
 // config whitelist: applyConfig materialises the synced data URL into the
 // local logo file + flag, and an empty payload clears them.
 func TestImageSyncLogoConfig(t *testing.T) {
-        fake := newAgent3Cloud(t)
+        fake := newVaultCloud(t)
         dir := t.TempDir()
         t.Chdir(dir) // brandLogoFile is relative to the data dir (process cwd)
 

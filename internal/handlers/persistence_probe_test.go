@@ -1,6 +1,6 @@
 package handlers_test
 
-// agent2_persistence_probe_test.go — T2 adversarial probe: DATA PERSISTENCE
+// persistence_persistence_probe_test.go — T2 adversarial probe: DATA PERSISTENCE
 // ACROSS UPDATES. Targets the client's #1 complaint (inventory vanishing
 // after an update):
 //
@@ -40,7 +40,7 @@ import (
 
 // ---- harness -----------------------------------------------------------
 
-type agent2Stack struct {
+type persistenceStack struct {
         dir      string // data dir (pos.db, shops.json, secret.key, shops/)
         engine   *gin.Engine
         h        *handlers.H
@@ -53,18 +53,18 @@ type agent2Stack struct {
         adminTok string
 }
 
-func agent2DefPath(s *agent2Stack) string { return filepath.Join(s.dir, "pos.db") }
+func persistenceDefPath(s *persistenceStack) string { return filepath.Join(s.dir, "pos.db") }
 
 // newAgent2Stack mirrors main.go's desktop boot: pos.db adopted as default
 // shop, two more shops created through the app (shops/<id>.db files), the
 // vault key file next to the DB, and a rotated admin session.
-func newAgent2Stack(t *testing.T) *agent2Stack {
+func newAgent2Stack(t *testing.T) *persistenceStack {
         t.Helper()
         gin.SetMode(gin.TestMode)
-        s := &agent2Stack{dir: t.TempDir()}
+        s := &persistenceStack{dir: t.TempDir()}
 
         settings.UseKeyFile(filepath.Join(s.dir, "secret.key")) // creates vault file (main.go order)
-        db, err := database.Open("sqlite", agent2DefPath(s), "")
+        db, err := database.Open("sqlite", persistenceDefPath(s), "")
         if err != nil {
                 t.Fatalf("db: %v", err)
         }
@@ -81,7 +81,7 @@ func newAgent2Stack(t *testing.T) *agent2Stack {
                 t.Fatalf("tenants: %v", err)
         }
         s.reg = reg
-        def, err := reg.CreateShop("Main Street", agent2DefPath(s), "2026-01-01T00:00:00Z")
+        def, err := reg.CreateShop("Main Street", persistenceDefPath(s), "2026-01-01T00:00:00Z")
         if err != nil {
                 t.Fatalf("adopt default shop: %v", err)
         }
@@ -130,17 +130,17 @@ func newAgent2Stack(t *testing.T) *agent2Stack {
         return s
 }
 
-// agent2InsertProduct stocks one product directly in the given DB handle
+// persistenceInsertProduct stocks one product directly in the given DB handle
 // (the way inventory exists before any update runs).
-func agent2InsertProduct(t *testing.T, db *database.DB, sku, name string, qty int64) int64 {
+func persistenceInsertProduct(t *testing.T, db *database.DB, sku, name string, qty int64) int64 {
         t.Helper()
         var cat int64
         err := db.QueryRow(`SELECT id FROM categories ORDER BY id LIMIT 1`).Scan(&cat)
         if err != nil {
-                if _, err := db.Exec(db.Rebind(`INSERT INTO categories (name, slug) VALUES (?, 'agent2-cat')`), "Agent2"); err != nil {
+                if _, err := db.Exec(db.Rebind(`INSERT INTO categories (name, slug) VALUES (?, 'persistence-cat')`), "Agent2"); err != nil {
                         t.Fatalf("category: %v", err)
                 }
-                if err := db.QueryRow(`SELECT id FROM categories WHERE slug='agent2-cat'`).Scan(&cat); err != nil {
+                if err := db.QueryRow(`SELECT id FROM categories WHERE slug='persistence-cat'`).Scan(&cat); err != nil {
                         t.Fatalf("category id: %v", err)
                 }
         }
@@ -153,8 +153,8 @@ func agent2InsertProduct(t *testing.T, db *database.DB, sku, name string, qty in
         return id
 }
 
-// agent2OpenDB opens a snapshot/DB file read-only-ish for verification.
-func agent2OpenDB(t *testing.T, path string) *database.DB {
+// persistenceOpenDB opens a snapshot/DB file read-only-ish for verification.
+func persistenceOpenDB(t *testing.T, path string) *database.DB {
         t.Helper()
         db, err := database.Open("sqlite", path, "")
         if err != nil {
@@ -163,9 +163,9 @@ func agent2OpenDB(t *testing.T, path string) *database.DB {
         return db
 }
 
-func agent2CountNamed(t *testing.T, path, name string) int64 {
+func persistenceCountNamed(t *testing.T, path, name string) int64 {
         t.Helper()
-        db := agent2OpenDB(t, path)
+        db := persistenceOpenDB(t, path)
         defer db.Close()
         var n int64
         if err := db.QueryRow(db.Rebind(`SELECT COUNT(*) FROM products WHERE name = ?`), name).Scan(&n); err != nil {
@@ -174,9 +174,9 @@ func agent2CountNamed(t *testing.T, path, name string) int64 {
         return n
 }
 
-func agent2SchemaVersion(t *testing.T, path string) int64 {
+func persistenceSchemaVersion(t *testing.T, path string) int64 {
         t.Helper()
-        db := agent2OpenDB(t, path)
+        db := persistenceOpenDB(t, path)
         defer db.Close()
         var v int64
         if err := db.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&v); err != nil {
@@ -185,7 +185,7 @@ func agent2SchemaVersion(t *testing.T, path string) int64 {
         return v
 }
 
-func agent2ShopDBPath(t *testing.T, s *agent2Stack, shopID string) string {
+func persistenceShopDBPath(t *testing.T, s *persistenceStack, shopID string) string {
         t.Helper()
         shop, ok := s.reg.Find(shopID)
         if !ok {
@@ -200,26 +200,26 @@ func agent2ShopDBPath(t *testing.T, s *agent2Stack, shopID string) string {
 // shops under shops/), the tenants registry, and the vault key — with the
 // snapshot contents actually readable and complete.
 
-// agent2SnapName mirrors PreUpdateSnapshot's path-shaped snap naming:
+// persistenceSnapName mirrors PreUpdateSnapshot's path-shaped snap naming:
 // shops/x.db → shops_x.db.snap (path-exact undo).
-func agent2SnapName(dir, p string) string {
+func persistenceSnapName(dir, p string) string {
         rel, _ := filepath.Rel(dir, p)
         return strings.ReplaceAll(rel, string(filepath.Separator), "_") + ".snap"
 }
 
 func TestAgent2PreUpdateSnapshotCoversEverything(t *testing.T) {
         s := newAgent2Stack(t)
-        agent2InsertProduct(t, s.db, "SNAP-1", "SnapCola", 10)
+        persistenceInsertProduct(t, s.db, "SNAP-1", "SnapCola", 10)
         dbB, err := s.pool.DB(s.shopB)
         if err != nil {
                 t.Fatalf("shop B: %v", err)
         }
-        agent2InsertProduct(t, dbB, "SNAP-2", "SnapChips", 5)
+        persistenceInsertProduct(t, dbB, "SNAP-2", "SnapChips", 5)
         dbC, err := s.pool.DB(s.shopC)
         if err != nil {
                 t.Fatalf("shop C: %v", err)
         }
-        agent2InsertProduct(t, dbC, "SNAP-3", "SnapTea", 7)
+        persistenceInsertProduct(t, dbC, "SNAP-3", "SnapTea", 7)
         keyRaw, err := os.ReadFile(filepath.Join(s.dir, "secret.key"))
         if err != nil {
                 t.Fatalf("vault key: %v", err)
@@ -235,8 +235,8 @@ func TestAgent2PreUpdateSnapshotCoversEverything(t *testing.T) {
 
         // Every shop DB snapshotted, incl. shops/<id>.db files. Naming keeps
         // the path shape (shops/x.db → shops_x.db.snap) so undo is path-exact.
-        for _, p := range []string{agent2DefPath(s), agent2ShopDBPath(t, s, s.shopB), agent2ShopDBPath(t, s, s.shopC)} {
-                snapName := agent2SnapName(s.dir, p)
+        for _, p := range []string{persistenceDefPath(s), persistenceShopDBPath(t, s, s.shopB), persistenceShopDBPath(t, s, s.shopC)} {
+                snapName := persistenceSnapName(s.dir, p)
                 if _, err := os.Stat(filepath.Join(archive, snapName)); err != nil {
                         t.Errorf("pre-update archive missing snapshot for %s (want %s): %v", p, snapName, err)
                 }
@@ -253,19 +253,19 @@ func TestAgent2PreUpdateSnapshotCoversEverything(t *testing.T) {
         }
 
         // Snapshots must be complete DBs: the inventory is inside them.
-        if n := agent2CountNamed(t, filepath.Join(archive, "pos.db.snap"), "SnapCola"); n != 1 {
+        if n := persistenceCountNamed(t, filepath.Join(archive, "pos.db.snap"), "SnapCola"); n != 1 {
                 t.Errorf("pos.db snapshot lost SnapCola (count=%d)", n)
         }
-        if n := agent2CountNamed(t, filepath.Join(archive, agent2SnapName(s.dir, agent2ShopDBPath(t, s, s.shopB))), "SnapChips"); n != 1 {
+        if n := persistenceCountNamed(t, filepath.Join(archive, persistenceSnapName(s.dir, persistenceShopDBPath(t, s, s.shopB))), "SnapChips"); n != 1 {
                 t.Errorf("shop B snapshot lost SnapChips (count=%d)", n)
         }
-        if n := agent2CountNamed(t, filepath.Join(archive, agent2SnapName(s.dir, agent2ShopDBPath(t, s, s.shopC))), "SnapTea"); n != 1 {
+        if n := persistenceCountNamed(t, filepath.Join(archive, persistenceSnapName(s.dir, persistenceShopDBPath(t, s, s.shopC))), "SnapTea"); n != 1 {
                 t.Errorf("shop C snapshot lost SnapTea (count=%d)", n)
         }
 
         // Snapshot must not disturb the live DBs (VACUUM INTO is read-only).
-        agent2InsertProduct(t, s.db, "SNAP-4", "SnapAfter", 1)
-        if n := agent2CountNamed(t, agent2DefPath(s), "SnapAfter"); n != 1 {
+        persistenceInsertProduct(t, s.db, "SNAP-4", "SnapAfter", 1)
+        if n := persistenceCountNamed(t, persistenceDefPath(s), "SnapAfter"); n != 1 {
                 t.Errorf("live DB unusable after snapshot")
         }
 }
@@ -304,14 +304,14 @@ func TestAgent2PreUpdateSnapshotFailsClosedOnUnopenableShop(t *testing.T) {
 // back from the pre-update archive at the path the registry points to.
 func TestAgent2UndoRestoresAllShopDatabases(t *testing.T) {
         s := newAgent2Stack(t)
-        agent2InsertProduct(t, s.db, "UND-1", "UndoCola", 10)
+        persistenceInsertProduct(t, s.db, "UND-1", "UndoCola", 10)
         dbB, err := s.pool.DB(s.shopB)
         if err != nil {
                 t.Fatalf("shop B: %v", err)
         }
-        agent2InsertProduct(t, dbB, "UND-2", "UndoChips", 22)
+        persistenceInsertProduct(t, dbB, "UND-2", "UndoChips", 22)
 
-        preSchema := agent2SchemaVersion(t, agent2DefPath(s))
+        preSchema := persistenceSchemaVersion(t, persistenceDefPath(s))
         archive, err := s.h.PreUpdateSnapshot("v1.2.3")
         if err != nil {
                 t.Fatalf("pre-update snapshot: %v", err)
@@ -329,7 +329,7 @@ func TestAgent2UndoRestoresAllShopDatabases(t *testing.T) {
                         t.Fatalf("simulate schema bump: %v", err)
                 }
         }
-        if n := agent2CountNamed(t, agent2DefPath(s), "UndoCola"); n != 0 {
+        if n := persistenceCountNamed(t, persistenceDefPath(s), "UndoCola"); n != 0 {
                 t.Fatal("setup: wipe failed")
         }
 
@@ -367,19 +367,19 @@ func TestAgent2UndoRestoresAllShopDatabases(t *testing.T) {
         }
 
         // ---- data must be back, schema coherent for the old binary.
-        if got := agent2SchemaVersion(t, agent2DefPath(s)); got != preSchema {
+        if got := persistenceSchemaVersion(t, persistenceDefPath(s)); got != preSchema {
                 t.Errorf("pos.db schema version after undo = %d, want %d (restore incoherent)", got, preSchema)
         }
-        if n := agent2CountNamed(t, agent2DefPath(s), "UndoCola"); n != 1 {
+        if n := persistenceCountNamed(t, persistenceDefPath(s), "UndoCola"); n != 1 {
                 t.Errorf("DEFAULT shop inventory not restored by undo (UndoCola count=%d)", n)
         }
 
         // Shop B lives at shops/<id>.db — the registry path. It must be restored THERE.
-        shopBPath := agent2ShopDBPath(t, s, s.shopB)
-        if n := agent2CountNamed(t, shopBPath, "UndoChips"); n != 1 {
+        shopBPath := persistenceShopDBPath(t, s, s.shopB)
+        if n := persistenceCountNamed(t, shopBPath, "UndoChips"); n != 1 {
                 t.Errorf("BUG T2-1: shop B inventory NOT restored by undo at its registry path %s "+
                         "(UndoChips count=%d, schema=%d) — update_rollback.go restores shops/<id>.db "+
-                        "into the data-dir root instead of shops/", shopBPath, n, agent2SchemaVersion(t, shopBPath))
+                        "into the data-dir root instead of shops/", shopBPath, n, persistenceSchemaVersion(t, shopBPath))
         }
         stray := filepath.Join(s.dir, filepath.Base(shopBPath))
         if _, err := os.Stat(stray); err == nil {
@@ -392,21 +392,21 @@ func TestAgent2UndoRestoresAllShopDatabases(t *testing.T) {
 // and the restore must be verbatim (marker row planted in the archive).
 func TestAgent2UndoPicksNewestArchiveAndRestoresVerbatim(t *testing.T) {
         s := newAgent2Stack(t)
-        agent2InsertProduct(t, s.db, "LIVE-1", "LiveCola", 3)
+        persistenceInsertProduct(t, s.db, "LIVE-1", "LiveCola", 3)
 
         plant := func(stamp string) string {
                 dir := filepath.Join(s.dir, "backups", "pre-update-v"+stamp)
                 if err := os.MkdirAll(dir, 0o755); err != nil {
                         t.Fatalf("plant %s: %v", stamp, err)
                 }
-                pdb := agent2OpenDB(t, filepath.Join(s.dir, "plant-"+stamp+".db"))
+                pdb := persistenceOpenDB(t, filepath.Join(s.dir, "plant-"+stamp+".db"))
                 if err := pdb.Migrate(); err != nil {
                         t.Fatalf("plant migrate: %v", err)
                 }
                 if _, err := pdb.Exec(`DELETE FROM products`); err != nil {
                         t.Fatalf("plant wipe: %v", err)
                 }
-                agent2InsertProduct(t, pdb, "ARC-"+stamp, "Archive"+stamp, 9)
+                persistenceInsertProduct(t, pdb, "ARC-"+stamp, "Archive"+stamp, 9)
                 pdb.Close()
                 raw, err := os.ReadFile(filepath.Join(s.dir, "plant-"+stamp+".db"))
                 if err != nil {
@@ -439,10 +439,10 @@ func TestAgent2UndoPicksNewestArchiveAndRestoresVerbatim(t *testing.T) {
         if reason := handlers.RestorePending(s.dir); reason == "" {
                 t.Fatalf("restore did not run")
         }
-        if n := agent2CountNamed(t, agent2DefPath(s), "Archive2.0.0-20260102-000002"); n != 1 {
+        if n := persistenceCountNamed(t, persistenceDefPath(s), "Archive2.0.0-20260102-000002"); n != 1 {
                 t.Errorf("restored pos.db is not the newest archive verbatim (marker count=%d)", n)
         }
-        if n := agent2CountNamed(t, agent2DefPath(s), "Archive1.0.0-20260101-000001"); n != 0 {
+        if n := persistenceCountNamed(t, persistenceDefPath(s), "Archive1.0.0-20260101-000001"); n != 0 {
                 t.Errorf("restore used the OLD archive")
         }
 }
@@ -477,7 +477,7 @@ func TestAgent2RestorePendingRetriesFailedCopy(t *testing.T) {
 
         manifest := map[string]any{
                 "when":   "2026-01-01T00:00:00Z",
-                "reason": "agent2 probe: partial failure",
+                "reason": "persistence probe: partial failure",
                 "files": map[string]string{
                         dstGood: goodSrc,
                         dstBad:  badSrc,
@@ -515,12 +515,12 @@ func TestAgent2RestorePendingRetriesFailedCopy(t *testing.T) {
 // Migrate is idempotent: running it twice changes nothing and loses nothing.
 func TestAgent2MigrationsIdempotent(t *testing.T) {
         dir := t.TempDir()
-        db := agent2OpenDB(t, filepath.Join(dir, "twice.db"))
+        db := persistenceOpenDB(t, filepath.Join(dir, "twice.db"))
         defer db.Close()
         if err := db.Migrate(); err != nil {
                 t.Fatalf("migrate 1: %v", err)
         }
-        agent2InsertProduct(t, db, "IDEM-1", "IdemCola", 4)
+        persistenceInsertProduct(t, db, "IDEM-1", "IdemCola", 4)
         var seq1 int64
         if err := db.QueryRow(`SELECT seq FROM sqlite_sequence WHERE name='products'`).Scan(&seq1); err != nil {
                 t.Fatalf("seq: %v", err)
@@ -533,7 +533,7 @@ func TestAgent2MigrationsIdempotent(t *testing.T) {
         if seq1 != seq2 {
                 t.Errorf("second Migrate disturbed sqlite_sequence (%d → %d)", seq1, seq2)
         }
-        if n := agent2CountNamed(t, filepath.Join(dir, "twice.db"), "IdemCola"); n != 1 {
+        if n := persistenceCountNamed(t, filepath.Join(dir, "twice.db"), "IdemCola"); n != 1 {
                 t.Errorf("second Migrate lost data")
         }
 }
@@ -544,7 +544,7 @@ func TestAgent2MigrationsIdempotent(t *testing.T) {
 func TestAgent2OldSchemaMigratesCleanlyNoRebuild(t *testing.T) {
         dir := t.TempDir()
         path := filepath.Join(dir, "old.db")
-        db := agent2OpenDB(t, path)
+        db := persistenceOpenDB(t, path)
         _, err := db.Exec(`
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '');
 CREATE TABLE roles (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
@@ -641,7 +641,7 @@ INSERT INTO order_items (order_id, product_id, name, qty, unit_price_cents, line
                 t.Errorf("v2 tables missing after migration: %v", err)
         }
         // Migration ran exactly once (current head: v17 — quotations).
-        if v := agent2SchemaVersion(t, path); v != 17 {
+        if v := persistenceSchemaVersion(t, path); v != 17 {
                 t.Errorf("schema version after migrate = %d, want 17", v)
         }
         if err := db.Migrate(); err != nil {
@@ -657,7 +657,7 @@ INSERT INTO order_items (order_id, product_id, name, qty, unit_price_cents, line
 func TestAgent2PreTrackingSchemaMigrates(t *testing.T) {
         dir := t.TempDir()
         path := filepath.Join(dir, "pretracking.db")
-        db := agent2OpenDB(t, path)
+        db := persistenceOpenDB(t, path)
         defer db.Close()
         _, err := db.Exec(`
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '');
@@ -768,12 +768,12 @@ func TestAgent2MigrationsContainNoDestructiveDDL(t *testing.T) {
 // "inventory vanished" bug).
 func TestAgent2TenantIsolationAndPinRouting(t *testing.T) {
         s := newAgent2Stack(t)
-        agent2InsertProduct(t, s.db, "ISO-DEF", "IslandDefault", 1)
+        persistenceInsertProduct(t, s.db, "ISO-DEF", "IslandDefault", 1)
         dbB, err := s.pool.DB(s.shopB)
         if err != nil {
                 t.Fatalf("shop B: %v", err)
         }
-        agent2InsertProduct(t, dbB, "ISO-B", "IslandB", 2)
+        persistenceInsertProduct(t, dbB, "ISO-B", "IslandB", 2)
         dbC, err := s.pool.DB(s.shopC)
         if err != nil {
                 t.Fatalf("shop C: %v", err)
@@ -781,9 +781,9 @@ func TestAgent2TenantIsolationAndPinRouting(t *testing.T) {
 
         // Distinct files on disk.
         paths := map[string]string{
-                s.defShop: agent2DefPath(s),
-                s.shopB:   agent2ShopDBPath(t, s, s.shopB),
-                s.shopC:   agent2ShopDBPath(t, s, s.shopC),
+                s.defShop: persistenceDefPath(s),
+                s.shopB:   persistenceShopDBPath(t, s, s.shopB),
+                s.shopC:   persistenceShopDBPath(t, s, s.shopC),
         }
         seen := map[string]bool{}
         for id, p := range paths {

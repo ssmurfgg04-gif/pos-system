@@ -4,9 +4,9 @@
 #
 #   /             the download landing page — Big-7 value props, one
 #                 primary CTA that auto-detects the visitor's OS
-#   /downloads/   the 4 installer packages + checksums.txt, served
-#                 straight from this deploy (committed under downloads/
-#                 in the repo; GitHub Releases stays the mirror)
+#   /downloads/   checksums.txt + manifest.json (small text); the
+#                 installer binaries live only on GitHub Releases and
+#                 the landing page links straight at them
 #   /demo/        the full POS as an in-browser demo (mock M-Pesa,
 #                 seeded Nairobi print shop; log in with
 #                 admin/admin123, cashier/cashier123, designer/designer123)
@@ -21,4 +21,6 @@
   publish = "dist"
 
 [build.environment]
-  NODE_VERSION = "20"
+  # Aligned with CI's test + deploy jobs (node 24 is where the vitest
+  # suite is green; jsdom+undici break on the older 20.x image).
+  NODE_VERSION = "24"

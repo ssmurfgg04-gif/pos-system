@@ -24,7 +24,7 @@ type moneyFixture struct {
 
 func newMoneyTill(t *testing.T) *moneyFixture {
 	t.Helper()
-	s := agent3NewService(t)
+	s := vaultProbeNewService(t)
 	s.db.Exec(`INSERT INTO roles (name) VALUES ('Cashier')`)
 	s.db.Exec(`INSERT INTO users (username, role_id) SELECT 'cash1', id FROM roles LIMIT 1`)
 	var prodID, userID, roleID int64
