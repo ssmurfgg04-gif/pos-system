@@ -225,10 +225,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
         run: |
+          # Semver pre-releases (v1.4.0-rc.1) publish marked as prerelease
+          # so the download site's "latest" logic and humans don't ship them
+          # to shops by accident. Full releases stay full.
+          EXTRA=""
+          case "$TAG" in *-*) EXTRA="--prerelease";; esac
           gh release create "$TAG" \
             --title "LedgerPOS ${TAG#v} — desktop app" \
             --notes-file build/release-notes.md \
-            --verify-tag \
+            --verify-tag $EXTRA \
             build/netlify-site/downloads/ledgerpos-setup-windows-x64.exe \
             build/netlify-site/downloads/ledgerpos-macos-apple-silicon.zip \
             build/netlify-site/downloads/ledgerpos-macos-intel.zip \
