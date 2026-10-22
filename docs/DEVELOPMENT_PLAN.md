@@ -82,3 +82,22 @@ Values go ONLY into GitHub Actions secrets / Supabase secrets / local gitignored
 5. **Legacy Daraja (rollback path)**: client's Daraja consumer key/secret, shortcode, passkey — only if we keep the legacy flow live for their tills.
 
 Until then, integration is built and tested against the **existing CDC Buni keys** (owner instruction) — real-money pushes gated behind explicit flags only.
+
+
+---
+## STATUS UPDATE — 2026-10-22 (all batches executed)
+
+| Batch | Scope | Outcome |
+|---|---|---|
+| A | Criticals (callback forgery gate, CORS allowlist, pin-users rate limit, gitignore, SEED_DEMO) | DONE — commit 19e3ae4 |
+| B | KCB Buni M-Pesa as MAIN rail; Paystack demoted | DONE — commit 1e36f9d; live production E2E verified (push accepted, real 1037 callback received + claimed exactly-once) |
+| C | Installer blobs out of the repo; history purge | DONE — commit 5d83e41 + forced rewrite: 823 MB → 21 MB, Releases intact, collaborators must re-clone |
+| D | teamsync split, OTA manifest signing (ed25519), security headers/CSP, token choke point, shared VAT math, Node 24 alignment, swarm cleanup, CI postgres dialect | DONE — commits 0ad5576, b4d4426; live manifest signed & verified |
+| E | Operator/developer docs suite | DONE — ARCHITECTURE / ACCESS-CONTROL / PAYMENTS / RECEIPTS-WHATSAPP / TESTING / DEPLOYMENT |
+
+Credentials checklist (§4) state:
+- Supabase access token: VALID (sbp_fcd1…)
+- Buni production keys: deployed as Edge secrets (BUNI_*); till 7853959
+- OTA manifest signing keypair: generated; PUBLIC key embedded
+  (internal/update/signing.go); PRIVATE key offline with owner
+- GitHub PAT: stored outside the repo (.secrets, 600)
