@@ -3,11 +3,14 @@
 
 - uploads the four installer packages (deleting stale same-name assets)
 - removes legacy assets that are no longer shipped (e.g. the old .tar.gz)
+- regenerates the committed downloads/manifest.json (version + sizes +
+  sha256) — the repo ships links, never binaries
 - patches the release notes to match the current distribution story
 
 The GitHub release is the *mirror*; the Netlify site serves the same
 files directly. Token comes from the GITHUB_TOKEN env var.
 """
+import hashlib
 import json
 import os
 import sys
@@ -30,6 +33,32 @@ ASSETS = [
 ]
 LEGACY = {"ledgerpos-linux-x64.tar.gz"}
 
+MANIFEST = os.path.join(ROOT, "downloads", "manifest.json")
+
+
+def write_manifest(version: str) -> None:
+    """Refresh the committed installer manifest from the built packages.
+
+    The manifest is what the download site renders (sizes + integrity) —
+    the binaries themselves are never committed.
+    """
+    entries = []
+    for name, _mime in ASSETS:
+        p = os.path.join(DL, name)
+        if not os.path.isfile(p):
+            sys.exit(f"missing installer {p} — run scripts/package_desktop.py first")
+        h = hashlib.sha256()
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        entries.append({"name": name, "size": os.path.getsize(p), "sha256": h.hexdigest()})
+    os.makedirs(os.path.dirname(MANIFEST), exist_ok=True)
+    with open(MANIFEST, "w") as f:
+        json.dump({"version": version, "assets": entries}, f, indent=2)
+        f.write("\n")
+    print(f"manifest -> {MANIFEST} (version {version})")
+
+
 NOTES = """LedgerPOS {v} — the point of sale that installs itself.
 
 **What is new in 1.3.1: a safety sweep. Nothing to relearn — your till looks and works exactly the same.** This release tightens the lock on the door you never see. Staff logins can no longer be quietly upgraded into owner accounts, and role edits can no longer lock the business owner out by accident. Saved payment and backup credentials are protected from peeking and from accidental erasure — they save, they work, and they never print themselves on screen. Before every update the app now takes a full safety snapshot and refuses to continue if that snapshot is not complete, so "Undo update" always really undoes. Local backups are now private to your own user account on the computer. Signing in is protected against someone trying many usernames in a row, not just one name over and over. Paystack payments work exactly as before — nothing changed on the counter. The team sync fixes a rare interruption window so customer balances can never double-count. Shop details, receipts, printers and business settings stay right where they were — Settings → Business.
@@ -47,7 +76,7 @@ Download the file for your machine, double-click it, start selling. The whole sh
 
 - **Windows SmartScreen** may warn (no code-signing certificate yet): *More info → Run anyway*.
 - **macOS Gatekeeper**: right-click the app → *Open → Open* (once; Apple remembers).
-- **Integrity:** SHA-256 of every package is published in the release's `checksums.txt` — or verify against `downloads/checksums.txt` in the repo.
+- **Integrity:** SHA-256 of every package is published in the release's `checksums.txt` — or verify against `downloads/manifest.json` in the repo.
 - **Updates:** the app checks the cloud update manifest (SHA-256 verified) and can install or undo updates from Settings → System.""".replace("{v}", TAG.lstrip("v"))
 
 
@@ -65,6 +94,10 @@ def api(method, url, data=None, ctype="application/json", raw=False):
 
 
 def main():
+    # refresh the committed manifest FIRST — the repo ships links + hashes,
+    # never binaries
+    write_manifest(TAG.lstrip("v"))
+
     # create or fetch the release
     status, body = api("POST", f"https://api.github.com/repos/{REPO}/releases",
                        {"tag_name": TAG, "target_commitish": "main",

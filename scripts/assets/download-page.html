@@ -158,17 +158,17 @@
     no localhost to remember, and it keeps working when the internet doesn't.</p>
 
   <div class="dl-zone">
-    <a class="btn-hero" id="dl-primary" href="downloads/ledgerpos-setup-windows-x64.exe" download>
+    <a class="btn-hero" id="dl-primary" href="{{RELEASE_BASE}}/ledgerpos-setup-windows-x64.exe" download>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
       <span id="dl-label">Download for Windows</span>
       <small id="dl-size">{{WIN_SIZE_MB}} MB</small>
     </a>
     <div class="alt-row">
       Also available:
-      <a id="alt-mac-arm" href="downloads/ledgerpos-macos-apple-silicon.zip" download>macOS · Apple Silicon</a>·
-      <a id="alt-mac-intel" href="downloads/ledgerpos-macos-intel.zip" download>macOS · Intel</a>·
-      <a id="alt-linux" href="downloads/ledgerpos-linux-x64.tar.xz" download>Linux</a>·
-      <a id="alt-windows" href="downloads/ledgerpos-setup-windows-x64.exe" download>Windows</a>
+      <a id="alt-mac-arm" href="{{RELEASE_BASE}}/ledgerpos-macos-apple-silicon.zip" download>macOS · Apple Silicon</a>·
+      <a id="alt-mac-intel" href="{{RELEASE_BASE}}/ledgerpos-macos-intel.zip" download>macOS · Intel</a>·
+      <a id="alt-linux" href="{{RELEASE_BASE}}/ledgerpos-linux-x64.tar.xz" download>Linux</a>·
+      <a id="alt-windows" href="{{RELEASE_BASE}}/ledgerpos-setup-windows-x64.exe" download>Windows</a>
     </div>
     <div class="mobile-note" id="mobile-note">LedgerPOS runs on Windows, macOS and Linux computers
       save this page and download it from your computer.</div>
@@ -192,7 +192,7 @@
         <div><h2>Windows</h2><span>10 &amp; 11 · 64-bit</span></div>
       </div>
       <p class="desc">One file. Double-click the installer, click through once: desktop + Start-menu shortcuts, an Add/Remove Programs entry, then the app opens. Re-download any time; running a newer file updates the install.</p>
-      <a class="btn" href="downloads/ledgerpos-setup-windows-x64.exe" download>
+      <a class="btn" href="{{RELEASE_BASE}}/ledgerpos-setup-windows-x64.exe" download>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
         Download for Windows <small>{{WIN_SIZE_MB}} MB</small>
       </a>
@@ -207,11 +207,11 @@
         <div><h2>macOS</h2><span>12+ · Apple Silicon / Intel</span></div>
       </div>
       <p class="desc">A proper .app bundle. Unzip, drag to Applications if you like, double-click. Pick your Mac's chip, M-series, or 2019-and-older Intel.</p>
-      <a class="btn" href="downloads/ledgerpos-macos-apple-silicon.zip" download>
+      <a class="btn" href="{{RELEASE_BASE}}/ledgerpos-macos-apple-silicon.zip" download>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
         Apple Silicon (M1–M4) <small>{{MAC_ARM_SIZE_MB}} MB</small>
       </a>
-      <a class="btn alt" href="downloads/ledgerpos-macos-intel.zip" download>Intel Mac <small>{{MAC_INTEL_SIZE_MB}} MB</small></a>
+      <a class="btn alt" href="{{RELEASE_BASE}}/ledgerpos-macos-intel.zip" download>Intel Mac <small>{{MAC_INTEL_SIZE_MB}} MB</small></a>
       <p class="note"><b>First launch:</b> right-click the app → <b>Open → Open</b> (Apple asks once for unfamiliar apps, then remembers). Data lives in <code>~/Library/Application Support/LedgerPOS</code>.</p>
     </div>
 
@@ -223,7 +223,7 @@
         <div><h2>Linux</h2><span>x86-64 · any distro</span></div>
       </div>
       <p class="desc">A single static binary, no packages, no dependencies. Extract and run it. Data lands in <b>~/.local/share/LedgerPOS</b>.</p>
-      <a class="btn" href="downloads/ledgerpos-linux-x64.tar.xz" download>
+      <a class="btn" href="{{RELEASE_BASE}}/ledgerpos-linux-x64.tar.xz" download>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
         Download .tar.xz <small>{{LINUX_SIZE_MB}} MB</small>
       </a>

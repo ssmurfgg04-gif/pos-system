@@ -89,7 +89,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Build the site (landing + demo + installers)
+      - name: Build the site (landing + demo + checksums; installers link to Releases)
         working-directory: frontend
         run: python3 ../scripts/netlify_build.py
 
@@ -113,9 +113,10 @@ jobs:
             --message "repo deploy $GITHUB_SHA"
 
       # The step that keeps "green" honest: the live site must serve THIS
-      # commit's installers. If it does not, the run fails with the exact
+      # commit's checksums.txt. If it does not, the run fails with the exact
       # fix — no more silent staleness (site frozen at an old version while
-      # every CI run shows green).
+      # every CI run shows green). Installers themselves live on GitHub
+      # Releases; the repo ships links + manifest only.
       - name: Verify live site serves this commit
         run: |
           expected=$(awk '/ledgerpos-setup-windows-x64.exe/{print $1}' downloads/checksums.txt)

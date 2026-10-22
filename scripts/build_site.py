@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Assemble the self-contained LedgerPOS download site.
+"""Assemble the LedgerPOS download site (offline fallback builder).
 
-Everything the Netlify deploy needs, in one folder — including the four
-installer packages in downloads/, so visitors download straight from the
-Netlify page (no GitHub redirect):
+Same output as scripts/netlify_build.py: installers live ONLY on GitHub
+Releases and the landing page links straight at the release assets; the
+committed downloads/manifest.json (version + sizes + sha256) feeds the
+page labels and downloads/checksums.txt is copied for same-origin
+integrity checks.
 
   build/netlify-site/
-    index.html            rendered landing page (relative download links)
+    index.html            rendered landing page (release asset links)
     icon-*.png            favicons / og image
     demo/                 in-browser demo build of the full app
-    downloads/            the 4 installers + checksums.txt
+    downloads/            checksums.txt + manifest.json (small text only)
     _redirects            SPA fallback for /demo/*
 
-Also writes download/ledgerpos-netlify-site.zip (drag-and-drop deploy)
-and standalone copies of the installers.
+Also writes download/ledgerpos-netlify-site.zip (drag-and-drop deploy).
 
-Fast path: reuses the packages + demo dist that already exist under
-build/netlify-site/ — no Go or npm required. Rebuild those first if you
+Fast path: reuses the demo dist that already exists under
+build/netlify-site/ — no Go or npm required. Rebuild that first if you
 changed app code (scripts/package_desktop.py).
 
 Run from the repo root:  python3 scripts/build_site.py [version]
@@ -51,37 +52,41 @@ ICONS = ("icon-64.png", "icon-128.png", "icon-256.png", "icon-512.png")
 
 
 def main():
-    # ---- preflight: everything we embed must exist and be Netlify-safe ----
-    missing = [f for f in INSTALLERS
-               if not os.path.isfile(os.path.join(DL, f))]
+    # ---- preflight: manifest + demo build, no binaries required ----
+    manifest_path = os.path.join(ROOT, "downloads", "manifest.json")
+    if not os.path.isfile(manifest_path):
+        raise SystemExit("downloads/manifest.json missing — installers are "
+                         "release-only; run scripts/create_release.py to refresh it")
+    import json as _json
+    manifest = _json.load(open(manifest_path))
+    names = {a["name"] for a in manifest["assets"]}
+    missing = [n for n in INSTALLERS if n not in names]
     if missing:
-        raise SystemExit("missing installers in downloads/ — run scripts/repack.py "
-                         f"first: {missing}")
+        raise SystemExit(f"downloads/manifest.json missing assets: {missing}")
     if not os.path.isfile(os.path.join(SITE, "demo", "index.html")):
         raise SystemExit("missing demo build — run the vite demo build first "
                          "(see scripts/package_desktop.py step 5)")
-    total = 0
-    for f in INSTALLERS:
-        total += pkgutil.assert_netlify_safe(os.path.join(DL, f))
     for icon in ICONS:
         if not os.path.isfile(os.path.join(ROOT, "build", icon)):
             raise SystemExit(f"missing build/{icon} — run scripts/make_icon.py first")
 
-    # ---- checksums (regenerate so they always match what's embedded) ----
-    ck = os.path.join(DL, "checksums.txt")
-    with open(ck, "w") as f:
-        f.write(f"LedgerPOS {VERSION} — SHA-256 of the download packages\n\n")
-        for name in INSTALLERS:
-            f.write(f"{pkgutil.sha256_of(os.path.join(DL, name))}  {name}\n")
-    print(f"checksums -> {ck}")
+    # ---- checksums + manifest (copied from the committed small files) ----
+    os.makedirs(DL, exist_ok=True)
+    for small in ("checksums.txt", "manifest.json"):
+        src = os.path.join(ROOT, "downloads", small)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(DL, small))
+    print("checksums + manifest -> downloads/")
 
     # ---- landing page ----
-    sizes = {name: pkgutil.human_mb(os.path.join(DL, name)) for name in INSTALLERS}
+    sizes = {a["name"]: f"{a['size'] / 1e6:.1f}" for a in manifest["assets"]}
+    rel_base = f"{RELEASES_PAGE}/download/v{manifest['version']}"
     tpl = open(os.path.join(SCRIPTS, "assets", "download-page.html")).read()
     html = (tpl
-            .replace("{{VERSION}}", VERSION)
+            .replace("{{VERSION}}", manifest["version"])
             .replace("{{BUILD_DATE}}", date.today().strftime("%b %Y"))
             .replace("{{RELEASES_PAGE}}", RELEASES_PAGE)
+            .replace("{{RELEASE_BASE}}", rel_base)
             .replace("{{WIN_SIZE_MB}}", sizes["ledgerpos-setup-windows-x64.exe"])
             .replace("{{MAC_ARM_SIZE_MB}}", sizes["ledgerpos-macos-apple-silicon.zip"])
             .replace("{{MAC_INTEL_SIZE_MB}}", sizes["ledgerpos-macos-intel.zip"])
@@ -99,7 +104,7 @@ def main():
         f.write("# SPA fallback for the in-browser demo app only\n"
                 "/demo/*  /demo/index.html  200\n")
 
-    # ---- sanity: every href in the landing page resolves ----
+    # ---- sanity: every internal href in the landing page resolves ----
     import re
     hrefs = re.findall(r'href="((?:downloads|demo|icon)[^"]*)"', html)
     for h in hrefs:
@@ -113,7 +118,7 @@ def main():
                 raise SystemExit(f"directory link without index.html: {h}")
     print(f"link check: {len(hrefs)} internal hrefs resolve")
 
-    # ---- the drag-and-drop zip (everything included) ----
+    # ---- the drag-and-drop zip (demo + pages; installers are release-only) ----
     os.makedirs(DOWNLOAD, exist_ok=True)
     site_zip = os.path.join(DOWNLOAD, "ledgerpos-netlify-site.zip")
     if os.path.exists(site_zip):
@@ -125,19 +130,12 @@ def main():
             for fn in sorted(names):
                 full = os.path.join(base, fn)
                 rel = os.path.relpath(full, SITE)
-                # installers are already compressed — store them as-is
-                if rel.startswith("downloads" + os.sep) and rel.endswith(
-                        (".zip", ".xz")):
-                    zi = zipfile.ZipInfo(rel, date_time=(2026, 1, 1, 0, 0, 0))
-                    with open(full, "rb") as fh:
-                        z.writestr(zi, fh.read(), compress_type=zipfile.ZIP_STORED)
-                else:
-                    z.write(full, rel)
+                z.write(full, rel)
                 files += 1
-    total_site = sum(os.path.getsize(os.path.join(DL, f)) for f in INSTALLERS) + 500_000
+    total_site = sum(os.path.getsize(os.path.join(dp, f))
+                     for dp, _, fs in os.walk(SITE) for f in fs)
     print(f"site zip -> {site_zip}  {os.path.getsize(site_zip)/1e6:.1f} MB  "
-          f"({files} files; ~{total_site/1e6:.0f} MB deployed — under Netlify's "
-          "50 MB drag-and-drop guidance)")
+          f"({files} files; ~{total_site/1e6:.1f} MB deployed)")
 
     # ---- standalone installer copies ----
     for a in INSTALLERS + ["checksums.txt"]:

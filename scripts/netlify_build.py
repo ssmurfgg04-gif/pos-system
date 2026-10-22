@@ -12,20 +12,24 @@ and can be run locally for verification (from anywhere):
 
     python3 scripts/netlify_build.py [--skip-npm]
 
-Everything Netlify serves comes out of THIS repository — the four
-installer packages are committed under downloads/ (mirrored from the
-GitHub Release), the icons under scripts/assets/icons/. No network
-fetches at build time, so a deploy can never fail on a registry hiccup.
+Everything Netlify serves comes out of THIS repository — the installer
+packages live ONLY on GitHub Releases (the repo is not a CDN); the
+landing page links straight at the release assets and the small
+manifest (downloads/manifest.json: version, sizes, sha256) feeds the
+page's size/version labels. Icons live under scripts/assets/icons/. No
+network fetches at build time, so a deploy can never fail on a registry
+hiccup.
 
 Output layout (frontend/dist — the publish directory):
 
     index.html        the download landing page (Big-7, OS-detected CTA)
     icon-*.png        favicon / og image
-    downloads/        4 installers + checksums.txt
+    downloads/        checksums.txt + manifest.json (small text only)
     demo/             in-browser demo build of the full POS (VITE_BASE=/demo/)
     _redirects        SPA fallback for /demo/*
 """
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -54,6 +58,11 @@ INSTALLERS = [
 ICONS = ("icon-64.png", "icon-128.png", "icon-256.png", "icon-512.png")
 
 
+def release_base() -> str:
+    """GitHub Release asset base for the shipped version."""
+    return f"{RELEASES_PAGE}/download/v{VERSION}"
+
+
 def die(msg: str) -> None:
     print(f"BUILD FAILED: {msg}", file=sys.stderr)
     sys.exit(1)
@@ -71,27 +80,30 @@ def human_mb(path: str) -> str:
     return f"{os.path.getsize(path) / 1e6:.1f}"
 
 
-def verify_installers() -> dict:
-    """Fail the build if a committed installer is missing or corrupted."""
-    sizes = {}
-    ck_path = os.path.join(DL_SRC, "checksums.txt")
-    expected: dict[str, str] = {}
-    if os.path.isfile(ck_path):
-        for line in open(ck_path):
-            m = re.match(r"^([0-9a-f]{64})\s+(\S+)$", line.strip())
-            if m:
-                expected[m.group(2)] = m.group(1)
-    for name in INSTALLERS:
-        p = os.path.join(DL_SRC, name)
-        if not os.path.isfile(p):
-            die(f"downloads/{name} is missing from the repo")
-        if name in expected and sha256_of(p) != expected[name]:
-            die(f"downloads/{name} does not match checksums.txt — do NOT deploy "
-                f"(rebuilt the installers? run: python3 scripts/write_checksums.py, then commit it with them)")
-        sizes[name] = human_mb(p)
-    total = sum(os.path.getsize(os.path.join(DL_SRC, n)) for n in INSTALLERS)
-    print(f"installers verified — {len(INSTALLERS)} packages, {total/1e6:.1f} MB total")
-    return sizes
+def load_manifest() -> dict:
+    """Fail the build if the installer manifest is missing or inconsistent.
+
+    The binaries themselves live only on GitHub Releases; the committed
+    manifest (version + per-asset size + sha256) is what the landing page
+    renders. Binary blobs must NEVER come back into the repo — releases
+    are the distribution channel.
+    """
+    mp = os.path.join(DL_SRC, "manifest.json")
+    if not os.path.isfile(mp):
+        die("downloads/manifest.json is missing — installers are release-only, "
+            "run scripts/create_release.py <tag> to refresh it after a release")
+    manifest = json.load(open(mp))
+    names = {a["name"] for a in manifest["assets"]}
+    missing = [n for n in INSTALLERS if n not in names]
+    if missing:
+        die(f"downloads/manifest.json is missing assets: {', '.join(missing)}")
+    if manifest.get("version") != VERSION:
+        die(f"downloads/manifest.json version {manifest.get('version')} != "
+            f"netlify_build VERSION {VERSION} — bump VERSION (and the manifest) together")
+    total = sum(a["size"] for a in manifest["assets"])
+    print(f"installer manifest ok — {len(INSTALLERS)} packages, "
+          f"{total/1e6:.1f} MB total, served from {release_base()}")
+    return manifest
 
 
 def build_demo(skip_npm: bool) -> None:
@@ -131,21 +143,23 @@ def restructure() -> None:
     print("demo build -> dist/demo/")
 
 
-def render_landing(sizes: dict) -> None:
+def render_landing(manifest: dict) -> None:
+    sizes = {a["name"]: a["size"] / 1e6 for a in manifest["assets"]}
     tpl = open(TEMPLATE).read()
     html = (tpl
             .replace("{{VERSION}}", VERSION)
             .replace("{{BUILD_DATE}}", date.today().strftime("%b %Y"))
             .replace("{{RELEASES_PAGE}}", RELEASES_PAGE)
-            .replace("{{WIN_SIZE_MB}}", sizes["ledgerpos-setup-windows-x64.exe"])
-            .replace("{{MAC_ARM_SIZE_MB}}", sizes["ledgerpos-macos-apple-silicon.zip"])
-            .replace("{{MAC_INTEL_SIZE_MB}}", sizes["ledgerpos-macos-intel.zip"])
-            .replace("{{LINUX_SIZE_MB}}", sizes["ledgerpos-linux-x64.tar.xz"]))
+            .replace("{{RELEASE_BASE}}", release_base())
+            .replace("{{WIN_SIZE_MB}}", f"{sizes['ledgerpos-setup-windows-x64.exe']:.1f}")
+            .replace("{{MAC_ARM_SIZE_MB}}", f"{sizes['ledgerpos-macos-apple-silicon.zip']:.1f}")
+            .replace("{{MAC_INTEL_SIZE_MB}}", f"{sizes['ledgerpos-macos-intel.zip']:.1f}")
+            .replace("{{LINUX_SIZE_MB}}", f"{sizes['ledgerpos-linux-x64.tar.xz']:.1f}"))
     if "{{" in html:
         die("unsubstituted template variable left in landing page")
     with open(os.path.join(DIST, "index.html"), "w") as f:
         f.write(html)
-    print("index.html rendered")
+    print("index.html rendered (installers link to GitHub Releases)")
 
 
 def render_portal() -> None:
@@ -176,7 +190,7 @@ def render_join() -> None:
 def copy_assets() -> None:
     dl = os.path.join(DIST, "downloads")
     os.makedirs(dl, exist_ok=True)
-    for name in INSTALLERS + ["checksums.txt"]:
+    for name in ("checksums.txt", "manifest.json"):
         shutil.copy2(os.path.join(DL_SRC, name), os.path.join(dl, name))
     for icon in ICONS:
         src = os.path.join(ICONS_SRC, icon)
@@ -186,7 +200,7 @@ def copy_assets() -> None:
     with open(os.path.join(DIST, "_redirects"), "w") as f:
         f.write("# SPA fallback for the in-browser demo app only\n"
                 "/demo/*  /demo/index.html  200\n")
-    print(f"downloads/ ({len(INSTALLERS) + 1} files), icons, _redirects -> dist/")
+    print("downloads/ (checksums + manifest), icons, _redirects -> dist/")
 
 
 def link_check() -> None:
@@ -219,10 +233,10 @@ def link_check() -> None:
 
 def main() -> None:
     skip_npm = "--skip-npm" in sys.argv
-    sizes = verify_installers()
+    manifest = load_manifest()
     build_demo(skip_npm)
     restructure()
-    render_landing(sizes)
+    render_landing(manifest)
     render_portal()
     render_join()
     copy_assets()
@@ -230,7 +244,8 @@ def main() -> None:
     n_files = sum(len(fs) for _, _, fs in os.walk(DIST))
     total = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(DIST) for f in fs)
     print(f"\nDONE — {n_files} files, {total/1e6:.1f} MB in frontend/dist "
-          "(landing at /, demo at /demo/, owner portal at /portal/, join page at /join/, installers at /downloads/)")
+          "(landing at /, demo at /demo/, owner portal at /portal/, join page at /join/, "
+          "checksums at /downloads/; installers link to GitHub Releases)")
 
 
 if __name__ == "__main__":
