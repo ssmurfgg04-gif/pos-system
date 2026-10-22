@@ -38,7 +38,13 @@ func TestPostgresMigrations(t *testing.T) {
 		t.Fatal("driver reported sqlite for a postgres handle")
 	}
 
-	// Defaults seeded (server mode boots with a working settings surface).
+	// Boot sequence parity: Open → Migrate → Seed(demoData=false). Server
+	// mode runs the same chain, so the PG dialect must tolerate it too
+	// (SEED_DEMO stays false in production — demo rows would be fake
+	// money).
+	if err := db.Seed(false); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM settings`).Scan(&n); err != nil {
 		t.Fatalf("count settings: %v", err)
