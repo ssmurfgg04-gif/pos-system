@@ -62,6 +62,11 @@ What the operator still does by hand:
   tills actually trust. Keep an offline copy of the private key in the
   owner's password manager — GitHub Secrets are recoverable only by
   admins, and a lost key means re-rotating the whole fleet.
+- The repo secret `RELEASES_TOKEN` (a PAT with `contents:write`) backs
+  the manifest-sync commit: commits pushed with the workflow's own
+  `GITHUB_TOKEN` never trigger workflow runs, so without it the Netlify
+  site would not redeploy after a release and the staleness guard would
+  sleep through it.
 - **Consistency guard**: the release workflow refuses to sign if the
   secret's public half does not match `embeddedSigningPubKey` (a
   half-done rotation fails in CI, not on 500 tills).
