@@ -1121,9 +1121,11 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
                 }
         }
 
-        // Amount mismatch → flag, don't block (the money moved; staff must see it).
-        // An unknown/zero amount is UNVERIFIED — public callback endpoints must
-        // never wave a payment through silently; flag it for staff review.
+        // Amount discrepancy semantics (TRUSTED callers only — Paystack's
+        // HMAC-verified webhook can legitimately differ by cents in fees/
+        // rounding; recheck/sweeper results can map across superseded legs).
+        // Those complete and flag for staff. The UNTRUSTED public M-Pesa
+        // callback path is gated separately in HandleCallback — see there.
         discrepancy := 0
         if amountCents <= 0 || amountCents != payAmount {
                 discrepancy = 1
@@ -1462,8 +1464,8 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
 
 // HandleCallback processes a Daraja webhook (public endpoint).
 func (s *Service) HandleCallback(cb mpesa.CallbackResult) (*models.Order, error) {
-        var paymentID int64
-        err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM payments WHERE checkout_request_id = ?`), cb.CheckoutRequestID).Scan(&paymentID)
+        var paymentID, storedCents, callbackOrderID int64
+        err := s.db.QueryRow(s.db.Rebind(`SELECT id, amount_cents, order_id FROM payments WHERE checkout_request_id = ?`), cb.CheckoutRequestID).Scan(&paymentID, &storedCents, &callbackOrderID)
         if err != nil {
                 return nil, fmt.Errorf("callback for unknown checkout %s: %w", cb.CheckoutRequestID, err)
         }
@@ -1473,6 +1475,26 @@ func (s *Service) HandleCallback(cb mpesa.CallbackResult) (*models.Order, error)
                 s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
                         truncStr(cb.ResultDesc, 200), paymentID)
                 return s.GetOrderByPayment(paymentID)
+        }
+        // PUBLIC-path hard gate (REVIEW-3 critical #4): this endpoint is
+        // internet-reachable and unauthenticated, and the payload's amount is
+        // attacker-controlled. A success result that does not carry the exact
+        // stored amount (set server-side at push time) must NEVER complete the
+        // sale — previously it was only flagged while the order still flipped
+        // to PAID, so a forged KES 1 callback settled a KES 50,000 order.
+        // Real providers charge exactly the requested amount, so this only
+        // ever blocks tampered/malformed results. Fail closed: payment FAILED,
+        // order discrepancy flag raised (staff tell-tale), audit entry, order
+        // stays PENDING for retry STK / manual code / void / staff recheck
+        // (recheck re-queries Daraja directly and can still heal a genuine
+        // payment whose callback was spoofed or lost).
+        if cb.AmountCents <= 0 || cb.AmountCents != storedCents {
+                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
+                        truncStr(fmt.Sprintf("amount mismatch on public callback: result %d != stored %d — unverified, not completed", cb.AmountCents, storedCents), 200), paymentID)
+                s.db.Exec(`UPDATE orders SET discrepancy = 1 WHERE id = ?`, callbackOrderID)
+                s.Audit(0, "system", "PAYMENT_AMOUNT_MISMATCH", "order", fmt.Sprint(callbackOrderID),
+                        fmt.Sprintf("public callback amount %d does not match stored amount %d — order left PENDING for staff review", cb.AmountCents, storedCents))
+                return nil, fmt.Errorf("%w: public callback amount %d does not match stored amount %d", ErrInvalidState, cb.AmountCents, storedCents)
         }
         return s.completePayment(paymentID, cb.MpesaReceipt, cb.AmountCents, cb.ResultDesc)
 }

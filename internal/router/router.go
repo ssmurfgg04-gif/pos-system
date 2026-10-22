@@ -4,6 +4,7 @@ package router
 import (
         "io/fs"
         "net/http"
+        "os"
         "strings"
 
         "github.com/gin-gonic/gin"
@@ -361,15 +362,45 @@ func serveStatic(frontend fs.FS, c *gin.Context) bool {
 }
 
 func corsMiddleware() gin.HandlerFunc {
+        // Strict origin allowlist. The appliance serves its own SPA (same-origin)
+        // and dev-mode Vite proxies through :3000, so legitimate browser clients
+        // never need cross-origin CORS. The previous wildcard (`*`) let ANY website
+        // open in a cashier's browser read the staff/PIN list cross-origin —
+        // the /auth/pin-users enumeration surface. Extra origins (e.g. BYO-domain
+        // hosting) can be listed in CORS_EXTRA_ORIGINS (comma-separated).
+        // Non-allowlisted origins get no ACAO header (browsers block the read)
+        // and preflights get 403.
+        allowed := map[string]bool{
+                "http://localhost:5173":  true,
+                "http://127.0.0.1:5173":  true,
+                "https://localhost:5173": true,
+                "http://localhost:3000":  true,
+                "http://127.0.0.1:3000":  true,
+        }
+        for _, o := range strings.Split(os.Getenv("CORS_EXTRA_ORIGINS"), ",") {
+                if o = strings.TrimSpace(o); o != "" {
+                        allowed[o] = true
+                }
+        }
         return func(c *gin.Context) {
-                // LAN appliance: terminals and admin browsers hit the box directly
-                // or through the embedded SPA (same-origin). Allow all origins for
-                // dev-mode Vite (5173 → 3000 proxy) and BYO-domain hosting.
-                c.Header("Access-Control-Allow-Origin", "*")
-                c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-                c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+                origin := c.GetHeader("Origin")
+                // No Origin header = same-origin / server-to-server; an Origin equal
+                // to the request host is the SPA served by this very process.
+                sameOrigin := origin == "" ||
+                        origin == "http://"+c.Request.Host ||
+                        origin == "https://"+c.Request.Host
+                if !sameOrigin && allowed[origin] {
+                        c.Header("Access-Control-Allow-Origin", origin)
+                        c.Header("Vary", "Origin")
+                        c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+                        c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+                }
                 if c.Request.Method == http.MethodOptions {
-                        c.AbortWithStatus(204)
+                        if sameOrigin || allowed[origin] {
+                                c.AbortWithStatus(http.StatusNoContent)
+                        } else {
+                                c.AbortWithStatus(http.StatusForbidden)
+                        }
                         return
                 }
                 c.Next()

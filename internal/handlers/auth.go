@@ -240,6 +240,13 @@ func (h *H) Signup(c *gin.Context) {
 // Scoped by ?shop= (a terminal belongs to one shop); default shop otherwise.
 // Each row carries that shop's id so PIN sign-in can be BOUND to it.
 func (h *H) PinUsers(c *gin.Context) {
+        // Public endpoint (PIN pad lists users before any login) — rate-limit
+        // per IP so a script (local or, historically, any website via CORS *)
+        // cannot grind the 4-digit PIN space against a live staff list.
+        if h.PinUsersRL != nil && !h.PinUsersRL.Allow("pin-users:"+c.ClientIP()) {
+                c.JSON(429, gin.H{"error": "too many requests"})
+                return
+        }
         db, err := h.shopDB(c)
         if err != nil {
                 h.fail(c, 404, "unknown shop")

@@ -41,6 +41,10 @@ type H struct {
         LoginRL    *auth.RateLimiter
         PinRL      *auth.RateLimiter
         CallbackRL *auth.RateLimiter
+        // PinUsersRL blunts cross-origin grind attacks on the PUBLIC
+        // /auth/pin-users endpoint (staff list). CORS allowlisting closes the
+        // browser attack; this keeps even same-origin/LAN hammering slow.
+        PinUsersRL *auth.RateLimiter
         // IPRL blunts credential SPRAY (many usernames from one source),
         // complementing the per-account limits in LoginRL/PinRL.
         IPRL *auth.RateLimiter
@@ -78,6 +82,10 @@ func New(db *database.DB, st *settings.Store, svc *services.Service, hub *ws.Hub
                 // blind checkout_request_id guessing without touching Daraja
                 // retries (minutes apart).
                 CallbackRL: auth.NewRateLimiter(60*time.Second, 20),
+                // PIN-pad list is fetched once per till screen load; 60/min
+                // per IP covers a whole shop of terminals while capping the
+                // 4-digit-space enumeration grind.
+                PinUsersRL: auth.NewRateLimiter(60*time.Second, 60),
         }
 }
 

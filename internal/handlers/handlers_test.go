@@ -530,7 +530,10 @@ func TestCallbackAmountMismatchFlagsDiscrepancy(t *testing.T) {
         p0, _ := pays[0].(map[string]any)
         checkoutID, _ := p0["checkoutRequestId"].(string)
         time.Sleep(250 * time.Millisecond)
-        // Callback reports a WRONG amount (450.00 vs 550.00 due).
+        // Callback reports a WRONG amount (450.00 vs 550.00 due). The public
+        // callback path is untrusted (REVIEW-3 critical #4): it must FAIL
+        // CLOSED — raise the staff discrepancy tell-tale but NEVER complete
+        // the sale on an unverified amount.
         cb := map[string]any{
                 "Body": map[string]any{"stkCallback": map[string]any{
                         "MerchantRequestID": "m-2", "CheckoutRequestID": checkoutID,
@@ -550,6 +553,14 @@ func TestCallbackAmountMismatchFlagsDiscrepancy(t *testing.T) {
         order = dataMap(t, w)
         if order["discrepancy"] != true {
                 t.Fatalf("amount mismatch must flag discrepancy: %v", order["discrepancy"])
+        }
+        if order["status"] == "PAID" {
+                t.Fatalf("FORGERY WINDOW: mismatched public callback completed the order")
+        }
+        pays, _ = order["payments"].([]any)
+        p0, _ = pays[0].(map[string]any)
+        if p0["status"] != "FAILED" {
+                t.Fatalf("payment must be FAILED on unverified amount, got %v", p0["status"])
         }
 }
 
