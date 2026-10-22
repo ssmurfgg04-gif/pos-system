@@ -1,0 +1,318 @@
+# LedgerPOS Release — the release train builds from HEAD, not by hand.
+#
+# Pushing a tag v* runs the full pipeline the download story depends on:
+#
+#   build    — scripts/package_desktop.py cross-compiles every installer
+#              (Windows NSIS setup, macOS Apple Silicon + Intel, Linux)
+#              from THIS tag's source, so the shipped artifact can never
+#              be older than the repo again.
+#   sign     — the OTA update manifest is signed with the ed25519 key in
+#              the repo secret OTA_SIGNING_KEY (set once by the owner;
+#              its public half must match embeddedSigningPubKey in
+#              internal/update/signing.go — the workflow verifies the
+#              pair before signing, so a half-done rotation fails here
+#              instead of on 500 tills).
+#   publish  — GitHub Release with the 4 installers + checksums.txt +
+#              ota-assets.json (the exact bytes to store in the cloud
+#              app_config update_manifest_assets row) + ota-manifest.sig,
+#              then commits the regenerated downloads/manifest.json and
+#              downloads/checksums.txt back to main (the download site
+#              and the CI staleness check read those).
+#   summary  — the exact SQL that publishes the manifest to the fleet
+#              (update_manifest_tag/_assets/_sig rows).
+#
+# workflow_dispatch runs the same pipeline in dry-run by default: build +
+# sign + verify without touching Releases or main. Use it to rehearse a
+# release or to prove the OTA secret works.
+#
+# One-time setup (done): repo secret OTA_SIGNING_KEY = base64 ed25519
+# PRIVATE key (64 bytes). Offline copy stays in the owner's password
+# manager. Rotation = keygen → update the secret → ship the new public
+# key in internal/update/signing.go → the release that ships it is the
+# cutover (tills trust the key compiled into them).
+
+name: LedgerPOS Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build + sign only (no release, no commits)"
+        type: boolean
+        default: true
+      version:
+        description: "Version override for dry runs (e.g. 1.4.0-ci.1); ignored on tag push"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ledgerpos-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: build + sign + publish
+    runs-on: ubuntu-latest
+    env:
+      REPO_SLUG: ssmurfgg04-gif/pos-system
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # release notes need history since the previous tag
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24" # one node line everywhere (ci.yml + netlify.toml)
+
+      - name: Python + packaging deps
+        run: |
+          pip install --quiet --break-system-packages pillow zopfli || pip install --quiet pillow zopfli
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nsis || echo "::warning::nsis unavailable — package_desktop falls back to the portable self-installing exe"
+
+      - name: Resolve version + tag
+        id: meta
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+            PUBLISH=true
+          else
+            VERSION="${{ inputs.version }}"
+            if [ -z "$VERSION" ]; then VERSION="0.0.0-ci.$GITHUB_RUN_NUMBER"; fi
+            TAG="v$VERSION"
+            # Dispatch runs NEVER publish — only real tag pushes do.
+            PUBLISH=false
+          fi
+          echo "tag=$TAG"        >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "release: $TAG (version $VERSION, publish=$PUBLISH)"
+
+      - name: Frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build all installers from this exact commit
+        env:
+          LEDGERPOS_DOWNLOAD_DIR: ${{ github.workspace }}/build/dist
+        run: python3 scripts/package_desktop.py "${{ steps.meta.outputs.version }}"
+
+      - name: Build OTA manifest assets JSON (the exact app_config bytes)
+        run: |
+          python3 - <<'EOF'
+          import hashlib, json, os
+          dl = "build/netlify-site/downloads"
+          tag = "${{ steps.meta.outputs.tag }}"
+          assets = ("ledgerpos-setup-windows-x64.exe",
+                    "ledgerpos-macos-apple-silicon.zip",
+                    "ledgerpos-macos-intel.zip",
+                    "ledgerpos-linux-x64.tar.xz")
+          out = []
+          for name in assets:
+              h = hashlib.sha256()
+              with open(os.path.join(dl, name), "rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              out.append({"name": name,
+                          "url": f"https://github.com/${{ env.REPO_SLUG }}/releases/download/{tag}/{name}",
+                          "sha256": h.hexdigest()})
+          with open("build/ota-assets.json", "w") as f:
+              f.write(json.dumps(out) + "\n")
+          print(open("build/ota-assets.json").read())
+          EOF
+
+      - name: Sign the OTA manifest (repo secret OTA_SIGNING_KEY)
+        env:
+          LEDGERPOS_UPDATE_PRIV_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LEDGERPOS_UPDATE_PRIV_KEY:-}" ]; then
+            echo "::error::OTA_SIGNING_KEY repo secret is missing — set it (Settings → Secrets and variables → Actions). Tills refuse unsigned manifests."
+            exit 1
+          fi
+          # Consistency guard: the secret's key must be the pair of the key
+          # the fleet's binaries embed. A half-done rotation fails HERE with
+          # a plain answer, not as a bare signature mismatch below (and not
+          # on tills).
+          python3 - <<'EOF'
+          import base64, re
+          priv = base64.b64decode("${{ secrets.OTA_SIGNING_KEY }}")
+          assert len(priv) == 64, f"OTA_SIGNING_KEY is {len(priv)} bytes, want 64 (base64 ed25519 seed||pub)"
+          pub_half = base64.b64encode(priv[32:]).decode()
+          embedded = re.search(r'embeddedSigningPubKey = "([^"]+)"',
+                               open("internal/update/signing.go").read()).group(1)
+          if pub_half != embedded:
+              raise SystemExit(
+                  "OTA_SIGNING_KEY and embeddedSigningPubKey are DIFFERENT key pairs — "
+                  "half-done rotation. Update the secret AND internal/update/signing.go together "
+                  "(see docs/DEPLOYMENT.md → OTA signing key → rotation runbook).")
+          print("signing key pair consistent with the shipped fleet public key")
+          EOF
+          go run scripts/sign_manifest.go signfile "${{ steps.meta.outputs.tag }}" \
+            build/ota-assets.json > build/ota-manifest.sig
+          echo "signature: $(cat build/ota-manifest.sig | head -c 24)…"
+
+      - name: Verify signature + hashes independently (never trust the signer alone)
+        run: |
+          python3 - <<'EOF'
+          import base64, hashlib, json, os, re
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+          pub_b64 = re.search(r'embeddedSigningPubKey = "([^"]+)"',
+                              open("internal/update/signing.go").read()).group(1)
+          pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(pub_b64))
+          tag = "${{ steps.meta.outputs.tag }}".encode()
+          assets = open("build/ota-assets.json", "rb").read().rstrip(b"\n")
+          sig = base64.b64decode(open("build/ota-manifest.sig", "rb").read().strip())
+          payload = b"update_manifest_v1\n" + tag + b"\n" + assets
+          pub.verify(sig, payload)
+          print("ed25519 signature over the manifest: VALID")
+
+          for a in json.loads(assets):
+              name = a["name"]
+              path = os.path.join("build/netlify-site/downloads", name)
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              assert h.hexdigest() == a["sha256"], f"sha mismatch for {name}"
+          print("all asset sha256 verified against the built files")
+          EOF
+
+      - name: Generate release notes
+        if: steps.meta.outputs.publish == 'true'
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          {
+            echo "LedgerPOS ${TAG#v} — the point of sale that installs itself."
+            echo ""
+            echo "**Built in CI from ${GITHUB_SHA::7} — the artifact is exactly this source tree.**"
+            echo ""
+            if [ -n "$PREV" ]; then
+              echo "### Since $PREV"
+              echo ""
+              git log --oneline --no-decorate "$PREV..$TAG" | sed 's/^/- /'
+              echo ""
+            fi
+            echo "| File | For |"
+            echo "|---|---|"
+            echo "| \`ledgerpos-setup-windows-x64.exe\` | Windows 10/11 (64-bit) — one-click installer |"
+            echo "| \`ledgerpos-macos-apple-silicon.zip\` | macOS 12+ on Apple Silicon (M1–M4) |"
+            echo "| \`ledgerpos-macos-intel.zip\` | macOS 12+ on Intel Macs |"
+            echo "| \`ledgerpos-linux-x64.tar.xz\` | Linux x86-64, any distro |"
+            echo ""
+            echo "**First login:** pick **Sign in** (existing business — cloud syncs down) or **Register a new business**; teammates paste the owner's join link. The web demo stays \`admin\` / \`0000\`."
+            echo ""
+            echo "- **Windows SmartScreen** may warn (no code-signing certificate yet): *More info → Run anyway*."
+            echo "- **macOS Gatekeeper**: right-click the app → *Open → Open* (once; Apple remembers)."
+            echo "- **Integrity:** SHA-256 of every package in \`checksums.txt\` and \`downloads/manifest.json\`."
+            echo "- **Updates:** tills check the signed cloud manifest (ed25519) and can install or undo from Settings → System."
+          } > build/release-notes.md
+
+      - name: Publish GitHub Release + OTA artifacts
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            --title "LedgerPOS ${TAG#v} — desktop app" \
+            --notes-file build/release-notes.md \
+            --verify-tag \
+            build/netlify-site/downloads/ledgerpos-setup-windows-x64.exe \
+            build/netlify-site/downloads/ledgerpos-macos-apple-silicon.zip \
+            build/netlify-site/downloads/ledgerpos-macos-intel.zip \
+            build/netlify-site/downloads/ledgerpos-linux-x64.tar.xz \
+            build/netlify-site/downloads/checksums.txt \
+            build/ota-assets.json \
+            build/ota-manifest.sig
+
+      - name: Sync the committed download manifest back to main
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import hashlib, json, os
+          dl = "build/netlify-site/downloads"
+          assets = ("ledgerpos-setup-windows-x64.exe",
+                    "ledgerpos-macos-apple-silicon.zip",
+                    "ledgerpos-macos-intel.zip",
+                    "ledgerpos-linux-x64.tar.xz")
+          entries = []
+          for name in assets:
+              h = hashlib.sha256()
+              with open(os.path.join(dl, name), "rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              entries.append({"name": name, "size": os.path.getsize(os.path.join(dl, name)),
+                              "sha256": h.hexdigest()})
+          with open("downloads/manifest.json", "w") as f:
+              json.dump({"version": "${{ steps.meta.outputs.version }}", "assets": entries}, f, indent=2)
+              f.write("\n")
+          with open("downloads/checksums.txt", "w") as f:
+              f.write("LedgerPOS ${{ steps.meta.outputs.version }} — SHA-256 of the download packages\n\n")
+              for e in entries:
+                  f.write(f"{e['sha256']}  {e['name']}\n")
+          EOF
+          git config user.name "ledgerpos-release-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add downloads/manifest.json downloads/checksums.txt
+          git commit -m "release: sync download manifest for $TAG"
+          git push origin HEAD:main
+
+      - name: Job summary — manifest, signature, and the fleet SQL
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          {
+            echo "## LedgerPOS ${{ steps.meta.outputs.version }}"
+            echo ""
+            if [ "${{ steps.meta.outputs.publish }}" = "true" ]; then
+              echo "Release published: https://github.com/${{ env.REPO_SLUG }}/releases/tag/$TAG"
+            else
+              echo "**Dry run** — nothing published. Sign + verify only."
+            fi
+            echo ""
+            echo "### OTA manifest signature (ed25519)"
+            echo ""
+            echo '```'
+            cat build/ota-manifest.sig
+            echo '```'
+            echo ""
+            echo "### Publish to the fleet (Supabase SQL editor — run as one transaction)"
+            echo ""
+            echo "Store \`ota-assets.json\` and \`ota-manifest.sig\` from the release VERBATIM —"
+            echo "the signature covers the exact bytes. Template:"
+            echo ""
+            echo '```sql'
+            echo "begin;"
+            echo "select public.upsert_app_config('update_manifest_tag', '$TAG', false);"
+            echo "select public.upsert_app_config('update_manifest_notes', '<release notes>', false);"
+            echo "select public.upsert_app_config('update_manifest_assets', '<contents of ota-assets.json>', false);"
+            echo "select public.upsert_app_config('update_manifest_sig', '<contents of ota-manifest.sig>', false);"
+            echo "commit;"
+            echo '```'
+            echo ""
+            echo "Tills pick it up on their next update check; unsigned or re-serialized manifests are refused."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build for failed-run forensics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-build-${{ steps.meta.outputs.version }}
+          path: |
+            build/out/
+            build/netlify-site/downloads/
+          retention-days: 7

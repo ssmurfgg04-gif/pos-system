@@ -15,45 +15,73 @@ cloud is operated. Anchored to the repo as of commit `b4d4426` or later.
 
 ## Cutting a release
 
-1. **Bump the version** (netlify_build `VERSION`, app `appVersion` in
-   `main.go`'s build stamps, tag) and merge to `main`. CI gates: vet,
-   sqlite suite, postgres migration chain, vitest, site build.
-2. **Build installers**: `scripts/package_desktop.py` produces the four
-   packages under `build/netlify-site/downloads/` (Go cross-builds +
-   per-OS packaging; `rsrc_windows_amd64.syso` regenerates locally — it
-   is untracked on purpose).
-3. **Checksums**: `scripts/write_checksums.py` (or
-   `scripts/build_site.py <ver>` regenerates them alongside the site).
-4. **Publish the release**: `GITHUB_TOKEN=… python3 scripts/create_release.py v1.4.0`
-   — uploads the four assets, deletes stale same-name assets, and
-   **regenerates `downloads/manifest.json`** (version, sizes, sha256)
-   which the download site renders.
-5. **Sign the OTA manifest** (the critical step for auto-updates):
+**The release train is automated: pushing a tag `v*` builds, signs, and
+publishes.** `.github/workflows/release.yml` cross-compiles every
+installer from the tagged commit (the artifact can never be older than
+the source), signs the OTA manifest with the `OTA_SIGNING_KEY` repo
+secret, verifies the signature + hashes independently, publishes the
+GitHub Release (installers + `checksums.txt` + `ota-assets.json` +
+`ota-manifest.sig`), commits the regenerated `downloads/manifest.json`
+and `downloads/checksums.txt` back to `main`, and prints the fleet SQL
+in the job summary. `workflow_dispatch` runs the same pipeline in dry
+run (build + sign + verify, publishes nothing) — rehearse with it.
 
-   ```bash
-   # one-time (already done for this fleet — keys live OFFLINE):
-   go run scripts/sign_manifest.go keygen
+What the operator still does by hand:
 
-   # per release — sign the EXACT app_config values:
-   LEDGERPOS_UPDATE_PRIV_KEY=<b64-private> \
-     go run scripts/sign_manifest.go signfile v1.4.0 /tmp/assets.json \
-     > /tmp/manifest.sig
+1. **Bump the version + tag**: merge to `main` (CI gates: vet, sqlite
+   suite, postgres migration chain, vitest, site build), then
+   `git tag v1.4.0 && git push origin v1.4.0`.
+2. **Publish the manifest to the fleet**: copy `ota-assets.json` and
+   `ota-manifest.sig` from the release VERBATIM into the `app_config`
+   rows (the job summary shows the SQL template):
 
-   # then SQL:
-   INSERT INTO app_config (key, value, is_secret)
-   VALUES ('update_manifest_sig', '<sig from file>', false)
-   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+   ```sql
+   begin;
+   select public.upsert_app_config('update_manifest_tag', 'v1.4.0', false);
+   select public.upsert_app_config('update_manifest_notes', '<release notes>', false);
+   select public.upsert_app_config('update_manifest_assets',
+          '<contents of ota-assets.json>', false);
+   select public.upsert_app_config('update_manifest_sig',
+          '<contents of ota-manifest.sig>', false);
+   commit;
    ```
 
-   `/tmp/assets.json` must be byte-identical to the
-   `update_manifest_assets` row (copy it out of the DB, do not
-   re-serialize). Tills refuse unsigned/tampered manifests for auto-OTA
+   The signature covers the exact stored bytes — never re-serialize the
+   assets JSON. Tills refuse unsigned/tampered manifests for auto-OTA
    and fall back to GitHub (manual install) — a release without a
    signature simply doesn't auto-propagate; it can't break anyone.
-6. **Update the cloud manifest rows** (`update_manifest_tag`,
-   `_notes`, `_assets`) in the same transaction as the signature. Tills
-   re-check at boot and every 6h; installs wait for a quiet till
+   Tills re-check at boot and every 6h; installs wait for a quiet till
    (`HasUnfinishedWork` — money in flight or a live sale blocks it).
+
+### OTA signing key
+
+- The ed25519 **private** key lives in the repo secret
+  `OTA_SIGNING_KEY` (base64, 64 bytes `seed||pub`) so CI signs every
+  release; the **public** half is compiled into the fleet binary
+  (`internal/update/signing.go` `embeddedSigningPubKey`) and is what
+  tills actually trust. Keep an offline copy of the private key in the
+  owner's password manager — GitHub Secrets are recoverable only by
+  admins, and a lost key means re-rotating the whole fleet.
+- **Consistency guard**: the release workflow refuses to sign if the
+  secret's public half does not match `embeddedSigningPubKey` (a
+  half-done rotation fails in CI, not on 500 tills).
+- **Rotation runbook** (compromise, or planned):
+  1. `go run scripts/sign_manifest.go keygen`
+  2. Update the `OTA_SIGNING_KEY` repo secret with the new private key.
+  3. Replace `embeddedSigningPubKey` in `internal/update/signing.go`
+     with the new public key and ship it as a release. That release is
+     the cutover: tills only trust keys compiled into them, so the new
+     key is trusted only after tills install that release.
+  4. Until rollout completes, publish manifests signed with the OLD key
+     (tills that have not updated yet still enforce the old key). After
+     rollout, the old key is dead — treat it as burned.
+
+### Manual fallback (no CI)
+
+`scripts/package_desktop.py` + `scripts/create_release.py` +
+`LEDGERPOS_UPDATE_PRIV_KEY=… go run scripts/sign_manifest.go signfile`
+still work from a dev box (see git history of this file for the old
+step-by-step). CI is the supported path; the fallback is for outages.
 
 ## Cloud operations (ledgerpos-backups)
 

@@ -99,5 +99,20 @@ Credentials checklist (§4) state:
 - Supabase access token: VALID (sbp_fcd1…)
 - Buni production keys: deployed as Edge secrets (BUNI_*); till 7853959
 - OTA manifest signing keypair: generated; PUBLIC key embedded
-  (internal/update/signing.go); PRIVATE key offline with owner
+  (internal/update/signing.go); PRIVATE key in the repo secret
+  `OTA_SIGNING_KEY` (owner instruction) + offline backup with owner
 - GitHub PAT: stored outside the repo (.secrets, 600)
+
+## STATUS UPDATE 2 — 2026-10-22 (shop-floor follow-up: release train + OTA key to GH secrets)
+
+Owner direction: "ota signing key should be stored in github secrets",
+plus the live cashier's-day review of the shipped binary (findings now
+in `docs/ROADMAP.md`). Delta executed:
+
+| Item | Outcome |
+|---|---|
+| OTA signing key → GitHub Secrets | DONE — `OTA_SIGNING_KEY` repo secret uploaded via API (sealed box); key pair consistency verified (priv pub-half == `embeddedSigningPubKey`) |
+| CI release train (the review's Critical) | DONE — `.github/workflows/release.yml`: tag `v*` → build from HEAD (NSIS/mac/linux) → sign OTA manifest in CI → independent verify → publish Release → sync `downloads/manifest.json`+`checksums.txt` to main; `workflow_dispatch` dry-run mode |
+| Stocktake trust event | DONE — silent no-op fixed (product created after count open → 422, not 200-noop) + `stocktake_regression_test.go` (late product, zero-count, double-apply, empty close, clear-line) |
+| ROADMAP | DONE — shop-floor findings section added (returns/refunds, WhatsApp receipts, checkout responsiveness, eTIMS, a11y, offline scope, hotkeys) |
+| Docs | DONE — DEPLOYMENT.md rewritten around the CI train + OTA key runbook (secret location, consistency guard, rotation) |
