@@ -30,6 +30,7 @@ func isSecretKey(k string) bool {
         k = strings.ToLower(k)
         return strings.Contains(k, "secret") || strings.Contains(k, "passkey") ||
                 strings.Contains(k, "passphrase") || strings.Contains(k, "consumer_key") ||
+                strings.Contains(k, "service_key") || strings.Contains(k, "api_key") ||
                 k == "jwt_secret"
 }
 
@@ -212,6 +213,14 @@ func (s *Store) Set(key, value string) error {
 func (s *Store) Update(kv map[string]string) ([]string, error) {
         changed := make([]string, 0, len(kv))
         for k, v := range kv {
+                if k == "jwt_secret" {
+                        // The auth root is machine-local: seed.go writes it with raw
+                        // SQL and nothing else may rotate it — not the API (the
+                        // allowlist already blocks it there) and not a batch write
+                        // that walked around the handler. A ClearToken echo must not
+                        // wipe it either.
+                        continue
+                }
                 if isSecretKey(k) {
                         if v == MaskToken || v == "" {
                                 continue // untouched echo or cleared-by-accident — keep existing secret
@@ -267,16 +276,28 @@ var internalKeys = map[string]bool{
         "paystack_via_cloud":       true, // cloud route bookkeeping
         "paystack_enabled_touched": true, // one-time migration marker
         "buni_via_cloud":           true, // cloud route bookkeeping (Buni main rail switch)
+        // Cloud-vault bookkeeping: rows the vault apply loop and the OTA
+        // checker write locally on real tills. They are cloud-owned state,
+        // never admin-editable, and — before they were classified — every
+        // one of them 400'd the Settings page's save (the round-tripped
+        // snapshot echo tripped the allowlist: "unknown setting key:
+        // config_synced_at" was why the store name never saved).
+        "config_synced_at": true, // last vault apply stamp
+        "paystack_mode":    true, // vault route bookkeeping (live/test)
+        "offsite_api_key":  true, // vault-delivered credential, env-injected only
 }
 
 // IsInternalKey reports whether a settings key is runtime bookkeeping that
 // the API neither serves nor accepts. syncstate_* cursors/counters are
-// matched by prefix (they embed the team code).
+// matched by prefix (they embed the team code); update_manifest_* is the
+// OTA checker's local mirror of the cloud manifest (the assets row alone
+// is ~1KB and would also trip the 500-byte value cap).
 func IsInternalKey(k string) bool {
         if internalKeys[k] {
                 return true
         }
-        return strings.HasPrefix(k, "syncstate_")
+        return strings.HasPrefix(k, "syncstate_") ||
+                strings.HasPrefix(k, "update_manifest_")
 }
 
 // Snapshot returns all settings with secrets masked for API responses.
@@ -286,12 +307,20 @@ func IsInternalKey(k string) bool {
 // bookkeeping keys (sync state, device identity) are hidden for the same
 // reason: they are not API-writable, and an echo of them must never fail
 // the save.
+//
+// The rule is also a class-kill: anything NOT in the API allowlist is
+// runtime state by definition (admin-editable keys all live in
+// DefaultSettings), so it is hidden wholesale. The Settings page
+// round-trips this snapshot on save — one stray runtime key in here used
+// to 400 every save on real tills ("unknown setting key:
+// config_synced_at"; the store-name-never-saves report).
 func (s *Store) Snapshot() map[string]any {
+        allowed := AllowedKeys()
         s.mu.RLock()
         defer s.mu.RUnlock()
         out := make(map[string]any, len(s.cache))
         for k, v := range s.cache {
-                if k == "jwt_secret" || IsInternalKey(k) {
+                if k == "jwt_secret" || IsInternalKey(k) || !allowed[k] {
                         continue
                 }
                 if isSecretKey(k) {
