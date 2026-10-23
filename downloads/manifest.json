@@ -1,25 +1,25 @@
 {
-  "version": "1.3.6",
+  "version": "1.4.0",
   "assets": [
     {
       "name": "ledgerpos-setup-windows-x64.exe",
-      "size": 8379779,
-      "sha256": "e8573d5ded576238b0a1bcdcc0a8e1d1d7179ce59e7e1b906d9f44642fdde7b5"
+      "size": 8391427,
+      "sha256": "adda1b8448cdf51d3de3cf9ccfe2d0cb2388113426f113de64c937ec434f382a"
     },
     {
       "name": "ledgerpos-macos-apple-silicon.zip",
-      "size": 10095251,
-      "sha256": "fa22d4ab3c07335c8db29ef3548f3706ac97c2b322a41a14fef3a46eace1789c"
+      "size": 10108384,
+      "sha256": "ac5b0d62440265e3cc4ed6d3dacc9a5945b9404beb9d4c4fa83495d42cf9f4ff"
     },
     {
       "name": "ledgerpos-macos-intel.zip",
-      "size": 10793832,
-      "sha256": "b478e93cb62856546ed4c6c7d4faa75b80a0b5cc36c30334d16f55cdd5cdb656"
+      "size": 10815073,
+      "sha256": "c201c02d97a1973a71ad5a7d1a8e72e713a7122b0c2ccc449913a497d00885d1"
     },
     {
       "name": "ledgerpos-linux-x64.tar.xz",
-      "size": 7955924,
-      "sha256": "c61d8b9fb3d622a7568f273940b7f6e2a7e303feaa5dfd3cc8a2ce8248cc1ac6"
+      "size": 7969688,
+      "sha256": "054602781de56594a99b14cedb492fb46123bffdbde2251d67261534f23202b9"
     }
   ]
 }
