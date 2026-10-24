@@ -10,6 +10,7 @@ import (
         "os/exec"
         "path/filepath"
         "strings"
+        "time"
 
         "golang.org/x/sys/windows/registry"
 )
@@ -99,7 +100,24 @@ func selfInstall(exe string) (string, error) {
         return dst, nil
 }
 
+// copyFile refreshes the installed exe. Windows locks a RUNNING executable,
+// and this copy is exactly the OTA/manual update payload: the previous
+// build may still be shutting down when we get here (the in-app installer
+// launches us 300ms before it quits; a user may double-click the new setup
+// while the old app is open). Failing fast here made the new build fall
+// back to a portable run from %TEMP% while the installed copy stayed on the
+// old version — the "Install v1.4 that never goes away" field bug. Retry
+// until the old process lets go (its graceful quit completes in well under
+// a second; 20s is generous even on a slow till).
 func copyFile(src, dst string) error {
+        return retryUntil(20*time.Second, 500*time.Millisecond, func() error {
+                return copyFileOnce(src, dst)
+        }, func(attempt int, err error) {
+                log.Printf("install: destination busy (%v), retry %d", err, attempt)
+        })
+}
+
+func copyFileOnce(src, dst string) error {
         s, err := os.Open(src)
         if err != nil {
                 return err

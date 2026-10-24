@@ -165,9 +165,11 @@ func (h *H) svcDefault() *services.Service {
 //
 // The installer runs SILENT (/S): the auto path fires with nobody at the
 // keyboard, and an interactive wizard would leave the till dead. The NSIS
-// script relaunches the new build by itself in silent mode. When there is
-// no quit hook (serve mode on a Windows appliance), auto-apply refuses
-// above - the exe could never be replaced while this process holds it.
+// script closes the RUNNING build first (graceful taskkill, bounded wait,
+// force-kill backstop), replaces the exe, and relaunches the new build by
+// itself in silent mode. When there is no quit hook (serve mode on a
+// Windows appliance), auto-apply refuses above - the exe could never be
+// replaced while this process holds it.
 func (h *H) ApplyStagedUpdate(actor string) error {
         staged := h.Updater.Staged()
         if staged == "" {
@@ -180,11 +182,14 @@ func (h *H) ApplyStagedUpdate(actor string) error {
         if svc := h.svcDefault(); svc != nil {
                 svc.Audit(0, actor, "UPDATE_PRE_BACKUP", "system", "update", archive)
         }
+        if svc := h.svcDefault(); svc != nil {
+                // Audit BEFORE launching: the installer's first job is closing
+                // this running build (taskkill in the NSIS script) — anything
+                // written after Start() may never land.
+                svc.Audit(0, actor, "UPDATE_INSTALLED", "system", "update", staged)
+        }
         if err := exec.Command(staged, "/S").Start(); err != nil {
                 return err
-        }
-        if svc := h.svcDefault(); svc != nil {
-                svc.Audit(0, actor, "UPDATE_INSTALLED", "system", "update", staged)
         }
         if h.OnQuit != nil {
                 go func() {

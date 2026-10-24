@@ -55,6 +55,19 @@ ShowUninstDetails nevershow
 
 Section "Install"
   SetOutPath "$INSTDIR"
+  ; A running LedgerPOS.exe LOCKS the file we are about to overwrite (Windows
+  ; refuses to touch a running executable). Launching this installer 300ms
+  ; before the old app quits used to lose that race in silent mode: the File
+  ; overwrite failed quietly, the old build was relaunched, and the till sat
+  ; on the old version forever ("Install v1.4" that never goes away).
+  ; Close it deterministically: graceful WM_CLOSE first (the WebView window
+  ; closes and the server shuts down cleanly), a bounded wait, then a
+  ; force-kill backstop. The pre-update VACUUM INTO backup is already on
+  ; disk when this runs, and SQLite WAL makes a forced exit safe.
+  ExecWait '"$SYSDIR\taskkill.exe" /IM __APP__.exe'
+  Sleep 1500
+  ExecWait '"$SYSDIR\taskkill.exe" /F /IM __APP__.exe'
+  Sleep 400
   File "__EXE__"
   CreateShortCut "$DESKTOP\__APP__.lnk" "$INSTDIR\__APP__.exe" "" "$INSTDIR\__APP__.exe" 0
   CreateDirectory "$SMPROGRAMS\__APP__"
@@ -248,6 +261,13 @@ def main():
     )
     with open(nsipath, "w", encoding="utf-8") as f:
         f.write(script)
+    # Guard: the close-running-app block MUST precede the payload copy. It is
+    # the difference between "update installs" and "till stays on the old
+    # version forever" — the exact v1.4.0 field bug this exists to prevent.
+    generated = script
+    if "taskkill" not in generated or generated.index("taskkill") > generated.index("\n  File "):
+        print("FATAL: generated .nsi lost the close-running-app block (taskkill before File)")
+        return 4
     print(f"wrote {nsipath}")
     makensis = find_makensis()
     if not makensis:
