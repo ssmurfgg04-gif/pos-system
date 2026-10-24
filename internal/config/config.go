@@ -23,13 +23,13 @@ import (
 )
 
 type Config struct {
-	Port          string // HTTP port (default 3000)
-	DBDriver      string // "sqlite" | "postgres"
-	SQLitePath    string
-	PostgresDSN   string
-	MDNSEnabled   bool
-	SeedDemoData  bool
-	GinMode       string
+	Port         string // HTTP port (default 3000)
+	DBDriver     string // "sqlite" | "postgres"
+	SQLitePath   string
+	PostgresDSN  string
+	MDNSEnabled  bool
+	SeedDemoData bool
+	GinMode      string
 }
 
 func env(key, def string) string {
@@ -98,11 +98,11 @@ func LoadEnvFileNear(dbPath string) {
 // Load builds the config from environment variables with safe defaults.
 func Load() *Config {
 	c := &Config{
-		Port:         env("PORT", "3000"),
-		DBDriver:     env("DB_DRIVER", "sqlite"),
-		SQLitePath:   env("DB_PATH", "pos.db"),
-		PostgresDSN:  env("POSTGRES_DSN", ""),
-		MDNSEnabled:  envBool("MDNS_ENABLED", true),
+		Port:        env("PORT", "3000"),
+		DBDriver:    env("DB_DRIVER", "sqlite"),
+		SQLitePath:  env("DB_PATH", "pos.db"),
+		PostgresDSN: env("POSTGRES_DSN", ""),
+		MDNSEnabled: envBool("MDNS_ENABLED", true),
 		// Demo catalog is opt-in: real tills boot clean. SEED_DEMO=true is
 		// for demos/tests only — demo data never belongs on a shop machine.
 		SeedDemoData: envBool("SEED_DEMO", false),

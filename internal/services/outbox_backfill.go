@@ -30,12 +30,12 @@ const backfillBatch = 200
 // the sync loop: every insert is an ordinary Emit and the sync cycle
 // serializes pushes itself.
 func (s *Service) BackfillMissingEvents() int {
-        total := s.backfillOrders() + s.backfillVoids() + s.backfillLedger()
-        return total
+	total := s.backfillOrders() + s.backfillVoids() + s.backfillLedger()
+	return total
 }
 
 func (s *Service) backfillOrders() int {
-        rows, err := s.db.Query(s.db.Rebind(`SELECT o.id FROM orders o
+	rows, err := s.db.Query(s.db.Rebind(`SELECT o.id FROM orders o
                 WHERE COALESCE(o.client_uuid,'') != ''
                   AND o.created_at > datetime('now', '-' || ? || ' days')
                   AND NOT EXISTS (
@@ -43,28 +43,28 @@ func (s *Service) backfillOrders() int {
                         WHERE ob.entity = 'order'
                           AND json_extract(ob.payload, '$.clientUuid') = o.client_uuid)
                 ORDER BY o.id DESC LIMIT ?`), backfillWindowDays, backfillBatch)
-        if err != nil {
-                return 0
-        }
-        defer rows.Close()
-        var ids []int64
-        for rows.Next() {
-                var id int64
-                if rows.Scan(&id) == nil {
-                        ids = append(ids, id)
-                }
-        }
-        for _, id := range ids {
-                s.EmitOrder(id)
-        }
-        if len(ids) > 0 {
-                log.Printf("[sync] backfill: re-emitted %d order event(s)", len(ids))
-        }
-        return len(ids)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	for _, id := range ids {
+		s.EmitOrder(id)
+	}
+	if len(ids) > 0 {
+		log.Printf("[sync] backfill: re-emitted %d order event(s)", len(ids))
+	}
+	return len(ids)
 }
 
 func (s *Service) backfillVoids() int {
-        rows, err := s.db.Query(s.db.Rebind(`SELECT o.id FROM orders o
+	rows, err := s.db.Query(s.db.Rebind(`SELECT o.id FROM orders o
                 WHERE o.status = 'voided'
                   AND COALESCE(o.client_uuid,'') != ''
                   AND o.created_at > datetime('now', '-' || ? || ' days')
@@ -73,51 +73,51 @@ func (s *Service) backfillVoids() int {
                         WHERE ob.entity = 'void'
                           AND json_extract(ob.payload, '$.orderClientUuid') = o.client_uuid)
                 ORDER BY o.id DESC LIMIT ?`), backfillWindowDays, backfillBatch)
-        if err != nil {
-                return 0
-        }
-        defer rows.Close()
-        var ids []int64
-        for rows.Next() {
-                var id int64
-                if rows.Scan(&id) == nil {
-                        ids = append(ids, id)
-                }
-        }
-        for _, id := range ids {
-                s.EmitVoid(id, "backfill: void event was missing from the outbox")
-        }
-        if len(ids) > 0 {
-                log.Printf("[sync] backfill: re-emitted %d void event(s)", len(ids))
-        }
-        return len(ids)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	for _, id := range ids {
+		s.EmitVoid(id, "backfill: void event was missing from the outbox")
+	}
+	if len(ids) > 0 {
+		log.Printf("[sync] backfill: re-emitted %d void event(s)", len(ids))
+	}
+	return len(ids)
 }
 
 func (s *Service) backfillLedger() int {
-        // Ledger rows carry their own emit-once cursor (synced_at). Any row that
-        // moved money but still shows unsynced gets re-emitted; emitLedgerForOrder
-        // marks the rows only after a successful outbox insert, so this is
-        // idempotent by construction.
-        rows, err := s.db.Query(s.db.Rebind(`SELECT DISTINCT l.order_id FROM customer_ledger l
+	// Ledger rows carry their own emit-once cursor (synced_at). Any row that
+	// moved money but still shows unsynced gets re-emitted; emitLedgerForOrder
+	// marks the rows only after a successful outbox insert, so this is
+	// idempotent by construction.
+	rows, err := s.db.Query(s.db.Rebind(`SELECT DISTINCT l.order_id FROM customer_ledger l
                 WHERE l.order_id > 0
                   AND COALESCE(l.synced_at,'') = ''
                 ORDER BY l.order_id DESC LIMIT ?`), backfillBatch)
-        if err != nil {
-                return 0
-        }
-        defer rows.Close()
-        var ids []int64
-        for rows.Next() {
-                var id int64
-                if rows.Scan(&id) == nil {
-                        ids = append(ids, id)
-                }
-        }
-        for _, id := range ids {
-                s.emitLedgerForOrder(id)
-        }
-        if len(ids) > 0 {
-                log.Printf("[sync] backfill: re-emitted ledger for %d order(s)", len(ids))
-        }
-        return len(ids)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	for _, id := range ids {
+		s.emitLedgerForOrder(id)
+	}
+	if len(ids) > 0 {
+		log.Printf("[sync] backfill: re-emitted ledger for %d order(s)", len(ids))
+	}
+	return len(ids)
 }

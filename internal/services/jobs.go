@@ -185,11 +185,11 @@ func (s *Service) NotifyReady(p *auth.Principal, jobID, orderID int64) (*models.
 		fmt.Sprintf("WhatsApp prepared for %s, staff review-and-send%s", phone, jobSuffix(name)), p)
 	s.Audit(p.ID, p.Username, "WHATSAPP_READY_SENT", "order", order.Number, phone)
 	return &models.WhatsAppContact{
-		OrderID:   orderID,
-		Phone:     phone,
-		Message:   msg,
-		URL:       link,
-		OrderRef:  order.Number,
+		OrderID:    orderID,
+		Phone:      phone,
+		Message:    msg,
+		URL:        link,
+		OrderRef:   order.Number,
 		NotifiedAt: nowStamp(),
 	}, nil
 }

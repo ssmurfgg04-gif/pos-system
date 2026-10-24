@@ -24,9 +24,9 @@ type Daraja struct {
 	ConsumerSecret string
 	CallbackURL    string
 
-	client     *http.Client
-	mu         sync.Mutex
-	token      string
+	client      *http.Client
+	mu          sync.Mutex
+	token       string
 	tokenExpiry time.Time
 }
 
@@ -128,16 +128,16 @@ func (d *Daraja) InitiateSTK(ctx context.Context, req STKRequest) (STKResponse, 
 	ts := d.timestamp()
 	payload := map[string]any{
 		"BusinessShortCode": d.Shortcode,
-		"Password":           d.password(ts),
-		"Timestamp":          ts,
-		"TransactionType":    "CustomerPayBillOnline",
-		"Amount":             req.AmountCents / 100,
-		"PartyA":             req.Phone,
-		"PartyB":             d.Shortcode,
-		"PhoneNumber":        req.Phone,
-		"CallBackURL":        d.CallbackURL,
-		"AccountReference":   req.AccountReference,
-		"TransactionDesc":    req.Description,
+		"Password":          d.password(ts),
+		"Timestamp":         ts,
+		"TransactionType":   "CustomerPayBillOnline",
+		"Amount":            req.AmountCents / 100,
+		"PartyA":            req.Phone,
+		"PartyB":            d.Shortcode,
+		"PhoneNumber":       req.Phone,
+		"CallBackURL":       d.CallbackURL,
+		"AccountReference":  req.AccountReference,
+		"TransactionDesc":   req.Description,
 	}
 	body, status, err := d.do(ctx, "POST", d.BaseURL+"/mpesa/stkpush/v1/processrequest", payload,
 		map[string]string{"Authorization": "Bearer " + tok})
@@ -145,10 +145,10 @@ func (d *Daraja) InitiateSTK(ctx context.Context, req STKRequest) (STKResponse, 
 		return STKResponse{}, err
 	}
 	var r struct {
-		MerchantRequestID string `json:"MerchantRequestID"`
-		CheckoutRequestID string `json:"CheckoutRequestID"`
-		CustomerMessage   string `json:"CustomerMessage"`
-		ResponseCode       string `json:"ResponseCode"`
+		MerchantRequestID   string `json:"MerchantRequestID"`
+		CheckoutRequestID   string `json:"CheckoutRequestID"`
+		CustomerMessage     string `json:"CustomerMessage"`
+		ResponseCode        string `json:"ResponseCode"`
 		ResponseDescription string `json:"ResponseDescription"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
@@ -172,9 +172,9 @@ func (d *Daraja) QuerySTK(ctx context.Context, checkoutRequestID string) (STKQue
 	ts := d.timestamp()
 	payload := map[string]any{
 		"BusinessShortCode": d.Shortcode,
-		"Password":           d.password(ts),
-		"Timestamp":          ts,
-		"CheckoutRequestID":  checkoutRequestID,
+		"Password":          d.password(ts),
+		"Timestamp":         ts,
+		"CheckoutRequestID": checkoutRequestID,
 	}
 	body, status, err := d.do(ctx, "POST", d.BaseURL+"/mpesa/stkpushquery/v1/query", payload,
 		map[string]string{"Authorization": "Bearer " + tok})
@@ -182,11 +182,11 @@ func (d *Daraja) QuerySTK(ctx context.Context, checkoutRequestID string) (STKQue
 		return STKQueryResult{}, err
 	}
 	var r struct {
-		ResponseCode      string `json:"ResponseCode"`
-		ResultCode        any    `json:"ResultCode"`
-		ResultDesc        string `json:"ResultDesc"`
+		ResponseCode       string `json:"ResponseCode"`
+		ResultCode         any    `json:"ResultCode"`
+		ResultDesc         string `json:"ResultDesc"`
 		MpesaReceiptNumber string `json:"MpesaReceiptNumber"`
-		Amount            any    `json:"Amount"`
+		Amount             any    `json:"Amount"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
 		return STKQueryResult{}, fmt.Errorf("stkquery parse: %w (%s)", err, string(body))
@@ -221,8 +221,9 @@ type CallbackResult struct {
 
 // ParseCallback decodes the real Daraja callback shape:
 // {"Body":{"stkCallback":{"MerchantRequestID":...,"CheckoutRequestID":...,
-//  "ResultCode":0,"ResultDesc":"...","CallbackMetadata":{"Item":[
-//  {"Name":"Amount","Value":1},{"Name":"MpesaReceiptNumber","Value":"NLJ7RT61SV"},...]}}}}
+//
+//	"ResultCode":0,"ResultDesc":"...","CallbackMetadata":{"Item":[
+//	{"Name":"Amount","Value":1},{"Name":"MpesaReceiptNumber","Value":"NLJ7RT61SV"},...]}}}}
 func ParseCallback(body []byte) (CallbackResult, error) {
 	var raw struct {
 		Body struct {

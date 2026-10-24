@@ -1,238 +1,238 @@
 package handlers
 
 import (
-        "context"
-        "net/http"
-        "os"
-        "strconv"
-        "strings"
-        "time"
+	"context"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
 
-        "github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin"
 
-        "posapp/internal/auth"
-        "posapp/internal/models"
+	"posapp/internal/auth"
+	"posapp/internal/models"
 )
 
 type loginBody struct {
-        Username string `json:"username" binding:"required"`
-        Password string `json:"password" binding:"required"`
-        // v1.3.2 shop binding: when a multi-shop server matches the same
-        // credentials in several shops, the login is retried with an EXPLICIT
-        // shopId from the picker — a session is never bound by a heuristic.
-        ShopID string `json:"shopId"`
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+	// v1.3.2 shop binding: when a multi-shop server matches the same
+	// credentials in several shops, the login is retried with an EXPLICIT
+	// shopId from the picker — a session is never bound by a heuristic.
+	ShopID string `json:"shopId"`
 }
 
 // Login authenticates with username+password. The registry routes the
 // username to its shop first, so correct credentials always land in the
 // correct shop — and unknown names 401 without revealing shops.
 func (h *H) Login(c *gin.Context) {
-        var body loginBody
-        if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, "username and password required")
-                return
-        }
-        key := "login:" + strings.ToLower(body.Username)
-        if !h.LoginRL.Allow(key) || !h.IPRL.Allow("login-ip:"+c.ClientIP()) {
-                h.fail(c, 429, "too many attempts, wait a minute")
-                return
-        }
-        if h.Tenants == nil || h.Shops == nil {
-                h.fail(c, 500, "tenancy not configured")
-                return
-        }
-        shopIDs := h.Tenants.ShopsForUser(body.Username)
-        if len(shopIDs) == 0 {
-                auth.EqualizeLoginTiming(body.Password)
-                h.fail(c, 401, "invalid credentials")
-                return
-        }
-        if body.ShopID != "" {
-                if _, ok := h.Tenants.Find(body.ShopID); !ok {
-                        h.fail(c, 404, "unknown shop")
-                        return
-                }
-                if !containsID(shopIDs, body.ShopID) {
-                        auth.EqualizeLoginTiming(body.Password)
-                        h.fail(c, 403, "not a member of that shop")
-                        return
-                }
-                shopIDs = []string{body.ShopID}
-        }
-        type shopMatch struct {
-                sid   string
-                id    int64
-                hash  string
-                princ *auth.Principal
-        }
-        var matches []shopMatch
-        for _, sid := range shopIDs {
-                svc, err := h.Shops.Service(sid)
-                if err != nil {
-                        continue
-                }
-                db := svc.DB()
-                var id int64
-                var pwHash string
-                err = db.QueryRow(db.Rebind(
-                        `SELECT id, COALESCE(password_hash,'') FROM users WHERE LOWER(username) = LOWER(?)`), body.Username).
-                        Scan(&id, &pwHash)
-                if err != nil {
-                        continue
-                }
-                if !auth.VerifyPassword(pwHash, body.Password) {
-                        continue
-                }
-                p, err := auth.LoadPrincipal(db, id)
-                if err != nil {
-                        continue
-                }
-                p.ShopID = sid
-                matches = append(matches, shopMatch{sid: sid, id: id, hash: pwHash, princ: p})
-        }
-        if len(matches) == 0 {
-                h.fail(c, 401, "invalid credentials")
-                return
-        }
-        // Ambiguous multi-shop identity: NEVER guess (the old row-count
-        // heuristic silently landed staff in the wrong store). Ask the login
-        // screen which shop — 409 with a shop picker payload.
-        if len(matches) > 1 && body.ShopID == "" {
-                shops := make([]gin.H, 0, len(matches))
-                for _, m := range matches {
-                        if shop, ok := h.Tenants.Find(m.sid); ok {
-                                shops = append(shops, gin.H{"id": shop.ID, "name": shop.Name})
-                        }
-                }
-                h.failWith(c, 409, gin.H{
-                        "error":     "this account exists in several shops, pick one",
-                        "needsShop": true,
-                        "shops":     shops,
-                })
-                return
-        }
-        best := matches[0]
-        matchedShop := best.sid
-        matchedPrincipal := best.princ
-        // Use matched shop's service for audit and token
-        svc, _ := h.Shops.Service(matchedShop)
-        h.LoginRL.Forget(key)
-        // Portal self-heal: portal_accounts rows are normally written on
-        // password SAVES, so an owner whose password predates the portal
-        // could never pass the owner-approval gate (every invite, device
-        // approval and PIN-reset approval failed forever). A successful
-        // owner-level password login just proved the SAME credential the
-        // portal checks, so publishing the hash here is safe (the plaintext
-        // stays local, only the bcrypt hash is sent) and makes the gate
-        // self-recovering. Best-effort and async: login never waits on it.
-        if uname, isOwner := userIsOwnerLevel(svc.DB(), matchedPrincipal.ID); isOwner {
-                go svc.PortalPublishCredentials(uname, body.Password)
-        }
-        token, err := auth.IssueToken(h.MasterSecret, matchedPrincipal.ID, matchedPrincipal.Username, matchedShop)
-        if err != nil {
-                h.fail(c, 500, "token error")
-                return
-        }
-        svc.Audit(matchedPrincipal.ID, matchedPrincipal.Username, "LOGIN", "user", matchedPrincipal.Username, "password")
-        h.ok(c, gin.H{"token": token, "user": matchedPrincipal.User()})
+	var body loginBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "username and password required")
+		return
+	}
+	key := "login:" + strings.ToLower(body.Username)
+	if !h.LoginRL.Allow(key) || !h.IPRL.Allow("login-ip:"+c.ClientIP()) {
+		h.fail(c, 429, "too many attempts, wait a minute")
+		return
+	}
+	if h.Tenants == nil || h.Shops == nil {
+		h.fail(c, 500, "tenancy not configured")
+		return
+	}
+	shopIDs := h.Tenants.ShopsForUser(body.Username)
+	if len(shopIDs) == 0 {
+		auth.EqualizeLoginTiming(body.Password)
+		h.fail(c, 401, "invalid credentials")
+		return
+	}
+	if body.ShopID != "" {
+		if _, ok := h.Tenants.Find(body.ShopID); !ok {
+			h.fail(c, 404, "unknown shop")
+			return
+		}
+		if !containsID(shopIDs, body.ShopID) {
+			auth.EqualizeLoginTiming(body.Password)
+			h.fail(c, 403, "not a member of that shop")
+			return
+		}
+		shopIDs = []string{body.ShopID}
+	}
+	type shopMatch struct {
+		sid   string
+		id    int64
+		hash  string
+		princ *auth.Principal
+	}
+	var matches []shopMatch
+	for _, sid := range shopIDs {
+		svc, err := h.Shops.Service(sid)
+		if err != nil {
+			continue
+		}
+		db := svc.DB()
+		var id int64
+		var pwHash string
+		err = db.QueryRow(db.Rebind(
+			`SELECT id, COALESCE(password_hash,'') FROM users WHERE LOWER(username) = LOWER(?)`), body.Username).
+			Scan(&id, &pwHash)
+		if err != nil {
+			continue
+		}
+		if !auth.VerifyPassword(pwHash, body.Password) {
+			continue
+		}
+		p, err := auth.LoadPrincipal(db, id)
+		if err != nil {
+			continue
+		}
+		p.ShopID = sid
+		matches = append(matches, shopMatch{sid: sid, id: id, hash: pwHash, princ: p})
+	}
+	if len(matches) == 0 {
+		h.fail(c, 401, "invalid credentials")
+		return
+	}
+	// Ambiguous multi-shop identity: NEVER guess (the old row-count
+	// heuristic silently landed staff in the wrong store). Ask the login
+	// screen which shop — 409 with a shop picker payload.
+	if len(matches) > 1 && body.ShopID == "" {
+		shops := make([]gin.H, 0, len(matches))
+		for _, m := range matches {
+			if shop, ok := h.Tenants.Find(m.sid); ok {
+				shops = append(shops, gin.H{"id": shop.ID, "name": shop.Name})
+			}
+		}
+		h.failWith(c, 409, gin.H{
+			"error":     "this account exists in several shops, pick one",
+			"needsShop": true,
+			"shops":     shops,
+		})
+		return
+	}
+	best := matches[0]
+	matchedShop := best.sid
+	matchedPrincipal := best.princ
+	// Use matched shop's service for audit and token
+	svc, _ := h.Shops.Service(matchedShop)
+	h.LoginRL.Forget(key)
+	// Portal self-heal: portal_accounts rows are normally written on
+	// password SAVES, so an owner whose password predates the portal
+	// could never pass the owner-approval gate (every invite, device
+	// approval and PIN-reset approval failed forever). A successful
+	// owner-level password login just proved the SAME credential the
+	// portal checks, so publishing the hash here is safe (the plaintext
+	// stays local, only the bcrypt hash is sent) and makes the gate
+	// self-recovering. Best-effort and async: login never waits on it.
+	if uname, isOwner := userIsOwnerLevel(svc.DB(), matchedPrincipal.ID); isOwner {
+		go svc.PortalPublishCredentials(uname, body.Password)
+	}
+	token, err := auth.IssueToken(h.MasterSecret, matchedPrincipal.ID, matchedPrincipal.Username, matchedShop)
+	if err != nil {
+		h.fail(c, 500, "token error")
+		return
+	}
+	svc.Audit(matchedPrincipal.ID, matchedPrincipal.Username, "LOGIN", "user", matchedPrincipal.Username, "password")
+	h.ok(c, gin.H{"token": token, "user": matchedPrincipal.User()})
 }
 
 func containsID(ids []string, want string) bool {
-        for _, id := range ids {
-                if id == want {
-                        return true
-                }
-        }
-        return false
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Signup is public iff ALLOW_SIGNUP=true: provisions a shop (migrate +
 // catalog + one admin holding chosen credentials) and returns its token.
 // Usernames are unique per box so login routing stays unambiguous.
 func (h *H) Signup(c *gin.Context) {
-        if os.Getenv("ALLOW_SIGNUP") != "true" {
-                h.fail(c, 403, "signup disabled")
-                return
-        }
-        if h.Tenants == nil || h.Shops == nil {
-                h.fail(c, 500, "tenancy not configured")
-                return
-        }
-        var body struct {
-                Username string `json:"username" binding:"required"`
-                Password string `json:"password" binding:"required"`
-                ShopName string `json:"shopName" binding:"required"`
-        }
-        if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, "username, password, and shop name required")
-                return
-        }
-        if !auth.ValidUsername(body.Username) {
-                h.fail(c, 400, "username must be 3-32 letters, digits, dot, underscore, or hyphen")
-                return
-        }
-        if !auth.ValidPassword(body.Password) {
-                h.fail(c, 400, "password must be 6-128 characters")
-                return
-        }
-        // The default-password blocklist protects NEW passwords only: signup
-        // is always fresh, so it shares the same gate as password changes.
-        if auth.IsDefaultPassword(body.Password) {
-                h.fail(c, 400, "choose a stronger password, that one is public")
-                return
-        }
-        if len(body.ShopName) > 80 {
-                h.fail(c, 400, "shop name too long (max 80)")
-                return
-        }
-        if !h.LoginRL.Allow("signup:" + c.ClientIP()) {
-                h.fail(c, 429, "too many attempts, wait a minute")
-                return
-        }
-        shop, err := h.Tenants.CreateShop(strings.TrimSpace(body.ShopName), "",
-                time.Now().UTC().Format("2006-01-02T15:04:05.000Z"))
-        if err != nil {
-                h.fail(c, 500, err.Error())
-                return
-        }
-        db, err := h.Shops.DB(shop.ID)
-        if err != nil {
-                h.fail(c, 500, err.Error())
-                return
-        }
-        // Pool.Open migrates; SeedShop adds settings/roles/catalog + admin.
-        if err := db.SeedShop(body.ShopName, body.Username, body.Password); err != nil {
-                h.fail(c, 400, err.Error())
-                return
-        }
-        if err := h.Tenants.RegisterUser(body.Username, shop.ID); err != nil {
-                h.fail(c, 409, err.Error())
-                return
-        }
-        var id int64
-        if err := db.QueryRow(db.Rebind(`SELECT id FROM users WHERE LOWER(username) = LOWER(?)`),
-                body.Username).Scan(&id); err != nil {
-                h.fail(c, 500, "signup failed")
-                return
-        }
-        p, err := auth.LoadPrincipal(db, id)
-        if err != nil {
-                h.fail(c, 500, "signup failed")
-                return
-        }
-        p.ShopID = shop.ID
-        token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shop.ID)
-        if err != nil {
-                h.fail(c, 500, "token error")
-                return
-        }
-        svc, _ := h.Shops.Service(shop.ID)
-        svc.Audit(p.ID, p.Username, "SHOP_CREATED", "shop", shop.ID, shop.Name)
-        // New shops get background loops immediately (backups/sweeper/uploads),
-        // not just at next boot — owners sign up and walk away.
-        h.Shops.EnsureStarted(context.Background(), shop.ID)
-        h.created(c, gin.H{"token": token, "user": p.User(),
-                "shop": gin.H{"id": shop.ID, "name": shop.Name}})
+	if os.Getenv("ALLOW_SIGNUP") != "true" {
+		h.fail(c, 403, "signup disabled")
+		return
+	}
+	if h.Tenants == nil || h.Shops == nil {
+		h.fail(c, 500, "tenancy not configured")
+		return
+	}
+	var body struct {
+		Username string `json:"username" binding:"required"`
+		Password string `json:"password" binding:"required"`
+		ShopName string `json:"shopName" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "username, password, and shop name required")
+		return
+	}
+	if !auth.ValidUsername(body.Username) {
+		h.fail(c, 400, "username must be 3-32 letters, digits, dot, underscore, or hyphen")
+		return
+	}
+	if !auth.ValidPassword(body.Password) {
+		h.fail(c, 400, "password must be 6-128 characters")
+		return
+	}
+	// The default-password blocklist protects NEW passwords only: signup
+	// is always fresh, so it shares the same gate as password changes.
+	if auth.IsDefaultPassword(body.Password) {
+		h.fail(c, 400, "choose a stronger password, that one is public")
+		return
+	}
+	if len(body.ShopName) > 80 {
+		h.fail(c, 400, "shop name too long (max 80)")
+		return
+	}
+	if !h.LoginRL.Allow("signup:" + c.ClientIP()) {
+		h.fail(c, 429, "too many attempts, wait a minute")
+		return
+	}
+	shop, err := h.Tenants.CreateShop(strings.TrimSpace(body.ShopName), "",
+		time.Now().UTC().Format("2006-01-02T15:04:05.000Z"))
+	if err != nil {
+		h.fail(c, 500, err.Error())
+		return
+	}
+	db, err := h.Shops.DB(shop.ID)
+	if err != nil {
+		h.fail(c, 500, err.Error())
+		return
+	}
+	// Pool.Open migrates; SeedShop adds settings/roles/catalog + admin.
+	if err := db.SeedShop(body.ShopName, body.Username, body.Password); err != nil {
+		h.fail(c, 400, err.Error())
+		return
+	}
+	if err := h.Tenants.RegisterUser(body.Username, shop.ID); err != nil {
+		h.fail(c, 409, err.Error())
+		return
+	}
+	var id int64
+	if err := db.QueryRow(db.Rebind(`SELECT id FROM users WHERE LOWER(username) = LOWER(?)`),
+		body.Username).Scan(&id); err != nil {
+		h.fail(c, 500, "signup failed")
+		return
+	}
+	p, err := auth.LoadPrincipal(db, id)
+	if err != nil {
+		h.fail(c, 500, "signup failed")
+		return
+	}
+	p.ShopID = shop.ID
+	token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shop.ID)
+	if err != nil {
+		h.fail(c, 500, "token error")
+		return
+	}
+	svc, _ := h.Shops.Service(shop.ID)
+	svc.Audit(p.ID, p.Username, "SHOP_CREATED", "shop", shop.ID, shop.Name)
+	// New shops get background loops immediately (backups/sweeper/uploads),
+	// not just at next boot — owners sign up and walk away.
+	h.Shops.EnsureStarted(context.Background(), shop.ID)
+	h.created(c, gin.H{"token": token, "user": p.User(),
+		"shop": gin.H{"id": shop.ID, "name": shop.Name}})
 }
 
 // PinUsers lists staff available for quick PIN switch (name + role only —
@@ -240,142 +240,142 @@ func (h *H) Signup(c *gin.Context) {
 // Scoped by ?shop= (a terminal belongs to one shop); default shop otherwise.
 // Each row carries that shop's id so PIN sign-in can be BOUND to it.
 func (h *H) PinUsers(c *gin.Context) {
-        // Public endpoint (PIN pad lists users before any login) — rate-limit
-        // per IP so a script (local or, historically, any website via CORS *)
-        // cannot grind the 4-digit PIN space against a live staff list.
-        if h.PinUsersRL != nil && !h.PinUsersRL.Allow("pin-users:"+c.ClientIP()) {
-                c.JSON(429, gin.H{"error": "too many requests"})
-                return
-        }
-        db, err := h.shopDB(c)
-        if err != nil {
-                h.fail(c, 404, "unknown shop")
-                return
-        }
-        // PUBLIC route (the PIN pad lists users before any login): resolve the
-        // shop from ?shop= (publicShopID), never the auth claim (there is none).
-        shopID := h.publicShopID(c)
-        rows, err := db.Query(`
+	// Public endpoint (PIN pad lists users before any login) — rate-limit
+	// per IP so a script (local or, historically, any website via CORS *)
+	// cannot grind the 4-digit PIN space against a live staff list.
+	if h.PinUsersRL != nil && !h.PinUsersRL.Allow("pin-users:"+c.ClientIP()) {
+		c.JSON(429, gin.H{"error": "too many requests"})
+		return
+	}
+	db, err := h.shopDB(c)
+	if err != nil {
+		h.fail(c, 404, "unknown shop")
+		return
+	}
+	// PUBLIC route (the PIN pad lists users before any login): resolve the
+	// shop from ?shop= (publicShopID), never the auth claim (there is none).
+	shopID := h.publicShopID(c)
+	rows, err := db.Query(`
                 SELECT u.id, u.username, COALESCE(u.full_name, u.username), COALESCE(r.name,'')
                 FROM users u JOIN roles r ON r.id = u.role_id
                 WHERE u.is_active = 1 AND u.pin_hash != ''
                 ORDER BY u.id`)
-        if err != nil {
-                h.fail(c, 500, err.Error())
-                return
-        }
-        defer rows.Close()
-        out := []models.PinUser{}
-        for rows.Next() {
-                var u models.PinUser
-                if err := rows.Scan(&u.ID, &u.Username, &u.FullName, &u.RoleName); err != nil {
-                        break
-                }
-                u.ShopID = shopID
-                out = append(out, u)
-        }
-        h.ok(c, out)
+	if err != nil {
+		h.fail(c, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []models.PinUser{}
+	for rows.Next() {
+		var u models.PinUser
+		if err := rows.Scan(&u.ID, &u.Username, &u.FullName, &u.RoleName); err != nil {
+			break
+		}
+		u.ShopID = shopID
+		out = append(out, u)
+	}
+	h.ok(c, out)
 }
 
 // pinBody v1.3.2: shopId binds the sign-in to the EXACT shop the PIN pad
 // listed users from. Required going forward; the legacy fallback (global
 // resolve) only fires for pre-1.3.2 clients during the OTA window.
 type pinBody struct {
-        UserID int64  `json:"userId" binding:"required"`
-        PIN    string `json:"pin" binding:"required,len=4"`
-        ShopID string `json:"shopId"`
+	UserID int64  `json:"userId" binding:"required"`
+	PIN    string `json:"pin" binding:"required,len=4"`
+	ShopID string `json:"shopId"`
 }
 
 // PinLogin is the fast shift-switch path (4-digit PIN, bcrypt-hashed at
 // rest, escalating lockout, rate limited).
 func (h *H) PinLogin(c *gin.Context) {
-        var body pinBody
-        if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, "userId and 4-digit pin required")
-                return
-        }
-        // Rate limit on the composite (shop, user) + source — a spray across
-        // shops or users cannot share one bucket.
-        if !h.PinRL.Allow("pin:"+body.ShopID+":"+itoa64(body.UserID)) || !h.IPRL.Allow("pin-ip:"+c.ClientIP()) {
-                h.fail(c, 429, "too many attempts, wait a minute")
-                return
-        }
-        if h.Shops == nil {
-                h.fail(c, 500, "tenancy not configured")
-                return
-        }
-        var shopID string
-        if body.ShopID != "" {
-                // EXPLICIT binding: the shop must exist and hold this user.
-                if h.Tenants == nil {
-                        h.fail(c, 500, "tenancy not configured")
-                        return
-                }
-                if _, ok := h.Tenants.Find(body.ShopID); !ok {
-                        h.fail(c, 404, "unknown shop")
-                        return
-                }
-                shopID = body.ShopID
-        } else {
-                // Legacy clients: global resolve (data-volume heuristic).
-                sid, ok := h.Shops.FindUserShop(body.UserID)
-                if !ok {
-                        h.fail(c, 401, "invalid user")
-                        return
-                }
-                shopID = sid
-        }
-        db, err := h.Shops.DB(shopID)
-        if err != nil {
-                h.fail(c, 401, "invalid user")
-                return
-        }
-        if wait := auth.PINLockRemaining(db, body.UserID); wait > 0 {
-                h.fail(c, 423, "PIN locked, try again in "+itoa(wait)+"s")
-                return
-        }
-        var pinHash string
-        err = db.QueryRow(db.Rebind(
-                `SELECT COALESCE(pin_hash,'') FROM users WHERE id = ? AND is_active = 1`), body.UserID).Scan(&pinHash)
-        if err != nil || pinHash == "" {
-                // The user simply does not exist in the bound shop — 401,
-                // identical wording to a wrong PIN path (no shop enumeration).
-                h.fail(c, 401, "invalid user")
-                return
-        }
-        if !auth.VerifyPassword(pinHash, body.PIN) {
-                lock := auth.RegisterPINFailure(db, body.UserID)
-                if lock > 0 {
-                        h.fail(c, 423, "wrong PIN, locked for "+itoa(lock)+"s")
-                        return
-                }
-                h.fail(c, 401, "wrong PIN")
-                return
-        }
-        auth.ResetPINFailures(db, body.UserID)
-        p, err := auth.LoadPrincipal(db, body.UserID)
-        if err != nil {
-                h.fail(c, 403, "account inactive")
-                return
-        }
-        p.ShopID = shopID
-        h.PinRL.Forget("pin:" + body.ShopID + ":" + itoa64(body.UserID))
-        token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
-        if err != nil {
-                h.fail(c, 500, "token error")
-                return
-        }
-        svc, _ := h.Shops.Service(shopID)
-        svc.Audit(p.ID, p.Username, "LOGIN", "user", p.Username, "pin")
-        h.ok(c, gin.H{"token": token, "user": p.User()})
+	var body pinBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "userId and 4-digit pin required")
+		return
+	}
+	// Rate limit on the composite (shop, user) + source — a spray across
+	// shops or users cannot share one bucket.
+	if !h.PinRL.Allow("pin:"+body.ShopID+":"+itoa64(body.UserID)) || !h.IPRL.Allow("pin-ip:"+c.ClientIP()) {
+		h.fail(c, 429, "too many attempts, wait a minute")
+		return
+	}
+	if h.Shops == nil {
+		h.fail(c, 500, "tenancy not configured")
+		return
+	}
+	var shopID string
+	if body.ShopID != "" {
+		// EXPLICIT binding: the shop must exist and hold this user.
+		if h.Tenants == nil {
+			h.fail(c, 500, "tenancy not configured")
+			return
+		}
+		if _, ok := h.Tenants.Find(body.ShopID); !ok {
+			h.fail(c, 404, "unknown shop")
+			return
+		}
+		shopID = body.ShopID
+	} else {
+		// Legacy clients: global resolve (data-volume heuristic).
+		sid, ok := h.Shops.FindUserShop(body.UserID)
+		if !ok {
+			h.fail(c, 401, "invalid user")
+			return
+		}
+		shopID = sid
+	}
+	db, err := h.Shops.DB(shopID)
+	if err != nil {
+		h.fail(c, 401, "invalid user")
+		return
+	}
+	if wait := auth.PINLockRemaining(db, body.UserID); wait > 0 {
+		h.fail(c, 423, "PIN locked, try again in "+itoa(wait)+"s")
+		return
+	}
+	var pinHash string
+	err = db.QueryRow(db.Rebind(
+		`SELECT COALESCE(pin_hash,'') FROM users WHERE id = ? AND is_active = 1`), body.UserID).Scan(&pinHash)
+	if err != nil || pinHash == "" {
+		// The user simply does not exist in the bound shop — 401,
+		// identical wording to a wrong PIN path (no shop enumeration).
+		h.fail(c, 401, "invalid user")
+		return
+	}
+	if !auth.VerifyPassword(pinHash, body.PIN) {
+		lock := auth.RegisterPINFailure(db, body.UserID)
+		if lock > 0 {
+			h.fail(c, 423, "wrong PIN, locked for "+itoa(lock)+"s")
+			return
+		}
+		h.fail(c, 401, "wrong PIN")
+		return
+	}
+	auth.ResetPINFailures(db, body.UserID)
+	p, err := auth.LoadPrincipal(db, body.UserID)
+	if err != nil {
+		h.fail(c, 403, "account inactive")
+		return
+	}
+	p.ShopID = shopID
+	h.PinRL.Forget("pin:" + body.ShopID + ":" + itoa64(body.UserID))
+	token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
+	if err != nil {
+		h.fail(c, 500, "token error")
+		return
+	}
+	svc, _ := h.Shops.Service(shopID)
+	svc.Audit(p.ID, p.Username, "LOGIN", "user", p.Username, "pin")
+	h.ok(c, gin.H{"token": token, "user": p.User()})
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
 type teamJoinBody struct {
-        Link string `json:"link" binding:"required"`
-        Name string `json:"name" binding:"required"`
-        PIN  string `json:"pin" binding:"required"`
+	Link string `json:"link" binding:"required"`
+	Name string `json:"name" binding:"required"`
+	PIN  string `json:"pin" binding:"required"`
 }
 
 // TeamJoin is public on purpose: the join link's single-use token IS the
@@ -384,62 +384,62 @@ type teamJoinBody struct {
 // invite's role — no admin onboarding, no keys. The till joins the team,
 // creates the local worker account, and returns a session in one step.
 func (h *H) TeamJoin(c *gin.Context) {
-        var body teamJoinBody
-        if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, "paste the join link, your name, and a 4-digit PIN")
-                return
-        }
-        key := "teamjoin"
-        if !h.LoginRL.Allow(key) {
-                h.fail(c, 429, "too many attempts, wait a minute")
-                return
-        }
-        svc := h.svc(c)
-        info, err := svc.TeamJoinWithLink(body.Link, body.Name, body.PIN)
-        if err != nil {
-                h.fail(c, 422, err.Error())
-                return
-        }
-        // Registry routing so the new worker can log in on multi-shop servers.
-        shopID := h.shopID(c)
-        if h.Tenants != nil {
-                if err := h.Tenants.RegisterUser(info.Username, shopID); err != nil {
-                        h.fail(c, 409, err.Error())
-                        return
-                }
-        }
-        db := svc.DB()
-        p, err := auth.LoadPrincipal(db, info.UserID)
-        if err != nil {
-                h.fail(c, 500, "joined, but the session failed, try logging in with your PIN")
-                return
-        }
-        p.ShopID = shopID
-        token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
-        if err != nil {
-                h.fail(c, 500, "token error")
-                return
-        }
-        h.LoginRL.Forget(key)
-        svc.Audit(p.ID, p.Username, "LOGIN", "user", p.Username, "team join link")
-        h.ok(c, gin.H{
-                "token":     token,
-                "user":      p.User(),
-                "teamCode":  info.TeamCode,
-                "storeName": info.StoreName,
-                "roleName":  info.RoleName,
-        })
+	var body teamJoinBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "paste the join link, your name, and a 4-digit PIN")
+		return
+	}
+	key := "teamjoin"
+	if !h.LoginRL.Allow(key) {
+		h.fail(c, 429, "too many attempts, wait a minute")
+		return
+	}
+	svc := h.svc(c)
+	info, err := svc.TeamJoinWithLink(body.Link, body.Name, body.PIN)
+	if err != nil {
+		h.fail(c, 422, err.Error())
+		return
+	}
+	// Registry routing so the new worker can log in on multi-shop servers.
+	shopID := h.shopID(c)
+	if h.Tenants != nil {
+		if err := h.Tenants.RegisterUser(info.Username, shopID); err != nil {
+			h.fail(c, 409, err.Error())
+			return
+		}
+	}
+	db := svc.DB()
+	p, err := auth.LoadPrincipal(db, info.UserID)
+	if err != nil {
+		h.fail(c, 500, "joined, but the session failed, try logging in with your PIN")
+		return
+	}
+	p.ShopID = shopID
+	token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
+	if err != nil {
+		h.fail(c, 500, "token error")
+		return
+	}
+	h.LoginRL.Forget(key)
+	svc.Audit(p.ID, p.Username, "LOGIN", "user", p.Username, "team join link")
+	h.ok(c, gin.H{
+		"token":     token,
+		"user":      p.User(),
+		"teamCode":  info.TeamCode,
+		"storeName": info.StoreName,
+		"roleName":  info.RoleName,
+	})
 }
 
 // Me returns the current principal (fresh permissions every request).
 func (h *H) Me(c *gin.Context) {
-        h.ok(c, h.principal(c).User())
+	h.ok(c, h.principal(c).User())
 }
 
 type ownerSigninBody struct {
-        Username   string `json:"username" binding:"required"`
-        Password   string `json:"password" binding:"required"`
-        DeviceName string `json:"deviceName"`
+	Username   string `json:"username" binding:"required"`
+	Password   string `json:"password" binding:"required"`
+	DeviceName string `json:"deviceName"`
 }
 
 // OwnerSignin is public on purpose, and it exists for ONE moment: an owner
@@ -449,124 +449,124 @@ type ownerSigninBody struct {
 // credential, approves this device into the team server-side, and the shop
 // syncs down. Rate limited like every other public login.
 func (h *H) OwnerSignin(c *gin.Context) {
-        var body ownerSigninBody
-        if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, "username and password are required")
-                return
-        }
-        key := "ownersignin:" + strings.ToLower(body.Username)
-        if !h.LoginRL.Allow(key) || !h.IPRL.Allow("owner-ip:"+c.ClientIP()) {
-                h.fail(c, 429, "too many attempts, wait a minute")
-                return
-        }
-        svc := h.svc(c)
-        info, err := svc.OwnerCloudSignin(body.Username, body.Password, body.DeviceName)
-        if err != nil {
-                h.fail(c, 401, err.Error())
-                return
-        }
-        // Registry routing so the owner can log in on multi-shop servers.
-        shopID := h.shopID(c)
-        if h.Tenants != nil {
-                if err := h.Tenants.RegisterUser(info.Username, shopID); err != nil {
-                        h.fail(c, 409, err.Error())
-                        return
-                }
-        }
-        db := svc.DB()
-        p, err := auth.LoadPrincipal(db, info.UserID)
-        if err != nil {
-                h.fail(c, 500, "signed in, but the session failed, try logging in again")
-                return
-        }
-        p.ShopID = shopID
-        token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
-        if err != nil {
-                h.fail(c, 500, "token error")
-                return
-        }
-        h.LoginRL.Forget(key)
-        svc.Audit(p.ID, p.Username, "LOGIN", "user", p.Username, "owner cloud sign-in")
-        h.ok(c, gin.H{
-                "token":     token,
-                "user":      p.User(),
-                "teamCode":  info.TeamCode,
-                "storeName": info.StoreName,
-                "roleName":  info.RoleName,
-        })
+	var body ownerSigninBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "username and password are required")
+		return
+	}
+	key := "ownersignin:" + strings.ToLower(body.Username)
+	if !h.LoginRL.Allow(key) || !h.IPRL.Allow("owner-ip:"+c.ClientIP()) {
+		h.fail(c, 429, "too many attempts, wait a minute")
+		return
+	}
+	svc := h.svc(c)
+	info, err := svc.OwnerCloudSignin(body.Username, body.Password, body.DeviceName)
+	if err != nil {
+		h.fail(c, 401, err.Error())
+		return
+	}
+	// Registry routing so the owner can log in on multi-shop servers.
+	shopID := h.shopID(c)
+	if h.Tenants != nil {
+		if err := h.Tenants.RegisterUser(info.Username, shopID); err != nil {
+			h.fail(c, 409, err.Error())
+			return
+		}
+	}
+	db := svc.DB()
+	p, err := auth.LoadPrincipal(db, info.UserID)
+	if err != nil {
+		h.fail(c, 500, "signed in, but the session failed, try logging in again")
+		return
+	}
+	p.ShopID = shopID
+	token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
+	if err != nil {
+		h.fail(c, 500, "token error")
+		return
+	}
+	h.LoginRL.Forget(key)
+	svc.Audit(p.ID, p.Username, "LOGIN", "user", p.Username, "owner cloud sign-in")
+	h.ok(c, gin.H{
+		"token":     token,
+		"user":      p.User(),
+		"teamCode":  info.TeamCode,
+		"storeName": info.StoreName,
+		"roleName":  info.RoleName,
+	})
 }
 
 // Branding is public white-label display data for login/POS chrome.
 func (h *H) Branding(c *gin.Context) {
-        st, err := h.shopSettings(c)
-        if err != nil {
-                h.fail(c, 404, "unknown shop")
-                return
-        }
-        h.ok(c, st.Branding())
+	st, err := h.shopSettings(c)
+	if err != nil {
+		h.fail(c, 404, "unknown shop")
+		return
+	}
+	h.ok(c, st.Branding())
 }
 
 // MyShops returns all shops the current user belongs to (for shop switcher).
 func (h *H) MyShops(c *gin.Context) {
-        p := h.principal(c)
-        if h.Tenants == nil {
-                h.fail(c, 500, "tenancy not configured")
-                return
-        }
-        ids := h.Tenants.ShopsForUser(p.Username)
-        out := []map[string]string{}
-        for _, sid := range ids {
-                if shop, ok := h.Tenants.Find(sid); ok {
-                        out = append(out, map[string]string{"id": shop.ID, "name": shop.Name})
-                }
-        }
-        h.ok(c, out)
+	p := h.principal(c)
+	if h.Tenants == nil {
+		h.fail(c, 500, "tenancy not configured")
+		return
+	}
+	ids := h.Tenants.ShopsForUser(p.Username)
+	out := []map[string]string{}
+	for _, sid := range ids {
+		if shop, ok := h.Tenants.Find(sid); ok {
+			out = append(out, map[string]string{"id": shop.ID, "name": shop.Name})
+		}
+	}
+	h.ok(c, out)
 }
 
 // SwitchShop issues a new token for the same user in a different shop they belong to.
 func (h *H) SwitchShop(c *gin.Context) {
-        p := h.principal(c)
-        var body struct {
-                ShopID string `json:"shopId" binding:"required"`
-        }
-        if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, "shopId required")
-                return
-        }
-        allowed := false
-        for _, sid := range h.Tenants.ShopsForUser(p.Username) {
-                if sid == body.ShopID {
-                        allowed = true
-                        break
-                }
-        }
-        if !allowed {
-                h.fail(c, 403, "not a member of that shop")
-                return
-        }
-        svc, err := h.Shops.Service(body.ShopID)
-        if err != nil {
-                h.fail(c, 404, "unknown shop")
-                return
-        }
-        db := svc.DB()
-        var id int64
-        if err := db.QueryRow(db.Rebind(`SELECT id FROM users WHERE LOWER(username)=LOWER(?) AND is_active=1`), p.Username).Scan(&id); err != nil {
-                h.fail(c, 404, "user not found in target shop")
-                return
-        }
-        np, err := auth.LoadPrincipal(db, id)
-        if err != nil {
-                h.fail(c, 403, "account unavailable in target shop")
-                return
-        }
-        np.ShopID = body.ShopID
-        token, err := auth.IssueToken(h.MasterSecret, np.ID, np.Username, body.ShopID)
-        if err != nil {
-                h.fail(c, 500, "token error")
-                return
-        }
-        h.ok(c, gin.H{"token": token, "user": np.User()})
+	p := h.principal(c)
+	var body struct {
+		ShopID string `json:"shopId" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "shopId required")
+		return
+	}
+	allowed := false
+	for _, sid := range h.Tenants.ShopsForUser(p.Username) {
+		if sid == body.ShopID {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		h.fail(c, 403, "not a member of that shop")
+		return
+	}
+	svc, err := h.Shops.Service(body.ShopID)
+	if err != nil {
+		h.fail(c, 404, "unknown shop")
+		return
+	}
+	db := svc.DB()
+	var id int64
+	if err := db.QueryRow(db.Rebind(`SELECT id FROM users WHERE LOWER(username)=LOWER(?) AND is_active=1`), p.Username).Scan(&id); err != nil {
+		h.fail(c, 404, "user not found in target shop")
+		return
+	}
+	np, err := auth.LoadPrincipal(db, id)
+	if err != nil {
+		h.fail(c, 403, "account unavailable in target shop")
+		return
+	}
+	np.ShopID = body.ShopID
+	token, err := auth.IssueToken(h.MasterSecret, np.ID, np.Username, body.ShopID)
+	if err != nil {
+		h.fail(c, 500, "token error")
+		return
+	}
+	h.ok(c, gin.H{"token": token, "user": np.User()})
 }
 
 var _ = http.StatusOK

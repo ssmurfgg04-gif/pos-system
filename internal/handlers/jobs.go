@@ -6,7 +6,6 @@ package handlers
 // by orders.notify (Front Desk, Branding, Cyber, Owner).
 
 import (
-
 	"github.com/gin-gonic/gin"
 
 	"posapp/internal/models"
@@ -97,4 +96,3 @@ func (h *H) NotifyJobReady(c *gin.Context) {
 	}
 	h.ok(c, contact)
 }
-

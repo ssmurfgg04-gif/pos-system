@@ -1,141 +1,141 @@
 package database
 
 import (
-        "crypto/rand"
-        "database/sql"
-        "encoding/hex"
-        "encoding/json"
-        "fmt"
-        "strings"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"strings"
 
-        "posapp/internal/hash"
-        "posapp/internal/models"
+	"posapp/internal/hash"
+	"posapp/internal/models"
 )
 
 // DefaultSettings are the white-label defaults. Everything user-visible
 // comes from here — zero hardcoded branding anywhere in the app.
 // Secrets are masked by the settings API ("__SET__").
 var DefaultSettings = map[string]string{
-        "app_name":              "Point of Sale",
-        "store_name":            "My Store",
-        "store_address":         "",
-        "store_phone":           "",
-        "receipt_footer":        "Thank you for your business!",
-        "currency_code":         "KES",
-        "currency_symbol":       "KES",
-        "tax_percent":           "16",
-        "tax_included":          "true",
-        // Creative Divine blue — the design system's brand (frontend/src/index.css).
-        // Green is reserved for success/payment confirmation, never brand accents.
-        "brand_color":           "#0047ab",
-        "brand_logo":            "", // "1" when brand-logo.png is present
-        "payment_mode":          "auto", // auto | stk | manual
-        "till_number":           "",
-        "paybill_number":        "",
-        // mpesa_env: manual (default — receipt-code entry, nothing completes
-        // by itself) | paystack (STK via the Paystack integration) | sandbox |
-        // production (Daraja). "mock" is tests/demos only: the desktop app
-        // refuses mock unless ALLOW_MOCK_PAYMENTS=true (fake-money guard).
-        "mpesa_env":             "manual",
-        "mpesa_shortcode":       "",
-        "mpesa_passkey":         "",
-        "mpesa_consumer_key":    "",
-        "mpesa_consumer_secret": "",
-        "mpesa_callback_url":    "",
-        "mpesa_mock_delay_ms":   "4000",
-        "mpesa_mock_result_code": "0",
-        // Buni (KCB M-Pesa Express) — the MAIN M-Pesa rail. Keys never live
-        // on the till: the cloud config row buni_via_cloud switches the
-        // route on and the Edge Functions hold the secrets. buni_enabled is
-        // the local kill-switch (default ON so the vault row alone rolls it
-        // out; owners turn it off here if they want Paystack/Daraja only).
-        "buni_enabled": "true",
-        "printer_target":        "", // e.g. tcp://192.168.1.200:9100 or file:///dev/usb/lp0
-        "printer_width":         "80",
-        "auto_print_receipts":   "true",
-        "receipt_logo":            "true", // print brand-logo.png atop receipts when present
-        // eTIMS-ready invoice identity (P6): the business's own KRA PIN
-        // prints on tax invoices; a per-order buyer PIN (customer's KRA PIN)
-        // is captured at checkout when this is on file.
-        "kra_pin":               "",
-        "low_stock_threshold":   "5",
-        "backup_auto":           "true", // daily 02:00 VACUUM INTO snapshot
-        "backup_keep":           "7",    // snapshots retained
-        "onboarding_done":       "false", // guided first-run wizard completed
-        "update_channel":        "stable", // stable | off (auto-update checks)
-        "update_api_base":       "https://api.github.com", // overridable for tests
-        "offsite_enabled":       "false", // encrypted push of each snapshot
-        "offsite_endpoint":      "",     // Supabase project URL, e.g. https://xyzcompany.supabase.co
-        "offsite_bucket":        "",     // private storage bucket (one project per shop)
-        "offsite_secret_key":    "", // SECRET — project service_role key, masked in API
-        "offsite_prefix":        "", // defaults to OS hostname
-        "offsite_keep":          "14", // remote copies retained (free tier is 500MB)
-        "offsite_passphrase":    "", // SECRET — encrypts snapshots; owner keeps a copy
-        // Loyalty program: earn 1 point per loyalty_earn_per_cents of paid
-        // sales; a point is worth loyalty_point_cents when redeemed as
-        // payment; redemption can cover at most loyalty_max_percent of an
-        // order (the rest is cash/M-Pesa/tab/credit).
-        "loyalty_enabled":       "true",
-        "loyalty_earn_per_cents": "10000", // 1 pt / 100 KES
-        "loyalty_point_cents":   "100",    // 1 pt = KES 1 off
-        "loyalty_max_percent":   "50",     // points cover ≤50% of an order
-        "credit_enabled":        "true",   // prepaid store credit feature toggle
-        "crm_auto_capture":      "true",   // checkout links/creates CRM records from the sale phone
-        "whatsapp_ready_note":   "",       // appended to ready-pickup WhatsApp drafts
-        // Team sync: links standalone tills through the shop's Supabase
-        // project (same one offsite backups use). Secrets masked in API.
-        "sync_enabled":          "false",
-        "sync_endpoint":         "", // Supabase project URL
-        "sync_service_key":      "", // SECRET — service_role key
-        "sync_team_code":        "", // short code shared by the team's devices
-        // Paystack card / mobile-money checkout. The SECRET key lives only
-        // on this machine (settings DB or PAYSTACK_SECRET_KEY env) — it is
-        // masked in API responses and never team-synced. The PUBLIC key is
-        // safe to expose and is what the checkout popup uses.
-        // paystack_enabled is intentionally NOT seeded: absence means
-        // "on whenever a valid secret key exists" — a till with live keys
-        // just works; admins can still switch it off explicitly.
-        "paystack_public_key":    "", // pk_live_... / pk_test_... — safe for the frontend
-        "paystack_secret_key":    "", // SECRET — sk_live_... backend only
-        "paystack_currency":      "KES",
-        "paystack_callback_url":  "https://awesomeposs.netlify.app/",
+	"app_name":        "Point of Sale",
+	"store_name":      "My Store",
+	"store_address":   "",
+	"store_phone":     "",
+	"receipt_footer":  "Thank you for your business!",
+	"currency_code":   "KES",
+	"currency_symbol": "KES",
+	"tax_percent":     "16",
+	"tax_included":    "true",
+	// Creative Divine blue — the design system's brand (frontend/src/index.css).
+	// Green is reserved for success/payment confirmation, never brand accents.
+	"brand_color":    "#0047ab",
+	"brand_logo":     "",     // "1" when brand-logo.png is present
+	"payment_mode":   "auto", // auto | stk | manual
+	"till_number":    "",
+	"paybill_number": "",
+	// mpesa_env: manual (default — receipt-code entry, nothing completes
+	// by itself) | paystack (STK via the Paystack integration) | sandbox |
+	// production (Daraja). "mock" is tests/demos only: the desktop app
+	// refuses mock unless ALLOW_MOCK_PAYMENTS=true (fake-money guard).
+	"mpesa_env":              "manual",
+	"mpesa_shortcode":        "",
+	"mpesa_passkey":          "",
+	"mpesa_consumer_key":     "",
+	"mpesa_consumer_secret":  "",
+	"mpesa_callback_url":     "",
+	"mpesa_mock_delay_ms":    "4000",
+	"mpesa_mock_result_code": "0",
+	// Buni (KCB M-Pesa Express) — the MAIN M-Pesa rail. Keys never live
+	// on the till: the cloud config row buni_via_cloud switches the
+	// route on and the Edge Functions hold the secrets. buni_enabled is
+	// the local kill-switch (default ON so the vault row alone rolls it
+	// out; owners turn it off here if they want Paystack/Daraja only).
+	"buni_enabled":        "true",
+	"printer_target":      "", // e.g. tcp://192.168.1.200:9100 or file:///dev/usb/lp0
+	"printer_width":       "80",
+	"auto_print_receipts": "true",
+	"receipt_logo":        "true", // print brand-logo.png atop receipts when present
+	// eTIMS-ready invoice identity (P6): the business's own KRA PIN
+	// prints on tax invoices; a per-order buyer PIN (customer's KRA PIN)
+	// is captured at checkout when this is on file.
+	"kra_pin":             "",
+	"low_stock_threshold": "5",
+	"backup_auto":         "true",                   // daily 02:00 VACUUM INTO snapshot
+	"backup_keep":         "7",                      // snapshots retained
+	"onboarding_done":     "false",                  // guided first-run wizard completed
+	"update_channel":      "stable",                 // stable | off (auto-update checks)
+	"update_api_base":     "https://api.github.com", // overridable for tests
+	"offsite_enabled":     "false",                  // encrypted push of each snapshot
+	"offsite_endpoint":    "",                       // Supabase project URL, e.g. https://xyzcompany.supabase.co
+	"offsite_bucket":      "",                       // private storage bucket (one project per shop)
+	"offsite_secret_key":  "",                       // SECRET — project service_role key, masked in API
+	"offsite_prefix":      "",                       // defaults to OS hostname
+	"offsite_keep":        "14",                     // remote copies retained (free tier is 500MB)
+	"offsite_passphrase":  "",                       // SECRET — encrypts snapshots; owner keeps a copy
+	// Loyalty program: earn 1 point per loyalty_earn_per_cents of paid
+	// sales; a point is worth loyalty_point_cents when redeemed as
+	// payment; redemption can cover at most loyalty_max_percent of an
+	// order (the rest is cash/M-Pesa/tab/credit).
+	"loyalty_enabled":        "true",
+	"loyalty_earn_per_cents": "10000", // 1 pt / 100 KES
+	"loyalty_point_cents":    "100",   // 1 pt = KES 1 off
+	"loyalty_max_percent":    "50",    // points cover ≤50% of an order
+	"credit_enabled":         "true",  // prepaid store credit feature toggle
+	"crm_auto_capture":       "true",  // checkout links/creates CRM records from the sale phone
+	"whatsapp_ready_note":    "",      // appended to ready-pickup WhatsApp drafts
+	// Team sync: links standalone tills through the shop's Supabase
+	// project (same one offsite backups use). Secrets masked in API.
+	"sync_enabled":     "false",
+	"sync_endpoint":    "", // Supabase project URL
+	"sync_service_key": "", // SECRET — service_role key
+	"sync_team_code":   "", // short code shared by the team's devices
+	// Paystack card / mobile-money checkout. The SECRET key lives only
+	// on this machine (settings DB or PAYSTACK_SECRET_KEY env) — it is
+	// masked in API responses and never team-synced. The PUBLIC key is
+	// safe to expose and is what the checkout popup uses.
+	// paystack_enabled is intentionally NOT seeded: absence means
+	// "on whenever a valid secret key exists" — a till with live keys
+	// just works; admins can still switch it off explicitly.
+	"paystack_public_key":   "", // pk_live_... / pk_test_... — safe for the frontend
+	"paystack_secret_key":   "", // SECRET — sk_live_... backend only
+	"paystack_currency":     "KES",
+	"paystack_callback_url": "https://awesomeposs.netlify.app/",
 }
 
 type seedProduct struct {
-        sku, barcode, name, category string
-        price, cost, stock           int64
-        track                        bool
+	sku, barcode, name, category string
+	price, cost, stock           int64
+	track                        bool
 }
 
 var seedCategories = []struct{ name, slug string }{
-        {"T-Shirts", "tshirts"},
-        {"Mugs & Bottles", "mugs-bottles"},
-        {"Accessories", "accessories"},
-        {"Services", "services"},
+	{"T-Shirts", "tshirts"},
+	{"Mugs & Bottles", "mugs-bottles"},
+	{"Accessories", "accessories"},
+	{"Services", "services"},
 }
 
 var seedProducts = []seedProduct{
-        {"TS-001", "4001234500011", "Classic Cotton Tee, Black", "tshirts", 55000, 32000, 40, true},
-        {"TS-002", "4001234500028", "Classic Cotton Tee, White", "tshirts", 55000, 32000, 35, true},
-        {"TS-003", "4001234500035", "Premium Heavyweight Tee", "tshirts", 85000, 48000, 22, true},
-        {"TS-004", "4001234500042", "Oversized Streetwear Tee", "tshirts", 90000, 52000, 18, true},
-        {"MG-001", "4001234500059", "Ceramic Mug, 11oz", "mugs-bottles", 45000, 22000, 50, true},
-        {"MG-002", "4001234500066", "Enamel Camping Mug", "mugs-bottles", 60000, 34000, 25, true},
-        {"MG-003", "4001234500073", "Insulated Travel Tumbler", "mugs-bottles", 120000, 70000, 15, true},
-        {"AC-001", "4001234500080", "Silicone Wristband", "accessories", 15000, 5000, 200, true},
-        {"AC-002", "4001234500097", "Fabric Wristband", "accessories", 20000, 8000, 150, true},
-        {"AC-003", "4001234500103", "Canvas Tote Bag", "accessories", 55000, 28000, 30, true},
-        {"AC-004", "4001234500110", "Embroidered Cap", "accessories", 70000, 40000, 20, true},
-        {"SV-001", "", "Custom Print Run, per design", "services", 25000, 0, 0, false},
-        {"SV-002", "", "Artwork & Branding Setup", "services", 100000, 0, 0, false},
+	{"TS-001", "4001234500011", "Classic Cotton Tee, Black", "tshirts", 55000, 32000, 40, true},
+	{"TS-002", "4001234500028", "Classic Cotton Tee, White", "tshirts", 55000, 32000, 35, true},
+	{"TS-003", "4001234500035", "Premium Heavyweight Tee", "tshirts", 85000, 48000, 22, true},
+	{"TS-004", "4001234500042", "Oversized Streetwear Tee", "tshirts", 90000, 52000, 18, true},
+	{"MG-001", "4001234500059", "Ceramic Mug, 11oz", "mugs-bottles", 45000, 22000, 50, true},
+	{"MG-002", "4001234500066", "Enamel Camping Mug", "mugs-bottles", 60000, 34000, 25, true},
+	{"MG-003", "4001234500073", "Insulated Travel Tumbler", "mugs-bottles", 120000, 70000, 15, true},
+	{"AC-001", "4001234500080", "Silicone Wristband", "accessories", 15000, 5000, 200, true},
+	{"AC-002", "4001234500097", "Fabric Wristband", "accessories", 20000, 8000, 150, true},
+	{"AC-003", "4001234500103", "Canvas Tote Bag", "accessories", 55000, 28000, 30, true},
+	{"AC-004", "4001234500110", "Embroidered Cap", "accessories", 70000, 40000, 20, true},
+	{"SV-001", "", "Custom Print Run, per design", "services", 25000, 0, 0, false},
+	{"SV-002", "", "Artwork & Branding Setup", "services", 100000, 0, 0, false},
 }
 
 var seedUsers = []struct {
-        username, fullName, password, pin, role string
+	username, fullName, password, pin, role string
 }{
-        {"admin", "System Admin", "admin123", "1234", "Admin"},
-        {"cashier", "Cashier Demo", "cashier123", "2222", "Cashier"},
-        {"designer", "Designer Demo", "designer123", "3333", "Designer"},
+	{"admin", "System Admin", "admin123", "1234", "Admin"},
+	{"cashier", "Cashier Demo", "cashier123", "2222", "Cashier"},
+	{"designer", "Designer Demo", "designer123", "3333", "Designer"},
 }
 
 // Seed idempotently inserts defaults (roles, demo users, catalog, settings).
@@ -147,235 +147,235 @@ var seedUsers = []struct {
 // Existing databases were purged of unrotated demo accounts by migration
 // v13 (safeguarded, journalled, rollback documented).
 func (d *DB) Seed(demoData bool) error {
-        if err := d.seedSettings(); err != nil {
-                return fmt.Errorf("seed settings: %w", err)
-        }
-        if err := d.seedRoles(); err != nil {
-                return fmt.Errorf("seed roles: %w", err)
-        }
-        if demoData {
-                if err := d.seedUsers(); err != nil {
-                        return fmt.Errorf("seed users: %w", err)
-                }
-                if err := d.seedCatalog(); err != nil {
-                        return fmt.Errorf("seed catalog: %w", err)
-                }
-        }
-        return nil
+	if err := d.seedSettings(); err != nil {
+		return fmt.Errorf("seed settings: %w", err)
+	}
+	if err := d.seedRoles(); err != nil {
+		return fmt.Errorf("seed roles: %w", err)
+	}
+	if demoData {
+		if err := d.seedUsers(); err != nil {
+			return fmt.Errorf("seed users: %w", err)
+		}
+		if err := d.seedCatalog(); err != nil {
+			return fmt.Errorf("seed catalog: %w", err)
+		}
+	}
+	return nil
 }
 
 func (d *DB) seedSettings() error {
-        ins := d.Rebind("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING")
-        for k, v := range DefaultSettings {
-                if _, err := d.Exec(ins, k, v); err != nil {
-                        return fmt.Errorf("setting %s: %w", k, err)
-                }
-        }
-        // Random JWT secret on first boot (never hardcoded — fixes the
-        // poinf-of-sales flaw). Persisted so restarts keep sessions valid.
-        var secret string
-        err := d.QueryRow(`SELECT value FROM settings WHERE key = 'jwt_secret'`).Scan(&secret)
-        if err == sql.ErrNoRows || (err == nil && secret == "") {
-                buf := make([]byte, 32)
-                if _, err := rand.Read(buf); err != nil {
-                        return err
-                }
-                if _, err := d.Exec(ins, "jwt_secret", hex.EncodeToString(buf)); err != nil {
-                        return err
-                }
-        } else if err != nil {
-                return err
-        }
-        return nil
+	ins := d.Rebind("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING")
+	for k, v := range DefaultSettings {
+		if _, err := d.Exec(ins, k, v); err != nil {
+			return fmt.Errorf("setting %s: %w", k, err)
+		}
+	}
+	// Random JWT secret on first boot (never hardcoded — fixes the
+	// poinf-of-sales flaw). Persisted so restarts keep sessions valid.
+	var secret string
+	err := d.QueryRow(`SELECT value FROM settings WHERE key = 'jwt_secret'`).Scan(&secret)
+	if err == sql.ErrNoRows || (err == nil && secret == "") {
+		buf := make([]byte, 32)
+		if _, err := rand.Read(buf); err != nil {
+			return err
+		}
+		if _, err := d.Exec(ins, "jwt_secret", hex.EncodeToString(buf)); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	return nil
 }
 
 // backfillRolePerms unions the seeded permission set into same-named
 // system roles (v3 migration — runs once, so later admin edits are safe).
 func backfillRolePerms(d *DB, tx *sql.Tx) error {
-        extra := map[string][]string{}
-        for name, perms := range models.SeededRolePermissions {
-                extra[name] = perms
-        }
-        return unionRolePerms(d, tx, extra)
+	extra := map[string][]string{}
+	for name, perms := range models.SeededRolePermissions {
+		extra[name] = perms
+	}
+	return unionRolePerms(d, tx, extra)
 }
 
 // unionRolePerms merges extra permission sets into the saved permissions of
 // system roles (matched by name). Never removes anything an admin added —
 // union only, applied once per migration that calls it.
 func unionRolePerms(d *DB, tx *sql.Tx, extra map[string][]string) error {
-        rows, err := tx.Query(`SELECT id, name, permissions FROM roles WHERE is_system = 1`)
-        if err != nil {
-                return err
-        }
-        type roleRow struct {
-                id    int
-                name  string
-                perms string
-        }
-        var list []roleRow
-        for rows.Next() {
-                var r roleRow
-                if err := rows.Scan(&r.id, &r.name, &r.perms); err != nil {
-                        rows.Close()
-                        return err
-                }
-                list = append(list, r)
-        }
-        rows.Close()
-        for _, r := range list {
-                want, ok := extra[r.name]
-                if !ok {
-                        continue
-                }
-                var have []string
-                if err := json.Unmarshal([]byte(r.perms), &have); err != nil {
-                        have = nil
-                }
-                set := map[string]bool{}
-                for _, p := range have {
-                        set[p] = true
-                }
-                changed := false
-                for _, p := range want {
-                        if !set[p] {
-                                set[p] = true
-                                have = append(have, p)
-                                changed = true
-                        }
-                }
-                if !changed {
-                        continue
-                }
-                merged, _ := json.Marshal(have)
-                if _, err := tx.Exec(d.Rebind(`UPDATE roles SET permissions = ? WHERE id = ?`), string(merged), r.id); err != nil {
-                        return err
-                }
-        }
-        return nil
+	rows, err := tx.Query(`SELECT id, name, permissions FROM roles WHERE is_system = 1`)
+	if err != nil {
+		return err
+	}
+	type roleRow struct {
+		id    int
+		name  string
+		perms string
+	}
+	var list []roleRow
+	for rows.Next() {
+		var r roleRow
+		if err := rows.Scan(&r.id, &r.name, &r.perms); err != nil {
+			rows.Close()
+			return err
+		}
+		list = append(list, r)
+	}
+	rows.Close()
+	for _, r := range list {
+		want, ok := extra[r.name]
+		if !ok {
+			continue
+		}
+		var have []string
+		if err := json.Unmarshal([]byte(r.perms), &have); err != nil {
+			have = nil
+		}
+		set := map[string]bool{}
+		for _, p := range have {
+			set[p] = true
+		}
+		changed := false
+		for _, p := range want {
+			if !set[p] {
+				set[p] = true
+				have = append(have, p)
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+		merged, _ := json.Marshal(have)
+		if _, err := tx.Exec(d.Rebind(`UPDATE roles SET permissions = ? WHERE id = ?`), string(merged), r.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) seedRoles() error {
-        for name, perms := range models.SeededRolePermissions {
-                jsonPerms, _ := json.Marshal(perms)
-                desc := map[string]string{
-                        "Admin":      "Technical owner, full access to every module",
-                        "Owner":      "Business owner, full control of accounts, reports, settings and staff",
-                        "Cashier":    "Point of sale: checkout, manual M-Pesa entry, shifts",
-                        "Front Desk": "Run the floor: serve customers, take payment, delegate and track jobs",
-                        "Branding":   "Sell and produce branding jobs; hand work to designers",
-                        "Cyber":      "Sell and produce cyber-café jobs; hand work to designers",
-                        "Designer":   "Work the design board, only jobs assigned to you",
-                }[name]
-                if desc == "" {
-                        desc = "Staff role"
-                }
-                q := d.Rebind(`INSERT INTO roles (name, description, is_system, permissions)
+	for name, perms := range models.SeededRolePermissions {
+		jsonPerms, _ := json.Marshal(perms)
+		desc := map[string]string{
+			"Admin":      "Technical owner, full access to every module",
+			"Owner":      "Business owner, full control of accounts, reports, settings and staff",
+			"Cashier":    "Point of sale: checkout, manual M-Pesa entry, shifts",
+			"Front Desk": "Run the floor: serve customers, take payment, delegate and track jobs",
+			"Branding":   "Sell and produce branding jobs; hand work to designers",
+			"Cyber":      "Sell and produce cyber-café jobs; hand work to designers",
+			"Designer":   "Work the design board, only jobs assigned to you",
+		}[name]
+		if desc == "" {
+			desc = "Staff role"
+		}
+		q := d.Rebind(`INSERT INTO roles (name, description, is_system, permissions)
                         SELECT ?, ?, 1, ? WHERE NOT EXISTS (SELECT 1 FROM roles WHERE name = ?)`)
-                if _, err := d.Exec(q, name, desc, string(jsonPerms), name); err != nil {
-                        return err
-                }
-        }
-        return nil
+		if _, err := d.Exec(q, name, desc, string(jsonPerms), name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) seedUsers() error {
-        for _, u := range seedUsers {
-                pwHash, err := hash.Password(u.password)
-                if err != nil {
-                        return err
-                }
-                pinHash, err := hash.Password(u.pin)
-                if err != nil {
-                        return err
-                }
-                q := d.Rebind(`INSERT INTO users (username, full_name, password_hash, pin_hash, role_id, must_rotate)
+	for _, u := range seedUsers {
+		pwHash, err := hash.Password(u.password)
+		if err != nil {
+			return err
+		}
+		pinHash, err := hash.Password(u.pin)
+		if err != nil {
+			return err
+		}
+		q := d.Rebind(`INSERT INTO users (username, full_name, password_hash, pin_hash, role_id, must_rotate)
                         SELECT ?, ?, ?, ?, (SELECT id FROM roles WHERE name = ?), 1
                         WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = ?)`)
-                if _, err := d.Exec(q, u.username, u.fullName, pwHash, pinHash, u.role, u.username); err != nil {
-                        return err
-                }
-        }
-        return nil
+		if _, err := d.Exec(q, u.username, u.fullName, pwHash, pinHash, u.role, u.username); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // isValidUsername mirrors auth.ValidUsername (database cannot import auth —
 // cycle — so the 10-line rule lives here too; keep them in sync).
 func isValidUsername(u string) bool {
-        if len(u) < 3 || len(u) > 32 {
-                return false
-        }
-        for i := 0; i < len(u); i++ {
-                c := u[i]
-                ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-                        c == '.' || c == '_' || c == '-'
-                if !ok {
-                        return false
-                }
-        }
-        return true
+	if len(u) < 3 || len(u) > 32 {
+		return false
+	}
+	for i := 0; i < len(u); i++ {
+		c := u[i]
+		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			c == '.' || c == '_' || c == '-'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // SeedShop provisions a fresh tenant: settings (with the shop's own name),
 // roles, catalog, and exactly ONE admin holding chosen credentials
 // (must_rotate = 0 — they just set them; no default passwords exist here).
 func (d *DB) SeedShop(storeName, adminUser, adminPass string) error {
-        if strings.TrimSpace(storeName) == "" || len(storeName) > 80 {
-                return fmt.Errorf("shop name required (max 80)")
-        }
-        if !isValidUsername(adminUser) {
-                return fmt.Errorf("admin username must be 3-32 letters, digits, dot, underscore, or hyphen")
-        }
-        if len(adminPass) < 6 || len(adminPass) > 128 {
-                return fmt.Errorf("admin password must be 6-128 characters")
-        }
-        if err := d.seedSettings(); err != nil {
-                return fmt.Errorf("seed settings: %w", err)
-        }
-        if _, err := d.Exec(d.Rebind(`UPDATE settings SET value = ? WHERE key = 'store_name'`),
-                strings.TrimSpace(storeName)); err != nil {
-                return fmt.Errorf("store name: %w", err)
-        }
-        if err := d.seedRoles(); err != nil {
-                return fmt.Errorf("seed roles: %w", err)
-        }
-        if err := d.seedCatalog(); err != nil {
-                return fmt.Errorf("seed catalog: %w", err)
-        }
-        pwHash, err := hash.Password(adminPass)
-        if err != nil {
-                return err
-        }
-        q := d.Rebind(`INSERT INTO users (username, full_name, password_hash, pin_hash, role_id, must_rotate)
+	if strings.TrimSpace(storeName) == "" || len(storeName) > 80 {
+		return fmt.Errorf("shop name required (max 80)")
+	}
+	if !isValidUsername(adminUser) {
+		return fmt.Errorf("admin username must be 3-32 letters, digits, dot, underscore, or hyphen")
+	}
+	if len(adminPass) < 6 || len(adminPass) > 128 {
+		return fmt.Errorf("admin password must be 6-128 characters")
+	}
+	if err := d.seedSettings(); err != nil {
+		return fmt.Errorf("seed settings: %w", err)
+	}
+	if _, err := d.Exec(d.Rebind(`UPDATE settings SET value = ? WHERE key = 'store_name'`),
+		strings.TrimSpace(storeName)); err != nil {
+		return fmt.Errorf("store name: %w", err)
+	}
+	if err := d.seedRoles(); err != nil {
+		return fmt.Errorf("seed roles: %w", err)
+	}
+	if err := d.seedCatalog(); err != nil {
+		return fmt.Errorf("seed catalog: %w", err)
+	}
+	pwHash, err := hash.Password(adminPass)
+	if err != nil {
+		return err
+	}
+	q := d.Rebind(`INSERT INTO users (username, full_name, password_hash, pin_hash, role_id, must_rotate)
                 SELECT ?, ?, ?, '', (SELECT id FROM roles WHERE name = 'Admin'), 0
                 WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = ?)`)
-        if _, err := d.Exec(q, strings.TrimSpace(adminUser), strings.TrimSpace(adminUser),
-                pwHash, strings.TrimSpace(adminUser)); err != nil {
-                return err
-        }
-        return nil
+	if _, err := d.Exec(q, strings.TrimSpace(adminUser), strings.TrimSpace(adminUser),
+		pwHash, strings.TrimSpace(adminUser)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (d *DB) seedCatalog() error {
-        insCat := d.Rebind(`INSERT INTO categories (name, slug, sort_order)
+	insCat := d.Rebind(`INSERT INTO categories (name, slug, sort_order)
                 SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM categories WHERE slug = ?)`)
-        for i, c := range seedCategories {
-                if _, err := d.Exec(insCat, c.name, c.slug, i, c.slug); err != nil {
-                        return err
-                }
-        }
-        // category_id resolved via subquery on slug (the v1 bug fix — never
-        // assume a specific autoincrement value).
-        insProd := d.Rebind(`INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock)
+	for i, c := range seedCategories {
+		if _, err := d.Exec(insCat, c.name, c.slug, i, c.slug); err != nil {
+			return err
+		}
+	}
+	// category_id resolved via subquery on slug (the v1 bug fix — never
+	// assume a specific autoincrement value).
+	insProd := d.Rebind(`INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock)
                 SELECT ?, ?, ?, (SELECT id FROM categories WHERE slug = ?), ?, ?, ?, ?
                 WHERE NOT EXISTS (SELECT 1 FROM products WHERE sku = ?)`)
-        for _, p := range seedProducts {
-                track := 0
-                if p.track {
-                        track = 1
-                }
-                if _, err := d.Exec(insProd, p.sku, p.barcode, p.name, p.category, p.price, p.cost, p.stock, track, p.sku); err != nil {
-                        return err
-                }
-        }
-        return nil
+	for _, p := range seedProducts {
+		track := 0
+		if p.track {
+			track = 1
+		}
+		if _, err := d.Exec(insProd, p.sku, p.barcode, p.name, p.category, p.price, p.cost, p.stock, track, p.sku); err != nil {
+			return err
+		}
+	}
+	return nil
 }

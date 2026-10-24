@@ -18,15 +18,15 @@ func TestTaxGoldenFixtures(t *testing.T) {
 		{0, 16, 0, 0},
 		{1, 16, 0, 0},
 		// standard 16% cases
-		{10000, 16, 1379, 1600},   // KES 100.00
-		{11600, 16, 1600, 1856},   // the canonical KES 116 sale
+		{10000, 16, 1379, 1600},    // KES 100.00
+		{11600, 16, 1600, 1856},    // the canonical KES 116 sale
 		{100000, 16, 13793, 16000}, // KES 1,000.00
-		{99999, 16, 13793, 16000}, // rounding down on the inclusive side
+		{99999, 16, 13793, 16000},  // rounding down on the inclusive side
 		{999999, 16, 137931, 160000},
 		// .5 rounding boundary (half-away-from-zero)
-		{625, 16, 86, 100},  // 86.2 → 86
+		{625, 16, 86, 100},   // 86.2 → 86
 		{3125, 16, 431, 500}, // 431.03 → 431
-		{5, 16, 1, 1},       // 0.689… → 1
+		{5, 16, 1, 1},        // 0.689… → 1
 		// zero-rate
 		{500000, 0, 0, 0},
 		// 8% (reduced rate) — repeating binary fraction

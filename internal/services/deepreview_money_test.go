@@ -15,11 +15,11 @@ import (
 )
 
 type moneyFixture struct {
-	s       *Service
-	prodID  int64
-	userID  int64
-	roleID  int64
-	cust    *models.Customer
+	s      *Service
+	prodID int64
+	userID int64
+	roleID int64
+	cust   *models.Customer
 }
 
 func newMoneyTill(t *testing.T) *moneyFixture {

@@ -1,22 +1,22 @@
 package database
 
 import (
-        "database/sql"
-        "fmt"
-        "regexp"
-        "strings"
-        "time"
+	"database/sql"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
 
-        "posapp/internal/hash"
-        "posapp/internal/models"
+	"posapp/internal/hash"
+	"posapp/internal/models"
 )
 
 // hashVerify wraps bcrypt verification for migration-time credential checks.
 func hashVerify(h, plain string) bool {
-        if h == "" {
-                return false
-        }
-        return hash.Verify(h, plain)
+	if h == "" {
+		return false
+	}
+	return hash.Verify(h, plain)
 }
 
 func timeNowUTC() time.Time { return time.Now().UTC() }
@@ -25,16 +25,16 @@ func timeNowUTC() time.Time { return time.Now().UTC() }
 // covers data backfills that SQL can't express portably (JSON permission
 // merges). A migration may carry SQL, a Go hook, or both.
 type Migration struct {
-        Version int
-        SQLite  string
-        Pg      string // falls back to SQLite body when empty
-        Go      func(d *DB, tx *sql.Tx) error
+	Version int
+	SQLite  string
+	Pg      string // falls back to SQLite body when empty
+	Go      func(d *DB, tx *sql.Tx) error
 }
 
 var migrations = []Migration{
-        {
-                Version: 1,
-                SQLite: `
+	{
+		Version: 1,
+		SQLite: `
 CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL DEFAULT ''
@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 `,
-                Pg: `
+		Pg: `
 CREATE TABLE IF NOT EXISTS settings (
         key VARCHAR(128) PRIMARY KEY,
         value TEXT NOT NULL DEFAULT ''
@@ -332,10 +332,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 `,
-        },
-        {
-                Version: 2,
-                SQLite: `
+	},
+	{
+		Version: 2,
+		SQLite: `
 CREATE TABLE IF NOT EXISTS customers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -363,7 +363,7 @@ CREATE TABLE IF NOT EXISTS customer_ledger (
 CREATE INDEX IF NOT EXISTS idx_ledger_customer ON customer_ledger(customer_id);
 ALTER TABLE orders ADD COLUMN customer_id INTEGER NOT NULL DEFAULT 0;
 `,
-                Pg: `
+		Pg: `
 CREATE TABLE IF NOT EXISTS customers (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -391,37 +391,37 @@ CREATE TABLE IF NOT EXISTS customer_ledger (
 CREATE INDEX IF NOT EXISTS idx_ledger_customer ON customer_ledger(customer_id);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_id INTEGER NOT NULL DEFAULT 0;
 `,
-        },
-        {
-                // v3: shops created before tabs existed have system roles without
-                // the customers.* permissions — union the seeded set in so
-                // cashiers keep working after upgrade. Runs once (admin edits
-                // made afterwards are never touched).
-                Version: 3,
-                Go:      backfillRolePerms,
-        },
-        {
-                // v4: forced credential rotation — seeded defaults stop working
-                // until changed. Existing rows are flagged so every current user
-                // rotates once on next login.
-                Version: 4,
-                SQLite: `
+	},
+	{
+		// v3: shops created before tabs existed have system roles without
+		// the customers.* permissions — union the seeded set in so
+		// cashiers keep working after upgrade. Runs once (admin edits
+		// made afterwards are never touched).
+		Version: 3,
+		Go:      backfillRolePerms,
+	},
+	{
+		// v4: forced credential rotation — seeded defaults stop working
+		// until changed. Existing rows are flagged so every current user
+		// rotates once on next login.
+		Version: 4,
+		SQLite: `
 ALTER TABLE users ADD COLUMN must_rotate INTEGER NOT NULL DEFAULT 0;
 UPDATE users SET must_rotate = 1;
 `,
-                Pg: `
+		Pg: `
 ALTER TABLE users ADD COLUMN IF NOT EXISTS must_rotate INTEGER NOT NULL DEFAULT 0;
 UPDATE users SET must_rotate = 1;
 `,
-        },
-        {
-                // v5: suppliers & stock-in — supplier records, purchase orders
-                // (receive posts stock + weighted-average cost), stock takes.
-                // Also re-runs the role backfill so upgraded Admins gain the new
-                // suppliers.* permissions (same once-only union semantics as v3).
-                Version: 5,
-                Go:      backfillRolePerms,
-                SQLite: `
+	},
+	{
+		// v5: suppliers & stock-in — supplier records, purchase orders
+		// (receive posts stock + weighted-average cost), stock takes.
+		// Also re-runs the role backfill so upgraded Admins gain the new
+		// suppliers.* permissions (same once-only union semantics as v3).
+		Version: 5,
+		Go:      backfillRolePerms,
+		SQLite: `
 CREATE TABLE IF NOT EXISTS suppliers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -474,7 +474,7 @@ CREATE TABLE IF NOT EXISTS stock_take_items (
         counted_qty INTEGER NOT NULL DEFAULT 0
 );
 `,
-                Pg: `
+		Pg: `
 CREATE TABLE IF NOT EXISTS suppliers (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -527,45 +527,45 @@ CREATE TABLE IF NOT EXISTS stock_take_items (
                 counted_qty INTEGER NOT NULL DEFAULT 0
 );
 `,
-        },
-        {
-                // v6: token invalidation on credential change — sessions issued
-                // before the last password/PIN change stop working. Empty means
-                // pre-feature (existing sessions survive the upgrade once).
-                Version: 6,
-                SQLite: `
+	},
+	{
+		// v6: token invalidation on credential change — sessions issued
+		// before the last password/PIN change stop working. Empty means
+		// pre-feature (existing sessions survive the upgrade once).
+		Version: 6,
+		SQLite: `
 ALTER TABLE users ADD COLUMN password_changed_at TEXT NOT NULL DEFAULT '';
 `,
-                Pg: `
+		Pg: `
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TEXT NOT NULL DEFAULT '';
 `,
-        },
-        {
-                // v7: VAT historization — store tax percent + inclusive flag per order
-                // so reports never recalculate with current settings (per DBA best
-                // practice: store calculated values at posting time).
-                Version: 7,
-                SQLite: `
+	},
+	{
+		// v7: VAT historization — store tax percent + inclusive flag per order
+		// so reports never recalculate with current settings (per DBA best
+		// practice: store calculated values at posting time).
+		Version: 7,
+		SQLite: `
 ALTER TABLE orders ADD COLUMN tax_percent REAL NOT NULL DEFAULT 16;
 ALTER TABLE orders ADD COLUMN tax_included INTEGER NOT NULL DEFAULT 1;
 UPDATE orders SET tax_percent = 16 WHERE tax_percent = 16;
 `,
-                Pg: `
+		Pg: `
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_percent DOUBLE PRECISION NOT NULL DEFAULT 16;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_included INTEGER NOT NULL DEFAULT 1;
 `,
-        },
-        {
-                // v8: retail expansion pack —
-                //   product photos (image_url), order discounts + loyalty
-                //   redemption audit fields, store credit (prepaid money the
-                //   shop owes the customer), parked/held sales, a void-reason
-                //   catalog, design-job file attachments, per-role dashboard
-                //   config (landing page + visible nav), and the team-sync
-                //   outbox/state tables that link standalone tills through
-                //   the shop's Supabase project.
-                Version: 8,
-                SQLite: `
+	},
+	{
+		// v8: retail expansion pack —
+		//   product photos (image_url), order discounts + loyalty
+		//   redemption audit fields, store credit (prepaid money the
+		//   shop owes the customer), parked/held sales, a void-reason
+		//   catalog, design-job file attachments, per-role dashboard
+		//   config (landing page + visible nav), and the team-sync
+		//   outbox/state tables that link standalone tills through
+		//   the shop's Supabase project.
+		Version: 8,
+		SQLite: `
 ALTER TABLE products ADD COLUMN image_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE orders ADD COLUMN discount_cents INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE orders ADD COLUMN points_redeemed INTEGER NOT NULL DEFAULT 0;
@@ -625,7 +625,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
         value TEXT NOT NULL DEFAULT ''
 );
 `,
-                Pg: `
+		Pg: `
 ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_cents BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS points_redeemed BIGINT NOT NULL DEFAULT 0;
@@ -682,22 +682,22 @@ CREATE TABLE IF NOT EXISTS sync_state (
         value TEXT NOT NULL DEFAULT ''
 );
 `,
-        },
-        {
-                // v9: union the new retail permissions into existing roles'
-                // saved sets (Admin gains everything new; Cashier gains
-                // discount + loyalty redemption + credit as befits a till).
-                // Same once-only semantics as v3/v5: admin edits after this
-                // run are never touched.
-                Version: 9,
-                Go:      backfillRolePermsV9,
-        },
-        {
-                // v10: stocktake (count sessions with variance report) and
-                // gift cards (sellable products that mint redeemable codes
-                // loading prepaid store credit on a customer account).
-                Version: 10,
-                SQLite: `
+	},
+	{
+		// v9: union the new retail permissions into existing roles'
+		// saved sets (Admin gains everything new; Cashier gains
+		// discount + loyalty redemption + credit as befits a till).
+		// Same once-only semantics as v3/v5: admin edits after this
+		// run are never touched.
+		Version: 9,
+		Go:      backfillRolePermsV9,
+	},
+	{
+		// v10: stocktake (count sessions with variance report) and
+		// gift cards (sellable products that mint redeemable codes
+		// loading prepaid store credit on a customer account).
+		Version: 10,
+		SQLite: `
 CREATE TABLE IF NOT EXISTS stock_counts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         number TEXT NOT NULL UNIQUE,
@@ -739,7 +739,7 @@ CREATE TABLE IF NOT EXISTS gift_cards (
 );
 CREATE INDEX IF NOT EXISTS idx_gift_cards_code ON gift_cards(code);
 `,
-                Pg: `
+		Pg: `
 CREATE TABLE IF NOT EXISTS stock_counts (
         id SERIAL PRIMARY KEY,
         number TEXT NOT NULL UNIQUE,
@@ -781,41 +781,41 @@ CREATE TABLE IF NOT EXISTS gift_cards (
 );
 CREATE INDEX IF NOT EXISTS idx_gift_cards_code ON gift_cards(code);
 `,
-        },
-        {
-                // v11: performance indexes (composite cashier/status filters,
-                // SKU lookups, NOCASE name ordering) + the fake-money guard:
-                // tills upgraded from releases that defaulted mpesa_env to
-                // "mock" move to "manual" so no payment can auto-complete
-                // without a real provider (Paystack or Daraja credentials).
-                Version: 11,
-                SQLite: `
+	},
+	{
+		// v11: performance indexes (composite cashier/status filters,
+		// SKU lookups, NOCASE name ordering) + the fake-money guard:
+		// tills upgraded from releases that defaulted mpesa_env to
+		// "mock" move to "manual" so no payment can auto-complete
+		// without a real provider (Paystack or Daraja credentials).
+		Version: 11,
+		SQLite: `
 CREATE INDEX IF NOT EXISTS idx_orders_cashier_created ON orders(cashier_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
 CREATE INDEX IF NOT EXISTS idx_products_name_nocase ON products(name COLLATE NOCASE);
 UPDATE settings SET value = 'manual' WHERE key = 'mpesa_env' AND value = 'mock';
 `,
-                Pg: `
+		Pg: `
 CREATE INDEX IF NOT EXISTS idx_orders_cashier_created ON orders(cashier_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
 CREATE INDEX IF NOT EXISTS idx_products_name_nocase ON products(name);
 UPDATE settings SET value = 'manual' WHERE key = 'mpesa_env' AND value = 'mock';
 `,
-        },
-        {
-                // v12: sync hardening. Receiver-side exactly-once via
-                // sync_applied (cursor regression / backup restore can no
-                // longer double-apply stock deltas or ledger rows); a
-                // dead-letter table quarantines events that cannot apply
-                // (unknown product, unknown customer…) and outgoing poison
-                // rows that wedge the push batch, so they surface in the
-                // Team panel and can be retried instead of being lost.
-                // sync_outbox gains attempts/last_error for quarantine book-
-                // keeping (ADD COLUMN guarded for databases created pre-v12).
-                Version: 12,
-                SQLite: `
+	},
+	{
+		// v12: sync hardening. Receiver-side exactly-once via
+		// sync_applied (cursor regression / backup restore can no
+		// longer double-apply stock deltas or ledger rows); a
+		// dead-letter table quarantines events that cannot apply
+		// (unknown product, unknown customer…) and outgoing poison
+		// rows that wedge the push batch, so they surface in the
+		// Team panel and can be retried instead of being lost.
+		// sync_outbox gains attempts/last_error for quarantine book-
+		// keeping (ADD COLUMN guarded for databases created pre-v12).
+		Version: 12,
+		SQLite: `
 CREATE TABLE IF NOT EXISTS sync_applied (
         event_id INTEGER PRIMARY KEY,
         applied_at TEXT NOT NULL DEFAULT ''
@@ -838,7 +838,7 @@ CREATE INDEX IF NOT EXISTS idx_dead_letter_direction ON sync_dead_letter(directi
 ALTER TABLE sync_outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sync_outbox ADD COLUMN last_error TEXT NOT NULL DEFAULT '';
 `,
-                Pg: `
+		Pg: `
 CREATE TABLE IF NOT EXISTS sync_applied (
         event_id BIGINT PRIMARY KEY,
         applied_at TEXT NOT NULL DEFAULT ''
@@ -861,25 +861,25 @@ CREATE INDEX IF NOT EXISTS idx_dead_letter_direction ON sync_dead_letter(directi
 ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS attempts BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE sync_outbox ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT '';
 `,
-        },
-        {
-                // v13: authentication hardening.
-                //
-                // recovery_codes: single-use owner recovery codes (hashed at
-                // rest) backing the public forgot-password flow and the
-                // `ledgerpos reset-owner` escape hatch.
-                //
-                // Demo-account purge (Go step below, with a rollback plan):
-                // the installer seeded admin/cashier/designer with PUBLIC
-                // passwords (admin123…) into every database. Only accounts
-                // whose password AND PIN still verify against the seed
-                // values are disabled — a rotated account is owned by a real
-                // person and is left untouched. Deactivation (not deletion)
-                // keeps every historical sale, shift and audit row intact;
-                // each disabled account is journalled in audit_log for the
-                // rollback procedure (docs/MIGRATION-v13-ROLLBACK.md).
-                Version: 13,
-                SQLite: `
+	},
+	{
+		// v13: authentication hardening.
+		//
+		// recovery_codes: single-use owner recovery codes (hashed at
+		// rest) backing the public forgot-password flow and the
+		// `ledgerpos reset-owner` escape hatch.
+		//
+		// Demo-account purge (Go step below, with a rollback plan):
+		// the installer seeded admin/cashier/designer with PUBLIC
+		// passwords (admin123…) into every database. Only accounts
+		// whose password AND PIN still verify against the seed
+		// values are disabled — a rotated account is owned by a real
+		// person and is left untouched. Deactivation (not deletion)
+		// keeps every historical sale, shift and audit row intact;
+		// each disabled account is journalled in audit_log for the
+		// rollback procedure (docs/MIGRATION-v13-ROLLBACK.md).
+		Version: 13,
+		SQLite: `
 CREATE TABLE IF NOT EXISTS recovery_codes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -889,7 +889,7 @@ CREATE TABLE IF NOT EXISTS recovery_codes (
 );
 CREATE INDEX IF NOT EXISTS idx_recovery_codes_user ON recovery_codes(user_id);
 `,
-                Pg: `
+		Pg: `
 CREATE TABLE IF NOT EXISTS recovery_codes (
         id SERIAL PRIMARY KEY,
         user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -899,23 +899,23 @@ CREATE TABLE IF NOT EXISTS recovery_codes (
 );
 CREATE INDEX IF NOT EXISTS idx_recovery_codes_user ON recovery_codes(user_id);
 `,
-                Go: purgeDemoUsersV13,
-        },
-        {
-                // v14: business roles + the connected job lifecycle + CRM
-                // enrichment.
-                //
-                // Jobs: design_jobs gains the sale link (order_id), the
-                // promised deadline, a priority, and stage timestamps
-                // (assigned/ready/collected) so a job's journey is auditable.
-                // orders.assigned_to_id tracks the staff member responsible
-                // for fulfilment. order_events is the per-order activity
-                // timeline (job moves, WhatsApp contacts, notes) — the
-                // "activity history" the field asked for.
-                //
-                // CRM: customers gains email + notes.
-                Version: 14,
-                SQLite: `
+		Go: purgeDemoUsersV13,
+	},
+	{
+		// v14: business roles + the connected job lifecycle + CRM
+		// enrichment.
+		//
+		// Jobs: design_jobs gains the sale link (order_id), the
+		// promised deadline, a priority, and stage timestamps
+		// (assigned/ready/collected) so a job's journey is auditable.
+		// orders.assigned_to_id tracks the staff member responsible
+		// for fulfilment. order_events is the per-order activity
+		// timeline (job moves, WhatsApp contacts, notes) — the
+		// "activity history" the field asked for.
+		//
+		// CRM: customers gains email + notes.
+		Version: 14,
+		SQLite: `
 ALTER TABLE design_jobs ADD COLUMN order_id INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE design_jobs ADD COLUMN customer_id INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE design_jobs ADD COLUMN deadline_at TEXT NOT NULL DEFAULT '';
@@ -939,7 +939,7 @@ CREATE INDEX IF NOT EXISTS idx_order_events_order ON order_events(order_id);
 ALTER TABLE customers ADD COLUMN email TEXT NOT NULL DEFAULT '';
 ALTER TABLE customers ADD COLUMN notes TEXT NOT NULL DEFAULT '';
 `,
-                Pg: `
+		Pg: `
 ALTER TABLE design_jobs ADD COLUMN IF NOT EXISTS order_id BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE design_jobs ADD COLUMN IF NOT EXISTS customer_id BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE design_jobs ADD COLUMN IF NOT EXISTS deadline_at TEXT NOT NULL DEFAULT '';
@@ -963,62 +963,62 @@ CREATE INDEX IF NOT EXISTS idx_order_events_order ON order_events(order_id);
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '';
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';
 `,
-                Go: backfillRolePermsV14,
-        },
-        {
-                // v15: ERP depth (P6). eTIMS-ready invoice fields on every
-                // order: buyer_pin holds the customer's KRA PIN when a tax
-                // invoice is requested (printed on the receipt, exported in
-                // the KRA CSV), invoice_number is the eTIMS document number
-                // (defaults to the order number; an eTIMS Control Unit bridge
-                // can overwrite it without touching the order number).
-                // Rollback: docs/MIGRATION-v15-ROLLBACK.md (columns only —
-                // drop them, no data moves).
-                Version: 15,
-                SQLite: `
+		Go: backfillRolePermsV14,
+	},
+	{
+		// v15: ERP depth (P6). eTIMS-ready invoice fields on every
+		// order: buyer_pin holds the customer's KRA PIN when a tax
+		// invoice is requested (printed on the receipt, exported in
+		// the KRA CSV), invoice_number is the eTIMS document number
+		// (defaults to the order number; an eTIMS Control Unit bridge
+		// can overwrite it without touching the order number).
+		// Rollback: docs/MIGRATION-v15-ROLLBACK.md (columns only —
+		// drop them, no data moves).
+		Version: 15,
+		SQLite: `
 ALTER TABLE orders ADD COLUMN buyer_pin TEXT NOT NULL DEFAULT '';
 ALTER TABLE orders ADD COLUMN invoice_number TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_orders_invoice ON orders(invoice_number);
 `,
-                Pg: `
+		Pg: `
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyer_pin TEXT NOT NULL DEFAULT '';
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_orders_invoice ON orders(invoice_number);
 `,
-        },
-        {
-                // v16 — cross-machine photo sync bookkeeping. image_synced_at
-                // marks the rows whose CURRENT photo bytes are already in the
-                // sync outbox: the backfill only picks up rows where it is
-                // still '', and applying a REMOTE image stamps it so received
-                // photos are never echoed back (A → B → A ping-pong).
-                // customer_ledger.synced_at marks ledger rows already pushed
-                // as sync events (checkout charges/redeems + completion earns
-                // emit exactly once — a second emission would double-apply
-                // money on every receiving till).
-                Version: 16,
-                SQLite: `
+	},
+	{
+		// v16 — cross-machine photo sync bookkeeping. image_synced_at
+		// marks the rows whose CURRENT photo bytes are already in the
+		// sync outbox: the backfill only picks up rows where it is
+		// still '', and applying a REMOTE image stamps it so received
+		// photos are never echoed back (A → B → A ping-pong).
+		// customer_ledger.synced_at marks ledger rows already pushed
+		// as sync events (checkout charges/redeems + completion earns
+		// emit exactly once — a second emission would double-apply
+		// money on every receiving till).
+		Version: 16,
+		SQLite: `
 ALTER TABLE products ADD COLUMN image_synced_at TEXT NOT NULL DEFAULT '';
 ALTER TABLE customer_ledger ADD COLUMN synced_at TEXT NOT NULL DEFAULT '';
 `,
-                Pg: `
+		Pg: `
 ALTER TABLE products ADD COLUMN IF NOT EXISTS image_synced_at TEXT NOT NULL DEFAULT '';
 ALTER TABLE customer_ledger ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
 `,
-        },
-        {
-                // v17 — quotations. A quote is a priced offer document sent to
-                // a customer BEFORE a sale exists: draft → sent → accepted /
-                // declined, with "converted" stamped when its lines move to a
-                // till as a parked sale (the sale itself stays a normal
-                // checkout — quotes never touch money or stock).
-                //   client_uuid  sync identity (insert-by-uuid exactly once)
-                //   quote_no     per-team display number (QT-000123; remapped
-                //                on collision at apply time, like orders)
-                //   items_json   frozen line items (product id/name/qty/price)
-                //   synced_at    emit-once bookkeeping, same pattern as orders
-                Version: 17,
-                SQLite: `
+	},
+	{
+		// v17 — quotations. A quote is a priced offer document sent to
+		// a customer BEFORE a sale exists: draft → sent → accepted /
+		// declined, with "converted" stamped when its lines move to a
+		// till as a parked sale (the sale itself stays a normal
+		// checkout — quotes never touch money or stock).
+		//   client_uuid  sync identity (insert-by-uuid exactly once)
+		//   quote_no     per-team display number (QT-000123; remapped
+		//                on collision at apply time, like orders)
+		//   items_json   frozen line items (product id/name/qty/price)
+		//   synced_at    emit-once bookkeeping, same pattern as orders
+		Version: 17,
+		SQLite: `
 CREATE TABLE IF NOT EXISTS quotes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   quote_no TEXT NOT NULL DEFAULT '',
@@ -1046,7 +1046,7 @@ CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
 CREATE INDEX IF NOT EXISTS idx_quotes_customer ON quotes(customer_id);
 CREATE INDEX IF NOT EXISTS idx_quotes_created ON quotes(created_at);
 `,
-                Pg: `
+		Pg: `
 CREATE TABLE IF NOT EXISTS quotes (
   id BIGSERIAL PRIMARY KEY,
   quote_no TEXT NOT NULL DEFAULT '',
@@ -1074,8 +1074,8 @@ CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
 CREATE INDEX IF NOT EXISTS idx_quotes_customer ON quotes(customer_id);
 CREATE INDEX IF NOT EXISTS idx_quotes_created ON quotes(created_at);
 `,
-                Go: backfillRolePermsV17,
-        },
+		Go: backfillRolePermsV17,
+	},
 }
 
 // backfillRolePermsV17 unions the quotation permissions into the seeded
@@ -1083,43 +1083,43 @@ CREATE INDEX IF NOT EXISTS idx_quotes_created ON quotes(created_at);
 // already includes the new keys), the front-office roles quote all day,
 // Designers see quotes for their jobs, Cashiers can look them up.
 func backfillRolePermsV17(d *DB, tx *sql.Tx) error {
-        extra := map[string][]string{
-                "Admin":       models.SeededRolePermissions["Admin"],
-                "Owner":       models.SeededRolePermissions["Owner"],
-                "Front Desk":  models.SeededRolePermissions["Front Desk"],
-                "Branding":    models.SeededRolePermissions["Branding"],
-                "Cyber":       models.SeededRolePermissions["Cyber"],
-                "Designer":    models.SeededRolePermissions["Designer"],
-                "Cashier":     models.SeededRolePermissions["Cashier"],
-        }
-        return unionRolePerms(d, tx, extra)
+	extra := map[string][]string{
+		"Admin":      models.SeededRolePermissions["Admin"],
+		"Owner":      models.SeededRolePermissions["Owner"],
+		"Front Desk": models.SeededRolePermissions["Front Desk"],
+		"Branding":   models.SeededRolePermissions["Branding"],
+		"Cyber":      models.SeededRolePermissions["Cyber"],
+		"Designer":   models.SeededRolePermissions["Designer"],
+		"Cashier":    models.SeededRolePermissions["Cashier"],
+	}
+	return unionRolePerms(d, tx, extra)
 }
 
 // backfillRolePermsV9 unions the v8 permission additions into seeded roles:
 // Admin gets all, Cashier gets the till-side additions (discount, loyalty
 // redemption, store credit), Designer is unchanged.
 func backfillRolePermsV9(d *DB, tx *sql.Tx) error {
-        extra := map[string][]string{
-                "Admin":   {"payments.apply_discount", "loyalty.redeem", "credit.manage"},
-                "Cashier": {"payments.apply_discount", "loyalty.redeem", "credit.manage"},
-        }
-        return unionRolePerms(d, tx, extra)
+	extra := map[string][]string{
+		"Admin":   {"payments.apply_discount", "loyalty.redeem", "credit.manage"},
+		"Cashier": {"payments.apply_discount", "loyalty.redeem", "credit.manage"},
+	}
+	return unionRolePerms(d, tx, extra)
 }
 
 // backfillRolePermsV14 unions the P2/P3 workflow permissions into existing
 // system roles (union-only, once). New role names (Owner, Front Desk,
 // Branding, Cyber) are created by seedRoles on the same boot.
 func backfillRolePermsV14(d *DB, tx *sql.Tx) error {
-        extra := map[string][]string{
-                "Admin":       models.SeededRolePermissions["Admin"],
-                "Owner":       models.SeededRolePermissions["Owner"],
-                "Front Desk":  models.SeededRolePermissions["Front Desk"],
-                "Branding":    models.SeededRolePermissions["Branding"],
-                "Cyber":       models.SeededRolePermissions["Cyber"],
-                "Designer":    models.SeededRolePermissions["Designer"],
-                "Cashier":     models.SeededRolePermissions["Cashier"],
-        }
-        return unionRolePerms(d, tx, extra)
+	extra := map[string][]string{
+		"Admin":      models.SeededRolePermissions["Admin"],
+		"Owner":      models.SeededRolePermissions["Owner"],
+		"Front Desk": models.SeededRolePermissions["Front Desk"],
+		"Branding":   models.SeededRolePermissions["Branding"],
+		"Cyber":      models.SeededRolePermissions["Cyber"],
+		"Designer":   models.SeededRolePermissions["Designer"],
+		"Cashier":    models.SeededRolePermissions["Cashier"],
+	}
+	return unionRolePerms(d, tx, extra)
 }
 
 // seedCredentials mirrors database/seed.go's historical seedUsers — the
@@ -1127,11 +1127,11 @@ func backfillRolePermsV14(d *DB, tx *sql.Tx) error {
 // against these; any account still matching them is a demo account by
 // definition, whatever its username is now.
 var seedCredentials = []struct {
-        username, password, pin string
+	username, password, pin string
 }{
-        {"admin", "admin123", "1234"},
-        {"cashier", "cashier123", "2222"},
-        {"designer", "designer123", "3333"},
+	{"admin", "admin123", "1234"},
+	{"cashier", "cashier123", "2222"},
+	{"designer", "designer123", "3333"},
 }
 
 // purgeDemoUsersV13 disables installer-seeded demo accounts whose
@@ -1150,135 +1150,135 @@ var seedCredentials = []struct {
 //     so the box still has one working login and is forced to set a real
 //     password on first boot after upgrade.
 func purgeDemoUsersV13(d *DB, tx *sql.Tx) error {
-        type demoRow struct {
-                id     int64
-                pwHash string
-                pin    string
-        }
-        for _, sc := range seedCredentials {
-                rows, err := tx.Query(d.Rebind(`
+	type demoRow struct {
+		id     int64
+		pwHash string
+		pin    string
+	}
+	for _, sc := range seedCredentials {
+		rows, err := tx.Query(d.Rebind(`
                         SELECT id, COALESCE(password_hash,''), COALESCE(pin_hash,'') FROM users
                         WHERE LOWER(username) = LOWER(?) AND is_active = 1`), sc.username)
-                if err != nil {
-                        return err
-                }
-                var found []demoRow
-                for rows.Next() {
-                        var r demoRow
-                        if err := rows.Scan(&r.id, &r.pwHash, &r.pin); err == nil {
-                                found = append(found, r)
-                        }
-                }
-                rows.Close()
-                for _, r := range found {
-                        if !hashVerify(r.pwHash, sc.password) {
-                                continue // password rotated — a real person owns this account
-                        }
-                        if r.pin != "" && !hashVerify(r.pin, sc.pin) {
-                                continue // PIN rotated — owned
-                        }
-                        if _, err := tx.Exec(`UPDATE users SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, r.id); err != nil {
-                                return err
-                        }
-                        if _, err := tx.Exec(d.Rebind(`
+		if err != nil {
+			return err
+		}
+		var found []demoRow
+		for rows.Next() {
+			var r demoRow
+			if err := rows.Scan(&r.id, &r.pwHash, &r.pin); err == nil {
+				found = append(found, r)
+			}
+		}
+		rows.Close()
+		for _, r := range found {
+			if !hashVerify(r.pwHash, sc.password) {
+				continue // password rotated — a real person owns this account
+			}
+			if r.pin != "" && !hashVerify(r.pin, sc.pin) {
+				continue // PIN rotated — owned
+			}
+			if _, err := tx.Exec(`UPDATE users SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, r.id); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(d.Rebind(`
                                 INSERT INTO audit_log (user_id, username, action, entity, entity_id, details, created_at)
                                 VALUES (0, 'system', 'DEMO_ACCOUNT_DISABLED', 'user', ?, 'migration v13', ?)`),
-                                r.id, nowStampV13()); err != nil {
-                                return err
-                        }
-                }
-        }
-        // Guardrail: a box must never migrate to zero working logins.
-        var active int
-        if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE is_active = 1`).Scan(&active); err != nil {
-                return err
-        }
-        if active == 0 {
-                res, err := tx.Exec(`
+				r.id, nowStampV13()); err != nil {
+				return err
+			}
+		}
+	}
+	// Guardrail: a box must never migrate to zero working logins.
+	var active int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE is_active = 1`).Scan(&active); err != nil {
+		return err
+	}
+	if active == 0 {
+		res, err := tx.Exec(`
                         UPDATE users SET is_active = 1, must_rotate = 1, updated_at = CURRENT_TIMESTAMP
                         WHERE LOWER(username) = 'admin'`)
-                if err != nil {
-                        return err
-                }
-                if n, _ := res.RowsAffected(); n > 0 {
-                        if _, err := tx.Exec(d.Rebind(`
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			if _, err := tx.Exec(d.Rebind(`
                                 INSERT INTO audit_log (user_id, username, action, entity, entity_id, details, created_at)
                                 VALUES (0, 'system', 'DEMO_ACCOUNT_REENABLED_FOR_SETUP', 'user', '0', 'migration v13 guardrail', ?)`),
-                                nowStampV13()); err != nil {
-                                return err
-                        }
-                }
-        }
-        return nil
+				nowStampV13()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // nowStampV13 matches services.nowStamp (database cannot import services).
 func nowStampV13() string {
-        return timeNowUTC().Format("2006-01-02T15:04:05.000Z")
+	return timeNowUTC().Format("2006-01-02T15:04:05.000Z")
 }
 
 // Migrate applies pending migrations in order.
 func (d *DB) Migrate() error {
-        // Dialect note: the default applied_at used to be SQLite's
-        // datetime('now') on BOTH dialects — server-mode Postgres could
-        // never run Migrate at all ("function datetime(unknown) does not
-        // exist"), which the CI postgres job caught on its first run.
-        schemaDDL := `CREATE TABLE IF NOT EXISTS schema_migrations (
+	// Dialect note: the default applied_at used to be SQLite's
+	// datetime('now') on BOTH dialects — server-mode Postgres could
+	// never run Migrate at all ("function datetime(unknown) does not
+	// exist"), which the CI postgres job caught on its first run.
+	schemaDDL := `CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT (datetime('now'))
         )`
-        if !d.IsSQLite() {
-                schemaDDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
+	if !d.IsSQLite() {
+		schemaDDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
                         version INTEGER PRIMARY KEY,
                         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )`
-        }
-        if _, err := d.Exec(schemaDDL); err != nil {
-                return fmt.Errorf("create schema_migrations: %w", err)
-        }
-        var current int
-        if err := d.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
-                return fmt.Errorf("read migration version: %w", err)
-        }
-        for _, m := range migrations {
-                if m.Version <= current {
-                        continue
-                }
-                body := m.SQLite
-                if !d.IsSQLite() && m.Pg != "" {
-                        body = m.Pg
-                }
-                tx, err := d.Begin()
-                if err != nil {
-                        return err
-                }
-                for _, stmt := range splitSQLStatements(body) {
-                        if d.IsSQLite() && isAddColumnStmt(stmt) && addColumnAlreadyApplied(d, stmt) {
-                                // SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS. A
-                                // database created by a pre-migration-tracking build already
-                                // carries the column; skipping beats aborting the boot.
-                                continue
-                        }
-                        if _, err := tx.Exec(stmt); err != nil {
-                                tx.Rollback()
-                                return fmt.Errorf("migration %d: %w", m.Version, err)
-                        }
-                }
-                if m.Go != nil {
-                        if err := m.Go(d, tx); err != nil {
-                                tx.Rollback()
-                                return fmt.Errorf("migration %d: %w", m.Version, err)
-                        }
-                }
-                if _, err := tx.Exec(d.Rebind(`INSERT INTO schema_migrations (version) VALUES (?)`), m.Version); err != nil {
-                        tx.Rollback()
-                        return fmt.Errorf("record migration %d: %w", m.Version, err)
-                }
-                if err := tx.Commit(); err != nil {
-                        return err
-                }
-        }
-        return nil
+	}
+	if _, err := d.Exec(schemaDDL); err != nil {
+		return fmt.Errorf("create schema_migrations: %w", err)
+	}
+	var current int
+	if err := d.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
+		return fmt.Errorf("read migration version: %w", err)
+	}
+	for _, m := range migrations {
+		if m.Version <= current {
+			continue
+		}
+		body := m.SQLite
+		if !d.IsSQLite() && m.Pg != "" {
+			body = m.Pg
+		}
+		tx, err := d.Begin()
+		if err != nil {
+			return err
+		}
+		for _, stmt := range splitSQLStatements(body) {
+			if d.IsSQLite() && isAddColumnStmt(stmt) && addColumnAlreadyApplied(d, stmt) {
+				// SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS. A
+				// database created by a pre-migration-tracking build already
+				// carries the column; skipping beats aborting the boot.
+				continue
+			}
+			if _, err := tx.Exec(stmt); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration %d: %w", m.Version, err)
+			}
+		}
+		if m.Go != nil {
+			if err := m.Go(d, tx); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration %d: %w", m.Version, err)
+			}
+		}
+		if _, err := tx.Exec(d.Rebind(`INSERT INTO schema_migrations (version) VALUES (?)`), m.Version); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("record migration %d: %w", m.Version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // splitSQLStatements splits a migration body into individual statements,
@@ -1287,58 +1287,58 @@ func (d *DB) Migrate() error {
 // when quotes contain semicolons — our migrations never do, but quoted
 // literals are respected anyway).
 func splitSQLStatements(body string) []string {
-        var out []string
-        var cur strings.Builder
-        inQuote := false
-        for _, r := range body {
-                switch {
-                case r == '\'':
-                        inQuote = !inQuote
-                        cur.WriteRune(r)
-                case r == ';' && !inQuote:
-                        if s := strings.TrimSpace(cur.String()); s != "" {
-                                out = append(out, s)
-                        }
-                        cur.Reset()
-                default:
-                        cur.WriteRune(r)
-                }
-        }
-        if s := strings.TrimSpace(cur.String()); s != "" {
-                out = append(out, s)
-        }
-        return out
+	var out []string
+	var cur strings.Builder
+	inQuote := false
+	for _, r := range body {
+		switch {
+		case r == '\'':
+			inQuote = !inQuote
+			cur.WriteRune(r)
+		case r == ';' && !inQuote:
+			if s := strings.TrimSpace(cur.String()); s != "" {
+				out = append(out, s)
+			}
+			cur.Reset()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if s := strings.TrimSpace(cur.String()); s != "" {
+		out = append(out, s)
+	}
+	return out
 }
 
 // isAddColumnStmt reports whether stmt is `ALTER TABLE <t> ADD COLUMN …`.
 var addColumnRe = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)\b`)
 
 func isAddColumnStmt(stmt string) bool {
-        return addColumnRe.MatchString(stmt)
+	return addColumnRe.MatchString(stmt)
 }
 
 // addColumnAlreadyApplied checks pragma table_info for the target column.
 func addColumnAlreadyApplied(d *DB, stmt string) bool {
-        m := addColumnRe.FindStringSubmatch(stmt)
-        if m == nil {
-                return false
-        }
-        rows, err := d.Query("PRAGMA table_info(" + m[1] + ")")
-        if err != nil {
-                return false // let the ALTER run and surface the real error
-        }
-        defer rows.Close()
-        for rows.Next() {
-                var cid int
-                var name, ctype string
-                var notNull, pk int
-                var dflt any
-                if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
-                        continue
-                }
-                if strings.EqualFold(name, m[2]) {
-                        return true
-                }
-        }
-        return false
+	m := addColumnRe.FindStringSubmatch(stmt)
+	if m == nil {
+		return false
+	}
+	rows, err := d.Query("PRAGMA table_info(" + m[1] + ")")
+	if err != nil {
+		return false // let the ALTER run and surface the real error
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			continue
+		}
+		if strings.EqualFold(name, m[2]) {
+			return true
+		}
+	}
+	return false
 }

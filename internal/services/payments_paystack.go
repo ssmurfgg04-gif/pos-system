@@ -20,93 +20,93 @@ package services
 // signature in constant time before parsing anything.
 
 import (
-        "context"
-        "database/sql"
-        "errors"
-        "fmt"
-        "log"
-        "os"
-        "strings"
-        "time"
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"time"
 
-        "posapp/internal/auth"
-        "posapp/internal/models"
-        "posapp/internal/mpesa"
-        "posapp/internal/paystack"
+	"posapp/internal/auth"
+	"posapp/internal/models"
+	"posapp/internal/mpesa"
+	"posapp/internal/paystack"
 )
 
 // GetPaystack builds (and caches) the client for the current settings.
 // Env var PAYSTACK_SECRET_KEY overrides the stored key — useful for
 // headless deployments that never touch the Settings UI.
 func (s *Service) GetPaystack() *paystack.Client {
-        key := strings.TrimSpace(os.Getenv("PAYSTACK_SECRET_KEY"))
-        if key == "" {
-                key = s.settings.Get("paystack_secret_key")
-        }
-        if s.paystackKey != key {
-                s.paystackKey = key
-                if paystack.ValidKey(key) {
-                        s.paystack = paystack.NewClient(key)
-                } else {
-                        s.paystack = nil
-                }
-        }
-        return s.paystack
+	key := strings.TrimSpace(os.Getenv("PAYSTACK_SECRET_KEY"))
+	if key == "" {
+		key = s.settings.Get("paystack_secret_key")
+	}
+	if s.paystackKey != key {
+		s.paystackKey = key
+		if paystack.ValidKey(key) {
+			s.paystack = paystack.NewClient(key)
+		} else {
+			s.paystack = nil
+		}
+	}
+	return s.paystack
 }
 
 // paystackConfigured reports whether a charge can actually be initialized —
 // a local key OR the cloud proxy (v1.3.3: keeps MpesaRoute on the STK path
 // for keyless tills after the vault-key cutover).
 func (s *Service) paystackConfigured() bool {
-        return s.paystackUsable()
+	return s.paystackUsable()
 }
 
 // PaymentConfig powers the till's tender buttons (public data only).
 func (s *Service) PaymentConfig() *models.PaymentConfig {
-        cfg := &models.PaymentConfig{
-                CreditEnabled:  s.settings.GetBool("credit_enabled", true),
-                LoyaltyEnabled: s.settings.GetBool("loyalty_enabled", true),
-        }
-        cfg.Paystack.PublicKey = s.paystackPublicKey()
-        cfg.Paystack.Currency = s.paystackCurrency()
-        cfg.Paystack.Callback = s.paystackCallback()
-        cfg.Paystack.Configured = s.paystackUsable()
-        cfg.Paystack.FromEnv = strings.TrimSpace(os.Getenv("PAYSTACK_SECRET_KEY")) != ""
-        // Payment-ready the moment a valid secret exists (env, stored, or the
-        // cloud proxy); admins can still switch the feature off explicitly.
-        cfg.Paystack.Enabled = cfg.Paystack.Configured && s.settings.GetBool("paystack_enabled", true)
-        cfg.Mpesa.Env = s.settings.GetString("mpesa_env", "manual")
-        cfg.Mpesa.Route = s.MpesaRoute()
-        cfg.Mpesa.Till = s.settings.Get("till_number")
-        cfg.Mpesa.Paybill = s.settings.Get("paybill_number")
-        return cfg
+	cfg := &models.PaymentConfig{
+		CreditEnabled:  s.settings.GetBool("credit_enabled", true),
+		LoyaltyEnabled: s.settings.GetBool("loyalty_enabled", true),
+	}
+	cfg.Paystack.PublicKey = s.paystackPublicKey()
+	cfg.Paystack.Currency = s.paystackCurrency()
+	cfg.Paystack.Callback = s.paystackCallback()
+	cfg.Paystack.Configured = s.paystackUsable()
+	cfg.Paystack.FromEnv = strings.TrimSpace(os.Getenv("PAYSTACK_SECRET_KEY")) != ""
+	// Payment-ready the moment a valid secret exists (env, stored, or the
+	// cloud proxy); admins can still switch the feature off explicitly.
+	cfg.Paystack.Enabled = cfg.Paystack.Configured && s.settings.GetBool("paystack_enabled", true)
+	cfg.Mpesa.Env = s.settings.GetString("mpesa_env", "manual")
+	cfg.Mpesa.Route = s.MpesaRoute()
+	cfg.Mpesa.Till = s.settings.Get("till_number")
+	cfg.Mpesa.Paybill = s.settings.Get("paybill_number")
+	return cfg
 }
 
 // paystackPublicKey: PAYSTACK_PUBLIC_KEY env wins, then the stored value.
 func (s *Service) paystackPublicKey() string {
-        if k := strings.TrimSpace(os.Getenv("PAYSTACK_PUBLIC_KEY")); k != "" {
-                return k
-        }
-        return s.settings.Get("paystack_public_key")
+	if k := strings.TrimSpace(os.Getenv("PAYSTACK_PUBLIC_KEY")); k != "" {
+		return k
+	}
+	return s.settings.Get("paystack_public_key")
 }
 
 // paystackCallback: PAYSTACK_CALLBACK_URL env wins, then the stored value.
 func (s *Service) paystackCallback() string {
-        if u := strings.TrimSpace(os.Getenv("PAYSTACK_CALLBACK_URL")); u != "" {
-                return u
-        }
-        return s.settings.GetString("paystack_callback_url", "https://awesomeposs.netlify.app/")
+	if u := strings.TrimSpace(os.Getenv("PAYSTACK_CALLBACK_URL")); u != "" {
+		return u
+	}
+	return s.settings.GetString("paystack_callback_url", "https://awesomeposs.netlify.app/")
 }
 
 func (s *Service) paystackCurrency() string {
-        cur := strings.ToUpper(strings.TrimSpace(s.settings.Get("paystack_currency")))
-        if cur == "" {
-                cur = strings.ToUpper(strings.TrimSpace(s.settings.GetString("currency_code", "KES")))
-        }
-        if cur == "" {
-                cur = "KES"
-        }
-        return cur
+	cur := strings.ToUpper(strings.TrimSpace(s.settings.Get("paystack_currency")))
+	if cur == "" {
+		cur = strings.ToUpper(strings.TrimSpace(s.settings.GetString("currency_code", "KES")))
+	}
+	if cur == "" {
+		cur = "KES"
+	}
+	return cur
 }
 
 // paystackPhoneKe normalizes any valid Kenyan input (07xx/01xx, +2547xx,
@@ -114,10 +114,10 @@ func (s *Service) paystackCurrency() string {
 // for validation and till-side storage. Returns the input when it cannot be
 // normalized (callers validate afterwards).
 func paystackPhoneKe(in string) string {
-        if n, err := mpesa.NormalizePhone(in); err == nil {
-                return n
-        }
-        return strings.TrimSpace(in)
+	if n, err := mpesa.NormalizePhone(in); err == nil {
+		return n
+	}
+	return strings.TrimSpace(in)
 }
 
 // paystackWirePhoneKe converts the canonical 2547/2541 form to the E.164
@@ -128,10 +128,10 @@ func paystackPhoneKe(in string) string {
 // direct Safaricom provider) keeps the bare 2547… form — only the Paystack
 // boundary converts.
 func paystackWirePhoneKe(canonical string) string {
-        if len(canonical) == 12 && strings.HasPrefix(canonical, "254") {
-                return "+" + canonical
-        }
-        return canonical
+	if len(canonical) == 12 && strings.HasPrefix(canonical, "254") {
+		return "+" + canonical
+	}
+	return canonical
 }
 
 // PaystackInit opens (or re-opens) checkout for a PENDING paystack order.
@@ -140,154 +140,154 @@ func paystackWirePhoneKe(canonical string) string {
 // the POS before charging) rides the transaction so Paystack can prefill
 // the mobile-money channel; email stays optional for receipts.
 func (s *Service) PaystackInit(orderID int64, email, phone string, p *auth.Principal) (*models.Order, *models.PaystackInitResult, error) {
-        client := s.GetPaystack()
-        if client == nil && !s.paystackUsable() {
-                return nil, nil, fmt.Errorf("%w: paystack secret key missing", ErrNotConfigured)
-        }
-        if !s.settings.GetBool("paystack_enabled", true) {
-                return nil, nil, fmt.Errorf("%w: paystack is disabled in settings", ErrNotConfigured)
-        }
-        order, err := s.GetOrder(orderID)
-        if err != nil {
-                return nil, nil, err
-        }
-        if order.Status != models.OrderPending {
-                if order.Status == models.OrderPaid {
-                        return nil, nil, ErrOrderAlreadyPaid
-                }
-                return nil, nil, fmt.Errorf("%w: cannot start paystack checkout on %s order", ErrInvalidState, order.Status)
-        }
+	client := s.GetPaystack()
+	if client == nil && !s.paystackUsable() {
+		return nil, nil, fmt.Errorf("%w: paystack secret key missing", ErrNotConfigured)
+	}
+	if !s.settings.GetBool("paystack_enabled", true) {
+		return nil, nil, fmt.Errorf("%w: paystack is disabled in settings", ErrNotConfigured)
+	}
+	order, err := s.GetOrder(orderID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if order.Status != models.OrderPending {
+		if order.Status == models.OrderPaid {
+			return nil, nil, ErrOrderAlreadyPaid
+		}
+		return nil, nil, fmt.Errorf("%w: cannot start paystack checkout on %s order", ErrInvalidState, order.Status)
+	}
 
-        // Email is validated BEFORE anything mutates the payment rows — a
-        // failed init must not leave the order without a pending leg.
-        email = strings.TrimSpace(email)
-        if email == "" {
-                email = "customer+" + strings.ToLower(order.Number) + "@ledgerpos.app"
-        }
-        if len(email) > 200 || !strings.Contains(email, "@") {
-                return nil, nil, errors.New("invalid customer email")
-        }
-        phone = strings.TrimSpace(phone)
-        if phone != "" {
-                if n, err := mpesa.NormalizePhone(phone); err == nil {
-                        phone = n
-                }
-                if !mpesaPhoneOK(phone) {
-                        return nil, nil, fmt.Errorf("invalid customer phone %q, expected 07XX/2547XX/2541XX", phone)
-                }
-        }
-        wirePhone := paystackWirePhoneKe(phone)
+	// Email is validated BEFORE anything mutates the payment rows — a
+	// failed init must not leave the order without a pending leg.
+	email = strings.TrimSpace(email)
+	if email == "" {
+		email = "customer+" + strings.ToLower(order.Number) + "@ledgerpos.app"
+	}
+	if len(email) > 200 || !strings.Contains(email, "@") {
+		return nil, nil, errors.New("invalid customer email")
+	}
+	phone = strings.TrimSpace(phone)
+	if phone != "" {
+		if n, err := mpesa.NormalizePhone(phone); err == nil {
+			phone = n
+		}
+		if !mpesaPhoneOK(phone) {
+			return nil, nil, fmt.Errorf("invalid customer phone %q, expected 07XX/2547XX/2541XX", phone)
+		}
+	}
+	wirePhone := paystackWirePhoneKe(phone)
 
-        // Supersede previous pending paystack attempts (fresh reference each time),
-        // re-read the remaining balance and create/find the pending leg ATOMICALLY:
-        // these used to be four autocommit statements, so two concurrent inits
-        // (double-click / slow popup + retry) could both see "no pending leg" and
-        // both mint a full-balance reference — a double STK charge.
-        tx, err := s.db.Begin()
-        if err != nil {
-                return nil, nil, err
-        }
-        defer tx.Rollback()
-        if _, err := tx.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new checkout' WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID); err != nil {
-                return nil, nil, err
-        }
-        var paid int64
-        if err := tx.QueryRow(s.db.Rebind(`SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE order_id = ? AND status = 'COMPLETED'`), orderID).Scan(&paid); err != nil {
-                return nil, nil, err
-        }
-        remaining := order.TotalCents - paid
-        var payID, payAmount int64
-        err = tx.QueryRow(s.db.Rebind(`SELECT id, amount_cents FROM payments WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID).Scan(&payID, &payAmount)
-        if err == sql.ErrNoRows {
-                if remaining <= 0 {
-                        return nil, nil, ErrOrderAlreadyPaid
-                }
-                // Guarded insert: even under a future non-SQLite backend (READ
-                // COMMITTED), at most ONE full-balance leg can ever exist.
-                res, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, created_at)
+	// Supersede previous pending paystack attempts (fresh reference each time),
+	// re-read the remaining balance and create/find the pending leg ATOMICALLY:
+	// these used to be four autocommit statements, so two concurrent inits
+	// (double-click / slow popup + retry) could both see "no pending leg" and
+	// both mint a full-balance reference — a double STK charge.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new checkout' WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID); err != nil {
+		return nil, nil, err
+	}
+	var paid int64
+	if err := tx.QueryRow(s.db.Rebind(`SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE order_id = ? AND status = 'COMPLETED'`), orderID).Scan(&paid); err != nil {
+		return nil, nil, err
+	}
+	remaining := order.TotalCents - paid
+	var payID, payAmount int64
+	err = tx.QueryRow(s.db.Rebind(`SELECT id, amount_cents FROM payments WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID).Scan(&payID, &payAmount)
+	if err == sql.ErrNoRows {
+		if remaining <= 0 {
+			return nil, nil, ErrOrderAlreadyPaid
+		}
+		// Guarded insert: even under a future non-SQLite backend (READ
+		// COMMITTED), at most ONE full-balance leg can ever exist.
+		res, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, created_at)
                         SELECT ?, 'paystack', 'popup', ?, 'PENDING', ? WHERE NOT EXISTS
                                 (SELECT 1 FROM payments WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING')`),
-                        orderID, remaining, nowStamp(), orderID)
-                if err != nil {
-                        return nil, nil, err
-                }
-                if n, _ := res.RowsAffected(); n != 1 {
-                        // Lost an interleave — the winner's leg is the pending one.
-                        err = tx.QueryRow(s.db.Rebind(`SELECT id, amount_cents FROM payments WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID).Scan(&payID, &payAmount)
-                        if err != nil {
-                                return nil, nil, err
-                        }
-                } else {
-                        payID, _ = res.LastInsertId()
-                        payAmount = remaining
-                }
-        } else if err != nil {
-                return nil, nil, err
-        }
-        if err := tx.Commit(); err != nil {
-                return nil, nil, err
-        }
-        pay := &models.Payment{ID: payID, AmountCents: payAmount}
+			orderID, remaining, nowStamp(), orderID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			// Lost an interleave — the winner's leg is the pending one.
+			err = tx.QueryRow(s.db.Rebind(`SELECT id, amount_cents FROM payments WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), orderID).Scan(&payID, &payAmount)
+			if err != nil {
+				return nil, nil, err
+			}
+		} else {
+			payID, _ = res.LastInsertId()
+			payAmount = remaining
+		}
+	} else if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	pay := &models.Payment{ID: payID, AmountCents: payAmount}
 
-        reference := fmt.Sprintf("LP-%s-%s", order.Number, randToken(4))
-        amount := pay.AmountCents
-        if amount <= 0 {
-                return nil, nil, fmt.Errorf("%w: order has no payable amount", ErrInvalidState)
-        }
-        // Init through the LOCAL key when present; otherwise the cloud proxy
-        // (the Edge Function holds the secret — the till never sees it).
-        var init *paystack.InitializeResult
-        var initErr error
-        if client != nil {
-                init, initErr = client.Initialize(paystack.InitializeRequest{
-                        Email:       email,
-                        Phone:       wirePhone,
-                        Amount:      amount,
-                        Currency:    s.paystackCurrency(),
-                        Reference:   reference,
-                        CallbackURL: s.paystackCallback(),
-                        Metadata: map[string]any{
-                                "order_number":   order.Number,
-                                "cashier":        p.Username,
-                                "customer_phone": wirePhone,
-                                "custom_fields": []map[string]string{
-                                        {"display_name": "Order", "variable_name": "order", "value": order.Number},
-                                },
-                        },
-                })
-        } else {
-                init, initErr = s.paystackCloudInit(email, amount, s.paystackCurrency(), reference, s.paystackCallback(),
-                        map[string]any{
-                                "order_number":   order.Number,
-                                "cashier":        p.Username,
-                                "customer_phone": wirePhone,
-                                "custom_fields": []map[string]string{
-                                        {"display_name": "Order", "variable_name": "order", "value": order.Number},
-                                },
-                        })
-        }
-        if initErr != nil {
-                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
-                        truncStr(initErr.Error(), 200), pay.ID)
-                s.Audit(p.ID, p.Username, "PAYSTACK_INIT_FAILED", "order", order.Number, initErr.Error())
-                return nil, nil, initErr
-        }
-        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, email = ?, phone = ?, result_desc = ? WHERE id = ?`),
-                reference, email, phone, "checkout opened "+nowStamp(), pay.ID)
-        s.Audit(p.ID, p.Username, "PAYSTACK_INIT", "order", order.Number, "ref "+reference)
+	reference := fmt.Sprintf("LP-%s-%s", order.Number, randToken(4))
+	amount := pay.AmountCents
+	if amount <= 0 {
+		return nil, nil, fmt.Errorf("%w: order has no payable amount", ErrInvalidState)
+	}
+	// Init through the LOCAL key when present; otherwise the cloud proxy
+	// (the Edge Function holds the secret — the till never sees it).
+	var init *paystack.InitializeResult
+	var initErr error
+	if client != nil {
+		init, initErr = client.Initialize(paystack.InitializeRequest{
+			Email:       email,
+			Phone:       wirePhone,
+			Amount:      amount,
+			Currency:    s.paystackCurrency(),
+			Reference:   reference,
+			CallbackURL: s.paystackCallback(),
+			Metadata: map[string]any{
+				"order_number":   order.Number,
+				"cashier":        p.Username,
+				"customer_phone": wirePhone,
+				"custom_fields": []map[string]string{
+					{"display_name": "Order", "variable_name": "order", "value": order.Number},
+				},
+			},
+		})
+	} else {
+		init, initErr = s.paystackCloudInit(email, amount, s.paystackCurrency(), reference, s.paystackCallback(),
+			map[string]any{
+				"order_number":   order.Number,
+				"cashier":        p.Username,
+				"customer_phone": wirePhone,
+				"custom_fields": []map[string]string{
+					{"display_name": "Order", "variable_name": "order", "value": order.Number},
+				},
+			})
+	}
+	if initErr != nil {
+		s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
+			truncStr(initErr.Error(), 200), pay.ID)
+		s.Audit(p.ID, p.Username, "PAYSTACK_INIT_FAILED", "order", order.Number, initErr.Error())
+		return nil, nil, initErr
+	}
+	s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, email = ?, phone = ?, result_desc = ? WHERE id = ?`),
+		reference, email, phone, "checkout opened "+nowStamp(), pay.ID)
+	s.Audit(p.ID, p.Username, "PAYSTACK_INIT", "order", order.Number, "ref "+reference)
 
-        order, err = s.GetOrder(orderID)
-        if err != nil {
-                return nil, nil, err
-        }
-        return order, &models.PaystackInitResult{
-                Reference:        reference,
-                AccessCode:       init.AccessCode,
-                AuthorizationURL: init.AuthorizationURL,
-                PublicKey:        s.paystackPublicKey(),
-                Currency:         s.paystackCurrency(),
-                AmountCents:      amount,
-        }, nil
+	order, err = s.GetOrder(orderID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return order, &models.PaystackInitResult{
+		Reference:        reference,
+		AccessCode:       init.AccessCode,
+		AuthorizationURL: init.AuthorizationURL,
+		PublicKey:        s.paystackPublicKey(),
+		Currency:         s.paystackCurrency(),
+		AmountCents:      amount,
+	}, nil
 }
 
 // paystackMpesaSTK pushes a real M-Pesa prompt through Paystack's
@@ -295,82 +295,82 @@ func (s *Service) PaystackInit(orderID int64, email, phone string, p *auth.Princ
 // SweepPaystack (verify API) and the charge.success webhook own completion
 // — the order is marked PAID exclusively after Paystack confirms the money.
 func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay *models.Payment, p *auth.Principal) (*models.Order, error) {
-        client := s.GetPaystack()
-        if !s.paystackUsable() || !s.settings.GetBool("paystack_enabled", true) {
-                return nil, fmt.Errorf("%w: paystack is not connected, M-Pesa STK needs it (or use manual receipt entry)", ErrNotConfigured)
-        }
-        phone := paystackPhoneKe(pay.Phone)
-        if !mpesaPhoneOK(phone) {
-                return nil, fmt.Errorf("invalid customer phone %q, expected 07XX/2547XX/2541XX", pay.Phone)
-        }
-        wirePhone := paystackWirePhoneKe(phone)
+	client := s.GetPaystack()
+	if !s.paystackUsable() || !s.settings.GetBool("paystack_enabled", true) {
+		return nil, fmt.Errorf("%w: paystack is not connected, M-Pesa STK needs it (or use manual receipt entry)", ErrNotConfigured)
+	}
+	phone := paystackPhoneKe(pay.Phone)
+	if !mpesaPhoneOK(phone) {
+		return nil, fmt.Errorf("invalid customer phone %q, expected 07XX/2547XX/2541XX", pay.Phone)
+	}
+	wirePhone := paystackWirePhoneKe(phone)
 
-        // Supersede previous pending paystack attempts (fresh reference each time).
-        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new STK push' WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), order.ID)
-        // This payment now belongs to Paystack.
-        s.db.Exec(s.db.Rebind(`UPDATE payments SET method = 'paystack', mode = 'stk' WHERE id = ? AND status = 'PENDING'`), pay.ID)
+	// Supersede previous pending paystack attempts (fresh reference each time).
+	s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new STK push' WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), order.ID)
+	// This payment now belongs to Paystack.
+	s.db.Exec(s.db.Rebind(`UPDATE payments SET method = 'paystack', mode = 'stk' WHERE id = ? AND status = 'PENDING'`), pay.ID)
 
-        reference := fmt.Sprintf("LP-%s-%s", order.Number, randToken(4))
-        email := "customer+" + strings.ToLower(order.Number) + "@ledgerpos.app"
-        // Charge through the LOCAL key when present; otherwise the cloud proxy
-        // (the Edge Function holds the secret — the till never sees it). Both
-        // paths land the same ChargeResult; completion stays verify/webhook.
-        var init *paystack.ChargeResult
-        var initErr error
-        if client != nil {
-                init, initErr = client.ChargeMobileMoney(paystack.ChargeRequest{
-                        Email:     email,
-                        Amount:    pay.AmountCents,
-                        Currency:  s.paystackCurrency(),
-                        Reference: reference,
-                        MobileMoney: &paystack.MobileMoney{
-                                Phone:    wirePhone,
-                                Provider: "mpesa",
-                        },
-                        Metadata: map[string]any{
-                                "order_number":   order.Number,
-                                "cashier":        p.Username,
-                                "method":         "mpesa_stk",
-                                "customer_phone": wirePhone,
-                                "custom_fields": []map[string]string{
-                                        {"display_name": "Order", "variable_name": "order", "value": order.Number},
-                                },
-                        },
-                })
-        } else {
-                init, initErr = s.paystackCloudCharge(email, pay.AmountCents, s.paystackCurrency(), reference, wirePhone, map[string]any{
-                        "order_number":   order.Number,
-                        "cashier":        p.Username,
-                        "method":         "mpesa_stk",
-                        "customer_phone": wirePhone,
-                        "custom_fields": []map[string]string{
-                                {"display_name": "Order", "variable_name": "order", "value": order.Number},
-                        },
-                })
-        }
-        if initErr != nil {
-                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
-                        truncStr(initErr.Error(), 200), pay.ID)
-                s.Audit(p.ID, p.Username, "PAYSTACK_MPESA_FAILED", "order", order.Number, initErr.Error())
-                return nil, initErr
-        }
-        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, email = ?, result_desc = ? WHERE id = ?`),
-                reference, email, truncStr(init.DisplayText, 200), pay.ID)
-        s.Audit(p.ID, p.Username, "PAYSTACK_MPESA_INIT", "order", order.Number, "ref "+reference)
-        _ = ctx
-        return s.GetOrder(order.ID)
+	reference := fmt.Sprintf("LP-%s-%s", order.Number, randToken(4))
+	email := "customer+" + strings.ToLower(order.Number) + "@ledgerpos.app"
+	// Charge through the LOCAL key when present; otherwise the cloud proxy
+	// (the Edge Function holds the secret — the till never sees it). Both
+	// paths land the same ChargeResult; completion stays verify/webhook.
+	var init *paystack.ChargeResult
+	var initErr error
+	if client != nil {
+		init, initErr = client.ChargeMobileMoney(paystack.ChargeRequest{
+			Email:     email,
+			Amount:    pay.AmountCents,
+			Currency:  s.paystackCurrency(),
+			Reference: reference,
+			MobileMoney: &paystack.MobileMoney{
+				Phone:    wirePhone,
+				Provider: "mpesa",
+			},
+			Metadata: map[string]any{
+				"order_number":   order.Number,
+				"cashier":        p.Username,
+				"method":         "mpesa_stk",
+				"customer_phone": wirePhone,
+				"custom_fields": []map[string]string{
+					{"display_name": "Order", "variable_name": "order", "value": order.Number},
+				},
+			},
+		})
+	} else {
+		init, initErr = s.paystackCloudCharge(email, pay.AmountCents, s.paystackCurrency(), reference, wirePhone, map[string]any{
+			"order_number":   order.Number,
+			"cashier":        p.Username,
+			"method":         "mpesa_stk",
+			"customer_phone": wirePhone,
+			"custom_fields": []map[string]string{
+				{"display_name": "Order", "variable_name": "order", "value": order.Number},
+			},
+		})
+	}
+	if initErr != nil {
+		s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
+			truncStr(initErr.Error(), 200), pay.ID)
+		s.Audit(p.ID, p.Username, "PAYSTACK_MPESA_FAILED", "order", order.Number, initErr.Error())
+		return nil, initErr
+	}
+	s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, email = ?, result_desc = ? WHERE id = ?`),
+		reference, email, truncStr(init.DisplayText, 200), pay.ID)
+	s.Audit(p.ID, p.Username, "PAYSTACK_MPESA_INIT", "order", order.Number, "ref "+reference)
+	_ = ctx
+	return s.GetOrder(order.ID)
 }
 
 // mpesaPhoneOK accepts the normalized 2547/2541 form and local 07/01 forms.
 func mpesaPhoneOK(p string) bool {
-        p = strings.TrimSpace(p)
-        if len(p) == 12 && (strings.HasPrefix(p, "2547") || strings.HasPrefix(p, "2541")) {
-                return true
-        }
-        if len(p) == 10 && (strings.HasPrefix(p, "07") || strings.HasPrefix(p, "01")) {
-                return true
-        }
-        return false
+	p = strings.TrimSpace(p)
+	if len(p) == 12 && (strings.HasPrefix(p, "2547") || strings.HasPrefix(p, "2541")) {
+		return true
+	}
+	if len(p) == 10 && (strings.HasPrefix(p, "07") || strings.HasPrefix(p, "01")) {
+		return true
+	}
+	return false
 }
 
 // display_name metadata field is rendered in the Paystack checkout UI.
@@ -379,69 +379,69 @@ func mpesaPhoneOK(p string) bool {
 // callback fires. The reference is re-verified against the API — client
 // callbacks are never trusted on their own.
 func (s *Service) PaystackVerify(orderID int64, reference string, p *auth.Principal) (*models.Order, error) {
-        if !s.paystackUsable() {
-                return nil, fmt.Errorf("%w: paystack secret key missing", ErrNotConfigured)
-        }
-        reference = strings.TrimSpace(reference)
-        if reference == "" || len(reference) > 120 {
-                return nil, errors.New("invalid payment reference")
-        }
-        var paymentID int64
-        var payMode string
-        err := s.db.QueryRow(s.db.Rebind(`SELECT id, COALESCE(mode, 'popup') FROM payments WHERE checkout_request_id = ? AND order_id = ? AND method = 'paystack'`),
-                reference, orderID).Scan(&paymentID, &payMode)
-        if err != nil {
-                return nil, fmt.Errorf("%w: no paystack payment for reference %s", ErrNotFound, reference)
-        }
-        if err := s.paystackGuardVoid(paymentID); err != nil {
-                return nil, err
-        }
-        v, err := s.paystackVerifyRef(reference)
-        if err != nil {
-                s.Audit(p.ID, p.Username, "PAYSTACK_VERIFY_FAILED", "order", fmt.Sprint(orderID), err.Error())
-                return nil, err
-        }
-        if v.Status != "success" {
-                // abandoned / failed / pending — payment stays PENDING unless
-                // Paystack says definitively abandoned/failed, so the cashier can
-                // re-open checkout. STK legs get a grace window: the verify can
-                // report abandoned/failed while the customer is still entering
-                // their PIN, and the cashier screen reads this same status —
-                // failing instantly here is what cancelled the prompt too early.
-                if v.Status == "failed" || v.Status == "abandoned" {
-                        if s.stkGraceExpired(reference, payMode) {
-                                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
-                                        truncStr("paystack "+v.Status, 200), paymentID)
-                                s.stkGraceClear(reference)
-                        }
-                }
-                return nil, fmt.Errorf("payment not successful (status %s)", v.Status)
-        }
-        s.stkGraceClear(reference)
-        order, err := s.completePayment(paymentID, reference, v.Amount, "Paystack "+v.Channel)
-        if err != nil {
-                return nil, err
-        }
-        s.Audit(p.ID, p.Username, "PAYSTACK_VERIFIED", "order", order.Number,
-                fmt.Sprintf("ref %s, channel %s, amount %d", reference, v.Channel, v.Amount))
-        return order, nil
+	if !s.paystackUsable() {
+		return nil, fmt.Errorf("%w: paystack secret key missing", ErrNotConfigured)
+	}
+	reference = strings.TrimSpace(reference)
+	if reference == "" || len(reference) > 120 {
+		return nil, errors.New("invalid payment reference")
+	}
+	var paymentID int64
+	var payMode string
+	err := s.db.QueryRow(s.db.Rebind(`SELECT id, COALESCE(mode, 'popup') FROM payments WHERE checkout_request_id = ? AND order_id = ? AND method = 'paystack'`),
+		reference, orderID).Scan(&paymentID, &payMode)
+	if err != nil {
+		return nil, fmt.Errorf("%w: no paystack payment for reference %s", ErrNotFound, reference)
+	}
+	if err := s.paystackGuardVoid(paymentID); err != nil {
+		return nil, err
+	}
+	v, err := s.paystackVerifyRef(reference)
+	if err != nil {
+		s.Audit(p.ID, p.Username, "PAYSTACK_VERIFY_FAILED", "order", fmt.Sprint(orderID), err.Error())
+		return nil, err
+	}
+	if v.Status != "success" {
+		// abandoned / failed / pending — payment stays PENDING unless
+		// Paystack says definitively abandoned/failed, so the cashier can
+		// re-open checkout. STK legs get a grace window: the verify can
+		// report abandoned/failed while the customer is still entering
+		// their PIN, and the cashier screen reads this same status —
+		// failing instantly here is what cancelled the prompt too early.
+		if v.Status == "failed" || v.Status == "abandoned" {
+			if s.stkGraceExpired(reference, payMode) {
+				s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
+					truncStr("paystack "+v.Status, 200), paymentID)
+				s.stkGraceClear(reference)
+			}
+		}
+		return nil, fmt.Errorf("payment not successful (status %s)", v.Status)
+	}
+	s.stkGraceClear(reference)
+	order, err := s.completePayment(paymentID, reference, v.Amount, "Paystack "+v.Channel)
+	if err != nil {
+		return nil, err
+	}
+	s.Audit(p.ID, p.Username, "PAYSTACK_VERIFIED", "order", order.Number,
+		fmt.Sprintf("ref %s, channel %s, amount %d", reference, v.Channel, v.Amount))
+	return order, nil
 }
 
 // paystackGuardVoid refuses to complete payments on voided orders (money
 // moved, the sale is gone — staff must refund from the Paystack dashboard).
 func (s *Service) paystackGuardVoid(paymentID int64) error {
-        var orderID int64
-        var status string
-        if err := s.db.QueryRow(`SELECT order_id, (SELECT status FROM orders WHERE id = order_id) FROM payments WHERE id = ?`, paymentID).
-                Scan(&orderID, &status); err != nil {
-                return ErrNotFound
-        }
-        if status == models.OrderVoided {
-                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paid after void, refund via paystack dashboard' WHERE id = ? AND status = 'PENDING'`), paymentID)
-                s.Audit(0, "system", "PAYSTACK_AFTER_VOID", "order", fmt.Sprint(orderID), "refund required in paystack dashboard")
-                return fmt.Errorf("%w: order was voided, refund this charge from the Paystack dashboard", ErrInvalidState)
-        }
-        return nil
+	var orderID int64
+	var status string
+	if err := s.db.QueryRow(`SELECT order_id, (SELECT status FROM orders WHERE id = order_id) FROM payments WHERE id = ?`, paymentID).
+		Scan(&orderID, &status); err != nil {
+		return ErrNotFound
+	}
+	if status == models.OrderVoided {
+		s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paid after void, refund via paystack dashboard' WHERE id = ? AND status = 'PENDING'`), paymentID)
+		s.Audit(0, "system", "PAYSTACK_AFTER_VOID", "order", fmt.Sprint(orderID), "refund required in paystack dashboard")
+		return fmt.Errorf("%w: order was voided, refund this charge from the Paystack dashboard", ErrInvalidState)
+	}
+	return nil
 }
 
 // HandlePaystackWebhook processes server-to-server charge.success events.
@@ -449,22 +449,22 @@ func (s *Service) paystackGuardVoid(paymentID int64) error {
 // with any payload: unknown refs and non-success events are acknowledged
 // (200) so Paystack stops retrying, but nothing changes locally.
 func (s *Service) HandlePaystackWebhook(raw []byte, signature string) error {
-        client := s.GetPaystack()
-        if client == nil {
-                // No local key: the signature cannot be checked here. During the
-                // dual-read window the cloud Edge Function is the verifier — tills
-                // in proxy mode receive relayed events via sweepPaystackRelay
-                // instead of a direct webhook, so refuse quietly.
-                return errors.New("paystack secret key not configured")
-        }
-        if !client.CheckWebhookSignature(raw, signature) {
-                return errors.New("invalid webhook signature")
-        }
-        ev, err := paystack.ParseWebhook(raw)
-        if err != nil {
-                return err
-        }
-        return s.completePaystackEvent(ev)
+	client := s.GetPaystack()
+	if client == nil {
+		// No local key: the signature cannot be checked here. During the
+		// dual-read window the cloud Edge Function is the verifier — tills
+		// in proxy mode receive relayed events via sweepPaystackRelay
+		// instead of a direct webhook, so refuse quietly.
+		return errors.New("paystack secret key not configured")
+	}
+	if !client.CheckWebhookSignature(raw, signature) {
+		return errors.New("invalid webhook signature")
+	}
+	ev, err := paystack.ParseWebhook(raw)
+	if err != nil {
+		return err
+	}
+	return s.completePaystackEvent(ev)
 }
 
 // PaystackTimeout is how long a pending paystack checkout may sit before
@@ -484,138 +484,138 @@ const STKFailGrace = 10 * time.Second
 // leaves nothing behind). Popup legs (mode != 'stk') fail immediately,
 // unchanged. Nil-map safe (tests build Service structs literally).
 func (s *Service) stkGraceExpired(reference, mode string) bool {
-        if mode != "stk" {
-                return true
-        }
-        now := time.Now()
-        s.stkFailMu.Lock()
-        defer s.stkFailMu.Unlock()
-        if s.stkFailAt == nil {
-                s.stkFailAt = map[string]time.Time{}
-        }
-        first, ok := s.stkFailAt[reference]
-        if !ok {
-                s.stkFailAt[reference] = now
-                return false
-        }
-        if now.Sub(first) >= STKFailGrace {
-                delete(s.stkFailAt, reference)
-                return true
-        }
-        return false
+	if mode != "stk" {
+		return true
+	}
+	now := time.Now()
+	s.stkFailMu.Lock()
+	defer s.stkFailMu.Unlock()
+	if s.stkFailAt == nil {
+		s.stkFailAt = map[string]time.Time{}
+	}
+	first, ok := s.stkFailAt[reference]
+	if !ok {
+		s.stkFailAt[reference] = now
+		return false
+	}
+	if now.Sub(first) >= STKFailGrace {
+		delete(s.stkFailAt, reference)
+		return true
+	}
+	return false
 }
 
 // stkGraceClear forgets a reference's grace timer (on success or after the
 // leg finally fails).
 func (s *Service) stkGraceClear(reference string) {
-        s.stkFailMu.Lock()
-        defer s.stkFailMu.Unlock()
-        if s.stkFailAt != nil {
-                delete(s.stkFailAt, reference)
-        }
+	s.stkFailMu.Lock()
+	defer s.stkFailMu.Unlock()
+	if s.stkFailAt != nil {
+		delete(s.stkFailAt, reference)
+	}
 }
 
 // SweepPaystack polls pending paystack payments via the verify API — the
 // completion path for redirect flows whose callback never reached us.
 func (s *Service) SweepPaystack(ctx context.Context) {
-        if !s.paystackUsable() || !s.settings.GetBool("paystack_enabled", true) {
-                return
-        }
-        // Cloud webhook relay: verified events for THIS till's references are
-        // claimed and completed exactly like a direct webhook (best-effort —
-        // the verify path below stays the authority).
-        s.sweepPaystackRelay()
-        type pending struct {
-                id        int64
-                reference string
-                createdAt time.Time
-                mode      string
-        }
-        rows, err := s.db.Query(`SELECT id, checkout_request_id, created_at, COALESCE(mode, 'popup') FROM payments
+	if !s.paystackUsable() || !s.settings.GetBool("paystack_enabled", true) {
+		return
+	}
+	// Cloud webhook relay: verified events for THIS till's references are
+	// claimed and completed exactly like a direct webhook (best-effort —
+	// the verify path below stays the authority).
+	s.sweepPaystackRelay()
+	type pending struct {
+		id        int64
+		reference string
+		createdAt time.Time
+		mode      string
+	}
+	rows, err := s.db.Query(`SELECT id, checkout_request_id, created_at, COALESCE(mode, 'popup') FROM payments
                 WHERE status = 'PENDING' AND method = 'paystack' AND checkout_request_id != ''`)
-        if err != nil {
-                return
-        }
-        var list []pending
-        now := time.Now()
-        for rows.Next() {
-                var p pending
-                var created string
-                if err := rows.Scan(&p.id, &p.reference, &created, &p.mode); err != nil {
-                        break
-                }
-                if t, err := time.Parse("2006-01-02 15:04:05", created); err == nil {
-                        p.createdAt = t
-                } else if t, err := time.Parse(time.RFC3339, created); err == nil {
-                        p.createdAt = t
-                } else {
-                        p.createdAt = now
-                }
-                list = append(list, p)
-        }
-        rows.Close()
-        if rows.Err() != nil {
-                return
-        }
-        for _, p := range list {
-                select {
-                case <-ctx.Done():
-                        return
-                default:
-                }
-                if now.Sub(p.createdAt) > PaystackTimeout {
-                        // NEVER fail a reference without one last verify — the
-                        // customer may have paid seconds before the timeout
-                        // (charging real money and then voiding the sale is
-                        // the worst outcome a till can produce). A verify ERROR
-                        // (offline till, Paystack 5xx) is NOT an answer: keep the
-                        // payment pending and retry on the next sweep — only a
-                        // definitive non-success verify may fail the row.
-                        v, err := s.paystackVerifyRef(p.reference)
-                        if err != nil {
-                                log.Printf("[paystack] sweep final verify %s errored (%v), staying pending", p.reference, err)
-                                continue
-                        }
-                        if v.Status == "success" {
-                                if err := s.paystackGuardVoid(p.id); err == nil {
-                                        if _, err := s.completePayment(p.id, p.reference, v.Amount, "Paystack "+v.Channel+" (late verify)"); err != nil {
-                                                log.Printf("[paystack] sweep late-complete %d: %v", p.id, err)
-                                        }
-                                        s.stkGraceClear(p.reference)
-                                        continue
-                                }
-                        }
-                        if s.stkGraceExpired(p.reference, p.mode) {
-                                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paystack checkout timeout (15 min, final verify not success)' WHERE id = ? AND status = 'PENDING'`), p.id)
-                                s.stkGraceClear(p.reference)
-                        }
-                        continue
-                }
-                v, err := s.paystackVerifyRef(p.reference)
-                if err != nil {
-                        continue // transient — keep waiting
-                }
-                switch {
-                case v.Status == "success":
-                        if err := s.paystackGuardVoid(p.id); err != nil {
-                                continue
-                        }
-                        if _, err := s.completePayment(p.id, p.reference, v.Amount, "Paystack "+v.Channel); err != nil {
-                                log.Printf("[paystack] sweep complete %d: %v", p.id, err)
-                        }
-                        s.stkGraceClear(p.reference)
-                case v.Status == "abandoned" || v.Status == "failed":
-                        // STK grace: the customer may still be mid-PIN. Keep the
-                        // leg pending and let the next sweep (5s tick) re-verify;
-                        // only fail once the window has passed. Popup legs fail
-                        // immediately, as before.
-                        if s.stkGraceExpired(p.reference, p.mode) {
-                                s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
-                                        truncStr("paystack "+v.Status, 200), p.id)
-                                s.stkGraceClear(p.reference)
-                        }
-                }
-        }
+	if err != nil {
+		return
+	}
+	var list []pending
+	now := time.Now()
+	for rows.Next() {
+		var p pending
+		var created string
+		if err := rows.Scan(&p.id, &p.reference, &created, &p.mode); err != nil {
+			break
+		}
+		if t, err := time.Parse("2006-01-02 15:04:05", created); err == nil {
+			p.createdAt = t
+		} else if t, err := time.Parse(time.RFC3339, created); err == nil {
+			p.createdAt = t
+		} else {
+			p.createdAt = now
+		}
+		list = append(list, p)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return
+	}
+	for _, p := range list {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if now.Sub(p.createdAt) > PaystackTimeout {
+			// NEVER fail a reference without one last verify — the
+			// customer may have paid seconds before the timeout
+			// (charging real money and then voiding the sale is
+			// the worst outcome a till can produce). A verify ERROR
+			// (offline till, Paystack 5xx) is NOT an answer: keep the
+			// payment pending and retry on the next sweep — only a
+			// definitive non-success verify may fail the row.
+			v, err := s.paystackVerifyRef(p.reference)
+			if err != nil {
+				log.Printf("[paystack] sweep final verify %s errored (%v), staying pending", p.reference, err)
+				continue
+			}
+			if v.Status == "success" {
+				if err := s.paystackGuardVoid(p.id); err == nil {
+					if _, err := s.completePayment(p.id, p.reference, v.Amount, "Paystack "+v.Channel+" (late verify)"); err != nil {
+						log.Printf("[paystack] sweep late-complete %d: %v", p.id, err)
+					}
+					s.stkGraceClear(p.reference)
+					continue
+				}
+			}
+			if s.stkGraceExpired(p.reference, p.mode) {
+				s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'paystack checkout timeout (15 min, final verify not success)' WHERE id = ? AND status = 'PENDING'`), p.id)
+				s.stkGraceClear(p.reference)
+			}
+			continue
+		}
+		v, err := s.paystackVerifyRef(p.reference)
+		if err != nil {
+			continue // transient — keep waiting
+		}
+		switch {
+		case v.Status == "success":
+			if err := s.paystackGuardVoid(p.id); err != nil {
+				continue
+			}
+			if _, err := s.completePayment(p.id, p.reference, v.Amount, "Paystack "+v.Channel); err != nil {
+				log.Printf("[paystack] sweep complete %d: %v", p.id, err)
+			}
+			s.stkGraceClear(p.reference)
+		case v.Status == "abandoned" || v.Status == "failed":
+			// STK grace: the customer may still be mid-PIN. Keep the
+			// leg pending and let the next sweep (5s tick) re-verify;
+			// only fail once the window has passed. Popup legs fail
+			// immediately, as before.
+			if s.stkGraceExpired(p.reference, p.mode) {
+				s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
+					truncStr("paystack "+v.Status, 200), p.id)
+				s.stkGraceClear(p.reference)
+			}
+		}
+	}
 }
 
 // ---- Late-money recovery -------------------------------------------------
@@ -630,19 +630,19 @@ func (s *Service) SweepPaystack(ctx context.Context) {
 // parseStamp accepts the created_at layouts the app has written over time
 // (current UTC RFC3339 stamp and legacy SQLite datetime).
 func parseStamp(s string) (time.Time, bool) {
-        if t, err := time.Parse(time.RFC3339, s); err == nil {
-                return t, true
-        }
-        if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
-                return t, true
-        }
-        return time.Time{}, false
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
 }
 
 // settleSiblings closes any remaining PENDING Paystack legs on a just-paid
 // order so the sweep never re-verifies dead references against it later.
 func (s *Service) settleSiblings(orderID, doneID int64) {
-        s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by recovered payment'
+	s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by recovered payment'
                 WHERE order_id = ? AND id != ? AND method = 'paystack' AND status = 'PENDING'`), orderID, doneID)
 }
 
@@ -655,109 +655,109 @@ func (s *Service) settleSiblings(orderID, doneID int64) {
 // and never double-completes — completePayment stays the only PENDING →
 // PAID transition, with all its guards intact.
 func (s *Service) RecheckPayment(orderID int64, p *auth.Principal) (*models.Order, string, error) {
-        order, err := s.GetOrder(orderID)
-        if err != nil {
-                return nil, "", err
-        }
-        if order.Status == models.OrderPaid {
-                return order, "This order is already paid.", nil
-        }
-        if order.Status != models.OrderPending {
-                return nil, "", fmt.Errorf("%w: cannot recheck a %s order", ErrInvalidState, order.Status)
-        }
+	order, err := s.GetOrder(orderID)
+	if err != nil {
+		return nil, "", err
+	}
+	if order.Status == models.OrderPaid {
+		return order, "This order is already paid.", nil
+	}
+	if order.Status != models.OrderPending {
+		return nil, "", fmt.Errorf("%w: cannot recheck a %s order", ErrInvalidState, order.Status)
+	}
 
-        type leg struct {
-                id  int64
-                ref string
-        }
-        var legs []leg
-        seen := map[int64]bool{}
-        // The live pending reference first — the most likely place the money is.
-        for _, pm := range order.Payments {
-                if pm.Method == models.MethodPaystack && pm.Status == models.PaymentPending && pm.CheckoutRequestID != "" {
-                        seen[pm.ID] = true
-                        legs = append(legs, leg{pm.ID, pm.CheckoutRequestID})
-                }
-        }
-        // Then references failed within the last day (superseded pushes the
-        // customer may still have paid; the till stopped watching them).
-        cutoff := time.Now().Add(-24 * time.Hour)
-        rows, err := s.db.Query(s.db.Rebind(`SELECT id, checkout_request_id, created_at FROM payments
+	type leg struct {
+		id  int64
+		ref string
+	}
+	var legs []leg
+	seen := map[int64]bool{}
+	// The live pending reference first — the most likely place the money is.
+	for _, pm := range order.Payments {
+		if pm.Method == models.MethodPaystack && pm.Status == models.PaymentPending && pm.CheckoutRequestID != "" {
+			seen[pm.ID] = true
+			legs = append(legs, leg{pm.ID, pm.CheckoutRequestID})
+		}
+	}
+	// Then references failed within the last day (superseded pushes the
+	// customer may still have paid; the till stopped watching them).
+	cutoff := time.Now().Add(-24 * time.Hour)
+	rows, err := s.db.Query(s.db.Rebind(`SELECT id, checkout_request_id, created_at FROM payments
                 WHERE order_id = ? AND method = 'paystack' AND status = 'FAILED' AND checkout_request_id != ''`),
-                orderID)
-        if err == nil {
-                for rows.Next() {
-                        var id int64
-                        var ref, created string
-                        if err := rows.Scan(&id, &ref, &created); err != nil {
-                                break
-                        }
-                        if t, ok := parseStamp(created); !ok || t.Before(cutoff) {
-                                continue
-                        }
-                        if !seen[id] {
-                                seen[id] = true
-                                legs = append(legs, leg{id, ref})
-                        }
-                }
-                rows.Close()
-        }
+		orderID)
+	if err == nil {
+		for rows.Next() {
+			var id int64
+			var ref, created string
+			if err := rows.Scan(&id, &ref, &created); err != nil {
+				break
+			}
+			if t, ok := parseStamp(created); !ok || t.Before(cutoff) {
+				continue
+			}
+			if !seen[id] {
+				seen[id] = true
+				legs = append(legs, leg{id, ref})
+			}
+		}
+		rows.Close()
+	}
 
-        var lastStatus string
-        if s.paystackUsable() && s.settings.GetBool("paystack_enabled", true) {
-                for _, l := range legs {
-                        v, err := s.paystackVerifyRef(l.ref)
-                        if err != nil {
-                                continue // transient — try the next reference
-                        }
-                        lastStatus = v.Status
-                        if v.Status != "success" {
-                                continue
-                        }
-                        if err := s.paystackGuardVoid(l.id); err != nil {
-                                return nil, "", err
-                        }
-                        order, err := s.completePayment(l.id, l.ref, v.Amount, "Paystack "+v.Channel+" (recheck)")
-                        if err != nil {
-                                return nil, "", err
-                        }
-                        s.settleSiblings(orderID, l.id)
-                        s.Audit(p.ID, p.Username, "PAYMENT_RECHECK", "order", order.Number,
-                                fmt.Sprintf("ref %s, channel %s, amount %d, money arrived after the till moved on", l.ref, v.Channel, v.Amount))
-                        return order, "Payment confirmed, the money arrived after we stopped watching. Sale complete.", nil
-                }
-        }
+	var lastStatus string
+	if s.paystackUsable() && s.settings.GetBool("paystack_enabled", true) {
+		for _, l := range legs {
+			v, err := s.paystackVerifyRef(l.ref)
+			if err != nil {
+				continue // transient — try the next reference
+			}
+			lastStatus = v.Status
+			if v.Status != "success" {
+				continue
+			}
+			if err := s.paystackGuardVoid(l.id); err != nil {
+				return nil, "", err
+			}
+			order, err := s.completePayment(l.id, l.ref, v.Amount, "Paystack "+v.Channel+" (recheck)")
+			if err != nil {
+				return nil, "", err
+			}
+			s.settleSiblings(orderID, l.id)
+			s.Audit(p.ID, p.Username, "PAYMENT_RECHECK", "order", order.Number,
+				fmt.Sprintf("ref %s, channel %s, amount %d, money arrived after the till moved on", l.ref, v.Channel, v.Amount))
+			return order, "Payment confirmed, the money arrived after we stopped watching. Sale complete.", nil
+		}
+	}
 
-        // Daraja-mode STK legs, when this till runs a direct M-Pesa provider.
-        if provider, perr := s.GetProvider(); provider != nil && perr == nil {
-                for _, pm := range order.Payments {
-                        if pm.Method != models.MethodMpesa || pm.Status != models.PaymentPending || pm.CheckoutRequestID == "" {
-                                continue
-                        }
-                        res, err := provider.QuerySTK(context.Background(), pm.CheckoutRequestID)
-                        if err != nil || res.ResultCode != 0 {
-                                continue
-                        }
-                        order, err := s.completePayment(pm.ID, res.MpesaReceiptNumber, res.AmountCents, res.ResultDesc)
-                        if err != nil {
-                                return nil, "", err
-                        }
-                        s.Audit(p.ID, p.Username, "PAYMENT_RECHECK", "order", order.Number,
-                                fmt.Sprintf("daraja receipt %s, money arrived after the till moved on", res.MpesaReceiptNumber))
-                        return order, "Payment confirmed, the M-Pesa money arrived. Sale complete.", nil
-                }
-        }
+	// Daraja-mode STK legs, when this till runs a direct M-Pesa provider.
+	if provider, perr := s.GetProvider(); provider != nil && perr == nil {
+		for _, pm := range order.Payments {
+			if pm.Method != models.MethodMpesa || pm.Status != models.PaymentPending || pm.CheckoutRequestID == "" {
+				continue
+			}
+			res, err := provider.QuerySTK(context.Background(), pm.CheckoutRequestID)
+			if err != nil || res.ResultCode != 0 {
+				continue
+			}
+			order, err := s.completePayment(pm.ID, res.MpesaReceiptNumber, res.AmountCents, res.ResultDesc)
+			if err != nil {
+				return nil, "", err
+			}
+			s.Audit(p.ID, p.Username, "PAYMENT_RECHECK", "order", order.Number,
+				fmt.Sprintf("daraja receipt %s, money arrived after the till moved on", res.MpesaReceiptNumber))
+			return order, "Payment confirmed, the M-Pesa money arrived. Sale complete.", nil
+		}
+	}
 
-        switch {
-        case !s.paystackUsable():
-                return order, "Paystack is not connected on this till, nothing to re-check against. Enter the M-Pesa receipt code manually instead.", nil
-        case len(legs) == 0:
-                return order, "No Paystack or M-Pesa charge on this order to re-check. Enter the M-Pesa receipt code manually if the customer paid.", nil
-        case lastStatus != "":
-                return order, "No confirmed payment yet, Paystack reports the latest charge as “" + lastStatus + "”. Nothing has been marked paid.", nil
-        default:
-                return order, "Could not reach Paystack to re-check, check the internet connection and try again.", nil
-        }
+	switch {
+	case !s.paystackUsable():
+		return order, "Paystack is not connected on this till, nothing to re-check against. Enter the M-Pesa receipt code manually instead.", nil
+	case len(legs) == 0:
+		return order, "No Paystack or M-Pesa charge on this order to re-check. Enter the M-Pesa receipt code manually if the customer paid.", nil
+	case lastStatus != "":
+		return order, "No confirmed payment yet, Paystack reports the latest charge as “" + lastStatus + "”. Nothing has been marked paid.", nil
+	default:
+		return order, "Could not reach Paystack to re-check, check the internet connection and try again.", nil
+	}
 }
 
 // failedSweepLookback bounds the automatic deep sweep: Paystack references
@@ -772,63 +772,63 @@ const failedSweepLookback = 90 * time.Minute
 // entry and a late STK payment are the SAME money, and re-adding it would
 // double-count revenue.
 func (s *Service) SweepFailedPaystack(ctx context.Context) {
-        if !s.paystackUsable() || !s.settings.GetBool("paystack_enabled", true) {
-                return
-        }
-        rows, err := s.db.Query(`SELECT p.id, p.checkout_request_id, p.order_id, p.created_at
+	if !s.paystackUsable() || !s.settings.GetBool("paystack_enabled", true) {
+		return
+	}
+	rows, err := s.db.Query(`SELECT p.id, p.checkout_request_id, p.order_id, p.created_at
                 FROM payments p JOIN orders o ON o.id = p.order_id
                 WHERE p.status = 'FAILED' AND p.method = 'paystack'
                   AND p.checkout_request_id LIKE 'LP-%' AND o.status = 'PENDING'
                 LIMIT 100`)
-        if err != nil {
-                return
-        }
-        type fleg struct {
-                id      int64
-                ref     string
-                orderID int64
-                created time.Time
-        }
-        var list []fleg
-        cutoff := time.Now().Add(-failedSweepLookback)
-        for rows.Next() {
-                var f fleg
-                var created string
-                if err := rows.Scan(&f.id, &f.ref, &f.orderID, &created); err != nil {
-                        break
-                }
-                if t, ok := parseStamp(created); ok && t.After(cutoff) {
-                        f.created = t
-                        list = append(list, f)
-                }
-        }
-        rows.Close()
-        if rows.Err() != nil || len(list) == 0 {
-                return
-        }
-        for _, f := range list {
-                select {
-                case <-ctx.Done():
-                        return
-                default:
-                }
-                v, err := s.paystackVerifyRef(f.ref)
-                if err != nil {
-                        continue // offline / transient — retry next sweep
-                }
-                if v.Status != "success" {
-                        continue // abandoned stays abandoned
-                }
-                if err := s.paystackGuardVoid(f.id); err != nil {
-                        continue
-                }
-                if _, err := s.completePayment(f.id, f.ref, v.Amount, "Paystack "+v.Channel+" (late recovery)"); err != nil {
-                        log.Printf("[paystack] late recovery %s: %v", f.ref, err)
-                        continue
-                }
-                s.settleSiblings(f.orderID, f.id)
-                s.Audit(0, "system", "PAYSTACK_LATE_RECOVERED", "order", fmt.Sprint(f.orderID),
-                        fmt.Sprintf("ref %s, amount %d, customer paid after the till moved on", f.ref, v.Amount))
-                log.Printf("[paystack] late-recovered reference %s onto order %d", f.ref, f.orderID)
-        }
+	if err != nil {
+		return
+	}
+	type fleg struct {
+		id      int64
+		ref     string
+		orderID int64
+		created time.Time
+	}
+	var list []fleg
+	cutoff := time.Now().Add(-failedSweepLookback)
+	for rows.Next() {
+		var f fleg
+		var created string
+		if err := rows.Scan(&f.id, &f.ref, &f.orderID, &created); err != nil {
+			break
+		}
+		if t, ok := parseStamp(created); ok && t.After(cutoff) {
+			f.created = t
+			list = append(list, f)
+		}
+	}
+	rows.Close()
+	if rows.Err() != nil || len(list) == 0 {
+		return
+	}
+	for _, f := range list {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		v, err := s.paystackVerifyRef(f.ref)
+		if err != nil {
+			continue // offline / transient — retry next sweep
+		}
+		if v.Status != "success" {
+			continue // abandoned stays abandoned
+		}
+		if err := s.paystackGuardVoid(f.id); err != nil {
+			continue
+		}
+		if _, err := s.completePayment(f.id, f.ref, v.Amount, "Paystack "+v.Channel+" (late recovery)"); err != nil {
+			log.Printf("[paystack] late recovery %s: %v", f.ref, err)
+			continue
+		}
+		s.settleSiblings(f.orderID, f.id)
+		s.Audit(0, "system", "PAYSTACK_LATE_RECOVERED", "order", fmt.Sprint(f.orderID),
+			fmt.Sprintf("ref %s, amount %d, customer paid after the till moved on", f.ref, v.Amount))
+		log.Printf("[paystack] late-recovered reference %s onto order %d", f.ref, f.orderID)
+	}
 }

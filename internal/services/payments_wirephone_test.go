@@ -11,8 +11,8 @@ func TestPaystackWirePhoneKe(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"254745000111", "+254745000111"},
 		{"254122345678", "+254122345678"},
-		{"0745000111", "0745000111"},      // non-canonical input passes through — callers validate first
-		{"", ""},                          // empty stays empty (popup path allows empty phone)
+		{"0745000111", "0745000111"},       // non-canonical input passes through — callers validate first
+		{"", ""},                           // empty stays empty (popup path allows empty phone)
 		{"+254745000111", "+254745000111"}, // already E.164 — no double prefix
 		{"254", "254"},                     // not a phone — untouched
 	}

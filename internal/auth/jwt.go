@@ -41,11 +41,11 @@ func IssueToken(secret []byte, userID int64, username, shopID string) (string, e
 // pre-feature) values yield the zero time, which predates every token —
 // sessions survive data quirks; only well-formed rotations invalidate.
 func ParseChangedAt(s string) time.Time {
-        t, err := time.Parse("2006-01-02T15:04:05.000Z", s)
-        if err != nil {
-                return time.Time{}
-        }
-        return t
+	t, err := time.Parse("2006-01-02T15:04:05.000Z", s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // ParseToken validates and returns the user id, shop id, and issue time

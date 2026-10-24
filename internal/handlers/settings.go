@@ -1,20 +1,20 @@
 package handlers
 
 import (
-        "github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin"
 
-        "posapp/internal/models"
-        "posapp/internal/services"
-        "posapp/internal/settings"
+	"posapp/internal/models"
+	"posapp/internal/services"
+	"posapp/internal/settings"
 )
 
 // GetSettings (settings.manage) — secrets masked as "__SET__".
 func (h *H) GetSettings(c *gin.Context) {
-        h.ok(c, h.settings(c).Snapshot())
+	h.ok(c, h.settings(c).Snapshot())
 }
 
 type settingsBody struct {
-        Values map[string]string `json:"values" binding:"required"`
+	Values map[string]string `json:"values" binding:"required"`
 }
 
 // UpdateSettings (settings.manage). Masked values keep their secret. Every
@@ -26,108 +26,108 @@ type settingsBody struct {
 // Settings page round-trips the whole snapshot, and an echo of runtime
 // keys must never fail a real edit (the store-name report-as-failed bug).
 func (h *H) UpdateSettings(c *gin.Context) {
-        p := h.principal(c)
-        var body settingsBody
-        if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, "values map required")
-                return
-        }
-        allowed := settings.AllowedKeys()
-        for k, v := range body.Values {
-                if !allowed[k] {
-                        if settings.IsMaskToken(v) || settings.IsInternalKey(k) {
-                                // Echo of a key the API cannot write: drop it so
-                                // Update keeps the stored value (a stale echo must
-                                // never overwrite live runtime state either).
-                                delete(body.Values, k)
-                                continue
-                        }
-                        h.fail(c, 400, "unknown setting key: "+k)
-                        return
-                }
-                if len(v) > 500 {
-                        h.fail(c, 400, "value too long for key: "+k)
-                        return
-                }
-        }
-        // Guardrail: one Supabase project per shop. Reusing the same
-        // endpoint+bucket across shops would make a leaked key open multiple
-        // shops (defeats per-shop blast radius). Scan other shops' settings.
-        if h.Shops != nil {
-                if ep, ok := body.Values["offsite_endpoint"]; ok && ep != "" && ep != settings.MaskToken {
-                        if bucket, ok2 := body.Values["offsite_bucket"]; ok2 && bucket != "" {
-                                curShop := h.shopID(c)
-                                for _, sid := range h.Shops.ShopIDs() {
-                                        if sid == curShop {
-                                                continue
-                                        }
-                                        if st, err := h.Shops.Settings(sid); err == nil {
-                                                if st.Get("offsite_endpoint") == ep && st.Get("offsite_bucket") == bucket {
-                                                        h.fail(c, 400, "that Supabase project is already used by another shop, create a separate project per shop")
-                                                        return
-                                                }
-                                        }
-                                }
-                        }
-                }
-        }
-        changed, err := h.settings(c).Update(body.Values)
-        if err != nil {
-                h.fail(c, 500, err.Error())
-                return
-        }
-        // An explicit admin toggle of paystack_enabled marks the one-time
-        // legacy-toggle migration as done — the admin's choice always wins.
-        if _, ok := body.Values["paystack_enabled"]; ok {
-                _ = h.settings(c).Set("paystack_enabled_touched", "1")
-        }
-        h.svc(c).Audit(p.ID, p.Username, "SETTINGS_UPDATED", "settings", "", joinKeys(changed))
-        // OTA config: whitelisted commercial settings (branding, tax,
-        // loyalty, paystack public config, ...) propagate to the rest of
-        // the team through the sync log — no reinstall on other tills.
-        h.svc(c).EmitConfig(changed)
-        h.Hub.BroadcastJSONForShop(services.EventSettingsUpdate, h.settings(c).Branding(), h.shopID(c))
-        h.ok(c, h.settings(c).Snapshot())
+	p := h.principal(c)
+	var body settingsBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "values map required")
+		return
+	}
+	allowed := settings.AllowedKeys()
+	for k, v := range body.Values {
+		if !allowed[k] {
+			if settings.IsMaskToken(v) || settings.IsInternalKey(k) {
+				// Echo of a key the API cannot write: drop it so
+				// Update keeps the stored value (a stale echo must
+				// never overwrite live runtime state either).
+				delete(body.Values, k)
+				continue
+			}
+			h.fail(c, 400, "unknown setting key: "+k)
+			return
+		}
+		if len(v) > 500 {
+			h.fail(c, 400, "value too long for key: "+k)
+			return
+		}
+	}
+	// Guardrail: one Supabase project per shop. Reusing the same
+	// endpoint+bucket across shops would make a leaked key open multiple
+	// shops (defeats per-shop blast radius). Scan other shops' settings.
+	if h.Shops != nil {
+		if ep, ok := body.Values["offsite_endpoint"]; ok && ep != "" && ep != settings.MaskToken {
+			if bucket, ok2 := body.Values["offsite_bucket"]; ok2 && bucket != "" {
+				curShop := h.shopID(c)
+				for _, sid := range h.Shops.ShopIDs() {
+					if sid == curShop {
+						continue
+					}
+					if st, err := h.Shops.Settings(sid); err == nil {
+						if st.Get("offsite_endpoint") == ep && st.Get("offsite_bucket") == bucket {
+							h.fail(c, 400, "that Supabase project is already used by another shop, create a separate project per shop")
+							return
+						}
+					}
+				}
+			}
+		}
+	}
+	changed, err := h.settings(c).Update(body.Values)
+	if err != nil {
+		h.fail(c, 500, err.Error())
+		return
+	}
+	// An explicit admin toggle of paystack_enabled marks the one-time
+	// legacy-toggle migration as done — the admin's choice always wins.
+	if _, ok := body.Values["paystack_enabled"]; ok {
+		_ = h.settings(c).Set("paystack_enabled_touched", "1")
+	}
+	h.svc(c).Audit(p.ID, p.Username, "SETTINGS_UPDATED", "settings", "", joinKeys(changed))
+	// OTA config: whitelisted commercial settings (branding, tax,
+	// loyalty, paystack public config, ...) propagate to the rest of
+	// the team through the sync log — no reinstall on other tills.
+	h.svc(c).EmitConfig(changed)
+	h.Hub.BroadcastJSONForShop(services.EventSettingsUpdate, h.settings(c).Branding(), h.shopID(c))
+	h.ok(c, h.settings(c).Snapshot())
 }
 
 func joinKeys(keys []string) string {
-        out := ""
-        for i, k := range keys {
-                if i > 0 {
-                        out += ", "
-                }
-                out += k
-        }
-        return out
+	out := ""
+	for i, k := range keys {
+		if i > 0 {
+			out += ", "
+		}
+		out += k
+	}
+	return out
 }
 
 // TestPrint (printer.test) — sends a test receipt to the configured target.
 func (h *H) TestPrint(c *gin.Context) {
-        p := h.principal(c)
-        if err := h.Printer.TestPrint(); err != nil {
-                h.fail(c, 422, err.Error())
-                return
-        }
-        h.svc(c).Audit(p.ID, p.Username, "PRINTER_TESTED", "printer", h.settings(c).Get("printer_target"), "")
-        h.ok(c, gin.H{"printed": true})
+	p := h.principal(c)
+	if err := h.Printer.TestPrint(); err != nil {
+		h.fail(c, 422, err.Error())
+		return
+	}
+	h.svc(c).Audit(p.ID, p.Username, "PRINTER_TESTED", "printer", h.settings(c).Get("printer_target"), "")
+	h.ok(c, gin.H{"printed": true})
 }
 
 // KickDrawer (printer.test) — pulses the cash drawer for a till test.
 func (h *H) KickDrawer(c *gin.Context) {
-        p := h.principal(c)
-        if err := h.Printer.Kick(); err != nil {
-                h.fail(c, 422, err.Error())
-                return
-        }
-        h.svc(c).Audit(p.ID, p.Username, "DRAWER_KICKED", "printer", h.settings(c).Get("printer_target"), "")
-        h.ok(c, gin.H{"kicked": true})
+	p := h.principal(c)
+	if err := h.Printer.Kick(); err != nil {
+		h.fail(c, 422, err.Error())
+		return
+	}
+	h.svc(c).Audit(p.ID, p.Username, "DRAWER_KICKED", "printer", h.settings(c).Get("printer_target"), "")
+	h.ok(c, gin.H{"kicked": true})
 }
 
 // ListPrintJobs (printer.test) — queue diagnostics.
 func (h *H) ListPrintJobs(c *gin.Context) {
-        jobs := h.Printer.ListJobs(50)
-        if jobs == nil {
-                jobs = []models.PrintJob{}
-        }
-        h.ok(c, jobs)
+	jobs := h.Printer.ListJobs(50)
+	if jobs == nil {
+		jobs = []models.PrintJob{}
+	}
+	h.ok(c, jobs)
 }

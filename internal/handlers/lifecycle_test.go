@@ -98,10 +98,10 @@ func cashSale(t *testing.T, engine *gin.Engine, admin string, name string) map[s
 		}
 	}
 	w := doJSON(t, engine, http.MethodPost, "/api/v1/orders/checkout", admin, map[string]any{
-		"items":        []map[string]any{{"productId": pid, "qty": 1}},
+		"items":         []map[string]any{{"productId": pid, "qty": 1}},
 		"paymentMethod": "cash",
-		"clientUuid":   fmt.Sprintf("lc-%v", pid),
-		"customerName": "Jane Customer",
+		"clientUuid":    fmt.Sprintf("lc-%v", pid),
+		"customerName":  "Jane Customer",
 		"customerPhone": "0717344440",
 	})
 	if w.Code != 201 && w.Code != 200 {

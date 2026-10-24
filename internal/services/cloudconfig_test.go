@@ -14,10 +14,10 @@ import (
 func TestApplyCloudConfigWritesSettings(t *testing.T) {
 	s := newProviderTestService(t)
 	n := s.applyCloudConfig(map[string]string{
-		"paystack_public_key":  "pk_test_x",
-		"paystack_currency":    "KES",
-		"till_number":          "123456",
-		"config_synced_at":     "", // empty values are skipped entirely
+		"paystack_public_key": "pk_test_x",
+		"paystack_currency":   "KES",
+		"till_number":         "123456",
+		"config_synced_at":    "", // empty values are skipped entirely
 	})
 	if n != 3 {
 		t.Fatalf("expected 3 applied rows, got %d", n)

@@ -11,10 +11,11 @@ import (
 )
 
 // Target strings (configured in settings):
-//   tcp://HOST:9100   — network thermal printer (most common)
-//   file:///dev/usb/lp0 — USB printer device
-//   (empty)           — printing disabled; jobs stay queued harmlessly? No —
-//                       Enqueue skips when no target is configured.
+//
+//	tcp://HOST:9100   — network thermal printer (most common)
+//	file:///dev/usb/lp0 — USB printer device
+//	(empty)           — printing disabled; jobs stay queued harmlessly? No —
+//	                    Enqueue skips when no target is configured.
 type Target string
 
 func (t Target) Enabled() bool { return strings.TrimSpace(string(t)) != "" }
@@ -50,18 +51,18 @@ func (t Target) Open() (io.WriteCloser, error) {
 // would let a compromised admin account truncate arbitrary files (the
 // worker opens targets write-only).
 func (t Target) Valid() bool {
-        s := strings.TrimSpace(string(t))
-        if s == "" {
-                return true // disabled is valid
-        }
-        if strings.HasPrefix(s, "tcp://") {
-                return true
-        }
-        if strings.HasPrefix(s, "file:///dev/usb/lp") {
-                return true
-        }
-        if runtime.GOOS == "windows" && strings.HasPrefix(s, "file://COM") {
-                return true // COM1:-style receipt printers
-        }
-        return false
+	s := strings.TrimSpace(string(t))
+	if s == "" {
+		return true // disabled is valid
+	}
+	if strings.HasPrefix(s, "tcp://") {
+		return true
+	}
+	if strings.HasPrefix(s, "file:///dev/usb/lp") {
+		return true
+	}
+	if runtime.GOOS == "windows" && strings.HasPrefix(s, "file://COM") {
+		return true // COM1:-style receipt printers
+	}
+	return false
 }

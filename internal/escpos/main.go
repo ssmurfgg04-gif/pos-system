@@ -12,27 +12,28 @@ import (
 	"math"
 	"strings"
 )
+
 type Style struct {
-	Bold			bool
-	Width, Height	uint8
-	Reverse			bool
-	Underline		uint8 // can be 0, 1 or 2
-	UpsideDown		bool
-	Rotate			bool
-	Justify			uint8
+	Bold          bool
+	Width, Height uint8
+	Reverse       bool
+	Underline     uint8 // can be 0, 1 or 2
+	UpsideDown    bool
+	Rotate        bool
+	Justify       uint8
 }
 
 const (
-	JustifyLeft uint8 = 0
-	JustifyCenter uint8 = 1
-	JustifyRight uint8 = 2
+	JustifyLeft                 uint8 = 0
+	JustifyCenter               uint8 = 1
+	JustifyRight                uint8 = 2
 	QRCodeErrorCorrectionLevelL uint8 = 48
 	QRCodeErrorCorrectionLevelM uint8 = 49
 	QRCodeErrorCorrectionLevelQ uint8 = 50
 	QRCodeErrorCorrectionLevelH uint8 = 51
-	esc byte = 0x1B
-	gs byte = 0x1D
-	fs byte = 0x1C
+	esc                         byte  = 0x1B
+	gs                          byte  = 0x1D
+	fs                          byte  = 0x1C
 )
 
 type Escpos struct {
@@ -61,7 +62,6 @@ func (e *Escpos) PrintAndCut() error {
 	}
 	return e.dst.Flush()
 }
-
 
 // KickDrawer pulses the cash-drawer kick connector: ESC p m t1 t2.
 // Pin is 0 or 1 (clamped); on/off times are in 2ms units
@@ -127,7 +127,6 @@ func (e *Escpos) Write(data string) (int, error) {
 		return 0, err
 	}
 
-
 	return e.WriteRaw([]byte(data))
 }
 
@@ -184,7 +183,6 @@ func (e *Escpos) Size(width uint8, height uint8) *Escpos {
 	return e
 }
 
-
 // Barcode stuff.
 
 // Sets the position of the HRI characters
@@ -198,6 +196,7 @@ func (e *Escpos) HRIPosition(p uint8) (int, error) {
 	}
 	return e.WriteRaw([]byte{gs, 'H', p})
 }
+
 // Sets the HRI font to either
 // false: Font A (12x24) or
 // true: Font B (9x24)
@@ -272,48 +271,48 @@ func (e *Escpos) EAN8(code string) (int, error) {
 // Prints a CODE39 barcode. code holds 1+ chars from 0-9A-Z and
 // space plus -$/.+%; case-insensitive (uppercased before printing).
 func (e *Escpos) CODE39(code string) (int, error) {
-        if len(code) == 0 {
-                return 0, fmt.Errorf("code must not be empty")
-        }
-        upper := strings.ToUpper(code)
-        for _, c := range upper {
-                if !(c >= '0' && c <= '9') && !(c >= 'A' && c <= 'Z') &&
-                        !strings.ContainsRune(" -. $/+%", c) {
-                        return 0, fmt.Errorf("code contains unsupported CODE39 character %q", c)
-                }
-        }
-        byteCode := append([]byte(upper), 0)
-        return e.WriteRaw(append([]byte{gs, 'k', 4}, byteCode...))
+	if len(code) == 0 {
+		return 0, fmt.Errorf("code must not be empty")
+	}
+	upper := strings.ToUpper(code)
+	for _, c := range upper {
+		if !(c >= '0' && c <= '9') && !(c >= 'A' && c <= 'Z') &&
+			!strings.ContainsRune(" -. $/+%", c) {
+			return 0, fmt.Errorf("code contains unsupported CODE39 character %q", c)
+		}
+	}
+	byteCode := append([]byte(upper), 0)
+	return e.WriteRaw(append([]byte{gs, 'k', 4}, byteCode...))
 }
 
 // Prints an ITF (Interleaved 2 of 5) barcode. code holds digits only
 // with an even length.
 func (e *Escpos) ITF(code string) (int, error) {
-        if len(code) == 0 || len(code)%2 != 0 {
-                return 0, fmt.Errorf("code must have a non-zero even length")
-        }
-        if !onlyDigits(code) {
-                return 0, fmt.Errorf("code can only contain numerical characters")
-        }
-        byteCode := append([]byte(code), 0)
-        return e.WriteRaw(append([]byte{gs, 'k', 5}, byteCode...))
+	if len(code) == 0 || len(code)%2 != 0 {
+		return 0, fmt.Errorf("code must have a non-zero even length")
+	}
+	if !onlyDigits(code) {
+		return 0, fmt.Errorf("code can only contain numerical characters")
+	}
+	byteCode := append([]byte(code), 0)
+	return e.WriteRaw(append([]byte{gs, 'k', 5}, byteCode...))
 }
 
 // Prints a CODABAR barcode. code holds 1+ chars from 0-9A-D plus
 // -$:/+. (start/stop characters A-D included verbatim).
 func (e *Escpos) CODABAR(code string) (int, error) {
-        if len(code) == 0 {
-                return 0, fmt.Errorf("code must not be empty")
-        }
-        upper := strings.ToUpper(code)
-        for _, c := range upper {
-                if !(c >= '0' && c <= '9') && !(c >= 'A' && c <= 'D') &&
-                        !strings.ContainsRune("-$:/+. ", c) {
-                        return 0, fmt.Errorf("code contains unsupported CODABAR character %q", c)
-                }
-        }
-        byteCode := append([]byte(upper), 0)
-        return e.WriteRaw(append([]byte{gs, 'k', 6}, byteCode...))
+	if len(code) == 0 {
+		return 0, fmt.Errorf("code must not be empty")
+	}
+	upper := strings.ToUpper(code)
+	for _, c := range upper {
+		if !(c >= '0' && c <= '9') && !(c >= 'A' && c <= 'D') &&
+			!strings.ContainsRune("-$:/+. ", c) {
+			return 0, fmt.Errorf("code contains unsupported CODABAR character %q", c)
+		}
+	}
+	byteCode := append([]byte(upper), 0)
+	return e.WriteRaw(append([]byte{gs, 'k', 6}, byteCode...))
 }
 
 // Prints a QR Code.
@@ -364,7 +363,7 @@ func (e *Escpos) QRCode(code string, model bool, size uint8, correctionLevel uin
 
 	// pL and pH define the size of the data. Data ranges from 1 to (pL + pH*256)-3
 	// 3 < pL + pH*256 < 7093
-	var codeLength = len(code)+3
+	var codeLength = len(code) + 3
 	var pL, pH byte
 	pH = byte(int(math.Floor(float64(codeLength) / 256)))
 	pL = byte(codeLength - 256*int(pH))
@@ -415,6 +414,7 @@ func (e *Escpos) PrintNVBitImage(p uint8, mode uint8) (int, error) {
 func (e *Escpos) LineFeed() (int, error) {
 	return e.Write("\n")
 }
+
 // According to command manual this prints and feeds the paper p*line spacing.
 func (e *Escpos) LineFeedD(p uint8) (int, error) {
 	return e.WriteRaw([]byte{esc, 'd', p})
@@ -429,6 +429,7 @@ func (e *Escpos) DefaultLineSpacing() (int, error) {
 func (e *Escpos) LineSpacing(p uint8) (int, error) {
 	return e.WriteRaw([]byte{esc, '3', p})
 }
+
 // Initializes the printer to the settings it had when turned on
 func (e *Escpos) Initialize() (int, error) {
 	return e.WriteRaw([]byte{esc, '@'})
@@ -443,9 +444,6 @@ func (e *Escpos) MotionUnits(x, y uint8) (int, error) {
 func (e *Escpos) Cut() (int, error) {
 	return e.WriteRaw([]byte{gs, 'V', 'A', '0'})
 }
-
-
-
 
 // Helpers
 func boolToByte(b bool) byte {

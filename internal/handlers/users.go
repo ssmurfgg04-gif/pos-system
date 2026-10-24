@@ -1,184 +1,184 @@
 package handlers
 
 import (
-        "database/sql"
-        "encoding/json"
-        "errors"
-        "time"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"time"
 
-        "github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin"
 
-        "posapp/internal/auth"
-        "posapp/internal/database"
-        "posapp/internal/models"
+	"posapp/internal/auth"
+	"posapp/internal/database"
+	"posapp/internal/models"
 )
 
 // rotationStamp matches services.nowStamp (fixed-width, comparable).
 func rotationStamp() string { return time.Now().UTC().Format("2006-01-02T15:04:05.000Z") }
 
 type userBody struct {
-        Username string `json:"username" binding:"required"`
-        FullName string `json:"fullName"`
-        Password string `json:"password"`
-        PIN      string `json:"pin"`
-        RoleID   int64  `json:"roleId" binding:"required"`
-        Active   *bool  `json:"active"`
+	Username string `json:"username" binding:"required"`
+	FullName string `json:"fullName"`
+	Password string `json:"password"`
+	PIN      string `json:"pin"`
+	RoleID   int64  `json:"roleId" binding:"required"`
+	Active   *bool  `json:"active"`
 }
 
 // ListUsers (users.manage).
 func (h *H) ListUsers(c *gin.Context) {
-        rows, err := h.db(c).Query(h.db(c).Rebind(`
+	rows, err := h.db(c).Query(h.db(c).Rebind(`
                 SELECT u.id, u.username, COALESCE(u.full_name,''), u.role_id, COALESCE(r.name,''),
                         u.is_active, CASE WHEN u.pin_hash != '' THEN 1 ELSE 0 END, u.created_at
                 FROM users u JOIN roles r ON r.id = u.role_id ORDER BY u.id`))
-        if err != nil {
-                h.fail(c, 500, err.Error())
-                return
-        }
-        defer rows.Close()
-        out := []models.User{}
-        for rows.Next() {
-                var u models.User
-                var active, pinSet int
-                if err := rows.Scan(&u.ID, &u.Username, &u.FullName, &u.RoleID, &u.RoleName, &active, &pinSet, &u.CreatedAt); err != nil {
-                        break
-                }
-                u.Active = active == 1
-                u.PINSet = pinSet == 1
-                out = append(out, u)
-        }
-        h.ok(c, out)
+	if err != nil {
+		h.fail(c, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []models.User{}
+	for rows.Next() {
+		var u models.User
+		var active, pinSet int
+		if err := rows.Scan(&u.ID, &u.Username, &u.FullName, &u.RoleID, &u.RoleName, &active, &pinSet, &u.CreatedAt); err != nil {
+			break
+		}
+		u.Active = active == 1
+		u.PINSet = pinSet == 1
+		out = append(out, u)
+	}
+	h.ok(c, out)
 }
 
 // CreateUser (users.manage).
 func (h *H) CreateUser(c *gin.Context) {
-        p := h.principal(c)
-        var body userBody
-        if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, err.Error())
-                return
-        }
-        if !auth.ValidUsername(body.Username) {
-                h.fail(c, 400, "username must be 3-32 letters, digits, dot, underscore, or hyphen")
-                return
-        }
-        if !auth.ValidPassword(body.Password) {
-                h.fail(c, 400, "password must be 6-128 characters")
-                return
-        }
-        if auth.IsDefaultPassword(body.Password) {
-                h.fail(c, 400, "choose a stronger password, that one is public")
-                return
-        }
-        var roleExists int
-        if err := h.db(c).QueryRow(`SELECT COUNT(*) FROM roles WHERE id = ?`, body.RoleID).Scan(&roleExists); err != nil || roleExists == 0 {
-                h.fail(c, 400, "role not found")
-                return
-        }
-        var newRolePerms string
-        if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, body.RoleID).Scan(&newRolePerms); err != nil {
-                h.fail(c, 400, "role not found")
-                return
-        }
-        if !h.guardGrantElevation(c, newRolePerms) {
-                return
-        }
-        pwHash, err := auth.HashPassword(body.Password)
-        if err != nil {
-                h.fail(c, 500, err.Error())
-                return
-        }
-        pinHash := ""
-        if body.PIN != "" {
-                if !auth.ValidPIN(body.PIN) {
-                        h.fail(c, 400, "PIN must be exactly 4 digits and not an obvious pattern")
-                        return
-                }
-                pinHash, err = auth.HashPassword(body.PIN)
-                if err != nil {
-                        h.fail(c, 500, err.Error())
-                        return
-                }
-        }
-        active := 1
-        if body.Active != nil && !*body.Active {
-                active = 0
-        }
-        shopID := h.shopID(c)
-        if h.Tenants != nil {
-                if _, taken := h.Tenants.ShopForUser(body.Username); taken {
-                        h.fail(c, 409, "username already exists")
-                        return
-                }
-        }
-        res, err := h.db(c).Exec(h.db(c).Rebind(`
+	p := h.principal(c)
+	var body userBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, err.Error())
+		return
+	}
+	if !auth.ValidUsername(body.Username) {
+		h.fail(c, 400, "username must be 3-32 letters, digits, dot, underscore, or hyphen")
+		return
+	}
+	if !auth.ValidPassword(body.Password) {
+		h.fail(c, 400, "password must be 6-128 characters")
+		return
+	}
+	if auth.IsDefaultPassword(body.Password) {
+		h.fail(c, 400, "choose a stronger password, that one is public")
+		return
+	}
+	var roleExists int
+	if err := h.db(c).QueryRow(`SELECT COUNT(*) FROM roles WHERE id = ?`, body.RoleID).Scan(&roleExists); err != nil || roleExists == 0 {
+		h.fail(c, 400, "role not found")
+		return
+	}
+	var newRolePerms string
+	if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, body.RoleID).Scan(&newRolePerms); err != nil {
+		h.fail(c, 400, "role not found")
+		return
+	}
+	if !h.guardGrantElevation(c, newRolePerms) {
+		return
+	}
+	pwHash, err := auth.HashPassword(body.Password)
+	if err != nil {
+		h.fail(c, 500, err.Error())
+		return
+	}
+	pinHash := ""
+	if body.PIN != "" {
+		if !auth.ValidPIN(body.PIN) {
+			h.fail(c, 400, "PIN must be exactly 4 digits and not an obvious pattern")
+			return
+		}
+		pinHash, err = auth.HashPassword(body.PIN)
+		if err != nil {
+			h.fail(c, 500, err.Error())
+			return
+		}
+	}
+	active := 1
+	if body.Active != nil && !*body.Active {
+		active = 0
+	}
+	shopID := h.shopID(c)
+	if h.Tenants != nil {
+		if _, taken := h.Tenants.ShopForUser(body.Username); taken {
+			h.fail(c, 409, "username already exists")
+			return
+		}
+	}
+	res, err := h.db(c).Exec(h.db(c).Rebind(`
                 INSERT INTO users (username, full_name, password_hash, pin_hash, role_id, is_active, must_rotate)
                 VALUES (?, ?, ?, ?, ?, ?, 1)`), body.Username, body.FullName, pwHash, pinHash, body.RoleID, active)
-        if err != nil {
-                h.fail(c, 409, "username already exists")
-                return
-        }
-        id, _ := res.LastInsertId()
-        // Registry routing or the new user can never log in; rotation forced
-        // because an admin chose this password, not its owner.
-        if h.Tenants != nil {
-                if err := h.Tenants.RegisterUser(body.Username, shopID); err != nil {
-                        h.fail(c, 409, err.Error())
-                        return
-                }
-        }
-        h.svc(c).Audit(p.ID, p.Username, "USER_CREATED", "user", body.Username, "")
-        // A freshly created owner-level account also activates the portal.
-        if username, ok := h.ownerLevelUsername(c, id); ok && body.Password != "" {
-                go h.svc(c).PortalPublishCredentials(username, body.Password)
-        }
-        h.created(c, gin.H{"id": id})
+	if err != nil {
+		h.fail(c, 409, "username already exists")
+		return
+	}
+	id, _ := res.LastInsertId()
+	// Registry routing or the new user can never log in; rotation forced
+	// because an admin chose this password, not its owner.
+	if h.Tenants != nil {
+		if err := h.Tenants.RegisterUser(body.Username, shopID); err != nil {
+			h.fail(c, 409, err.Error())
+			return
+		}
+	}
+	h.svc(c).Audit(p.ID, p.Username, "USER_CREATED", "user", body.Username, "")
+	// A freshly created owner-level account also activates the portal.
+	if username, ok := h.ownerLevelUsername(c, id); ok && body.Password != "" {
+		go h.svc(c).PortalPublishCredentials(username, body.Password)
+	}
+	h.created(c, gin.H{"id": id})
 }
 
 // UpdateUser (users.manage).
 func (h *H) UpdateUser(c *gin.Context) {
-        p := h.principal(c)
-        id, ok := h.pathID(c, "id")
-        if !ok {
-                return
-        }
-        var body userBody
-        if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, err.Error())
-                return
-        }
-        var active int
-        if body.Active != nil && !*body.Active {
-                active = 0
-        } else {
-                active = 1
-        }
-        if !h.lastOwnerGuard(c, id, body.RoleID, active) {
-                return
-        }
-        // Assignment escalation: putting someone into a role with authority
-        // keys requires the caller to hold those keys themselves.
-        var newRolePerms string
-        if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, body.RoleID).Scan(&newRolePerms); err != nil {
-                h.fail(c, 409, "cannot verify the role right now, the change was refused. Try again.")
-                return
-        }
-        if !h.guardGrantElevation(c, newRolePerms) {
-                return
-        }
-        res, err := h.db(c).Exec(h.db(c).Rebind(`
+	p := h.principal(c)
+	id, ok := h.pathID(c, "id")
+	if !ok {
+		return
+	}
+	var body userBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, err.Error())
+		return
+	}
+	var active int
+	if body.Active != nil && !*body.Active {
+		active = 0
+	} else {
+		active = 1
+	}
+	if !h.lastOwnerGuard(c, id, body.RoleID, active) {
+		return
+	}
+	// Assignment escalation: putting someone into a role with authority
+	// keys requires the caller to hold those keys themselves.
+	var newRolePerms string
+	if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, body.RoleID).Scan(&newRolePerms); err != nil {
+		h.fail(c, 409, "cannot verify the role right now, the change was refused. Try again.")
+		return
+	}
+	if !h.guardGrantElevation(c, newRolePerms) {
+		return
+	}
+	res, err := h.db(c).Exec(h.db(c).Rebind(`
                 UPDATE users SET full_name = ?, role_id = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?`), body.FullName, body.RoleID, active, id)
-        if err != nil {
-                h.fail(c, 500, err.Error())
-                return
-        }
-        if n, _ := res.RowsAffected(); n != 1 {
-                h.fail(c, 404, "user not found")
-                return
-        }
-        h.svc(c).Audit(p.ID, p.Username, "USER_UPDATED", "user", itoa64(id), body.Username)
-        h.ok(c, gin.H{"updated": true})
+	if err != nil {
+		h.fail(c, 500, err.Error())
+		return
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		h.fail(c, 404, "user not found")
+		return
+	}
+	h.svc(c).Audit(p.ID, p.Username, "USER_UPDATED", "user", itoa64(id), body.Username)
+	h.ok(c, gin.H{"updated": true})
 }
 
 // lastOwnerGuard refuses a change that would leave the shop without any
@@ -188,154 +188,154 @@ func (h *H) UpdateUser(c *gin.Context) {
 // Fail-CLOSED: if the database cannot prove another owner exists, the risky
 // change is refused (a transient DB error must never enable owner lockout).
 func (h *H) lastOwnerGuard(c *gin.Context, targetID int64, newRoleID int64, setActive int) bool {
-        if setActive == 0 && targetID == h.principal(c).ID {
-                h.fail(c, 409, "you cannot deactivate yourself")
-                return false
-        }
-        // noRow reports whether err is sql.ErrNoRows — the target simply does
-        // not exist in THIS shop. That is not a database failure: let the
-        // request continue so the outer handler answers 404 (and a delete of a
-        // user that is not here can never lock out an owner that is not here).
-        noRow := func(err error) bool { return errors.Is(err, sql.ErrNoRows) }
-        ownerLevel := func(roleID int64) (bool, error) {
-                var permsJSON string
-                if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, roleID).Scan(&permsJSON); err != nil {
-                        return false, err
-                }
-                return permsIncludeBoth(permsJSON, "settings.manage", "users.manage"), nil
-        }
-        if setActive == 0 {
-                var roleID int64
-                if err := h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID); err != nil && !noRow(err) {
-                        h.fail(c, 409, "cannot verify the account's role right now, the last owner would be at risk, so the change was refused. Try again.")
-                        return false
-                } else if noRow(err) {
-                        return true
-                }
-                ok, err := ownerLevel(roleID)
-                if err != nil {
-                        h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
-                        return false
-                }
-                if !ok {
-                        return true // deactivating a non-owner: fine
-                }
-        } else {
-                ok, err := ownerLevel(newRoleID)
-                if err != nil {
-                        h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
-                        return false
-                }
-                if ok {
-                        return true // reassigning to/demoting within owner-level roles keeps an owner
-                }
-                var roleID int64
-                if err := h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID); err != nil && !noRow(err) {
-                        h.fail(c, 409, "cannot verify the account's role right now, the last owner would be at risk, so the change was refused. Try again.")
-                        return false
-                } else if noRow(err) {
-                        return true
-                }
-                wasOwner, err := ownerLevel(roleID)
-                if err != nil {
-                        h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
-                        return false
-                }
-                if !wasOwner {
-                        return true // target was not an owner: fine
-                }
-        }
-        // Count OTHER active owner-level users.
-        rows, err := h.db(c).Query(`
+	if setActive == 0 && targetID == h.principal(c).ID {
+		h.fail(c, 409, "you cannot deactivate yourself")
+		return false
+	}
+	// noRow reports whether err is sql.ErrNoRows — the target simply does
+	// not exist in THIS shop. That is not a database failure: let the
+	// request continue so the outer handler answers 404 (and a delete of a
+	// user that is not here can never lock out an owner that is not here).
+	noRow := func(err error) bool { return errors.Is(err, sql.ErrNoRows) }
+	ownerLevel := func(roleID int64) (bool, error) {
+		var permsJSON string
+		if err := h.db(c).QueryRow(`SELECT COALESCE(permissions,'[]') FROM roles WHERE id = ?`, roleID).Scan(&permsJSON); err != nil {
+			return false, err
+		}
+		return permsIncludeBoth(permsJSON, "settings.manage", "users.manage"), nil
+	}
+	if setActive == 0 {
+		var roleID int64
+		if err := h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID); err != nil && !noRow(err) {
+			h.fail(c, 409, "cannot verify the account's role right now, the last owner would be at risk, so the change was refused. Try again.")
+			return false
+		} else if noRow(err) {
+			return true
+		}
+		ok, err := ownerLevel(roleID)
+		if err != nil {
+			h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
+			return false
+		}
+		if !ok {
+			return true // deactivating a non-owner: fine
+		}
+	} else {
+		ok, err := ownerLevel(newRoleID)
+		if err != nil {
+			h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
+			return false
+		}
+		if ok {
+			return true // reassigning to/demoting within owner-level roles keeps an owner
+		}
+		var roleID int64
+		if err := h.db(c).QueryRow(`SELECT role_id FROM users WHERE id = ?`, targetID).Scan(&roleID); err != nil && !noRow(err) {
+			h.fail(c, 409, "cannot verify the account's role right now, the last owner would be at risk, so the change was refused. Try again.")
+			return false
+		} else if noRow(err) {
+			return true
+		}
+		wasOwner, err := ownerLevel(roleID)
+		if err != nil {
+			h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
+			return false
+		}
+		if !wasOwner {
+			return true // target was not an owner: fine
+		}
+	}
+	// Count OTHER active owner-level users.
+	rows, err := h.db(c).Query(`
                 SELECT u.id, COALESCE(r.permissions, '[]') FROM users u JOIN roles r ON r.id = u.role_id
                 WHERE u.is_active = 1 AND u.id != ?`, targetID)
-        if err != nil {
-                h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
-                return false // fail CLOSED — never allow when safety cannot be proven
-        }
-        defer rows.Close()
-        for rows.Next() {
-                var otherID int64
-                var permsJSON string
-                if err := rows.Scan(&otherID, &permsJSON); err == nil {
-                        if permsIncludeBoth(permsJSON, "settings.manage", "users.manage") {
-                                return true // another owner exists
-                        }
-                }
-        }
-        h.fail(c, 409, "this is the last owner account, promote another owner first")
-        return false
+	if err != nil {
+		h.fail(c, 409, "cannot verify owner accounts right now, the last owner would be at risk, so the change was refused. Try again.")
+		return false // fail CLOSED — never allow when safety cannot be proven
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var otherID int64
+		var permsJSON string
+		if err := rows.Scan(&otherID, &permsJSON); err == nil {
+			if permsIncludeBoth(permsJSON, "settings.manage", "users.manage") {
+				return true // another owner exists
+			}
+		}
+	}
+	h.fail(c, 409, "this is the last owner account, promote another owner first")
+	return false
 }
 
 func permsIncludeBoth(permsJSON, a, b string) bool {
-        var perms []string
-        if err := json.Unmarshal([]byte(permsJSON), &perms); err != nil {
-                return false
-        }
-        hasA, hasB := false, false
-        for _, p := range perms {
-                if p == a {
-                        hasA = true
-                }
-                if p == b {
-                        hasB = true
-                }
-        }
-        return hasA && hasB
+	var perms []string
+	if err := json.Unmarshal([]byte(permsJSON), &perms); err != nil {
+		return false
+	}
+	hasA, hasB := false, false
+	for _, p := range perms {
+		if p == a {
+			hasA = true
+		}
+		if p == b {
+			hasB = true
+		}
+	}
+	return hasA && hasB
 }
 
 type passwordBody struct {
-        Password string `json:"password" binding:"required,min=6,max=128"`
+	Password string `json:"password" binding:"required,min=6,max=128"`
 }
 
 // SetPassword (self-service, or users.manage for others). Resetting someone
 // else's password re-arms rotation (they must pick their own on next login);
 // changing your own clears it.
 func (h *H) SetPassword(c *gin.Context) {
-        p := h.principal(c)
-        id, ok := h.pathID(c, "id")
-        if !ok {
-                return
-        }
-        if id != p.ID && !p.Can("users.manage") {
-                h.fail(c, 403, "missing permission: users.manage")
-                return
-        }
-        var body passwordBody
-        if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, "password must be at least 6 characters")
-                return
-        }
-        hash, err := auth.HashPassword(body.Password)
-        if err != nil {
-                h.fail(c, 500, err.Error())
-                return
-        }
-        rotate := 0
-        if id != p.ID {
-                rotate = 1
-        }
-        res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET password_hash = ?, must_rotate = ?, password_changed_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, rotate, rotationStamp(), id)
-        if err != nil || n(res) != 1 {
-                h.fail(c, 404, "user not found")
-                return
-        }
-        h.svc(c).Audit(p.ID, p.Username, "USER_PASSWORD_RESET", "user", itoa64(id), "")
-        // Owner portal: when an owner-level password is saved (or reset by
-        // another admin), publish its bcrypt hash to the cloud so the shop
-        // owner can log into the public website and watch performance.
-        if username, ok := h.ownerLevelUsername(c, id); ok {
-                go h.svc(c).PortalPublishCredentials(username, body.Password)
-        }
-        // Self-service password changes rotate the recovery code so the old
-        // paper copy can never be replayed against the new password.
-        if id == p.ID {
-                if _, err := h.svc(c).IssueRecoveryCode(id); err != nil {
-                        h.fail(c, 500, "password saved but recovery code rotation failed: "+err.Error())
-                        return
-                }
-        }
-        h.ok(c, gin.H{"updated": true})
+	p := h.principal(c)
+	id, ok := h.pathID(c, "id")
+	if !ok {
+		return
+	}
+	if id != p.ID && !p.Can("users.manage") {
+		h.fail(c, 403, "missing permission: users.manage")
+		return
+	}
+	var body passwordBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "password must be at least 6 characters")
+		return
+	}
+	hash, err := auth.HashPassword(body.Password)
+	if err != nil {
+		h.fail(c, 500, err.Error())
+		return
+	}
+	rotate := 0
+	if id != p.ID {
+		rotate = 1
+	}
+	res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET password_hash = ?, must_rotate = ?, password_changed_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, rotate, rotationStamp(), id)
+	if err != nil || n(res) != 1 {
+		h.fail(c, 404, "user not found")
+		return
+	}
+	h.svc(c).Audit(p.ID, p.Username, "USER_PASSWORD_RESET", "user", itoa64(id), "")
+	// Owner portal: when an owner-level password is saved (or reset by
+	// another admin), publish its bcrypt hash to the cloud so the shop
+	// owner can log into the public website and watch performance.
+	if username, ok := h.ownerLevelUsername(c, id); ok {
+		go h.svc(c).PortalPublishCredentials(username, body.Password)
+	}
+	// Self-service password changes rotate the recovery code so the old
+	// paper copy can never be replayed against the new password.
+	if id == p.ID {
+		if _, err := h.svc(c).IssueRecoveryCode(id); err != nil {
+			h.fail(c, 500, "password saved but recovery code rotation failed: "+err.Error())
+			return
+		}
+	}
+	h.ok(c, gin.H{"updated": true})
 }
 
 // userIsOwnerLevel reports the username when the given user holds BOTH
@@ -343,108 +343,108 @@ func (h *H) SetPassword(c *gin.Context) {
 // the public performance portal). Shared by the password-save publish path
 // and the login self-heal path.
 func userIsOwnerLevel(db *database.DB, userID int64) (string, bool) {
-        var username, permsJSON string
-        err := db.QueryRow(db.Rebind(`
+	var username, permsJSON string
+	err := db.QueryRow(db.Rebind(`
                 SELECT u.username, COALESCE(r.permissions, '[]')
                 FROM users u JOIN roles r ON r.id = u.role_id
                 WHERE u.id = ? AND u.is_active = 1`), userID).Scan(&username, &permsJSON)
-        if err != nil {
-                return "", false
-        }
-        var perms []string
-        if err := json.Unmarshal([]byte(permsJSON), &perms); err != nil {
-                return "", false
-        }
-        want := map[string]bool{"settings.manage": false, "users.manage": false}
-        for _, p := range perms {
-                if _, hit := want[p]; hit {
-                        want[p] = true
-                }
-        }
-        if !want["settings.manage"] || !want["users.manage"] {
-                return "", false
-        }
-        return username, true
+	if err != nil {
+		return "", false
+	}
+	var perms []string
+	if err := json.Unmarshal([]byte(permsJSON), &perms); err != nil {
+		return "", false
+	}
+	want := map[string]bool{"settings.manage": false, "users.manage": false}
+	for _, p := range perms {
+		if _, hit := want[p]; hit {
+			want[p] = true
+		}
+	}
+	if !want["settings.manage"] || !want["users.manage"] {
+		return "", false
+	}
+	return username, true
 }
 
 // ownerLevelUsername reports the username when the request's user holds
 // BOTH settings.manage and users.manage.
 func (h *H) ownerLevelUsername(c *gin.Context, userID int64) (string, bool) {
-        return userIsOwnerLevel(h.db(c), userID)
+	return userIsOwnerLevel(h.db(c), userID)
 }
 
 type pinBody2 struct {
-        PIN string `json:"pin" binding:"required,len=4"`
+	PIN string `json:"pin" binding:"required,len=4"`
 }
 
 // SetPIN (self-service, or users.manage for others). Same rotation rule
 // as SetPassword: resetting others re-arms it.
 func (h *H) SetPIN(c *gin.Context) {
-        p := h.principal(c)
-        id, ok := h.pathID(c, "id")
-        if !ok {
-                return
-        }
-        if id != p.ID && !p.Can("users.manage") {
-                h.fail(c, 403, "missing permission: users.manage")
-                return
-        }
-        var body pinBody2
-        if err := c.ShouldBindJSON(&body); err != nil {
-                h.fail(c, 400, "PIN must be exactly 4 digits")
-                return
-        }
-        if !auth.ValidPIN(body.PIN) {
-                h.fail(c, 400, "PIN must be exactly 4 digits and not an obvious pattern")
-                return
-        }
-        hash, err := auth.HashPassword(body.PIN)
-        if err != nil {
-                h.fail(c, 500, err.Error())
-                return
-        }
-        rotate := 0
-        if id != p.ID {
-                rotate = 1
-        }
-        res, err := h.db(c).Exec(h.db(c).Rebind(
-                `UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '', must_rotate = ?, password_changed_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, rotate, rotationStamp(), id)
-        if err != nil || n(res) != 1 {
-                h.fail(c, 404, "user not found")
-                return
-        }
-        h.svc(c).Audit(p.ID, p.Username, "USER_PIN_RESET", "user", itoa64(id), "")
-        h.ok(c, gin.H{"updated": true})
+	p := h.principal(c)
+	id, ok := h.pathID(c, "id")
+	if !ok {
+		return
+	}
+	if id != p.ID && !p.Can("users.manage") {
+		h.fail(c, 403, "missing permission: users.manage")
+		return
+	}
+	var body pinBody2
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "PIN must be exactly 4 digits")
+		return
+	}
+	if !auth.ValidPIN(body.PIN) {
+		h.fail(c, 400, "PIN must be exactly 4 digits and not an obvious pattern")
+		return
+	}
+	hash, err := auth.HashPassword(body.PIN)
+	if err != nil {
+		h.fail(c, 500, err.Error())
+		return
+	}
+	rotate := 0
+	if id != p.ID {
+		rotate = 1
+	}
+	res, err := h.db(c).Exec(h.db(c).Rebind(
+		`UPDATE users SET pin_hash = ?, failed_pin_attempts = 0, pin_locked_until = '', must_rotate = ?, password_changed_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), hash, rotate, rotationStamp(), id)
+	if err != nil || n(res) != 1 {
+		h.fail(c, 404, "user not found")
+		return
+	}
+	h.svc(c).Audit(p.ID, p.Username, "USER_PIN_RESET", "user", itoa64(id), "")
+	h.ok(c, gin.H{"updated": true})
 }
 
 // DeactivateUser soft-deletes (orders keep their cashier reference).
 func (h *H) DeactivateUser(c *gin.Context) {
-        p := h.principal(c)
-        id, ok := h.pathID(c, "id")
-        if !ok {
-                return
-        }
-        if id == p.ID {
-                h.fail(c, 409, "you cannot deactivate yourself")
-                return
-        }
-        if !h.lastOwnerGuard(c, id, 0, 0) {
-                return
-        }
-        res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), id)
-        if err != nil || n(res) != 1 {
-                h.fail(c, 404, "user not found")
-                return
-        }
-        h.svc(c).Audit(p.ID, p.Username, "USER_DEACTIVATED", "user", itoa64(id), "")
-        h.ok(c, gin.H{"deactivated": true})
+	p := h.principal(c)
+	id, ok := h.pathID(c, "id")
+	if !ok {
+		return
+	}
+	if id == p.ID {
+		h.fail(c, 409, "you cannot deactivate yourself")
+		return
+	}
+	if !h.lastOwnerGuard(c, id, 0, 0) {
+		return
+	}
+	res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`), id)
+	if err != nil || n(res) != 1 {
+		h.fail(c, 404, "user not found")
+		return
+	}
+	h.svc(c).Audit(p.ID, p.Username, "USER_DEACTIVATED", "user", itoa64(id), "")
+	h.ok(c, gin.H{"deactivated": true})
 }
 
 func n(res sql.Result) int64 {
-        v, _ := res.RowsAffected()
-        return v
+	v, _ := res.RowsAffected()
+	return v
 }
 
 func itoa64(i int64) string {
-        return itoa(int(i))
+	return itoa(int(i))
 }

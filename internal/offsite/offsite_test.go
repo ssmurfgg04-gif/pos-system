@@ -60,7 +60,7 @@ func TestUploadListDownloadDeleteAgainstStub(t *testing.T) {
 		gotAuth = r.Header.Get("Authorization")
 		body, _ := io.ReadAll(r.Body)
 		gotBody = body
-	 switch {
+		switch {
 		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/storage/v1/object/list/"):
 			var q struct {
 				Prefix string `json:"prefix"`

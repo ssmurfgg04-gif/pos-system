@@ -32,11 +32,11 @@ func TestBuniCloudInitiateMapsEdgeResponse(t *testing.T) {
 			t.Errorf("push payload refs = %v", in)
 		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":                 true,
+			"ok":                  true,
 			"merchant_request_id": "9e99-4e1f",
 			"checkout_request_id": "ws_CO_TEST1",
-			"customer_message":   "Success. Request accepted for processing",
-			"invoice_number":     "7853959-ORD2",
+			"customer_message":    "Success. Request accepted for processing",
+			"invoice_number":      "7853959-ORD2",
 		})
 	})
 	srv := httptest.NewServer(mux)
