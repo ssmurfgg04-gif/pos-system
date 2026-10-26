@@ -47,7 +47,28 @@ PORTAL_TEMPLATE = os.path.join(ROOT, "scripts", "assets", "portal-page.html")
 JOIN_TEMPLATE = os.path.join(ROOT, "scripts", "assets", "join-page.html")
 
 RELEASES_PAGE = "https://github.com/ssmurfgg04-gif/pos-system/releases"
-VERSION = "1.4.1"
+
+
+def _resolve_version() -> str:
+    """Site version = the release-train-synced downloads/manifest.json.
+
+    This used to be a hardcoded constant, and it drifted EVERY release
+    (v1.4.2 shipped a manifest the site build then refused — one more
+    reason the landing page kept freezing on stale links). The manifest
+    is the single source of truth; LEDGERPOS_SITE_VERSION overrides for
+    rehearsals and the gate below still enforces the pair agrees.
+    """
+    override = os.environ.get("LEDGERPOS_SITE_VERSION", "").strip()
+    if override:
+        return override
+    try:
+        with open(os.path.join(ROOT, "downloads", "manifest.json")) as f:
+            return str(json.load(f).get("version") or "")
+    except Exception:
+        return ""
+
+
+VERSION = _resolve_version()
 
 INSTALLERS = [
     "ledgerpos-setup-windows-x64.exe",
@@ -99,7 +120,8 @@ def load_manifest() -> dict:
         die(f"downloads/manifest.json is missing assets: {', '.join(missing)}")
     if manifest.get("version") != VERSION:
         die(f"downloads/manifest.json version {manifest.get('version')} != "
-            f"netlify_build VERSION {VERSION} — bump VERSION (and the manifest) together")
+            f"site VERSION {VERSION or '<unreadable>'} — the release train "
+            f"must sync the manifest (LEDGERPOS_SITE_VERSION overrides for rehearsals)")
     total = sum(a["size"] for a in manifest["assets"])
     print(f"installer manifest ok — {len(INSTALLERS)} packages, "
           f"{total/1e6:.1f} MB total, served from {release_base()}")
