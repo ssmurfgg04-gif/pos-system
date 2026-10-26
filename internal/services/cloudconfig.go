@@ -1,26 +1,29 @@
 package services
 
 // cloudconfig.go — the central key vault client. Payment and deployment
-// config (Paystack keys, callback URL, currency, feature switches) lives
-// in the CLOUD's app_config table — never in the binary, never typed per
-// machine, never in a per-shop .env. Rotation is one SQL UPDATE in the
-// cloud; every till picks it up at its next boot / refresh with zero site
-// visits.
+// config (Buni route switch, till identity, offsite credentials, feature
+// switches) lives in the CLOUD's app_config table — never in the binary,
+// never typed per machine, never in a per-shop .env. Rotation is one SQL
+// UPDATE in the cloud; every till picks it up at its next boot / refresh
+// with zero site visits.
+//
+// Legacy paystack_* rows may still exist in old vaults: applyCloudConfig
+// tolerates them as opaque settings keys (masked/no-op safe), they just no
+// longer drive any payment rail.
 //
 // Fetch paths, in order of trust:
 //   1. sync_device_config RPC — device-gated (device_id + secret_hash must
 //      match an approved, non-revoked sync_devices row). Returns ALL rows,
-//      including secrets (the Paystack secret key) over TLS.
+//      including secrets (e.g. the offsite credentials) over TLS.
 //   2. anon REST read — RLS exposes only is_secret=false rows. Works for
 //      fresh/unregistered devices so public config arrives immediately;
 //      secrets require approval.
 //
-// Apply path: rows are lowercase settings keys (paystack_secret_key, …)
-// and land straight in the local settings store (secrets encrypted at
+// Apply path: rows are lowercase settings keys and land straight in the
+// local settings store (secrets encrypted at
 // rest by the settings vault). Real environment variables still win at
-// read time (GetPaystack checks env first), preserving headless overrides.
-// The settings store doubles as the offline snapshot, so a till that
-// loses connectivity keeps charging.
+// read time for the keys with an env mapping, preserving headless overrides.
+// The settings store doubles as the offline snapshot.
 
 import (
 	"context"
@@ -50,9 +53,8 @@ var vaultInjectedEnv = map[string]bool{}
 // cloudConfigSkip lists settings keys the cloud may NOT overwrite — local
 // identity/policy that must never be mutated from the outside.
 var cloudConfigSkip = map[string]bool{
-	"jwt_secret":               true, // machine-local auth root
-	"sync_device_secret":       true, // machine identity
-	"paystack_enabled_touched": true, // one-time migration marker
+	"jwt_secret":         true, // machine-local auth root
+	"sync_device_secret": true, // machine identity
 }
 
 type cloudConfigResult struct {
@@ -152,8 +154,8 @@ func fetchPublicConfig() (map[string]string, error) {
 // applyCloudConfig lands vault rows in the settings store. Returns how
 // many rows changed. Cloud is the source of truth; env vars still win at
 // read time. Deployment-style env names are also injected into the
-// process environment when unset (PAYSTACK_SECRET_KEY & friends for
-// server-mode parity and the offsite worker).
+// process environment when unset (OFFSITE_* for server-mode parity and
+// the offsite worker).
 func (s *Service) applyCloudConfig(cfg map[string]string) int {
 	applied := 0
 	for k, v := range cfg {
@@ -207,12 +209,6 @@ func (s *Service) applyCloudConfig(cfg map[string]string) int {
 // no mapping). Keeping this list explicit avoids surprise overrides.
 func settingsEnvName(k string) string {
 	switch k {
-	case "paystack_secret_key":
-		return "PAYSTACK_SECRET_KEY"
-	case "paystack_public_key":
-		return "PAYSTACK_PUBLIC_KEY"
-	case "paystack_callback_url":
-		return "PAYSTACK_CALLBACK_URL"
 	case "offsite_endpoint":
 		return "OFFSITE_ENDPOINT"
 	case "offsite_bucket":

@@ -430,9 +430,6 @@ func TestVaultProbeRPCConfigAfterRegistration(t *testing.T) {
 	deviceSecretBefore := s.deviceSecret()
 	_ = s.Settings().Set("offsite_api_key", "off-local-key")
 	_ = s.Settings().Set("paystack_public_key", "pk_live_stale_value_0001")
-	// Reserve the env slot so applyCloudConfig's os.Setenv is cleaned up.
-	t.Setenv("PAYSTACK_SECRET_KEY", "")
-
 	if err := s.RefreshCloudConfig(); err != nil {
 		t.Fatalf("RefreshCloudConfig: %v", err)
 	}
@@ -467,20 +464,15 @@ func TestVaultProbeRPCConfigAfterRegistration(t *testing.T) {
 	if s.Settings().Get("config_synced_at") == "" {
 		t.Fatal("config_synced_at missing")
 	}
-	// Deployment env injection (env was unset).
-	if got := os.Getenv("PAYSTACK_SECRET_KEY"); got != cloudSecret {
-		t.Fatalf("PAYSTACK_SECRET_KEY not injected from vault: %q", got)
-	}
-
-	// GetPaystack picks up the vault key.
-	if c := s.GetPaystack(); c == nil {
-		t.Fatal("GetPaystack nil with vault secret")
-	} else if s.paystackKey != cloudSecret {
-		t.Fatalf("paystack client key = %q, want vault secret", s.paystackKey)
-	}
+	// v1.4.4: paystack keys are opaque vault rows now — they land in the
+	// settings store (legacy-vault tolerance) but arm no payment client.
 }
 
-func TestVaultProbeEnvWinsAtReadTime(t *testing.T) {
+// TestVaultProbeRotationLandsInStore — the vault rotation promise at the
+// settings level: one cloud UPDATE reaches the till's store on the next
+// refresh, with no restart. (The env-injection layer is pinned by the
+// OFFSITE rotation probe below on a live env mapping.)
+func TestVaultProbeRotationLandsInStore(t *testing.T) {
 	fake := newVaultCloud(t)
 	vaultLink(t, fake.srv.URL)
 	const cloudSecret = "sk_live_cloudvaultkey0000000001"
@@ -489,7 +481,6 @@ func TestVaultProbeEnvWinsAtReadTime(t *testing.T) {
 	fake.mu.Unlock()
 
 	s := vaultProbeNewService(t)
-	t.Setenv("PAYSTACK_SECRET_KEY", "") // reserve slot; applyCloudConfig will inject
 	if err := s.RefreshCloudConfig(); err != nil {
 		t.Fatalf("RefreshCloudConfig: %v", err)
 	}
@@ -497,18 +488,7 @@ func TestVaultProbeEnvWinsAtReadTime(t *testing.T) {
 		t.Fatalf("vault secret missing from settings store")
 	}
 
-	// An operator-set env var wins at READ time even though the cloud value
-	// is what the settings store holds.
-	const envKey = "sk_live_envoverridekey000000042"
-	t.Setenv("PAYSTACK_SECRET_KEY", envKey)
-	if c := s.GetPaystack(); c == nil {
-		t.Fatal("GetPaystack nil with env key")
-	} else if s.paystackKey != envKey {
-		t.Fatalf("env did not win at read time: effective key %q", s.paystackKey)
-	}
-
-	// A cloud refresh landing a NEW secret updates the store but must not
-	// clobber the env override.
+	// A cloud refresh landing a NEW value updates the store.
 	fake.mu.Lock()
 	fake.configRows["paystack_secret_key"] = "sk_live_rotatedvaultkey0000009"
 	fake.mu.Unlock()
@@ -517,17 +497,6 @@ func TestVaultProbeEnvWinsAtReadTime(t *testing.T) {
 	}
 	if got := s.Settings().Get("paystack_secret_key"); got != "sk_live_rotatedvaultkey0000009" {
 		t.Fatalf("cloud rotation did not land in the store: %q", got)
-	}
-	if s.paystackKey != envKey {
-		t.Fatalf("rotation leaked into the effective key: %q", s.paystackKey)
-	}
-
-	// Clearing the env falls back to the (rotated) vault value.
-	t.Setenv("PAYSTACK_SECRET_KEY", "")
-	if c := s.GetPaystack(); c == nil {
-		t.Fatal("GetPaystack nil after env cleared")
-	} else if s.paystackKey != "sk_live_rotatedvaultkey0000009" {
-		t.Fatalf("fallback to vault value failed: %q", s.paystackKey)
 	}
 }
 
@@ -1313,63 +1282,51 @@ func TestAgent3GuardProductionStillArmed(t *testing.T) {
 
 // The vault's headline promise: "rotation is one SQL UPDATE in the cloud;
 // every till picks it up at its next refresh with zero site visits."
-// applyCloudConfig seeds PAYSTACK_SECRET_KEY into the process env the first
-// time it applies a secret (when the env slot is unset) — and GetPaystack
-// reads env FIRST. So the seed freezes: a later rotation updates the
-// settings store but os.Setenv is skipped ("env already set"), and the till
-// keeps charging on the REVOKED key until the process restarts. On a POS
-// appliance that runs for months, that is exactly the window the 6h
-// refresh loop exists to cover.
-//
-// This test asserts the CURRENT (buggy) behaviour as a tripwire: when the
-// fix lands, the final two asserts fail with "BUG T3-1 appears fixed" and
-// should be flipped to assert rotation wins.
+// applyCloudConfig seeds deployment env vars (OFFSITE_* — the paystack
+// mappings were retired in v1.4.4) into the process env the first time it
+// applies a value (when the env slot is unset). BUG T3-1 was exactly that
+// seed freezing: a later rotation updated the settings store but skipped
+// os.Setenv ("env already set"), so the till kept running on the REVOKED
+// value until restart. FIXED: a vault-injected env var follows rotation.
 func TestVaultProbeRotationAfterEnvInjection(t *testing.T) {
 	fake := newVaultCloud(t)
 	vaultLink(t, fake.srv.URL)
-	const v1 = "sk_live_vaultv1key00000000001"
-	const v2 = "sk_live_vaultv2key00000000002"
+	const v1 = "off-vaultv1key000000000001"
+	const v2 = "off-vaultv2key000000000002"
 	fake.mu.Lock()
-	fake.configRows["paystack_secret_key"] = v1
+	fake.configRows["offsite_api_key"] = v1
 	fake.mu.Unlock()
 
 	s := vaultProbeNewService(t)
-	t.Setenv("PAYSTACK_SECRET_KEY", "") // reserve the slot; applyCloudConfig will inject
+	t.Setenv("OFFSITE_API_KEY", "") // reserve the slot; applyCloudConfig will inject
 	if err := s.RefreshCloudConfig(); err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
 	// Precondition: the seed injection happened.
-	if got := os.Getenv("PAYSTACK_SECRET_KEY"); got != v1 {
+	if got := os.Getenv("OFFSITE_API_KEY"); got != v1 {
 		t.Fatalf("precondition: env not seeded from vault: %q", got)
-	}
-	if c := s.GetPaystack(); c == nil || s.paystackKey != v1 {
-		t.Fatalf("precondition: effective key %q, want v1", s.paystackKey)
 	}
 
 	// Rotation: one SQL UPDATE in the cloud.
 	fake.mu.Lock()
-	fake.configRows["paystack_secret_key"] = v2
+	fake.configRows["offsite_api_key"] = v2
 	fake.mu.Unlock()
 	if err := s.RefreshCloudConfig(); err != nil {
 		t.Fatalf("refresh after rotation: %v", err)
 	}
-	if got := s.Settings().Get("paystack_secret_key"); got != v2 {
+	if got := s.Settings().Get("offsite_api_key"); got != v2 {
 		t.Fatalf("rotation did not reach the settings store: %q", got)
 	}
 
-	// FIXED T3-1: the vault-injected env follows rotation — no till keeps
-	// charging on a revoked key, and child processes see the new value.
-	if got := os.Getenv("PAYSTACK_SECRET_KEY"); got != v2 {
+	// FIXED T3-1: the vault-injected env follows rotation — the till never
+	// keeps running on a revoked credential, and child processes see the
+	// new value.
+	if got := os.Getenv("OFFSITE_API_KEY"); got != v2 {
 		t.Fatalf("injected env must follow rotation, got %q", got)
-	}
-	if c := s.GetPaystack(); c == nil {
-		t.Fatal("GetPaystack nil after rotation")
-	} else if s.paystackKey != v2 {
-		t.Fatalf("effective key must follow rotation, got %q", s.paystackKey)
 	}
 	rotated := false
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "PAYSTACK_SECRET_KEY=") && strings.HasSuffix(kv, v2) {
+		if strings.HasPrefix(kv, "OFFSITE_API_KEY=") && strings.HasSuffix(kv, v2) {
 			rotated = true
 		}
 	}
@@ -1382,37 +1339,40 @@ func TestVaultProbeRotationAfterEnvInjection(t *testing.T) {
 // 18. Vault cannot remotely revoke a secret (INFO tripwire)
 // ---------------------------------------------------------------------------
 
-// applyCloudConfig skips rows with empty values, so an operator "revoking"
-// a compromised key by CLEARING the vault row never reaches the tills —
-// they keep charging on the compromised key indefinitely (no local expiry,
-// no negative signal). Only overwriting with a NEW value propagates.
+// applyCloudConfig clears a local setting (and any env var it injected)
+// when the vault row is emptied, so an operator "revoking" a compromised
+// credential by CLEARING the vault row does reach the tills — the local
+// value and the injected env var both disappear on the next refresh.
 func TestVaultProbeCloudCannotRevokeSecret(t *testing.T) {
 	fake := newVaultCloud(t)
 	vaultLink(t, fake.srv.URL)
-	const v1 = "sk_live_compromisedkey00000001"
+	const v1 = "off-compromisedkey00000001"
 	fake.mu.Lock()
-	fake.configRows["paystack_secret_key"] = v1
+	fake.configRows["offsite_api_key"] = v1
 	fake.mu.Unlock()
 	s := vaultProbeNewService(t)
-	t.Setenv("PAYSTACK_SECRET_KEY", "")
+	t.Setenv("OFFSITE_API_KEY", "")
 	if err := s.RefreshCloudConfig(); err != nil {
 		t.Fatalf("first refresh: %v", err)
+	}
+	if os.Getenv("OFFSITE_API_KEY") != v1 {
+		t.Fatalf("precondition: env not seeded from vault: %q", os.Getenv("OFFSITE_API_KEY"))
 	}
 
 	// Cloud-side "revocation": clear the row.
 	fake.mu.Lock()
-	fake.configRows["paystack_secret_key"] = ""
+	fake.configRows["offsite_api_key"] = ""
 	fake.mu.Unlock()
 	if err := s.RefreshCloudConfig(); err != nil {
 		t.Fatalf("refresh after revocation: %v", err)
 	}
-	// FIXED: clearing the vault row revokes the secret locally — the till
-	// stops charging on a compromised key.
-	if got := s.Settings().Get("paystack_secret_key"); got != "" {
-		t.Fatalf("cleared vault row must clear the local secret, got %q", got)
+	// FIXED: clearing the vault row revokes the credential locally — the
+	// setting is emptied and the injected env var is unset.
+	if got := s.Settings().Get("offsite_api_key"); got != "" {
+		t.Fatalf("cleared vault row must clear the local credential, got %q", got)
 	}
-	if s.GetPaystack() != nil {
-		t.Fatal("client must refuse the revoked key (cleared locally)")
+	if got := os.Getenv("OFFSITE_API_KEY"); got != "" {
+		t.Fatalf("injected env must be unset on revocation, got %q", got)
 	}
 }
 

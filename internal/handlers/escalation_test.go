@@ -20,7 +20,9 @@ import (
 	"strings"
 	"testing"
 
+	"encoding/json"
 	"github.com/gin-gonic/gin"
+	"net/http/httptest"
 )
 
 // roleIDByName resolves a seeded/custom role id via the API.
@@ -181,7 +183,7 @@ func TestSettingsSecretsNeverEchoAndSurviveSaves(t *testing.T) {
 
 	// Configure a secret.
 	r := do(t, engine, "PUT", "/api/v1/settings", admin, map[string]any{
-		"values": map[string]string{"paystack_secret_key": "sk_live_regression_test"},
+		"values": map[string]string{"offsite_secret_key": "sk_live_regression_test"},
 	})
 	if r.Code != 200 {
 		t.Fatalf("save secret: %d %s", r.Code, r.Body.String())
@@ -201,7 +203,7 @@ func TestSettingsSecretsNeverEchoAndSurviveSaves(t *testing.T) {
 
 	// A save with the field emptied preserves the secret.
 	r = do(t, engine, "PUT", "/api/v1/settings", admin, map[string]any{
-		"values": map[string]string{"paystack_secret_key": "", "store_name": "Secret Survive Shop"},
+		"values": map[string]string{"offsite_secret_key": "", "store_name": "Secret Survive Shop"},
 	})
 	if r.Code != 200 {
 		t.Fatalf("save with empty secret: %d %s", r.Code, r.Body.String())
@@ -209,35 +211,44 @@ func TestSettingsSecretsNeverEchoAndSurviveSaves(t *testing.T) {
 
 	// A masked echo also preserves it.
 	r = do(t, engine, "PUT", "/api/v1/settings", admin, map[string]any{
-		"values": map[string]string{"paystack_secret_key": "__SET__"},
+		"values": map[string]string{"offsite_secret_key": "__SET__"},
 	})
 	if r.Code != 200 {
 		t.Fatalf("save with mask: %d %s", r.Code, r.Body.String())
 	}
 
-	// Server-side proof the secret survived: the payment status endpoint
-	// reports "configured" (it reads the real stored value, not the mask).
-	pc := do(t, engine, "GET", "/api/v1/payments/config", admin, nil)
-	if pc.Code != 200 {
-		t.Fatalf("payments config: %d %s", pc.Code, pc.Body.String())
-	}
-	if !strings.Contains(pc.Body.String(), `"configured":true`) {
-		t.Fatalf("secret did not survive the saves; payments config: %s", pc.Body.String())
+	// Server-side proof the secret survived: the settings snapshot masks
+	// the row exactly while a value is stored — the mask IS the read of
+	// the real stored value (an empty string means it is gone). (The old
+	// proof rode the paystack "configured" flag on /payments/config; that
+	// rail retired in v1.4.4.)
+	g = do(t, engine, "GET", "/api/v1/settings", admin, nil)
+	if !offsiteSecretMasked(t, g) {
+		t.Fatalf("secret did not survive the saves; settings snapshot: %s", g.Body.String())
 	}
 
 	// Explicit removal works and is reflected as unconfigured.
 	r = do(t, engine, "PUT", "/api/v1/settings", admin, map[string]any{
-		"values": map[string]string{"paystack_secret_key": "__CLEAR__"},
+		"values": map[string]string{"offsite_secret_key": "__CLEAR__"},
 	})
 	if r.Code != 200 {
 		t.Fatalf("explicit clear: %d %s", r.Code, r.Body.String())
 	}
 	g = do(t, engine, "GET", "/api/v1/settings", admin, nil)
-	if strings.Contains(g.Body.String(), `"__SET__"`) && strings.Contains(g.Body.String(), "paystack_secret_key") {
-		// __SET__ may appear for OTHER configured secrets; re-check precisely.
+	if offsiteSecretMasked(t, g) {
+		t.Fatal("explicit clear did not remove the secret")
 	}
-	pc = do(t, engine, "GET", "/api/v1/payments/config", admin, nil)
-	if strings.Contains(pc.Body.String(), `"configured":true`) {
-		t.Fatalf("explicit clear did not remove the secret; payments config: %s", pc.Body.String())
+}
+
+// offsiteSecretMasked reads the settings snapshot and reports whether the
+// offsite secret row currently holds a stored (masked) value.
+func offsiteSecretMasked(t *testing.T, w *httptest.ResponseRecorder) bool {
+	t.Helper()
+	var env struct {
+		Data map[string]string `json:"data"`
 	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("snapshot decode: %v", err)
+	}
+	return env.Data["offsite_secret_key"] == "__SET__"
 }

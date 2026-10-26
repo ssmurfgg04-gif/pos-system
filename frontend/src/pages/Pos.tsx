@@ -58,7 +58,12 @@ export function Pos() {
 
   const canHold = !!user?.permissions.includes('pos.hold')
 
+  const loadingRef = useRef(false)
   const load = async () => {
+    // In-flight guard: a WS reconnect landing during the post-payment
+    // load() used to stack two full-catalog refetches on the same render.
+    if (loadingRef.current) return
+    loadingRef.current = true
     try {
       const [p, c] = await Promise.all([
         api.get<Product[]>('/api/v1/products'),
@@ -69,6 +74,8 @@ export function Pos() {
     } catch (e: any) {
       // Offline is an expected, non-alarming state (banner handles it).
       if (navigator.onLine) toast.error('Could not load products', e?.message)
+    } finally {
+      loadingRef.current = false
     }
   }
 

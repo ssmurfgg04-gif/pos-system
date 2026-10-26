@@ -1433,7 +1433,10 @@ func TestAdversarialProbeVoidExactlyOnceStockAndPoints(t *testing.T) {
 	}
 
 	// Void once: stock restored to 5, points refunded to exactly 500.
-	w = do(t, engine, "POST", "/api/v1/orders/"+itoa64(oid2)+"/void", cashier,
+	// Voided by ADMIN — oid2 is admin's sale, and v19 scoping means staff
+	// can only void their OWN orders (adversarialProbe asserts the 404 for
+	// cross-user voids elsewhere).
+	w = do(t, engine, "POST", "/api/v1/orders/"+itoa64(oid2)+"/void", admin,
 		map[string]any{"reason": "changed mind"})
 	if w.Code != 200 {
 		t.Fatalf("void: %d %s", w.Code, w.Body.String())
@@ -1446,7 +1449,7 @@ func TestAdversarialProbeVoidExactlyOnceStockAndPoints(t *testing.T) {
 	}
 
 	// Second void on the SAME order: 4xx, moves nothing.
-	if c := a5Code(t, engine, "POST", "/api/v1/orders/"+itoa64(oid2)+"/void", cashier,
+	if c := a5Code(t, engine, "POST", "/api/v1/orders/"+itoa64(oid2)+"/void", admin,
 		map[string]any{"reason": "again"}); c < 400 || c >= 500 {
 		t.Fatalf("double void must 4xx, got %d", c)
 	}

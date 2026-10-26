@@ -18,6 +18,12 @@ func parseI64(s string) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
 }
 
+// PaymentConfig (authed) — tender-button capabilities for the till.
+// (Moved here from the retired handlers/paystack.go, v1.4.4.)
+func (h *H) PaymentConfig(c *gin.Context) {
+	h.ok(c, h.svc(c).PaymentConfig())
+}
+
 // ---- Reports ----
 
 // DailyReport (reports.view).
@@ -107,6 +113,12 @@ func (h *H) ShiftReportXZ(c *gin.Context) {
 	if v := c.Query("shift"); v != "" {
 		var id int64
 		if id, err = parseI64(v); err == nil {
+			// Another staff member's Z report is management visibility:
+			// own shifts for everyone, others' only with reports.view.
+			if !h.svc(c).CanViewShift(p, id) {
+				h.mapErr(c, services.ErrNotFound)
+				return
+			}
 			rep, err = h.svc(c).GetShiftReport(id)
 		}
 	} else {

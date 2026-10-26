@@ -115,7 +115,7 @@ func TestOutboxBackfillRecoversLostOrderEvent(t *testing.T) {
 	cashier := seedUser(t, s)
 	// A committed order with NO outbox row (the emit insert failed).
 	res, err := s.db.Exec(s.db.Rebind(`INSERT INTO orders (number, status, subtotal_cents, total_cents, cashier_id, client_uuid, created_at)
-		VALUES ('ORD-BF-1', 'PAID', 100, 116, ?, 'bf-uuid-1', datetime('now'))`), cashier)
+                VALUES ('ORD-BF-1', 'PAID', 100, 116, ?, 'bf-uuid-1', datetime('now'))`), cashier)
 	if err != nil {
 		t.Fatalf("seed order: %v", err)
 	}
@@ -146,13 +146,13 @@ func TestOutboxBackfillRecoversVoidAndLedger(t *testing.T) {
 	s := newSyncTestService(t)
 	cashier := seedUser(t, s)
 	s.db.Exec(s.db.Rebind(`INSERT INTO orders (number, status, subtotal_cents, total_cents, cashier_id, client_uuid, created_at)
-		VALUES ('ORD-BF-2', 'voided', 100, 116, ?, 'bf-uuid-2', datetime('now'))`), cashier)
+                VALUES ('ORD-BF-2', 'voided', 100, 116, ?, 'bf-uuid-2', datetime('now'))`), cashier)
 	// A customer + an unsynced ledger movement (money path).
 	s.db.Exec(`INSERT INTO customers (name, phone) VALUES ('BF Customer', '254700000001')`)
 	var custID int64
 	s.db.QueryRow(`SELECT id FROM customers WHERE phone='254700000001'`).Scan(&custID)
 	s.db.Exec(`INSERT INTO customer_ledger (customer_id, order_id, kind, amount_cents, points_delta, note, created_at)
-		VALUES (?, 1, 'charge', 5000, 0, 'tab', datetime('now'))`, custID)
+                VALUES (?, 1, 'charge', 5000, 0, 'tab', datetime('now'))`, custID)
 
 	if n := s.BackfillMissingEvents(); n == 0 {
 		t.Fatal("backfill recovered nothing")
@@ -208,40 +208,8 @@ func seedUser(t *testing.T, s *Service) int64 {
 	return id
 }
 
-func TestPaystackVerifyRefCloudProxyMapping(t *testing.T) {
-	mux := http.NewServeMux()
-	var self string
-	mux.HandleFunc("/rest/v1/sync_bootstrap", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]any{{
-			"project_url": self, "team_code": "TEAM-A", "auto_approve": true,
-		}})
-	})
-	mux.HandleFunc("/functions/v1/paystack-verify", func(w http.ResponseWriter, r *http.Request) {
-		var in map[string]any
-		json.NewDecoder(r.Body).Decode(&in)
-		if in["p_device_id"] == "" || in["reference"] != "LP-X-1" {
-			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "device not recognized"})
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"ok": true, "status": true, "message": "Verification successful",
-			"data": map[string]any{"status": "success", "amount": 250000, "channel": "card"},
-		})
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-	self = srv.URL
-	oldURL := cloudBaseURL
-	cloudBaseURL = srv.URL
-	t.Cleanup(func() { cloudBaseURL = oldURL })
-
-	s := newSyncTestService(t)
-	v, err := s.paystackVerifyRef("LP-X-1")
-	if err != nil {
-		t.Fatalf("proxy verify: %v", err)
-	}
-	if v.Status != "success" || v.Amount != 250000 || v.Channel != "card" {
-		t.Fatalf("mapping = %+v", v)
-	}
-}
+// TestPaystackVerifyRefCloudProxyMapping was retired with the v1.4.4
+// paystack removal: the paystack-verify cloud proxy no longer exists, and
+// neither does the rail it fed. The claim-RPC + relay semantics that
+// superseded it are pinned by payments_buni_test.go
+// (claim → ParseCallback → HandleCallback, fail-closed amount gate).

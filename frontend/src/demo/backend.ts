@@ -905,13 +905,9 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   // Tender capabilities snapshot (public identifiers only, server parity).
   if (m === 'GET' && p === '/payments/config') {
     return {
-      paystack: {
-        enabled: false, publicKey: '',
-        currency: String(d.settings.currency_code || 'KES').toUpperCase(),
-        callbackUrl: '', configured: false,
-      },
       mpesa: {
         env: d.settings.mpesa_env || 'mock',
+        route: 'buni',
         till: d.settings.till_number || '',
         paybill: d.settings.paybill_number || '',
       },
@@ -1227,24 +1223,25 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     // Payable is what changes hands (discount + points already applied).
     const payable = Math.max(0, totalCents - redeemCents)
     // ---- Split / mixed tender validation (server parity): legs must sum
-    // exactly to the payable, at most one async leg (mpesa/paystack), no
-    // account tabs; credit legs need a live customer and wallet coverage.
+    // exactly to the payable, at most one async leg (mpesa), no account
+    // tabs; credit legs need a live customer and wallet coverage. (Card
+    // legs rode the retired Paystack rail — removed v1.4.4.)
     const rawLegs: any[] = Array.isArray(body?.splitPayments) ? body.splitPayments : []
     const isSplit = rawLegs.length > 0
-    const splitLegs: { method: 'cash' | 'mpesa' | 'paystack' | 'credit'; amountCents: number; phone: string; email: string; mode: string }[] = []
+    const splitLegs: { method: 'cash' | 'mpesa' | 'credit'; amountCents: number; phone: string; email: string; mode: string }[] = []
     if (isSplit) {
       if (method === 'account') throw new ApiError(400, 'split tender cannot include account tabs')
       let sum = 0
       let asyncCount = 0
       for (const lg of rawLegs) {
         const lm = String(lg?.method || '')
-        if (lm !== 'cash' && lm !== 'mpesa' && lm !== 'paystack' && lm !== 'credit') {
+        if (lm !== 'cash' && lm !== 'mpesa' && lm !== 'credit') {
           throw new ApiError(400, `invalid split method "${lm}"`)
         }
         const amt = Math.round(Number(lg?.amountCents) || 0)
         if (!(amt > 0)) throw new ApiError(400, 'split legs need positive amounts')
         sum += amt
-        if (lm === 'mpesa' || lm === 'paystack') asyncCount++
+        if (lm === 'mpesa') asyncCount++
         splitLegs.push({
           method: lm, amountCents: amt,
           phone: String(lg?.phone || ''), email: String(lg?.email || ''),
@@ -1290,7 +1287,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (isSplit) {
       // Record each leg as a payment; the async leg rides LAST so the STK
       // simulator / manual completion targets it (payments[last]).
-      const asyncLeg = splitLegs.find((l) => l.method === 'mpesa' || l.method === 'paystack')
+      const asyncLeg = splitLegs.find((l) => l.method === 'mpesa')
       const ordered = asyncLeg ? [...splitLegs.filter((l) => l !== asyncLeg), asyncLeg] : splitLegs
       for (const l of ordered) {
         o.payments.push({

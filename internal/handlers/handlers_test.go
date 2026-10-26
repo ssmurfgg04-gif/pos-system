@@ -676,8 +676,8 @@ func TestSettingsMasking(t *testing.T) {
 	engine, admin, _, _ := newTestServer(t)
 	w := do(t, engine, "PUT", "/api/v1/settings", admin, map[string]any{
 		"values": map[string]any{
-			"mpesa_consumer_secret": "super-secret-value",
-			"store_name":            "Test Shop",
+			"offsite_secret_key": "super-secret-value",
+			"store_name":         "Test Shop",
 		},
 	})
 	if w.Code != 200 {

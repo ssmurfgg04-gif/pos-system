@@ -203,30 +203,33 @@ type Payment struct {
 }
 
 type Order struct {
-	ID             int64       `json:"id"`
-	Number         string      `json:"number"`
-	Status         string      `json:"status"`
-	SubtotalCents  int64       `json:"subtotalCents"`
-	DiscountCents  int64       `json:"discountCents"`
-	DiscountLabel  string      `json:"discountLabel"`
-	PointsRedeemed int64       `json:"pointsRedeemed"`
-	TaxCents       int64       `json:"taxCents"`
-	TotalCents     int64       `json:"totalCents"`
-	TaxPercent     float64     `json:"taxPercent"`
-	TaxIncluded    bool        `json:"taxIncluded"`
-	CashierID      int64       `json:"cashierId"`
-	CashierName    string      `json:"cashierName"`
-	CustomerName   string      `json:"customerName"`
-	CustomerID     int64       `json:"customerId"`
-	Note           string      `json:"note"`
-	ClientUUID     string      `json:"clientUuid"`
-	Discrepancy    bool        `json:"discrepancy"`
-	CreatedAt      string      `json:"createdAt"`
-	PaidAt         string      `json:"paidAt"`
-	VoidedAt       string      `json:"voidedAt"`
-	VoidReason     string      `json:"voidReason"`
-	Items          []OrderItem `json:"items"`
-	Payments       []Payment   `json:"payments"`
+	ID             int64   `json:"id"`
+	Number         string  `json:"number"`
+	Status         string  `json:"status"`
+	SubtotalCents  int64   `json:"subtotalCents"`
+	DiscountCents  int64   `json:"discountCents"`
+	DiscountLabel  string  `json:"discountLabel"`
+	PointsRedeemed int64   `json:"pointsRedeemed"`
+	TaxCents       int64   `json:"taxCents"`
+	TotalCents     int64   `json:"totalCents"`
+	TaxPercent     float64 `json:"taxPercent"`
+	TaxIncluded    bool    `json:"taxIncluded"`
+	CashierID      int64   `json:"cashierId"`
+	CashierName    string  `json:"cashierName"`
+	CustomerName   string  `json:"customerName"`
+	CustomerID     int64   `json:"customerId"`
+	Note           string  `json:"note"`
+	ClientUUID     string  `json:"clientUuid"`
+	Discrepancy    bool    `json:"discrepancy"`
+	CreatedAt      string  `json:"createdAt"`
+	PaidAt         string  `json:"paidAt"`
+	VoidedAt       string  `json:"voidedAt"`
+	VoidReason     string  `json:"voidReason"`
+	// Originating till (v19). '' on pre-v19 rows; visibility is
+	// scoped on cashier_id + orders.view.all, never on this alone.
+	DeviceID string      `json:"deviceId"`
+	Items    []OrderItem `json:"items"`
+	Payments []Payment   `json:"payments"`
 	// Connected job lifecycle: fulfilment jobs spawned from this sale
 	// (loaded on the detail view) + the last WhatsApp contact attempt.
 	Jobs         []DesignJob `json:"jobs,omitempty"`
@@ -783,48 +786,12 @@ type VoidRequest struct {
 	Reason string `json:"reason" binding:"required"`
 }
 
-// ---- Paystack card / mobile-money checkout ----
-
-// PaystackInitRequest starts (or re-opens) a Paystack checkout for a
-// pending order. Email is optional: a deterministic placeholder is used
-// when the till does not collect one.
-type PaystackInitRequest struct {
-	Email string `json:"email"`
-}
-
-// PaystackInitResult carries what the frontend needs to open the popup:
-// the PUBLIC key goes to PaystackPop.setup({key, access_code}); the
-// authorization URL is the redirect fallback. The secret key never leaves
-// the server.
-type PaystackInitResult struct {
-	Reference        string `json:"reference"`
-	AccessCode       string `json:"accessCode"`
-	AuthorizationURL string `json:"authorizationUrl"`
-	PublicKey        string `json:"publicKey"`
-	Currency         string `json:"currency"`
-	AmountCents      int64  `json:"amountCents"`
-}
-
-// PaystackVerifyRequest completes a payment from the popup callback —
-// the reference is re-verified server-side before anything is marked paid.
-type PaystackVerifyRequest struct {
-	Reference string `json:"reference" binding:"required"`
-}
-
 // PaymentConfig is the till-facing payment capability snapshot (public
 // identifiers only — no secret keys).
 type PaymentConfig struct {
-	Paystack struct {
-		Enabled    bool   `json:"enabled"`
-		PublicKey  string `json:"publicKey"`
-		Currency   string `json:"currency"`
-		Callback   string `json:"callbackUrl"`
-		Configured bool   `json:"configured"` // secret key present server-side
-		FromEnv    bool   `json:"fromEnv"`    // keys supplied via environment
-	} `json:"paystack"`
 	Mpesa struct {
 		Env     string `json:"env"`
-		Route   string `json:"route"` // buni | paystack | daraja | mock | manual
+		Route   string `json:"route"` // buni | mock | manual (v1.4.4 rail set)
 		Till    string `json:"till"`
 		Paybill string `json:"paybill"`
 	} `json:"mpesa"`

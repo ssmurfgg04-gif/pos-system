@@ -148,21 +148,26 @@ export async function removeFromQueue(clientUuid: string): Promise<void> {
 
 /** Record a failed replay attempt against a queued sale. */
 export async function markQueueAttempt(clientUuid: string, error: string): Promise<void> {
-  const patch = (q: QueuedCheckout) => {
-    if (q.clientUuid === clientUuid) {
-      q.attempts = (q.attempts || 0) + 1
-      q.lastError = error
-    }
-  }
   if (!idbBroken) {
     try {
-      const all = await idbDrain()
-      all.forEach(patch)
+      // Single-key read-modify-write in ONE transaction. The old path
+      // drained the WHOLE queue, patched it and put every record back —
+      // O(failed × queue) rewrites per flush, exactly during outage
+      // recovery when the device is busiest.
       const db = await openDB()
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction(STORE, 'readwrite')
         const store = tx.objectStore(STORE)
-        for (const q of all) store.put(q)
+        const get = store.get(clientUuid)
+        get.onsuccess = () => {
+          const q = get.result as QueuedCheckout | undefined
+          if (q) {
+            q.attempts = (q.attempts || 0) + 1
+            q.lastError = error
+            store.put(q)
+          }
+        }
+        get.onerror = () => reject(get.error)
         tx.oncomplete = () => resolve()
         tx.onerror = () => reject(tx.error)
       })
@@ -173,7 +178,12 @@ export async function markQueueAttempt(clientUuid: string, error: string): Promi
     }
   }
   const all = lsAll()
-  all.forEach(patch)
+  for (const q of all) {
+    if (q.clientUuid === clientUuid) {
+      q.attempts = (q.attempts || 0) + 1
+      q.lastError = error
+    }
+  }
   lsSave(all)
 }
 

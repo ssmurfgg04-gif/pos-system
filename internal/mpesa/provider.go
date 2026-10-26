@@ -1,11 +1,14 @@
 // Package mpesa abstracts M-Pesa payments behind a Provider interface so
-// the POS never hard-depends on Daraja. Modes:
+// the POS never hard-depends on a single vendor. Modes:
 //   - auto   : STK push first, manual receipt-code fallback
 //   - stk    : force STK push
 //   - manual : customer pays to the till/paybill; cashier enters the
 //     10-character receipt code (first-class flow, not an afterthought)
 //
-// Providers: Mock (demos/tests), Daraja (sandbox/production). Aggregators
+// Providers: Mock (demos/tests). Real STK rides the KCB Buni cloud route
+// (buni.go) — the direct Daraja provider was retired in v1.4.4, and the
+// shared callback decoder (callback.go) still parses the Daraja-shaped
+// envelope both the public webhook and the Buni relay use. Aggregators
 // (KopoKopo, IntaSend, ...) can be added later behind the same interface.
 package mpesa
 

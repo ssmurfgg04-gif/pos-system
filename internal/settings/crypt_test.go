@@ -34,18 +34,20 @@ func TestSecretRoundTripEncryptedAtRest(t *testing.T) {
 	UseKeyFile(filepath.Join(t.TempDir(), "secret.key"))
 	st, db, _ := testStore(t)
 
-	if err := st.Set("paystack_secret_key", "sk_live_abc123"); err != nil {
+	// offsite_secret_key stands in for any secret-class setting
+	// (v1.4.4 retired the paystack rows this test originally used).
+	if err := st.Set("offsite_secret_key", "sk_live_abc123"); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 
 	// Read path decrypts transparently.
-	if got := st.Get("paystack_secret_key"); got != "sk_live_abc123" {
+	if got := st.Get("offsite_secret_key"); got != "sk_live_abc123" {
 		t.Fatalf("Get = %q, want the plaintext secret", got)
 	}
 
 	// Stored bytes must not contain the secret.
 	var raw string
-	if err := db.QueryRow(`SELECT value FROM settings WHERE key = 'paystack_secret_key'`).Scan(&raw); err != nil {
+	if err := db.QueryRow(`SELECT value FROM settings WHERE key = 'offsite_secret_key'`).Scan(&raw); err != nil {
 		t.Fatalf("raw read: %v", err)
 	}
 	if !isEncrypted(raw) {
@@ -57,8 +59,8 @@ func TestSecretRoundTripEncryptedAtRest(t *testing.T) {
 
 	// API snapshot masks it.
 	snap := st.Snapshot()
-	if snap["paystack_secret_key"] != MaskToken {
-		t.Fatalf("snapshot should mask secrets, got %v", snap["paystack_secret_key"])
+	if snap["offsite_secret_key"] != MaskToken {
+		t.Fatalf("snapshot should mask secrets, got %v", snap["offsite_secret_key"])
 	}
 }
 
@@ -69,7 +71,7 @@ func TestLegacyPlaintextMigratedOnBoot(t *testing.T) {
 	// Simulate an older install: plaintext secret already in the DB.
 	st, db, _ := testStore(t)
 	q := db.Rebind(`INSERT INTO settings (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
 	if _, err := db.Exec(q, "mpesa_passkey", "old-plain-passkey"); err != nil {
 		t.Fatalf("seed legacy row: %v", err)
 	}
@@ -96,19 +98,19 @@ func TestMaskTokenKeepsStoredSecret(t *testing.T) {
 	UseKeyFile(filepath.Join(t.TempDir(), "secret.key"))
 	st, _, _ := testStore(t)
 
-	if err := st.Set("paystack_secret_key", "sk_live_first"); err != nil {
+	if err := st.Set("offsite_secret_key", "sk_live_first"); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	changed, err := st.Update(map[string]string{"paystack_secret_key": MaskToken})
+	changed, err := st.Update(map[string]string{"offsite_secret_key": MaskToken})
 	if err != nil {
 		t.Fatalf("update mask: %v", err)
 	}
 	for _, k := range changed {
-		if k == "paystack_secret_key" {
+		if k == "offsite_secret_key" {
 			t.Fatal("mask token must not overwrite the stored secret")
 		}
 	}
-	if got := st.Get("paystack_secret_key"); got != "sk_live_first" {
+	if got := st.Get("offsite_secret_key"); got != "sk_live_first" {
 		t.Fatalf("stored secret changed: %q", got)
 	}
 }
@@ -134,9 +136,22 @@ func TestJWTSecretNeverEncrypted(t *testing.T) {
 }
 
 func TestMissingKeyFileYieldsUnconfigured(t *testing.T) {
-	// No UseKeyFile call: encrypted rows cannot decrypt → Get returns "".
-	st, _, _ := testStore(t)
-	if got := st.Get("paystack_secret_key"); got != "" {
+	// A secret row written by a DIFFERENT (keyed) install cannot be
+	// decrypted here: no UseKeyFile call → Get returns "" (unconfigured),
+	// never the ciphertext or a half-decrypted value.
+	st, db, _ := testStore(t)
+	if err := st.Set("offsite_secret_key", "sk_live_x"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	// Rewrite the row as if it came from a keyed install (ciphertext the
+	// local store has no key for).
+	if _, err := db.Exec(`UPDATE settings SET value = 'enc:v1:deadbeef:deadbeefdeadbeef' WHERE key = 'offsite_secret_key'`); err != nil {
+		t.Fatalf("force ciphertext: %v", err)
+	}
+	st.mu.Lock()
+	delete(st.cache, "offsite_secret_key")
+	st.mu.Unlock()
+	if got := st.Get("offsite_secret_key"); got != "" {
 		t.Fatalf("expected empty read without a key file, got %q", got)
 	}
 }

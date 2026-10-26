@@ -55,7 +55,7 @@ insert into app_config (key, value, is_secret) values
 on conflict (key) do update set value = excluded.value, is_secret = true, updated_at = now();
 
 insert into app_config (key, value, is_secret) values
-  ('paystack_public_key', 'pk_live_66f1d939e67c79ef5418a575f84173b29f61b0e9', false)
+  ('paystack_public_key', 'pk_live_RETIRED_WITH_THE_PAYSTACK_RAIL_v144', false)
 on conflict (key) do update set value = excluded.value, is_secret = false, updated_at = now();
 
 insert into app_config (key, value, is_secret) values

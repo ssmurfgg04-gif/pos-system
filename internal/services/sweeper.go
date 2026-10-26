@@ -8,16 +8,15 @@ import (
 	"posapp/internal/models"
 )
 
-// Sweeper polls pending STK payments every 5s. This is the real-world
-// completion path for LAN deployments (no public webhook) — Daraja's
-// stkpushquery answers what the customer did on their phone. Payments older
-// than 3 minutes time out as FAILED (the order stays PENDING for manual
-// fallback or void).
+// Sweeper polls pending STK payments every 5s. This is the completion path
+// for mock-provider training deployments (ALLOW_MOCK_PAYMENTS): QuerySTK
+// answers what the "customer" did on their phone. Payments older than 3
+// minutes time out as FAILED (the order stays PENDING for manual fallback
+// or void). Real money (Buni) is callback-driven and claimed in SweepBuni.
 type Sweeper struct {
 	svc      *Service
 	interval time.Duration
 	timeout  time.Duration
-	ticks    uint64
 }
 
 func NewSweeper(s *Service) *Sweeper {
@@ -32,32 +31,22 @@ func (sw *Sweeper) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			sw.ticks++
 			sw.tick(ctx)
-			// Once a minute: deep recovery sweep — re-verify recently-failed
-			// Paystack references in case the customer paid after the till
-			// moved on (late PIN entry has no webhook on a LAN deployment).
-			if sw.ticks%12 == 0 {
-				sw.svc.SweepFailedPaystack(ctx)
-			}
 		}
 	}
 }
 
 func (sw *Sweeper) tick(ctx context.Context) {
 	s := sw.svc
-	// Paystack checkouts ride the same loop with their own longer timeout.
-	s.SweepPaystack(ctx)
 	// Buni checkouts are callback-driven (no query API): claim verified
 	// cloud events for pending/recently-failed legs; the relay funnels
 	// them through the same fail-closed completion guard.
 	s.SweepBuni()
 	// Collect pending STK payments (rows closed before any provider
-	// calls). Method-filtered: paystack checkouts have their own
-	// sweeper (SweepPaystack) with a longer timeout — feeding them to
-	// the Daraja query would falsely fail them mid-payment. Buni legs
-	// ("BUNI-" prefixed checkouts) are excluded for the same reason:
-	// Buni has no query API and the claim sweep above owns them.
+	// calls). Method-filtered to plain mpesa legs: Buni legs
+	// ("BUNI-" prefixed checkouts) are owned by the claim sweep above
+	// (Buni has no query API), and the retired Daraja/Paystack rails
+	// no longer mint checkouts at all.
 	type pending struct {
 		id         int64
 		checkoutID string
@@ -94,7 +83,7 @@ func (sw *Sweeper) tick(ctx context.Context) {
 
 	provider, perr := s.GetProvider()
 	if provider == nil || perr != nil {
-		return // no STK provider (manual mode / Paystack route) — nothing to poll here
+		return // no STK provider (manual mode) — nothing to poll here
 	}
 	for _, p := range list {
 		select {

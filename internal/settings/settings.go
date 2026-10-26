@@ -202,6 +202,25 @@ func (s *Store) Set(key, value string) error {
 	return nil
 }
 
+// SetOnce writes key only when absent (INSERT OR IGNORE) and returns the
+// value actually stored — first writer wins in a multi-Store race. Sibling
+// Store instances (one per shop claim) share the database but not the
+// cache, so identity claims like device_id must resolve at the DB level,
+// not per-cache.
+func (s *Store) SetOnce(key, value string) (string, error) {
+	q := s.db.Rebind(`INSERT INTO settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO NOTHING`)
+	if _, err := s.db.Exec(q, key, value); err != nil {
+		return "", err
+	}
+	winner := value
+	_ = s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(value,'') FROM settings WHERE key = ?`), key).Scan(&winner)
+	s.mu.Lock()
+	s.cache[key] = winner
+	s.mu.Unlock()
+	return winner, nil
+}
+
 // Update applies a batch. For secret-class keys:
 //   - MaskToken keeps the stored secret (the UI echoes it back untouched)
 //   - "" keeps the stored secret too — an accidentally cleared field (a
@@ -275,6 +294,7 @@ var internalKeys = map[string]bool{
 	"brand_logo_data":          true, // synced logo data URL (can be huge)
 	"paystack_via_cloud":       true, // cloud route bookkeeping
 	"paystack_enabled_touched": true, // one-time migration marker
+	"paystack_enabled":         true, // legacy row from the retired rail (v1.4.4): echoed, never writable
 	"buni_via_cloud":           true, // cloud route bookkeeping (Buni main rail switch)
 	// Cloud-vault bookkeeping: rows the vault apply loop and the OTA
 	// checker write locally on real tills. They are cloud-owned state,
@@ -379,11 +399,10 @@ func AllowedKeys() map[string]bool {
 	for k := range database.DefaultSettings {
 		out[k] = true
 	}
-	// paystack_enabled is deliberately not seeded (absence means
-	// "on whenever a valid secret key exists"), but admins may still
-	// toggle it explicitly through the API. paystack_enabled_touched
-	// is runtime bookkeeping (internal): the handler writes it with
-	// Set directly, never through this allowlist.
-	out["paystack_enabled"] = true
+	// paystack_enabled is NOT admin-writable since v1.4.4: the Paystack
+	// rail was retired. Old databases still carry the row, so it lives in
+	// internalKeys — the Settings page's snapshot echo is dropped
+	// silently instead of failing the whole save (the store-name bug
+	// class). It is no longer a toggle; the rail simply does not exist.
 	return out
 }

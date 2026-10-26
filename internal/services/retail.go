@@ -75,15 +75,24 @@ func (s *Service) HoldSale(refName string, req models.CheckoutRequest, p *auth.P
 	id, _ := res.LastInsertId()
 	s.Audit(p.ID, p.Username, "SALE_HELD", "held_sale", fmt.Sprint(id), refName)
 	s.broadcast(EventHeldUpdate, nil)
-	return s.GetHeldSale(id)
+	return s.GetHeldSale(p, id)
 }
 
 // ListHeldSales returns parked carts, oldest last.
-func (s *Service) ListHeldSales() ([]models.HeldSale, error) {
-	rows, err := s.db.Query(`
+func (s *Service) ListHeldSales(p *auth.Principal) ([]models.HeldSale, error) {
+	q := `
                 SELECT id, COALESCE(ref_name,''), items_json, customer_id, COALESCE(customer_name,''),
                         COALESCE(note,''), COALESCE(device_id,''), created_by, COALESCE(created_by_name,''), created_at
-                FROM held_sales ORDER BY id DESC LIMIT 100`)
+                FROM held_sales`
+	var args []any
+	if !canViewAllOrders(p) {
+		// Parked carts stay visible on the till that parked them;
+		// other tills' carts need Admin oversight.
+		q += ` WHERE device_id = ?`
+		args = append(args, s.deviceID())
+	}
+	q += ` ORDER BY id DESC LIMIT 100`
+	rows, err := s.db.Query(s.db.Rebind(q), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +112,7 @@ func (s *Service) ListHeldSales() ([]models.HeldSale, error) {
 }
 
 // GetHeldSale loads one parked cart.
-func (s *Service) GetHeldSale(id int64) (*models.HeldSale, error) {
+func (s *Service) GetHeldSale(p *auth.Principal, id int64) (*models.HeldSale, error) {
 	var h models.HeldSale
 	var raw string
 	err := s.db.QueryRow(`
@@ -116,6 +125,9 @@ func (s *Service) GetHeldSale(id int64) (*models.HeldSale, error) {
 		return nil, ErrNotFound
 	}
 	_ = json.Unmarshal([]byte(raw), &h.Items)
+	if !canViewAllOrders(p) && h.DeviceID != s.deviceID() {
+		return nil, ErrNotFound
+	}
 	return &h, nil
 }
 
@@ -144,7 +156,14 @@ func (s *Service) deviceID() string {
 		host = "till"
 	}
 	id := "dev-" + strings.ToLower(host) + "-" + randToken(4)
-	_ = s.settings.Set("device_id", id) // best-effort persist
+	// Claim first-writer-wins at the DB level: sibling Service instances
+	// (one per shop claim) share the file but not the settings cache, so
+	// a cache-only decision would mint a different id per instance and
+	// shred per-till sales attribution. The winner is what everyone uses.
+	_, _ = s.settings.SetOnce("device_id", id)
+	if claimed := s.settings.Get("device_id"); claimed != "" {
+		return claimed
+	}
 	return id
 }
 

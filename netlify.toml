@@ -27,12 +27,13 @@
 
 # Browser-facing defense headers. The CSP mirrors the desktop app's
 # (internal/router/router.go secureHeaders): scripts only from this origin
-# plus the Paystack popup toolkit; the /portal/ page additionally talks to
-# the fleet Supabase project. No inline handlers, no third-party packages.
+# (the third-party Paystack popup exception is gone with that integration);
+# the /portal/ page additionally talks to the fleet Supabase project. No
+# inline handlers, no third-party packages.
 [[headers]]
   for = "/*"
   [headers.values]
-    Content-Security-Policy = "default-src 'self'; script-src 'self' https://js.paystack.co; script-src-elem 'self' https://js.paystack.co; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://*.supabase.co; frame-src https://js.paystack.co; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; script-src-elem 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
     X-Content-Type-Options = "nosniff"
     X-Frame-Options = "SAMEORIGIN"
     Referrer-Policy = "no-referrer"

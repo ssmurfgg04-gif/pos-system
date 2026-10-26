@@ -7,9 +7,8 @@
 // any variables not already present in the real environment. This is where
 // deployment secrets belong, e.g.:
 //
-//	PAYSTACK_SECRET_KEY=sk_live_…
-//	PAYSTACK_PUBLIC_KEY=pk_live_…
-//	PAYSTACK_CALLBACK_URL=https://awesomeposs.netlify.app/
+//	OFFSITE_ENDPOINT=https://xyz.supabase.co
+//	OFFSITE_BUCKET=backups
 //
 // Keys in a real environment variable always win over the file.
 package config

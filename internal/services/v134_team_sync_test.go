@@ -9,6 +9,11 @@ package services
 // and Approve-on-revoked (the Unrevoke path) still reaches the cloud.
 
 import (
+	"bytes"
+	"encoding/base64"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +22,23 @@ import (
 
 func joinLink(team, role, token string) string {
 	return "https://awesomeposs.netlify.app/join#t=" + team + "&r=" + role + "&k=" + token
+}
+
+// tinyPNG builds a valid 8x8 PNG data URL for the logo-sync tests.
+// (Moved here from the retired paystack grace test file, v1.4.4.)
+func tinyPNG(t *testing.T) string {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for x := 0; x < 8; x++ {
+		for y := 0; y < 8; y++ {
+			img.Set(x, y, color.RGBA{R: 0x10, G: 0x47, B: 0xab, A: 0xff})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("png encode: %v", err)
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
 // TestTeamJoinLinkRedeemsOnFreshTill: owner mints an invite on till A; a

@@ -158,6 +158,11 @@ func (s *Service) NotifyReady(p *auth.Principal, jobID, orderID int64) (*models.
 	if err != nil {
 		return nil, ErrNotFound
 	}
+	// v19: the WhatsApp payload includes the customer's phone and order
+	// detail — staff may only contact customers on their OWN sales.
+	if !canViewAllOrders(p) && order.CashierID != p.ID {
+		return nil, ErrNotFound
+	}
 	phone := ""
 	if order.CustomerID != 0 {
 		s.db.QueryRow(s.db.Rebind(`SELECT phone FROM customers WHERE id = ?`), order.CustomerID).Scan(&phone)

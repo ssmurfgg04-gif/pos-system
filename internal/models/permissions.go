@@ -31,6 +31,7 @@ var PermissionCatalog = []PermissionDef{
 	{Key: "suppliers.view", Group: "Catalog", Label: "View suppliers and purchase orders"},
 	{Key: "suppliers.manage", Group: "Catalog", Label: "Manage suppliers, receive stock, stock takes"},
 	{Key: "reports.view", Group: "Insights", Label: "View sales reports"},
+	{Key: "orders.view.all", Group: "Insights", Label: "Browse all individual sales (every till and cashier)"},
 	{Key: "shifts.manage", Group: "Shifts", Label: "Open and close shifts"},
 	{Key: "design.view", Group: "Production", Label: "View design board"},
 	{Key: "design.manage", Group: "Production", Label: "Manage design jobs and attachments"},

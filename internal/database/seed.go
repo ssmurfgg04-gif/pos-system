@@ -33,22 +33,21 @@ var DefaultSettings = map[string]string{
 	"till_number":    "",
 	"paybill_number": "",
 	// mpesa_env: manual (default — receipt-code entry, nothing completes
-	// by itself) | paystack (STK via the Paystack integration) | sandbox |
-	// production (Daraja). "mock" is tests/demos only: the desktop app
+	// by itself) | mock. "mock" is tests/demos only: the desktop app
 	// refuses mock unless ALLOW_MOCK_PAYMENTS=true (fake-money guard).
+	// Real STK rides the KCB Buni cloud route; the direct Daraja
+	// credential keys (consumer key/secret, shortcode, passkey,
+	// callback URL) were removed in v1.4.4 — old DBs may still hold the
+	// rows and are simply ignored.
 	"mpesa_env":              "manual",
-	"mpesa_shortcode":        "",
-	"mpesa_passkey":          "",
-	"mpesa_consumer_key":     "",
-	"mpesa_consumer_secret":  "",
-	"mpesa_callback_url":     "",
 	"mpesa_mock_delay_ms":    "4000",
 	"mpesa_mock_result_code": "0",
-	// Buni (KCB M-Pesa Express) — the MAIN M-Pesa rail. Keys never live
-	// on the till: the cloud config row buni_via_cloud switches the
-	// route on and the Edge Functions hold the secrets. buni_enabled is
-	// the local kill-switch (default ON so the vault row alone rolls it
-	// out; owners turn it off here if they want Paystack/Daraja only).
+	// Buni (KCB M-Pesa Express) — the MAIN M-Pesa rail (v1.4.4: the only
+	// one). Keys never live on the till: the cloud config row
+	// buni_via_cloud switches the route on and the Edge Functions hold
+	// the secrets. buni_enabled is the local kill-switch (default ON so
+	// the vault row alone rolls it out; owners turn it off here to run
+	// manual receipt entry only).
 	"buni_enabled":        "true",
 	"printer_target":      "", // e.g. tcp://192.168.1.200:9100 or file:///dev/usb/lp0
 	"printer_width":       "80",
@@ -88,17 +87,6 @@ var DefaultSettings = map[string]string{
 	"sync_endpoint":    "", // Supabase project URL
 	"sync_service_key": "", // SECRET — service_role key
 	"sync_team_code":   "", // short code shared by the team's devices
-	// Paystack card / mobile-money checkout. The SECRET key lives only
-	// on this machine (settings DB or PAYSTACK_SECRET_KEY env) — it is
-	// masked in API responses and never team-synced. The PUBLIC key is
-	// safe to expose and is what the checkout popup uses.
-	// paystack_enabled is intentionally NOT seeded: absence means
-	// "on whenever a valid secret key exists" — a till with live keys
-	// just works; admins can still switch it off explicitly.
-	"paystack_public_key":   "", // pk_live_... / pk_test_... — safe for the frontend
-	"paystack_secret_key":   "", // SECRET — sk_live_... backend only
-	"paystack_currency":     "KES",
-	"paystack_callback_url": "https://awesomeposs.netlify.app/",
 }
 
 type seedProduct struct {

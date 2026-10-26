@@ -3,6 +3,10 @@ package services
 // cloudconfig_test.go — the central key vault client: cloud rows land in
 // the settings store, guarded keys are never overwritten, deployment env
 // vars are injected only when unset, and masked sentinels are skipped.
+//
+// v1.4.4: fixtures use live keys (offsite_*, till_number). The retired
+// paystack_* vault rows are tolerated as opaque settings keys and are
+// asserted nowhere — they arm no payment rail anymore.
 
 import (
 	"os"
@@ -14,16 +18,15 @@ import (
 func TestApplyCloudConfigWritesSettings(t *testing.T) {
 	s := newProviderTestService(t)
 	n := s.applyCloudConfig(map[string]string{
-		"paystack_public_key": "pk_test_x",
-		"paystack_currency":   "KES",
-		"till_number":         "123456",
-		"config_synced_at":    "", // empty values are skipped entirely
+		"offsite_prefix":   "till-a",
+		"till_number":      "123456",
+		"config_synced_at": "", // empty values are skipped entirely
 	})
-	if n != 3 {
-		t.Fatalf("expected 3 applied rows, got %d", n)
+	if n != 2 {
+		t.Fatalf("expected 2 applied rows, got %d", n)
 	}
-	if got := s.Settings().Get("paystack_public_key"); got != "pk_test_x" {
-		t.Fatalf("paystack_public_key = %q", got)
+	if got := s.Settings().Get("offsite_prefix"); got != "till-a" {
+		t.Fatalf("offsite_prefix = %q", got)
 	}
 	if got := s.Settings().Get("till_number"); got != "123456" {
 		t.Fatalf("till_number = %q", got)
@@ -48,33 +51,33 @@ func TestApplyCloudConfigSkipsGuardedKeys(t *testing.T) {
 
 func TestApplyCloudConfigSkipsMaskToken(t *testing.T) {
 	s := newProviderTestService(t)
-	_ = s.Settings().Set("paystack_secret_key", "sk_real")
+	_ = s.Settings().Set("sync_service_key", "svc_real")
 	s.applyCloudConfig(map[string]string{
-		"paystack_secret_key": settings.MaskToken, // echo of a masked secret must never land
+		"sync_service_key": settings.MaskToken, // echo of a masked secret must never land
 	})
-	if got := s.Settings().Get("paystack_secret_key"); got != "sk_real" {
+	if got := s.Settings().Get("sync_service_key"); got != "svc_real" {
 		t.Fatalf("mask token must be skipped, key now %q", got)
 	}
 }
 
 func TestApplyCloudConfigInjectsEnvOnlyWhenUnset(t *testing.T) {
 	s := newProviderTestService(t)
-	t.Setenv("PAYSTACK_CALLBACK_URL", "https://already-set.example/")
+	t.Setenv("OFFSITE_ENDPOINT", "https://already-set.example/")
 	s.applyCloudConfig(map[string]string{
-		"paystack_callback_url": "https://awesomeposs.netlify.app/",
-		"paystack_currency":     "KES", // no env mapping — must not appear in env
+		"offsite_endpoint": "https://vault.example/",
+		"offsite_prefix":   "till-a", // no env mapping — must not appear in env
 	})
-	if got := os.Getenv("PAYSTACK_CALLBACK_URL"); got != "https://already-set.example/" {
+	if got := os.Getenv("OFFSITE_ENDPOINT"); got != "https://already-set.example/" {
 		t.Fatalf("real env must win, got %q", got)
 	}
-	if _, ok := os.LookupEnv("KES"); ok {
+	if _, ok := os.LookupEnv("TILL-A"); ok {
 		t.Fatalf("settings keys without env mapping must not be injected")
 	}
 }
 
 func TestApplyCloudConfigIdempotent(t *testing.T) {
 	s := newProviderTestService(t)
-	rows := map[string]string{"paystack_public_key": "pk_live_x", "paystack_mode": "live"}
+	rows := map[string]string{"offsite_prefix": "till-b", "till_number": "123456"}
 	if n := s.applyCloudConfig(rows); n != 2 {
 		t.Fatalf("first apply should write 2, got %d", n)
 	}

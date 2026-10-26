@@ -351,17 +351,18 @@ export interface Branding {
 }
 
 /** One tender in a split/mixed payment. Account tabs cannot be split and
- *  at most one asynchronous leg (mpesa/paystack) is allowed per checkout. */
+ *  at most one asynchronous leg (mpesa) is allowed per checkout. (The
+ *  retired Paystack rail stays valid on HISTORICAL order/payment display
+ *  types below — new checkouts can no longer mint card legs.) */
 export interface SplitLeg {
-  method: 'cash' | 'mpesa' | 'paystack' | 'credit'
+  method: 'cash' | 'mpesa' | 'credit'
   amountCents: number
   phone?: string  // mpesa leg (STK push target)
-  email?: string  // paystack leg (receipt)
 }
 
 export interface CheckoutRequest {
   items: { productId: number; qty: number; unitPriceCents?: number }[]
-  paymentMethod: 'cash' | 'mpesa' | 'account' | 'credit' | 'paystack'
+  paymentMethod: 'cash' | 'mpesa' | 'account' | 'credit'
   paymentMode?: 'auto' | 'stk' | 'manual'
   customerPhone?: string
   customerEmail?: string
@@ -482,6 +483,8 @@ export interface DailySummary {
   series: { date: string; salesCents: number; orders: number }[]
   /** P5: who sold what today + how many new customers were captured. */
   perStaff?: { userId: number; name: string; orders: number; salesCents: number }[]
+  /** v19: sales grouped by originating till (deviceId '' = pre-v19 rows). */
+  byTill?: { deviceId: string; orders: number; salesCents: number }[]
   newCustomers?: number
   /** P6 multi-store: present (with per-shop rows) on the ?shop=all consolidated view. */
   consolidated?: boolean
@@ -888,80 +891,13 @@ export interface TeamSyncStatus {
 }
 
 export interface PaymentConfig {
-  paystack: {
-    enabled: boolean
-    publicKey: string
-    currency: string
-    callbackUrl: string
-    configured: boolean
-    /** Keys are supplied via the till's .env file (owner-managed). */
-    fromEnv?: boolean
-  }
   mpesa: {
     env: string
-    /** How STK currently runs: paystack | daraja | mock | manual. */
-    route: 'paystack' | 'daraja' | 'mock' | 'manual' | string
+    /** How STK currently runs: buni | mock | manual (v1.4.4 rail set). */
+    route: 'buni' | 'mock' | 'manual' | string
     till: string
     paybill: string
   }
   creditEnabled: boolean
   loyaltyEnabled: boolean
-}
-
-export interface PaystackInitResult {
-  reference: string
-  accessCode: string
-  authorizationUrl: string
-  publicKey: string
-  currency: string
-  amountCents: number
-}
-
-// ---- Paystack popup (Popup V2 — https://js.paystack.co/v2/inline.js) ----
-// The charge is initialized SERVER-side (secret key); the popup merely
-// resumes it with the minted access_code. That is why the amount shown in
-// the popup is always the server's amount — the v1 "Transaction amount not
-// set" error came from inline.js v1 ignoring access_code and expecting a
-// client-side `amount`. V2 fixes the contract: new PaystackPop().
-// resumeTransaction(accessCode, callbacks).
-interface PaystackHandler { openIframe(): void }
-interface PaystackResumeCallbacks {
-  onLoad?(t: { id: number; customer: unknown; accessCode: string }): void
-  onSuccess(r: { id: number; reference: string; message: string }): void
-  onError?(e: { message: string }): void
-  onCancel?(): void
-}
-interface PaystackPopupV2 {
-  resumeTransaction(accessCode: string, callbacks?: PaystackResumeCallbacks): PaystackHandler
-  cancelTransaction(id?: unknown): void
-  isLoaded(): boolean
-}
-declare global {
-  interface Window { PaystackPop?: { new (): PaystackPopupV2 } }
-}
-
-/**
- * Open the Paystack popup (Popup V2, in-page iframe — never a separate
- * browser window or tab) with a server-minted access_code. onSuccess
- * resolves with the reference; verify happens server-side afterwards.
- * onError fires when the transaction fails to load (e.g. expired access
- * code) — callers should re-init for a fresh reference.
- */
-export function openPaystackPopup(init: PaystackInitResult, _email: string,
-  callbacks: { onSuccess(ref: string): void; onCancelled(): void; onError?(message: string): void }): void {
-  if (!window.PaystackPop) {
-    callbacks.onError?.('Paystack popup library not loaded, check the internet connection and retry')
-    callbacks.onCancelled()
-    return
-  }
-  // eslint-disable-next-line new-cap
-  const popup = new window.PaystackPop()
-  popup.resumeTransaction(init.accessCode, {
-    onSuccess: (r) => callbacks.onSuccess(r.reference),
-    onCancel: () => callbacks.onCancelled(),
-    onError: (e) => {
-      callbacks.onError?.(e?.message || 'Paystack checkout failed to open')
-      callbacks.onCancelled()
-    },
-  })
 }

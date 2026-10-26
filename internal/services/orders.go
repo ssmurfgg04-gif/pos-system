@@ -27,6 +27,12 @@ var (
 	ErrNoStoreCredit     = errors.New("not enough store credit")
 	ErrLoyaltyPoints     = errors.New("not enough loyalty points")
 	ErrNotConfigured     = errors.New("payment provider not configured")
+	// ErrSTKPromptBusy — a Buni STK prompt is already live on the
+	// customer's phone. KCB USSD sessions are per MSISDN: pushing again
+	// while one is open is rejected with 4999 "Duplicated MSISDN. MSISDN
+	// has an existing USSD Session". The cooldown guard turns that into
+	// an actionable 409 instead of a raw KCB error on the counter.
+	ErrSTKPromptBusy = errors.New("an M-Pesa prompt was sent to this phone moments ago — wait for the customer to enter their PIN or cancel it, then retry")
 )
 
 // nowStamp is the fixed-width millisecond timestamp used for all
@@ -84,7 +90,7 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 		default:
 			return nil, fmt.Errorf("invalid payment mode %q", mode)
 		}
-	} else if method != models.MethodCash && method != models.MethodAccount && method != models.MethodCredit && method != models.MethodPaystack {
+	} else if method != models.MethodCash && method != models.MethodAccount && method != models.MethodCredit {
 		return nil, fmt.Errorf("invalid payment method %q", method)
 	}
 	if method == models.MethodCredit && !s.settings.GetBool("credit_enabled", true) {
@@ -294,12 +300,13 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 	immediateCash := method == models.MethodCash
 	immediateCredit := method == models.MethodCredit
 	isManual := method == models.MethodMpesa && mode == models.ModeManual
-	isPaystack := method == models.MethodPaystack
 
 	// ---- Split / mixed tender (optional multi-leg payment) ----
 	// Loyalty redemption is not a leg (it already reduced the payable);
-	// account tabs cannot be split; at most one async leg (mpesa or
-	// paystack) stays PENDING — cash/credit legs complete at the till.
+	// account tabs cannot be split; at most one async leg (mpesa) stays
+	// PENDING — cash/credit legs complete at the till. A paystack leg is
+	// INVALID since the v1.4.4 rail retirement: it could never complete
+	// without its rail, so it must not enter a split.
 	var legs []models.SplitLeg
 	isSplit := len(req.SplitPayments) > 0
 	splitAllInstant := false
@@ -317,7 +324,7 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 			sum += lg.AmountCents
 			switch lg.Method {
 			case models.MethodCash, models.MethodCredit:
-			case models.MethodMpesa, models.MethodPaystack:
+			case models.MethodMpesa:
 				asyncCount++
 				if splitAsyncMethod == "" {
 					splitAsyncMethod = lg.Method
@@ -369,6 +376,11 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 	// counter bump rolled back with the failed tx — and every payment method
 	// died with "could not allocate order number" all day).
 	var lastNumber string
+	// v19: stamp the originating till on the sale. The device-id claim
+	// (first boot only) does its own DB write, so it MUST resolve BEFORE
+	// the checkout transaction opens — calling it inside the tx would
+	// self-deadlock the pool (SQLITE_BUSY on the second connection).
+	origin := s.deviceID()
 	for attempt := 0; attempt < 6; attempt++ {
 		tx, err := s.db.Begin()
 		if err != nil {
@@ -397,9 +409,9 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 			taxIncludedInt = 1
 		}
 		res, err := tx.Exec(s.db.Rebind(`
-                        INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent, tax_included, discount_cents, discount_label, points_redeemed, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id, buyer_pin, invoice_number)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-			number, status, subtotal, tax, payable, pct, taxIncludedInt, discount, truncStr(req.DiscountLabel, 120), redeemSpent, p.ID, req.CustomerName, req.Note, req.ClientUUID, now, paidAt, req.CustomerID, strings.ToUpper(strings.TrimSpace(req.BuyerPIN)), number)
+                        INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent, tax_included, discount_cents, discount_label, points_redeemed, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id, buyer_pin, invoice_number, device_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			number, status, subtotal, tax, payable, pct, taxIncludedInt, discount, truncStr(req.DiscountLabel, 120), redeemSpent, p.ID, req.CustomerName, req.Note, req.ClientUUID, now, paidAt, req.CustomerID, strings.ToUpper(strings.TrimSpace(req.BuyerPIN)), number, origin)
 		if err != nil {
 			tx.Rollback()
 			if isUniqueViolation(err) {
@@ -489,12 +501,6 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 					}
 					if _, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, phone, created_at)
                                                 VALUES (?, 'mpesa', ?, ?, 'PENDING', ?, ?)`), id, legMode, amount, phone, now); err != nil {
-						tx.Rollback()
-						return nil, err
-					}
-				case models.MethodPaystack:
-					if _, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, email, created_at)
-                                                VALUES (?, 'paystack', 'popup', ?, 'PENDING', ?, ?)`), id, lg.AmountCents, truncStr(strings.TrimSpace(lg.Email), 200), now); err != nil {
 						tx.Rollback()
 						return nil, err
 					}
@@ -719,35 +725,6 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 					return nil, err
 				}
 			}
-		} else if isPaystack {
-			// Paystack card / mobile-money: order PENDING, payment
-			// PENDING for the payable (points + discount already
-			// knocked off). Stock deducts once at completion via
-			// completePayment. The frontend opens checkout right
-			// after with POST /orders/:id/paystack/init.
-			if _, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, email, created_at)
-                                VALUES (?, 'paystack', 'popup', ?, 'PENDING', ?, ?)`), id, payable, truncStr(strings.TrimSpace(req.CustomerEmail), 200), now); err != nil {
-				tx.Rollback()
-				return nil, err
-			}
-			// Points redeemed on a paystack order deduct now; a
-			// void refunds them.
-			if redeemSpent > 0 {
-				var pts int64
-				if err := tx.QueryRow(`SELECT loyalty_points FROM customers WHERE id = ?`, tabCustomer.ID).Scan(&pts); err != nil {
-					tx.Rollback()
-					return nil, err
-				}
-				if pts < redeemSpent {
-					tx.Rollback()
-					return nil, fmt.Errorf("%w: %s has %d, wants %d", ErrLoyaltyPoints, tabCustomer.Name, pts, redeemSpent)
-				}
-				if err := recordLedgerTx(tx, s.db.Rebind, tabCustomer.ID, id, models.LedgerLoyalty,
-					0, -redeemSpent, "points redeemed "+number, p.ID); err != nil {
-					tx.Rollback()
-					return nil, err
-				}
-			}
 		} else {
 			// M-Pesa: payment PENDING for the payable (points +
 			// discount already knocked off). STK requests whole
@@ -826,10 +803,7 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 		// Mixed tender with one async leg: instant legs are already
 		// banked; the async leg drives completion (stock + print +
 		// broadcast happen via completePayment, exactly once).
-		if splitAsyncMethod == models.MethodPaystack {
-			s.Audit(p.ID, p.Username, "CHECKOUT_SPLIT", "order", orderNumber,
-				fmt.Sprintf("total %d, awaiting card/mobile leg", payable))
-		} else if !isManual {
+		if !isManual {
 			if _, err := s.InitiateSTK(ctx, orderID, p); err != nil {
 				return s.GetOrder(orderID)
 			}
@@ -841,22 +815,20 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 		s.Audit(p.ID, p.Username, "CHECKOUT_SPLIT", "order", orderNumber, fmt.Sprintf("total %d, mixed tender", payable))
 		if order, err := s.GetOrder(orderID); err == nil {
 			s.printer.Enqueue(order)
-			s.broadcast(EventOrderPaid, order)
+			s.broadcast(EventOrderPaid, orderBroadcastPayload(order))
 		}
 	} else if immediateCredit {
 		s.Audit(p.ID, p.Username, "CHECKOUT_CREDIT", "order", orderNumber, fmt.Sprintf("total %d, store credit", payable))
 		if order, err := s.GetOrder(orderID); err == nil {
 			s.printer.Enqueue(order)
-			s.broadcast(EventOrderPaid, order)
+			s.broadcast(EventOrderPaid, orderBroadcastPayload(order))
 		}
 	} else if immediateCash {
 		s.Audit(p.ID, p.Username, "CHECKOUT_CASH", "order", orderNumber, fmt.Sprintf("total %d", payable))
 		if order, err := s.GetOrder(orderID); err == nil {
 			s.printer.Enqueue(order)
-			s.broadcast(EventOrderPaid, order)
+			s.broadcast(EventOrderPaid, orderBroadcastPayload(order))
 		}
-	} else if isPaystack {
-		s.Audit(p.ID, p.Username, "CHECKOUT_PAYSTACK", "order", orderNumber, fmt.Sprintf("awaiting checkout, total %d", payable))
 	} else if !isManual {
 		if _, err := s.InitiateSTK(ctx, orderID, p); err != nil {
 			// Order stays PENDING — cashier sees failure, can retry or void.
@@ -927,10 +899,16 @@ func (s *Service) nextDocNumber(tx *sql.Tx, prefix string, skip int) (string, er
 	// exists for this prefix+day. LENGTH() first so suffixed ingest
 	// numbers ("...0005-XF") and 5-digit seqs sort ahead of 4-digit.
 	var maxNum string
+	// Half-open range on the UNIQUE index instead of LIKE: day is zero-
+	// padded YYYYMMDD, so [prefix+day, prefix+nextDay) bounds exactly
+	// the day's numbers. This probe runs inside EVERY checkout's write
+	// tx — LIKE degraded toward a full orders scan as the till aged
+	// (~73k rows/year at 200 sales/day); the range stays O(day) forever.
+	nextDay := incrementDay(day)
 	if err := tx.QueryRow(s.db.Rebind(`
-                SELECT number FROM orders WHERE number LIKE ?
+                SELECT number FROM orders WHERE number >= ? AND number < ?
                 ORDER BY LENGTH(number) DESC, number DESC LIMIT 1
-        `), prefix+day+"%").Scan(&maxNum); err == nil && strings.HasPrefix(maxNum, prefix+day) {
+        `), prefix+day, prefix+nextDay).Scan(&maxNum); err == nil && strings.HasPrefix(maxNum, prefix+day) {
 		tail := maxNum[len(prefix)+len(day):]
 		if i := strings.IndexByte(tail, '-'); i >= 0 { // ingest suffix
 			tail = tail[:i]
@@ -941,6 +919,16 @@ func (s *Service) nextDocNumber(tx *sql.Tx, prefix string, skip int) (string, er
 	}
 
 	return fmt.Sprintf(prefix+"%s%04d", day, daySeq+skip), nil
+}
+
+// incrementDay returns the day AFTER a YYYYMMDD stamp (same layout), the
+// exclusive upper bound for the order-number heal probe's index range.
+func incrementDay(day string) string {
+	t, err := time.Parse("20060102", day)
+	if err != nil {
+		return day // unparsable: keep the original bound, the unique index still guards duplicates
+	}
+	return t.AddDate(0, 0, 1).Format("20060102")
 }
 
 // bumpDaySeq advances the order_sequences row for day by one and returns
@@ -998,17 +986,12 @@ func (s *Service) InitiateSTK(ctx context.Context, orderID int64, p *auth.Princi
 	if pay.Phone == "" {
 		return nil, errors.New("payment has no phone number; collect the customer's number and retry")
 	}
-	// REAL MONEY ROUTE: Buni (KCB M-Pesa Express) is the MAIN rail when
-	// the shop's cloud link enables it — the prompt rides buni-stkpush
-	// and completes only from verified callback events.
+	// REAL MONEY ROUTE: Buni (KCB M-Pesa Express) is the MAIN rail — and
+	// since v1.4.4 the ONLY rail — when the shop's cloud link enables it:
+	// the prompt rides buni-stkpush and completes only from verified
+	// callback events.
 	if s.MpesaRoute() == "buni" {
 		return s.buniMpesaSTK(ctx, order, pay, p)
-	}
-	// Paystack route: when the shop's Paystack integration is live,
-	// M-Pesa STK rides Paystack's mobile-money charge — a real prompt on
-	// the customer's phone, completed only after server-side verify.
-	if s.MpesaRoute() == "paystack" {
-		return s.paystackMpesaSTK(ctx, order, pay, p)
 	}
 	provider, err := s.GetProvider()
 	if err != nil {
@@ -1018,7 +1001,7 @@ func (s *Service) InitiateSTK(ctx context.Context, orderID int64, p *auth.Princi
 		return nil, err
 	}
 	if provider == nil {
-		return nil, errors.New("M-Pesa STK is not configured, connect Paystack in Settings (or switch to manual receipt entry)")
+		return nil, errors.New("M-Pesa STK is not configured on this till (Buni needs the cloud link); use manual receipt entry or void the order")
 	}
 	resp, err := provider.InitiateSTK(ctx, mpesa.STKRequest{
 		OrderID:          order.ID,
@@ -1148,8 +1131,8 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
 		}
 	}
 
-	// Amount discrepancy semantics (TRUSTED callers only — Paystack's
-	// HMAC-verified webhook can legitimately differ by cents in fees/
+	// Amount discrepancy semantics (TRUSTED callers only — a provider's
+	// verified webhook can legitimately differ by cents in fees/
 	// rounding; recheck/sweeper results can map across superseded legs).
 	// Those complete and flag for staff. The UNTRUSTED public M-Pesa
 	// callback path is gated separately in HandleCallback — see there.
@@ -1225,7 +1208,7 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
 		tx.Exec(`UPDATE orders SET discrepancy = 1 WHERE id = ?`, orderID)
 	}
 	// Gift-card products mint one redeemable code per unit (async pay
-	// paths: tab settle, M-Pesa, Paystack, split with an async leg) —
+	// paths: tab settle, M-Pesa, split with an async leg) —
 	// WINNER ONLY: a completing leg that lost the PENDING→PAID race (the
 	// order was already completed by another leg) must not mint a second
 	// set of spendable codes for the same basket.
@@ -1249,7 +1232,7 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
 			s.Audit(0, payMethod, "DRAWER_KICK_FAILED", "order", order.Number, err.Error())
 		}
 	}
-	s.broadcast(EventOrderPaid, order)
+	s.broadcast(EventOrderPaid, orderBroadcastPayload(order))
 	s.Audit(0, payMethod, "PAYMENT_COMPLETED", "order", order.Number, fmt.Sprintf("payment %d, receipt %s, amount %d", paymentID, receipt, payAmount))
 	s.EmitOrder(orderID)
 	s.emitLedgerForOrder(orderID) // the loyalty earn (and any other movement) follows the team
@@ -1340,6 +1323,14 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
 	if err := tx.QueryRow(`SELECT status FROM orders WHERE id = ?`, orderID).Scan(&status); err != nil {
 		return nil, ErrNotFound
 	}
+	// v19: staff may only void their OWN sales — cancelling someone
+	// else's order (stock restore + money reversal) is Admin oversight.
+	if !canViewAllOrders(p) {
+		var owner int64
+		if err := tx.QueryRow(`SELECT cashier_id FROM orders WHERE id = ?`, orderID).Scan(&owner); err != nil || owner != p.ID {
+			return nil, ErrNotFound
+		}
+	}
 	if status == models.OrderVoided {
 		return nil, fmt.Errorf("%w: order already voided", ErrInvalidState)
 	}
@@ -1363,8 +1354,9 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
 		}
 	}
 	// Collect the void-with-money signal BEFORE flipping the legs: a PAID
-	// order whose online leg (Paystack/M-Pesa) already COMPLETED means real
-	// money landed and is now being reversed — settlement still arrives at
+	// order whose online leg (M-Pesa — or a historical paystack row)
+	// already COMPLETED means real money landed and is now being
+	// reversed — settlement still arrives at
 	// the provider, so staff must see the refund obligation in reports
 	// (discrepancy flag), not dig through audit_log.
 	collectedOnline := 0
@@ -1485,14 +1477,14 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
 	if err != nil {
 		return nil, err
 	}
-	s.broadcast(EventOrderVoided, order)
+	s.broadcast(EventOrderVoided, orderBroadcastPayload(order))
 	return order, nil
 }
 
-// HandleCallback processes a provider webhook (public endpoint): Daraja
-// posts directly; Buni results arrive through the cloud relay with the
-// same shape. Buni legs store a "BUNI-" prefixed checkout id, so both
-// forms resolve here.
+// HandleCallback processes a provider webhook (public endpoint): the
+// M-Pesa callback envelope (Daraja-shaped; Buni posts the same shape)
+// arrives directly or through the cloud relay. Buni legs store a "BUNI-"
+// prefixed checkout id, so both forms resolve here.
 func (s *Service) HandleCallback(cb mpesa.CallbackResult) (*models.Order, error) {
 	var paymentID, storedCents, callbackOrderID int64
 	err := s.db.QueryRow(s.db.Rebind(`SELECT id, amount_cents, order_id FROM payments WHERE checkout_request_id IN (?, ?)`),
@@ -1517,8 +1509,8 @@ func (s *Service) HandleCallback(cb mpesa.CallbackResult) (*models.Order, error)
 	// ever blocks tampered/malformed results. Fail closed: payment FAILED,
 	// order discrepancy flag raised (staff tell-tale), audit entry, order
 	// stays PENDING for retry STK / manual code / void / staff recheck
-	// (recheck re-queries Daraja directly and can still heal a genuine
-	// payment whose callback was spoofed or lost).
+	// (recheck re-queries the provider directly and can still heal a
+	// genuine payment whose callback was spoofed or lost).
 	if cb.AmountCents <= 0 || cb.AmountCents != storedCents {
 		s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),
 			truncStr(fmt.Sprintf("amount mismatch on public callback: result %d != stored %d — unverified, not completed", cb.AmountCents, storedCents), 200), paymentID)

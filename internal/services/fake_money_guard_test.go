@@ -2,11 +2,11 @@ package services
 
 // fake_money_guard_test.go — regression tests for the fake-success fix:
 // a shop that never configured a real payment provider must NEVER get an
-// auto-completing STK provider, and misconfigured Daraja credentials must
-// fail loudly instead of silently falling back to the mock.
+// auto-completing STK provider, and a till still set to the RETIRED Daraja
+// environments must fail loudly instead of silently falling back to the
+// mock. (v1.4.4: Daraja is gone — real STK rides the Buni cloud route.)
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,18 +65,28 @@ func TestGetProviderAllowsMockWithOptIn(t *testing.T) {
 	}
 }
 
-func TestGetProviderFailsLoudlyOnIncompleteDaraja(t *testing.T) {
+func TestGetProviderFailsLoudlyOnRetiredDarajaEnv(t *testing.T) {
+	// v1.4.4: Daraja is retired. A till still set to sandbox/production
+	// must get a LOUD error — never a provider, never a silent mock.
 	s := newProviderTestService(t)
 	s.Settings().Set("mpesa_env", "production")
-	// No consumer key/secret/passkey set.
 	t.Setenv("ALLOW_MOCK_PAYMENTS", "")
 
 	p, err := s.GetProvider()
 	if err == nil || p != nil {
-		t.Fatalf("incomplete Daraja creds must error, not fall back to mock: provider=%v", p)
+		t.Fatalf("retired Daraja env must error, not fall back to mock: provider=%v", p)
 	}
-	if !strings.Contains(err.Error(), "incomplete") {
-		t.Fatalf("error should say credentials incomplete: %v", err)
+	if !strings.Contains(err.Error(), "Daraja was retired") {
+		t.Fatalf("error should name the retirement: %v", err)
+	}
+	if got := s.MpesaRoute(); got != "manual" {
+		t.Fatalf("route with retired env should be manual, got %q", got)
+	}
+
+	// Same for the sandbox environment.
+	s.Settings().Set("mpesa_env", "sandbox")
+	if p, err := s.GetProvider(); err == nil || p != nil {
+		t.Fatalf("sandbox env must error too: provider=%v err=%v", p, err)
 	}
 }
 
@@ -91,7 +101,10 @@ func TestGetProviderNilForManualMode(t *testing.T) {
 	}
 }
 
-func TestGetProviderDarajaComplete(t *testing.T) {
+func TestGetProviderIgnoresLegacyDarajaCredentials(t *testing.T) {
+	// Old databases may still carry Daraja credential rows; with the
+	// retirement they must arm NOTHING (the loud-error contract holds even
+	// when the credential set would have been complete).
 	s := newProviderTestService(t)
 	st := s.Settings()
 	st.Set("mpesa_env", "production")
@@ -102,10 +115,7 @@ func TestGetProviderDarajaComplete(t *testing.T) {
 	t.Setenv("ALLOW_MOCK_PAYMENTS", "")
 
 	p, err := s.GetProvider()
-	if err != nil || p == nil {
-		t.Fatalf("complete Daraja creds should yield a provider: %v", err)
+	if err == nil || p != nil {
+		t.Fatalf("legacy Daraja credentials must not yield a provider: %v", err)
 	}
-	// Provider is actually usable (no network call here).
-	_ = p.InitiateSTK // interface method present
-	_ = context.Background()
 }

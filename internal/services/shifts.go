@@ -191,6 +191,20 @@ type ShiftReport struct {
 // per-tender sums follow the SAME completed-payments window the close flow
 // uses (opened_at → now or closed_at), so X never disagrees with the Z the
 // cashier later signs.
+// CanViewShift reports whether p may read shiftID's X/Z report: their own
+// shift always; other people's shift reports are management visibility
+// (reports.view). Unknown shifts are invisible to everyone.
+func (s *Service) CanViewShift(p *auth.Principal, shiftID int64) bool {
+	if p == nil {
+		return false
+	}
+	var uid int64
+	if err := s.db.QueryRow(s.db.Rebind(`SELECT user_id FROM shifts WHERE id = ?`), shiftID).Scan(&uid); err != nil {
+		return false
+	}
+	return uid == p.ID || p.Can("reports.view")
+}
+
 func (s *Service) GetShiftReport(shiftID int64) (*ShiftReport, error) {
 	shift, err := s.GetShift(shiftID)
 	if err != nil {

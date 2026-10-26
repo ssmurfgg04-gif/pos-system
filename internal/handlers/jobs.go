@@ -23,6 +23,10 @@ func (h *H) GetOrderEvents(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if err := h.svc(c).AssertOrderVisible(h.principal(c), id); err != nil {
+		h.mapErr(c, err)
+		return
+	}
 	h.ok(c, h.svc(c).GetOrderEvents(id))
 }
 
@@ -40,7 +44,7 @@ func (h *H) AddOrderNote(c *gin.Context) {
 		h.fail(c, 400, "message required")
 		return
 	}
-	if _, err := h.svc(c).GetOrder(id); err != nil {
+	if _, err := h.svc(c).GetOrderScoped(h.principal(c), id); err != nil {
 		h.mapErr(c, err)
 		return
 	}

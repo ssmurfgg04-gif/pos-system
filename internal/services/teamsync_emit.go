@@ -21,6 +21,7 @@ func (s *Service) EmitOrder(orderID int64) {
 		}
 	}
 	oe := orderEvent{
+		DeviceID:   s.deviceID(),
 		ClientUUID: order.ClientUUID, Number: order.Number, Status: order.Status,
 		SubtotalCents: order.SubtotalCents, DiscountCents: order.DiscountCents,
 		DiscountLabel: order.DiscountLabel, PointsRedeemed: order.PointsRedeemed,

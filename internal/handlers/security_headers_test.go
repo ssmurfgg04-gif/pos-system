@@ -23,7 +23,7 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 	}
 	for _, want := range []string{
 		"default-src 'self'",
-		"script-src 'self' https://js.paystack.co",
+		"script-src 'self'",
 		"object-src 'none'",
 		"base-uri 'self'",
 		"frame-ancestors 'self'",

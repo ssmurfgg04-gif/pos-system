@@ -73,6 +73,8 @@ export async function flushQueue(): Promise<Order[]> {
   const created: Order[] = []
   try {
     const queued = await drainQueue()
+    let removed = 0
+    let failedLeft = 0
     for (let i = 0; i < queued.length; i += FLUSH_BATCH) {
       const batch = queued.slice(i, i + FLUSH_BATCH)
       let results: SyncResult[]
@@ -88,6 +90,7 @@ export async function flushQueue(): Promise<Order[]> {
       for (const r of results) {
         if (!r.error) {
           await removeFromQueue(r.clientUuid)
+          removed++
           continue
         }
         // The server flags DEFINITIVE refusals with `rejected: true`
@@ -99,8 +102,10 @@ export async function flushQueue(): Promise<Order[]> {
         if (r.rejected === true || isBusinessRejection(r.error)) {
           toast.error('Offline sale rejected', r.error)
           await removeFromQueue(r.clientUuid)
+          removed++
         } else {
           await markQueueAttempt(r.clientUuid, r.error)
+          failedLeft++
           const q = batch.find((b) => b.clientUuid === r.clientUuid)
           if (q && (q.attempts || 0) + 1 >= MAX_FLUSH_ATTEMPTS) {
             toast.error(
@@ -112,11 +117,14 @@ export async function flushQueue(): Promise<Order[]> {
         }
       }
     }
-    await useNet.getState().refreshPending()
-    const left = useNet.getState().pending
-    const synced = queued.length - left
-    if (synced > 0) {
-      toast.success(`Synced ${synced} offline sale${synced > 1 ? 's' : ''}`)
+    // Badge counts come straight from what this flush observed — no
+    // extra full-queue drains (queueSize + failedQueueSize each used to
+    // re-walk every record after every flush).
+    const pendingLeft = Math.max(0, queued.length - removed)
+    useNet.getState().setPending(pendingLeft)
+    useNet.getState().setFailed(failedLeft)
+    if (removed > 0) {
+      toast.success(`Synced ${removed} offline sale${removed > 1 ? 's' : ''}`)
     }
   } finally {
     flushing = false

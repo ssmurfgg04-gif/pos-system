@@ -23,7 +23,16 @@ type DailySummary struct {
 	TopProducts   []TopProduct `json:"topProducts"`
 	Series        []DayPoint   `json:"series"`   // 7-day window ending on date
 	PerStaff      []StaffSales `json:"perStaff"` // who sold what today
+	ByTill        []TillSales  `json:"byTill"`   // sales grouped by originating till (v19)
 	NewCustomers  int          `json:"newCustomers"`
+}
+
+// TillSales is one originating till's slice of a reporting window (v19:
+// orders.device_id). DeviceID ” = pre-v19 rows.
+type TillSales struct {
+	DeviceID   string `json:"deviceId"`
+	Orders     int    `json:"orders"`
+	SalesCents int64  `json:"salesCents"`
 }
 
 // StaffSales is one staff member's day (P5: business reporting).
@@ -82,8 +91,23 @@ func (s *Service) GetDailySummary(date string) (*DailySummary, error) {
                         COALESCE(SUM(CASE WHEN method = 'mpesa' THEN amount_cents ELSE 0 END),0),
                         COALESCE(SUM(CASE WHEN method = 'paystack' THEN amount_cents ELSE 0 END),0),
                         COALESCE(SUM(CASE WHEN method = 'credit' THEN amount_cents ELSE 0 END),0)
-                FROM payments WHERE status = 'COMPLETED' AND completed_at BETWEEN ? AND ?`), from, to).
+                FROM payments p JOIN orders o ON o.id = p.order_id WHERE p.status = 'COMPLETED' AND o.created_at BETWEEN ? AND ?`), from, to).
 		Scan(&out.CashCents, &out.MpesaCents, &out.PaystackCents, &out.CreditCents)
+
+	// Sales by originating till (v19 device attribution). Legacy rows
+	// (pre-v19) group under '' — surfaced to admin as one bucket.
+	if tillRows, err := s.db.Query(s.db.Rebind(`
+                SELECT COALESCE(device_id,''), COUNT(*), SUM(total_cents)
+                FROM orders WHERE status = 'PAID' AND created_at BETWEEN ? AND ?
+                GROUP BY device_id ORDER BY SUM(total_cents) DESC`), from, to); err == nil {
+		for tillRows.Next() {
+			var t TillSales
+			if tillRows.Scan(&t.DeviceID, &t.Orders, &t.SalesCents) == nil {
+				out.ByTill = append(out.ByTill, t)
+			}
+		}
+		tillRows.Close()
+	}
 
 	// Top products of the day.
 	rows, err := s.db.Query(s.db.Rebind(`
@@ -223,7 +247,7 @@ func (s *Service) GetMonthlySummary(month string) (*MonthlySummary, error) {
                         COALESCE(SUM(CASE WHEN method = 'mpesa' THEN amount_cents ELSE 0 END),0),
                         COALESCE(SUM(CASE WHEN method = 'paystack' THEN amount_cents ELSE 0 END),0),
                         COALESCE(SUM(CASE WHEN method = 'credit' THEN amount_cents ELSE 0 END),0)
-                FROM payments WHERE status = 'COMPLETED' AND completed_at BETWEEN ? AND ?`), from, to).
+                FROM payments p JOIN orders o ON o.id = p.order_id WHERE p.status = 'COMPLETED' AND o.created_at BETWEEN ? AND ?`), from, to).
 		Scan(&out.CashCents, &out.MpesaCents, &out.PaystackCents, &out.CreditCents)
 
 	// Per-day series for the month (fills zero days).

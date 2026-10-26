@@ -153,13 +153,24 @@ func (s *Service) UpdateCustomer(id int64, name, phone, email, notes string, lim
 // GetCustomerOrders is the shared purchase history: every sale linked to
 // the CRM record, newest first. This is what makes the customer book a
 // CRM and not just a list of tab balances.
-func (s *Service) GetCustomerOrders(customerID int64) ([]models.OrderSummary, error) {
+// GetCustomerOrders is the shared purchase history: every sale linked to
+// the CRM record, newest first. v19: staff without orders.view.all see
+// only the sales THEY rang up for this customer.
+func (s *Service) GetCustomerOrders(customerID int64, p *auth.Principal) ([]models.OrderSummary, error) {
 	if _, err := s.GetCustomer(customerID); err != nil {
 		return nil, ErrNotFound
 	}
-	rows, err := s.db.Query(s.db.Rebind(`
+	q := `
                 SELECT id, number, status, total_cents, created_at, paid_at
-                FROM orders WHERE customer_id = ? ORDER BY id DESC LIMIT 100`), customerID)
+                FROM orders WHERE customer_id = ?`
+	var args []any
+	args = append(args, customerID)
+	if !canViewAllOrders(p) {
+		q += ` AND cashier_id = ?`
+		args = append(args, p.ID)
+	}
+	q += ` ORDER BY id DESC LIMIT 100`
+	rows, err := s.db.Query(s.db.Rebind(q), args...)
 	if err != nil {
 		return nil, err
 	}

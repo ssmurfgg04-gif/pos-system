@@ -2,17 +2,15 @@
 // component fills the mobile bottom sheet). Everything a cashier needs for
 // one sale lives here in one vertical flow:
 //   cart header → item rows → totals → customer → payment tiles → charge.
-// Payment feedback renders IN-RAIL (STK waiting, Paystack inline, paid,
+// Payment feedback renders IN-RAIL (STK waiting, paid,
 // failed + retry) — the customer never leaves the POS screen and no
 // separate browser windows/tabs are ever opened. Card/mobile-money rides
-// Paystack Popup V2 (server-minted access_code → in-page iframe), and
 // M-Pesa STK pushes straight to the customer's phone captured first in the
 // Customer section. Email is optional (receipt only); phone is the primary
 // M-Pesa identifier.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, CheckoutRequest, Customer, Order, PaymentConfig, Product, SplitLeg } from '../lib/api'
-import { openPaystackPopup } from '../lib/api'
 import { useCart } from '../stores/cart'
 import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
@@ -24,14 +22,10 @@ import { ReceiptModal } from './Receipt'
 import { toast } from '../stores/toasts'
 import { enqueue, newClientUuid } from '../offline/queue'
 import { useNet } from '../offline/heartbeat'
-import {
-  ShoppingCart, Smartphone, CreditCard, Banknote, BookUser, Wallet, X, Minus, Plus,
-  Check, AlertTriangle, RotateCcw, Ban, Star, SplitSquareHorizontal, Pause, Archive, Trash2,
-} from 'lucide-react'
+import { ShoppingCart, Smartphone, Banknote, BookUser, Wallet, X, Minus, Plus, Check, AlertTriangle, RotateCcw, Ban, Star, SplitSquareHorizontal, Pause, Archive, Trash2 } from 'lucide-react'
 
-type Method = 'mpesa' | 'card' | 'cash' | 'tab' | 'credit'
+type Method = 'mpesa' | 'cash' | 'tab' | 'credit'
 type StkStage = 'sending' | 'sent' | 'waiting' | 'slow' | 'paid' | 'failed'
-type InlineStage = 'init' | 'popup' | 'verifying' | 'paid' | 'failed'
 
 export function CheckoutRail({
   products,
@@ -85,11 +79,9 @@ export function CheckoutRail({
   const [editing, setEditing] = useState<number | null>(null)
   const [overrideVal, setOverrideVal] = useState(0)
   // in-rail payment state machines
-  const [mode, setMode] = useState<'idle' | 'stk' | 'inline'>('idle')
+  const [mode, setMode] = useState<'idle' | 'stk'>('idle')
   const [stkStage, setStkStage] = useState<StkStage>('sending')
-  const [inlineStage, setInlineStage] = useState<InlineStage>('init')
   const [activeOrder, setActiveOrder] = useState<Order | null>(null)
-  const [lastRef, setLastRef] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [payError, setPayError] = useState('')
   const [receiptOpen, setReceiptOpen] = useState(false)
@@ -101,29 +93,22 @@ export function CheckoutRail({
     onBusyChange?.(paymentBusy)
   }, [paymentBusy, onBusyChange])
 
-  // Paystack fires onClose after the success callback on some flows —
-  // once settled, late cancel events must be ignored.
-  const settledRef = useRef(false)
   const pollRef = useRef<number | null>(null)
   const timerRef = useRef<number | null>(null)
 
   const canOverride = useAuth((s) => !!s.user?.permissions.includes('payments.override_price'))
   const canDiscount = !!user?.permissions.includes('payments.apply_discount')
   const canRedeem = !!user?.permissions.includes('loyalty.redeem')
-  const paystackReady = !!(payConfig && !Array.isArray(payConfig) && payConfig.paystack?.enabled && payConfig.paystack?.configured)
   const creditEnabled = !!(payConfig && payConfig.creditEnabled)
   const loyaltyEnabled = !!(payConfig && payConfig.loyaltyEnabled)
   const manualMode = branding.payment_mode === 'manual'
-  const manualOnly = manualMode || (!paystackReady && !online)
+  const manualOnly = manualMode || !online
 
   const resetPayment = () => {
-    settledRef.current = false
     stopTimers()
     setMode('idle')
     setStkStage('sending')
-    setInlineStage('init')
     setActiveOrder(null)
-    setLastRef('')
     setBuyerPin('')
     setElapsed(0)
     setPayError('')
@@ -206,7 +191,7 @@ export function CheckoutRail({
     splitRemaining(tenderDue, splitLegs) === 0 &&
     splitLegs.filter(isAsyncLeg).length <= 1 &&
     (!splitLegs.some((l) => l.method === 'credit') || (!!tabCustomer && creditOf(tabCustomer) > 0 && online)) &&
-    (!splitLegs.some((l) => l.method === 'paystack' || l.method === 'mpesa') || online) &&
+    (!splitLegs.some((l) => l.method === 'mpesa') || online) &&
     (!splitMpesaLeg || manualMode || !!normalizePhoneKe(splitMpesaLeg.phone || '') || !!normalizedPhone)
 
   // Tab / store-credit customer search (server enforces limits at charge time).
@@ -228,8 +213,8 @@ export function CheckoutRail({
     return () => window.clearTimeout(t)
   }, [method, mode, tabQuery, splitNeedsCustomer])
 
-  // STK waiting loop — poll the order; the backend sweeper completes it via
-  // Paystack verify (or the charge.success webhook) and the poll surfaces it.
+  // STK waiting loop — poll the order; the backend Buni claim sweeper
+  // completes it from the provider callback and the poll surfaces it.
   // The cashier-facing window is 15 minutes (mirrors the backend sweep
   // timeout): money that lands at ANY point in that window still flips this
   // screen to paid. Field report v1.1.9: a customer paid 21 minutes after
@@ -304,66 +289,10 @@ export function CheckoutRail({
     }
   }
 
-  const paystackInit = async (order: Order, customerEmail: string) => {
-    setInlineStage('init')
-    setPayError('')
-    try {
-      const res = await api.post<{ order: Order; paystack: { reference: string; accessCode: string; authorizationUrl: string; publicKey: string } }>(
-        `/api/v1/orders/${order.id}/paystack/init`,
-        { email: customerEmail.trim() || undefined, phone: normalizedPhone || undefined },
-      )
-      setActiveOrder(res.order)
-      setLastRef(res.paystack.reference)
-      settledRef.current = false
-      setInlineStage('popup')
-      openPaystackPopup(
-        { ...res.paystack, currency: payConfig?.paystack?.currency || 'KES', amountCents: res.order.totalCents },
-        customerEmail.trim() || `${res.order.number}@paystack.local`,
-        {
-          onSuccess: (ref) => {
-            if (settledRef.current) return
-            settledRef.current = true
-            setLastRef(ref)
-            verify(order.id, ref)
-          },
-          onCancelled: () => {
-            if (settledRef.current) return
-            settledRef.current = true
-            setInlineStage('failed')
-            setPayError('Checkout closed before payment, the order stays pending. Retry or void it.')
-          },
-          onError: (message) => {
-            if (settledRef.current) return
-            settledRef.current = true
-            setInlineStage('failed')
-            setPayError(message || 'Checkout failed to open, try again.')
-          },
-        },
-      )
-    } catch (err: any) {
-      setInlineStage('failed')
-      setPayError(err?.message || 'Could not open checkout')
-    }
-  }
-
-  const verify = async (orderID: number, ref: string) => {
-    setInlineStage('verifying')
-    setPayError('')
-    try {
-      const done = await api.post<Order>(`/api/v1/orders/${orderID}/paystack/verify`, { reference: ref })
-      setActiveOrder(done)
-      setInlineStage('paid')
-      handlePaid(done)
-    } catch (err: any) {
-      setInlineStage('failed')
-      setPayError(err?.message || 'Verification failed, try again')
-    }
-  }
-
-  // "Check payment status" — asks the server to re-verify every reference
-  // this order minted against Paystack (pending + recent failed pushes) and
-  // complete the sale if the money actually arrived. The recovery path for
-  // late PIN entries: the customer paid after the till stopped watching.
+  // "Check payment status" — asks the server to re-verify the order's
+  // M-Pesa charges and complete the sale if the money actually arrived.
+  // The recovery path for late PIN entries: the customer paid after the
+  // till stopped watching (Buni claims land via the claim sweep).
   const recheckPayment = async () => {
     if (!activeOrder || busy) return
     setBusy(true)
@@ -371,8 +300,7 @@ export function CheckoutRail({
       const r = await api.post<{ order: Order; message: string }>(`/api/v1/orders/${activeOrder.id}/recheck`, {})
       if (r?.order?.status === 'PAID') {
         setActiveOrder(r.order)
-        if (mode === 'stk') setStkStage('paid')
-        else setInlineStage('paid')
+        setStkStage('paid')
         stopTimers()
         handlePaid(r.order)
         toast.success('Payment confirmed', `${r.order.number}, ${formatMoney(r.order.totalCents)}`)
@@ -391,8 +319,8 @@ export function CheckoutRail({
     if (busy) return
     setBusy(true)
     setError('')
-    const wire = (m: Method | SplitLeg['method']): 'cash' | 'mpesa' | 'account' | 'credit' | 'paystack' =>
-      m === 'tab' ? 'account' : m === 'card' ? 'paystack' : m
+    const wire = (m: Method | SplitLeg['method']): 'cash' | 'mpesa' | 'account' | 'credit' =>
+      m === 'tab' ? 'account' : m
     const wiredMethod = wire(paymentMethod)
     const wiredLegs = legs?.map((l) => ({ ...l, method: wire(l.method) as SplitLeg['method'] }))
     const clientUuid = newClientUuid()
@@ -423,10 +351,7 @@ export function CheckoutRail({
         setActiveOrder(o)
         // Route to the in-rail payment state machine.
         if (o.status === 'PENDING') {
-          if (asyncLeg?.method === 'paystack' || (!asyncLeg && wiredMethod === 'paystack')) {
-            setMode('inline')
-            paystackInit(o, asyncLeg?.email?.trim() || email.trim())
-          } else if (asyncLeg?.method === 'mpesa' || (!asyncLeg && wiredMethod === 'mpesa')) {
+          if (asyncLeg?.method === 'mpesa' || (!asyncLeg && wiredMethod === 'mpesa')) {
             setMode('stk')
             const legPhone = normalizePhoneKe(asyncLeg?.phone || '') || normalizedPhone
             if (manualMode) {
@@ -445,7 +370,7 @@ export function CheckoutRail({
           handlePaid(o)
         }
       } catch (err: any) {
-        // Network failure → queue offline (cash only; M-Pesa/Paystack need a
+        // Network failure → queue offline (cash only; M-Pesa needs a
         // live connection to know payment state).
         const splitNeedsServer = !!legs && legs.some((l) => isAsyncLeg(l) || l.method === 'credit')
         if (!navigator.onLine || /network|fetch/i.test(String(err))) {
@@ -516,9 +441,7 @@ export function CheckoutRail({
         <PaymentPanel
           mode={mode}
           stkStage={stkStage}
-          inlineStage={inlineStage}
           order={activeOrder}
-          reference={lastRef}
           elapsed={elapsed}
           phone={activeOrder.payments?.[activeOrder.payments.length - 1]?.phone || normalizedPhone || phone}
           manualOnly={manualOnly}
@@ -526,7 +449,6 @@ export function CheckoutRail({
           payError={payError}
           busy={busy}
           onRetryStk={(p) => pushStk(activeOrder, p)}
-          onRetryInline={() => paystackInit(activeOrder, email)}
           onRecheck={recheckPayment}
           onManualCode={submitManual}
           onBack={abandonPending}
@@ -680,7 +602,7 @@ export function CheckoutRail({
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain -mx-1 px-1">
             <PaymentForm
             {...{
-              method, setMethod, paystackReady, creditEnabled, manualMode, online,
+              method, setMethod, creditEnabled, manualMode, online,
               phone, setPhone, phoneOk, normalizedPhone, email, setEmail, customerName, setCustomerName,
               buyerPin, setBuyerPin,
               received, setReceived, quick, change, canCash,
@@ -738,7 +660,7 @@ function creditOf(c: Customer): number {
 
 function PaymentForm(props: {
   method: Method; setMethod: (m: Method) => void
-  paystackReady: boolean; creditEnabled: boolean; manualMode: boolean; online: boolean
+  creditEnabled: boolean; manualMode: boolean; online: boolean
   phone: string; setPhone: (v: string) => void; phoneOk: boolean; normalizedPhone: string | null
   buyerPin: string; setBuyerPin: (v: string) => void
   email: string; setEmail: (v: string) => void
@@ -756,7 +678,7 @@ function PaymentForm(props: {
   onPark?: () => void
 }) {
   const {
-    method, setMethod, paystackReady, creditEnabled, manualMode, online,
+    method, setMethod, creditEnabled, manualMode, online,
     phone, setPhone, phoneOk, normalizedPhone, email, setEmail, customerName, setCustomerName,
     buyerPin, setBuyerPin,
     received, setReceived, quick, change, canCash,
@@ -767,9 +689,10 @@ function PaymentForm(props: {
     tenderDue, busy, error, branding, checkout, onPark,
   } = props
 
+  // Card tender rode the retired Paystack rail (v1.4.4) — M-Pesa STK is
+  // the electronic tender now, cash and credit carry the rest.
   const tiles: { key: Method; label: string; sub: string; icon: React.ReactNode; enabled: boolean }[] = [
     { key: 'mpesa', label: 'M-Pesa', sub: manualMode ? 'Manual code' : 'STK Push', icon: <Smartphone size={17} strokeWidth={2.25} />, enabled: true },
-    { key: 'card', label: 'Card', sub: 'Secure checkout', icon: <CreditCard size={17} strokeWidth={2.25} />, enabled: paystackReady },
     { key: 'cash', label: 'Cash', sub: 'Exact / change', icon: <Banknote size={17} strokeWidth={2.25} />, enabled: true },
   ]
 
@@ -781,7 +704,7 @@ function PaymentForm(props: {
         (canDiscount && discountCents >= props.totals.subtotal && discountCents > 0) ||
         (method === 'mpesa' && !manualMode && !normalizePhoneKe(phone)) ||
         ((method === 'tab' || method === 'credit') && (!online || !tabCustomer || (method === 'tab' ? tabCustomer.creditLimitCents <= 0 : creditOf(tabCustomer) <= 0))) ||
-        ((method === 'card' || (method === 'mpesa' && !manualMode)) && !online))
+        ((method === 'mpesa' && !manualMode) && !online))
 
   const chargeLabel = busy
     ? 'Working…'
@@ -793,9 +716,7 @@ function PaymentForm(props: {
           ? `Charge ${formatMoney(tenderDue)} to tab`
           : method === 'credit'
             ? `Take ${formatMoney(tenderDue)} from credit`
-            : method === 'card'
-              ? `Pay ${formatMoney(tenderDue)} →`
-              : manualMode
+            : manualMode
                 ? `Confirm ${formatMoney(tenderDue)} M-Pesa →`
                 : `Charge ${formatMoney(tenderDue)}, Send STK →`
 
@@ -921,7 +842,6 @@ function PaymentForm(props: {
           onChange={setSplitLegs}
           totalCents={tenderDue}
           creditEnabled={!!creditEnabled}
-          paystackReady={!!paystackReady}
           creditReady={!!tabCustomer && creditOf(tabCustomer) > 0}
         />
       ) : method === 'cash' ? (
@@ -1005,16 +925,6 @@ function PaymentForm(props: {
             <p className="text-pending-text text-[13px] font-bold">You're offline, {method === 'credit' ? 'store credit' : 'tabs'} need the server for checks.</p>
           )}
         </>
-      ) : method === 'card' ? (
-        <div className="bg-surface-muted border border-line rounded-input p-3 text-[13px] text-ink-muted space-y-1">
-          <p>A secure checkout opens right here in the app, card or mobile money, with the exact amount already set.</p>
-          {!online && (
-            <p className="text-pending-text font-bold flex items-center gap-1.5">
-              <AlertTriangle size={14} strokeWidth={2.5} aria-hidden />
-              You're offline, card payments need a connection. Cash sales keep working.
-            </p>
-          )}
-        </div>
       ) : method === 'mpesa' && manualMode ? (
         <div className="bg-surface-muted border border-line rounded-input p-3 text-[13px] text-ink-muted">
           The customer pays to {branding.paybill_number ? 'Paybill ' + branding.paybill_number : 'Till ' + (branding.till_number || '-')} (Account: the order number). You'll enter their receipt code next.
@@ -1122,17 +1032,15 @@ function PaymentForm(props: {
   )
 }
 
-// ---- PaymentPanel: in-rail payment lifecycle (STK / inline Paystack) ----
+// ---- PaymentPanel: in-rail payment lifecycle (STK) ----
 
 function PaymentPanel({
-  mode, stkStage, inlineStage, order, reference, elapsed, phone, manualOnly, branding,
-  payError, busy, onRetryStk, onRetryInline, onRecheck, onManualCode, onBack, onVoidedOrder, onNewSale, onReceipt,
+  mode, stkStage, order, elapsed, phone, manualOnly, branding,
+  payError, busy, onRetryStk, onRecheck, onManualCode, onBack, onVoidedOrder, onNewSale, onReceipt,
 }: {
-  mode: 'stk' | 'inline'
+  mode: 'stk'
   stkStage: StkStage
-  inlineStage: InlineStage
   order: Order
-  reference: string
   elapsed: number
   phone: string
   manualOnly: boolean
@@ -1140,7 +1048,6 @@ function PaymentPanel({
   payError: string
   busy: boolean
   onRetryStk: (phone: string) => void
-  onRetryInline: () => void
   onRecheck: () => void
   onManualCode: (code: string) => void
   onBack: () => void
@@ -1150,7 +1057,7 @@ function PaymentPanel({
 }) {
   const [code, setCode] = useState('')
   const [voiding, setVoiding] = useState(false)
-  const paid = mode === 'stk' ? stkStage === 'paid' : inlineStage === 'paid'
+  const paid = stkStage === 'paid'
   const [localPhone, setLocalPhone] = useState(phone)
   useEffect(() => { setLocalPhone(phone) }, [phone])
   const lastPayment = order.payments?.[order.payments.length - 1]
@@ -1199,10 +1106,6 @@ function PaymentPanel({
           />
         )}
 
-        {mode === 'inline' && inlineStage !== 'paid' && (
-          <InlinePanel stage={inlineStage} reference={reference} payError={payError} onRetry={onRetryInline} onRecheck={onRecheck} />
-        )}
-
         {paid && (
           <div className="text-center py-4 space-y-4" role="status">
             <div className="w-20 h-20 mx-auto rounded-full bg-paid-bg border-2 border-paid-text flex items-center justify-center text-paid-text anim-pop" aria-hidden>
@@ -1213,7 +1116,7 @@ function PaymentPanel({
               <p className="text-[32px] leading-none font-extrabold text-ink tabular mt-2">{formatMoney(order.totalCents)}</p>
               <p className="text-ink-muted text-sm mt-2">
                 Order <span className="tabular font-semibold text-ink">{order.number}</span>
-                {mode === 'stk' && lastPayment?.mpesaReceipt
+                {lastPayment?.mpesaReceipt
                   ? <> · M-Pesa receipt <strong className="text-ink tabular">{lastPayment.mpesaReceipt}</strong></>
                   : null}
               </p>
@@ -1360,9 +1263,9 @@ function StkPanel({
         </div>
         <p className="text-ink-subtle text-xs tabular">{Math.max(0, 180 - elapsed)}s left · auto-checks every 2s</p>
         <p className="text-[11px] text-ink-subtle max-w-xs mx-auto leading-relaxed">
-          On their phone the prompt shows <strong className="text-ink">PAYSTACK PAYMENTS KENYA LIMITED</strong>
-          {branding.store_name ? <> for account <strong className="text-ink">{branding.store_name}</strong></> : null}
-          {' '}, that's Paystack, the card &amp; M-Pesa processor. Money lands in your account.
+          On their phone the prompt shows <strong className="text-ink">7853959-CDC</strong>
+          {branding.store_name ? <> for <strong className="text-ink">{branding.store_name}</strong></> : null}
+          {' '}, sent through KCB Buni. Money lands in the shop account.
         </p>
         {till && (
           <div className="text-left bg-surface-muted border border-line rounded-input p-3">
@@ -1406,14 +1309,21 @@ function StkPanel({
           <ul className="text-[13px] text-ink-muted mt-1 space-y-0.5 list-disc pl-4">
             <li>Ask them to check for the prompt, it can land under “My SIP messages”.</li>
             <li>They can also pay from their M-Pesa menu, then you key the code below.</li>
+            <li>Resending while the prompt is open is blocked — the phone rejects a second prompt (“Duplicated MSISDN”). It unlocks when they cancel or the push fails.</li>
             <li>Wrong number? Leave pending and start the sale again.</li>
           </ul>
         </div>
         <ManualEntry code={code} setCode={setCode} busy={busy} onSubmit={() => onManualCode(code)} error={payError} plain />
         <div className="flex gap-2">
-          <Button variant="secondary" className="w-full" onClick={onSend} disabled={busy || !phone.trim()}>
+          <Button
+            variant="secondary"
+            className="w-full"
+            onClick={onSend}
+            disabled
+            title="A prompt is already on the customer's phone. It unlocks when they cancel it or the push fails."
+          >
             <RotateCcw size={15} strokeWidth={2.5} aria-hidden />
-            Resend prompt
+            Prompt on phone…
           </Button>
           <Button variant="secondary" className="w-full" onClick={onRecheck} disabled={busy}>
             Check payment status
@@ -1439,7 +1349,7 @@ function StkPanel({
         Check payment status
       </Button>
       <p className="text-[12px] text-ink-muted text-center -mt-2">
-        Re-verifies every charge sent for this order with Paystack and completes the sale if the money arrived.
+        Re-verifies the M-Pesa charges on this order and completes the sale if the money arrived.
       </p>
       <Field label="Change M-Pesa number" hint="Wrong number? Fix it here, the cart is safe and the order stays put.">
         <Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" />
@@ -1458,75 +1368,6 @@ function StkPanel({
         </div>
       )}
       <ManualEntry code={code} setCode={setCode} busy={busy} onSubmit={() => onManualCode(code)} error={payError} highlight />
-    </div>
-  )
-}
-
-function InlinePanel({
-  stage, reference, payError, onRetry, onRecheck,
-}: {
-  stage: InlineStage
-  reference: string
-  payError: string
-  onRetry: () => void
-  onRecheck: () => void
-}) {
-  return (
-    <div className="space-y-4">
-      {(stage === 'init' || stage === 'popup' || stage === 'verifying') && (
-        <div className="space-y-5 text-center pt-2 pb-4">
-          <div className="flex justify-center">
-            <span className="relative flex w-16 h-16 items-center justify-center">
-              <span className={`absolute inset-0 rounded-full border-2 border-info-text/40 anim-pulse-dot ${stage === 'verifying' ? 'bg-pending-bg' : 'bg-info-bg'}`} aria-hidden />
-              <CreditCard size={30} strokeWidth={2.25} className="text-info-text" aria-hidden />
-            </span>
-          </div>
-          <div>
-            {stage === 'init' && (
-              <>
-                <p className="font-bold text-ink text-lg flex items-center justify-center gap-2">
-                  <Spinner className="border-t-info-text" /> Opening secure checkout…
-                </p>
-                <p className="text-ink-muted text-sm mt-1">Setting the exact amount for this sale…</p>
-              </>
-            )}
-            {stage === 'popup' && (
-              <>
-                <p className="font-bold text-ink text-lg">Checkout open</p>
-                <p className="text-ink-muted text-sm mt-1">Ask the customer to complete payment in the secure checkout window (card or mobile money).</p>
-              </>
-            )}
-            {stage === 'verifying' && (
-              <>
-                <p className="font-bold text-ink text-lg flex items-center justify-center gap-2">
-                  <Spinner className="border-t-pending-text" /> Waiting for payment…
-                </p>
-                <p className="text-ink-muted text-sm mt-1">Confirming payment for reference <span className="tabular">{reference}</span>…</p>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-      {stage === 'failed' && (
-        <div className="space-y-4">
-          <div className="flex items-start gap-3 bg-pending-bg border border-pending-text/30 rounded-input p-3">
-            <AlertTriangle size={20} strokeWidth={2.5} className="text-pending-text shrink-0 mt-0.5" aria-hidden />
-            <div>
-              <p className="font-bold text-pending-text text-sm">Payment not completed</p>
-              <p role="alert" className="text-[13px] text-ink-muted mt-0.5">{payError || 'The checkout was closed before payment. The order stays pending, retry or void it.'}</p>
-            </div>
-          </div>
-          <Button variant="primary" size="lg" className="w-full" onClick={onRetry}>
-            <RotateCcw size={16} strokeWidth={2.5} aria-hidden />
-            Open checkout again
-          </Button>
-          {reference ? (
-            <Button variant="secondary" className="w-full" onClick={onRecheck}>
-              Check payment status
-            </Button>
-          ) : null}
-        </div>
-      )}
     </div>
   )
 }
@@ -1570,7 +1411,7 @@ function ManualEntry({
   )
 }
 
-// ---- VoidReasonPicker — catalog-backed void (moved from PaystackModal) ----
+// ---- VoidReasonPicker — catalog-backed void reasons ----
 
 export function VoidReasonPicker({
   order,

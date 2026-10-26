@@ -157,7 +157,7 @@ func (h *H) CustomerOrders(c *gin.Context) {
 	if !ok {
 		return
 	}
-	orders, err := h.svc(c).GetCustomerOrders(id)
+	orders, err := h.svc(c).GetCustomerOrders(id, h.principal(c))
 	if err != nil {
 		h.mapErr(c, err)
 		return

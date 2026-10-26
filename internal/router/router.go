@@ -113,8 +113,6 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	api.GET("/branding", h.Branding)
 	api.GET("/settings/logo", h.GetLogo)
 	api.POST("/payments/mpesa/callback", h.MpesaCallback)
-	// Paystack server-to-server events (HMAC-SHA512 verified in-handler).
-	api.POST("/payments/paystack/webhook", h.PaystackWebhook)
 	// Product photos are marketing content served to <img> tags (which
 	// cannot send Authorization headers) — public like the brand logo.
 	api.GET("/products/:id/image", h.GetProductImage)
@@ -156,8 +154,6 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	authd.POST("/orders/:id/stkpush", perm("pos.sell"), h.RetrySTK)
 	authd.POST("/orders/:id/manual", perm("payments.manual"), h.ManualConfirm)
 	authd.POST("/orders/:id/recheck", perm("pos.sell"), h.OrderRecheck)
-	authd.POST("/orders/:id/paystack/init", perm("pos.sell"), h.PaystackInit)
-	authd.POST("/orders/:id/paystack/verify", perm("pos.sell"), h.PaystackVerify)
 	authd.GET("/payments/config", h.PaymentConfig)
 	authd.POST("/sync", perm("pos.sell"), h.Sync)
 
@@ -364,21 +360,20 @@ func serveStatic(frontend fs.FS, c *gin.Context) bool {
 
 // secureHeaders sets the browser-facing defense headers on every
 // response. The CSP is the XSS backstop for the desktop webview AND any
-// browser tab on the LAN: scripts may only come from this origin plus the
-// Paystack popup toolkit (which runs in its own frame and cannot read
-// this origin's storage — the reason the session token in localStorage is
-// acceptable). Inline handlers and third-party packages are refused;
-// style-src keeps 'unsafe-inline' because React style attributes need it.
+// browser tab on the LAN: scripts may only come from this origin. The
+// third-party exception the old Paystack popup toolkit needed is gone
+// with that integration (v1.4.4) — the allowlist is now same-origin only.
+// Inline handlers and third-party packages are refused; style-src keeps
+// 'unsafe-inline' because React style attributes need it.
 func secureHeaders() gin.HandlerFunc {
 	csp := strings.Join([]string{
 		"default-src 'self'",
-		"script-src 'self' https://js.paystack.co",
-		"script-src-elem 'self' https://js.paystack.co",
+		"script-src 'self'",
+		"script-src-elem 'self'",
 		"style-src 'self' 'unsafe-inline'",
 		"img-src 'self' data: blob:",
 		"font-src 'self' data:",
-		"connect-src 'self' https://api.paystack.co https://*.supabase.co ws: wss:",
-		"frame-src https://js.paystack.co",
+		"connect-src 'self' https://*.supabase.co ws: wss:",
 		"frame-ancestors 'self'",
 		"object-src 'none'",
 		"base-uri 'self'",

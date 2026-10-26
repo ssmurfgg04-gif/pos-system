@@ -1092,6 +1092,47 @@ CREATE INDEX IF NOT EXISTS idx_payments_status_completed ON payments(status, com
 CREATE INDEX IF NOT EXISTS idx_payments_status_completed ON payments(status, completed_at);
 `,
 	},
+	{
+		// v19 — sales attribution + visibility scoping.
+		//
+		// 1) orders.device_id records the ORIGINATING TILL for every
+		//    sale (stamped at checkout, carried in sync events so
+		//    remote tills keep the original attribution). Completes
+		//    the traceability chain: till + cashier + timestamp +
+		//    payment legs + status, and enables sales-by-till.
+		// 2) orders.view.all is the cross-till oversight permission
+		//    (Admin/Owner only). From v19 the whole order surface
+		//    scopes non-holders to their OWN sales — staff can no
+		//    longer browse others' sale records via URL/ID probes.
+		// 3) Indexes keep the scoped queries and daily reports
+		//    index-driven. Role union runs in backfillRolePermsV19
+		//    so existing shops gain the new key without touching
+		//    admin-edited role JSON.
+		Version: 19,
+		SQLite: `
+ALTER TABLE orders ADD COLUMN device_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_orders_device_created ON orders(device_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_cashier_created ON orders(cashier_id, created_at);
+`,
+		Pg: `
+ALTER TABLE orders ADD COLUMN device_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_orders_device_created ON orders(device_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_cashier_created ON orders(cashier_id, created_at);
+`,
+		Go: backfillRolePermsV19,
+	},
+}
+
+// backfillRolePermsV19 unions the v19 sales-oversight permission into the
+// seeded Admin/Owner roles (union-only, once — admin edits after this run
+// are never touched). Non-admin roles intentionally do NOT gain it: from
+// v19, browsing other people's sale records requires orders.view.all.
+func backfillRolePermsV19(d *DB, tx *sql.Tx) error {
+	extra := map[string][]string{
+		"Admin": models.SeededRolePermissions["Admin"],
+		"Owner": models.SeededRolePermissions["Owner"],
+	}
+	return unionRolePerms(d, tx, extra)
 }
 
 // backfillRolePermsV17 unions the quotation permissions into the seeded

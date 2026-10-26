@@ -97,7 +97,7 @@ end $function$;
 select public.upsert_app_config('PAYSTACK_SECRET_KEY',
   'sk_live_PLACEHOLDER_injected_via_management_api', true);
 select public.upsert_app_config('PAYSTACK_PUBLIC_KEY',
-  'pk_live_PLACEHOLDER_injected_via_management_api', false);
+  'pk_live_RETIRED_WITH_THE_PAYSTACK_RAIL_v144_injected_via_management_api', false);
 select public.upsert_app_config('PAYSTACK_CALLBACK_URL',
   'https://awesomeposs.netlify.app/', false);
 select public.upsert_app_config('PAYSTACK_WEBHOOK_URL',

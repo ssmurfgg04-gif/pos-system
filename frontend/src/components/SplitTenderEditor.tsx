@@ -1,9 +1,10 @@
 // SplitTenderEditor — mixed-tender builder for the charge modal: one leg
-// per payment method (cash / M-Pesa / card / store credit), a live
+// per payment method (cash / M-Pesa / store credit), a live
 // "remaining" readout that must reach exactly 0, and the backend's rule
-// baked into the UI: at most ONE asynchronous leg (M-Pesa or Paystack) —
-// the second async option is disabled once one exists. Cash and store
-// credit settle instantly at the till.
+// baked into the UI: at most ONE asynchronous leg (M-Pesa) —
+// the async option is disabled once one exists. Cash and store
+// credit settle instantly at the till. (Card tender rode the retired
+// Paystack rail — removed in v1.4.4.)
 //
 // Standalone by design: ChargeModal owns the legs state and only mounts
 // this when the cashier opts into split payment.
@@ -13,17 +14,16 @@ import { splitRemaining, formatMoney, normalizePhoneKe } from '../lib/money'
 import { Input, MoneyInput, Select } from './ui'
 import { Plus, X, AlertTriangle } from 'lucide-react'
 
-const METHODS: SplitLeg['method'][] = ['cash', 'mpesa', 'paystack', 'credit']
+const METHODS: SplitLeg['method'][] = ['cash', 'mpesa', 'credit']
 
 const METHOD_LABEL: Record<SplitLeg['method'], string> = {
   cash: 'Cash',
   mpesa: 'M-Pesa',
-  paystack: 'Card / M-M',
   credit: 'Store credit',
 }
 
 export function isAsyncLeg(l: SplitLeg): boolean {
-  return l.method === 'mpesa' || l.method === 'paystack'
+  return l.method === 'mpesa'
 }
 
 export function SplitTenderEditor({
@@ -31,14 +31,12 @@ export function SplitTenderEditor({
   onChange,
   totalCents,
   creditEnabled,
-  paystackReady,
   creditReady,
 }: {
   legs: SplitLeg[]
   onChange: (legs: SplitLeg[]) => void
   totalCents: number
   creditEnabled: boolean
-  paystackReady: boolean
   /** A customer with store credit is attached to the checkout. */
   creditReady: boolean
 }) {
@@ -62,7 +60,6 @@ export function SplitTenderEditor({
   const optionsFor = (i: number): SplitLeg['method'][] =>
     METHODS.filter((m) => {
       if (m === 'credit' && !creditEnabled) return false
-      if (m === 'paystack' && !paystackReady) return false
       if (isAsyncLeg({ method: m, amountCents: 0 }) && asyncIdx >= 0 && asyncIdx !== i) return false
       return true
     })
@@ -117,16 +114,6 @@ export function SplitTenderEditor({
             {leg.method === 'mpesa' && leg.phone && !normalizePhoneKe(leg.phone) && (
               <p className="text-[11px] text-danger-text font-semibold">Not a valid Safaricom number yet.</p>
             )}
-            {leg.method === 'paystack' && (
-              <Input
-                type="email"
-                value={leg.email || ''}
-                onChange={(e) => update(i, { email: e.target.value })}
-                inputMode="email"
-                placeholder="Customer email (optional, receipt)"
-                aria-label="Email for the card payment leg"
-              />
-            )}
             {leg.method === 'credit' && !creditReady && (
               <p className="text-[11px] text-danger-text font-semibold flex items-center gap-1">
                 <AlertTriangle size={12} strokeWidth={2.5} aria-hidden />
@@ -165,7 +152,7 @@ export function SplitTenderEditor({
       </div>
 
       <p className="text-[11px] text-ink-subtle">
-        Cash and store credit settle now. One M-Pesa or card payment can stay pending, a second one is not allowed.
+        Cash and store credit settle now. One M-Pesa payment can stay pending, a second one is not allowed.
       </p>
     </div>
   )

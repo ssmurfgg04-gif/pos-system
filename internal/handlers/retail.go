@@ -42,7 +42,7 @@ func (h *H) HoldSale(c *gin.Context) {
 
 // ListHeldSales (pos.hold) — parked carts for the resume drawer.
 func (h *H) ListHeldSales(c *gin.Context) {
-	sales, err := h.svc(c).ListHeldSales()
+	sales, err := h.svc(c).ListHeldSales(h.principal(c))
 	if err != nil {
 		h.fail(c, 500, err.Error())
 		return

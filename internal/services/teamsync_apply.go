@@ -431,6 +431,7 @@ func (s *Service) applyLedger(payload json.RawMessage) error {
 
 type orderEvent struct {
 	ClientUUID     string  `json:"clientUuid"`
+	DeviceID       string  `json:"deviceId"`
 	Number         string  `json:"number"`
 	Status         string  `json:"status"`
 	SubtotalCents  int64   `json:"subtotalCents"`
@@ -537,10 +538,10 @@ func (s *Service) applyOrder(payload json.RawMessage) error {
 	cashierID := s.resolveLocalCashierID(tx, oe.CashierName)
 	res, err := tx.Exec(s.db.Rebind(`
                 INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent, tax_included,
-                        discount_cents, discount_label, points_redeemed, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id, buyer_pin, invoice_number)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                        discount_cents, discount_label, points_redeemed, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id, buyer_pin, invoice_number, device_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		number, status, oe.SubtotalCents, oe.TaxCents, oe.TotalCents, oe.TaxPercent, taxInc,
-		oe.DiscountCents, oe.DiscountLabel, oe.PointsRedeemed, cashierID, oe.CustomerName, oe.Note, oe.ClientUUID, oe.CreatedAt, paidAt, custID, oe.BuyerPin, oe.InvoiceNumber)
+		oe.DiscountCents, oe.DiscountLabel, oe.PointsRedeemed, cashierID, oe.CustomerName, oe.Note, oe.ClientUUID, oe.CreatedAt, paidAt, custID, oe.BuyerPin, oe.InvoiceNumber, oe.DeviceID)
 	if err != nil {
 		return err
 	}
@@ -603,7 +604,7 @@ func (s *Service) remoteComplete(orderID int64, oe orderEvent) error {
 		return err
 	}
 	if order, err := s.GetOrder(orderID); err == nil {
-		s.broadcast(EventOrderPaid, order)
+		s.broadcast(EventOrderPaid, orderBroadcastPayload(order))
 	}
 	return nil
 }
@@ -737,7 +738,7 @@ func (s *Service) applyVoid(payload json.RawMessage) error {
 		return err
 	}
 	if order, err := s.GetOrder(orderID); err == nil {
-		s.broadcast(EventOrderVoided, order)
+		s.broadcast(EventOrderVoided, orderBroadcastPayload(order))
 	}
 	return nil
 }

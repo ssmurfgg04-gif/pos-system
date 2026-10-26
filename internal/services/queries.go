@@ -14,11 +14,29 @@ import (
 type OrderFilter struct {
 	Status  string // PENDING | PAID | VOIDED | ""
 	Search  string // order number, customer, receipt, phone
-	Cashier int64  // 0 = all
+	Cashier int64  // 0 = all (ignored for callers without orders.view.all)
 	From    string // YYYY-MM-DD inclusive (optional)
 	To      string // YYYY-MM-DD inclusive (optional)
 	Limit   int
 	Offset  int
+}
+
+// canViewAllOrders reports whether p may browse the WHOLE store's sale
+// records (every till, every cashier). Everyone else is scoped to their
+// own sales — v19 rule: only Admin/Owner browse individual sale records;
+// staff keep operational visibility of their own work.
+func canViewAllOrders(p *auth.Principal) bool { return p != nil && p.Can("orders.view.all") }
+
+// orderBroadcastPayload is the REDACTED order event pushed over the shop
+// WebSocket. Full order objects are never broadcast: WS clients include
+// every logged-in device in the shop, and sale details must not leak to
+// staff without orders.view.all. Clients needing detail call the scoped
+// REST API.
+func orderBroadcastPayload(o *models.Order) map[string]any {
+	return map[string]any{
+		"id": o.ID, "number": o.Number, "status": o.Status,
+		"cashierName": o.CashierName, "deviceId": o.DeviceID,
+	}
 }
 
 // ListOrders returns enriched orders.
@@ -26,7 +44,7 @@ type OrderFilter struct {
 // DEADLOCK DISCIPLINE: the settings reads (tax/currency are display-only and
 // not needed here) and all enrichment happen AFTER the main rows are fully
 // collected and closed. No query ever runs while rows are open.
-func (s *Service) ListOrders(f OrderFilter) ([]models.Order, error) {
+func (s *Service) ListOrders(f OrderFilter, p *auth.Principal) ([]models.Order, error) {
 	q := strings.Builder{}
 	q.WriteString(`
                 SELECT o.id, o.number, o.status, o.subtotal_cents, o.tax_cents, o.total_cents,
@@ -35,16 +53,24 @@ func (s *Service) ListOrders(f OrderFilter) ([]models.Order, error) {
                         o.cashier_id, COALESCE(u.full_name, u.username, ''), COALESCE(o.customer_name,''),
                         COALESCE(o.customer_id,0),
                         COALESCE(o.note,''), COALESCE(o.client_uuid,''), COALESCE(o.discrepancy,0),
-                        o.created_at, COALESCE(o.paid_at,''), COALESCE(o.voided_at,''), COALESCE(o.void_reason,'')
+                        o.created_at, COALESCE(o.paid_at,''), COALESCE(o.voided_at,''), COALESCE(o.void_reason,''),
+                        COALESCE(o.device_id,'')
                 FROM orders o LEFT JOIN users u ON u.id = o.cashier_id WHERE 1=1`)
 	var args []any
 	if f.Status != "" {
 		q.WriteString(` AND o.status = ?`)
 		args = append(args, f.Status)
 	}
-	if f.Cashier != 0 {
+	if canViewAllOrders(p) {
+		if f.Cashier != 0 {
+			q.WriteString(` AND o.cashier_id = ?`)
+			args = append(args, f.Cashier)
+		}
+	} else {
+		// v19: staff without orders.view.all only ever see their OWN
+		// sales. cashierId is caller-supplied and must never widen it.
 		q.WriteString(` AND o.cashier_id = ?`)
-		args = append(args, f.Cashier)
+		args = append(args, p.ID)
 	}
 	if f.Search != "" {
 		like := "%" + strings.ToLower(f.Search) + "%"
@@ -78,7 +104,7 @@ func (s *Service) ListOrders(f OrderFilter) ([]models.Order, error) {
 			&o.DiscountCents, &o.DiscountLabel, &o.PointsRedeemed,
 			&o.CashierID, &o.CashierName, &o.CustomerName, &o.CustomerID,
 			&o.Note, &o.ClientUUID, &o.Discrepancy,
-			&o.CreatedAt, &o.PaidAt, &o.VoidedAt, &o.VoidReason); err != nil {
+			&o.CreatedAt, &o.PaidAt, &o.VoidedAt, &o.VoidReason, &o.DeviceID); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -182,7 +208,7 @@ func (s *Service) GetOrder(orderID int64) (*models.Order, error) {
                         COALESCE(o.customer_id,0),
                         COALESCE(o.note,''), COALESCE(o.client_uuid,''), COALESCE(o.discrepancy,0),
                         o.created_at, COALESCE(o.paid_at,''), COALESCE(o.voided_at,''), COALESCE(o.void_reason,''),
-                        COALESCE(o.buyer_pin,''), COALESCE(o.invoice_number,'')
+                        COALESCE(o.buyer_pin,''), COALESCE(o.invoice_number,''), COALESCE(o.device_id,'')
                 FROM orders o LEFT JOIN users u ON u.id = o.cashier_id
                 WHERE o.id = ?`), orderID).
 		Scan(&o.ID, &o.Number, &o.Status, &o.SubtotalCents, &o.TaxCents, &o.TotalCents,
@@ -191,7 +217,7 @@ func (s *Service) GetOrder(orderID int64) (*models.Order, error) {
 			&o.CashierID, &o.CashierName, &o.CustomerName, &o.CustomerID,
 			&o.Note, &o.ClientUUID, &o.Discrepancy,
 			&o.CreatedAt, &o.PaidAt, &o.VoidedAt, &o.VoidReason,
-			&o.BuyerPIN, &o.InvoiceNumber)
+			&o.BuyerPIN, &o.InvoiceNumber, &o.DeviceID)
 	if err != nil {
 		return nil, ErrNotFound
 	}
@@ -205,6 +231,35 @@ func (s *Service) GetOrder(orderID int64) (*models.Order, error) {
 		o.Payments = pays[orderID]
 	}
 	return &o, nil
+}
+
+// GetOrderScoped loads an order for a USER-FACING request: callers without
+// orders.view.all may only load their own sales. Out-of-scope ids answer
+// ErrNotFound (not 403) so id probing reveals nothing. Internal flows
+// (callbacks, sweeps, sync apply) keep using GetOrder directly.
+func (s *Service) GetOrderScoped(p *auth.Principal, orderID int64) (*models.Order, error) {
+	o, err := s.GetOrder(orderID)
+	if err != nil {
+		return nil, err
+	}
+	if !canViewAllOrders(p) && o.CashierID != p.ID {
+		return nil, ErrNotFound
+	}
+	return o, nil
+}
+
+// AssertOrderVisible is the cheap guard for endpoints that touch an order
+// without needing its full payload (events timeline, notify). Unknown and
+// out-of-scope are the same error — nothing leaks.
+func (s *Service) AssertOrderVisible(p *auth.Principal, orderID int64) error {
+	var cashierID int64
+	if err := s.db.QueryRow(s.db.Rebind(`SELECT cashier_id FROM orders WHERE id = ?`), orderID).Scan(&cashierID); err != nil {
+		return ErrNotFound
+	}
+	if !canViewAllOrders(p) && cashierID != p.ID {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Service) GetOrderByClientUUID(uuid string) (*models.Order, error) {

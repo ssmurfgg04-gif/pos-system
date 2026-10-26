@@ -37,7 +37,7 @@ func (h *H) ListOrders(c *gin.Context) {
 		}
 	}
 	f.From, f.To = c.Query("from"), c.Query("to")
-	orders, err := h.svc(c).ListOrders(f)
+	orders, err := h.svc(c).ListOrders(f, h.principal(c))
 	if err != nil {
 		h.fail(c, 500, err.Error())
 		return
@@ -54,7 +54,7 @@ func (h *H) GetOrder(c *gin.Context) {
 	if !ok {
 		return
 	}
-	order, err := h.svc(c).GetOrder(id)
+	order, err := h.svc(c).GetOrderScoped(h.principal(c), id)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -144,8 +144,8 @@ func (h *H) ManualConfirm(c *gin.Context) {
 	h.ok(c, order)
 }
 
-// OrderRecheck (pos.sell) — re-verify an order's Paystack/M-Pesa charges
-// against the provider and complete the sale if the money actually arrived.
+// OrderRecheck (pos.sell) — re-verify an order's M-Pesa charges against
+// the provider and complete the sale if the money actually arrived.
 // The recovery path for late PIN entries: the customer paid after the till
 // stopped watching, and the order is stuck Pending. Always returns the
 // order plus a cashier-readable message; never voids, never double-completes.
@@ -221,7 +221,7 @@ func (h *H) ReceiptHTML(c *gin.Context) {
 	if !ok {
 		return
 	}
-	order, err := h.svc(c).GetOrder(id)
+	order, err := h.svc(c).GetOrderScoped(h.principal(c), id)
 	if err != nil {
 		h.fail(c, 404, "order not found")
 		return

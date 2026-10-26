@@ -114,6 +114,13 @@ func (w *Worker) Run(ctx context.Context) {
 
 // tick claims one queued job and prints it.
 func (w *Worker) tick(ctx context.Context) {
+	// Cheap read-only probe first: Begin() is an IMMEDIATE transaction —
+	// it takes the same write lock a checkout commit needs. An idle till
+	// used to grab that lock every 2s for nothing.
+	var probe int
+	if err := w.db.QueryRow(w.db.Rebind(`SELECT 1 FROM print_jobs WHERE status = 'queued' LIMIT 1`)).Scan(&probe); err != nil {
+		return // no queued job (or probe failed — next tick retries)
+	}
 	tx, err := w.db.Begin()
 	if err != nil {
 		return

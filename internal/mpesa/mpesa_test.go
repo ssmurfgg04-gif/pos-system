@@ -179,22 +179,6 @@ func TestMockProviderFailure(t *testing.T) {
 	}
 }
 
-func TestDarajaPasswordFormat(t *testing.T) {
-	// password = base64(shortcode + passkey + timestamp YYYYMMDDHHMMSS)
-	d := NewDaraja("sandbox", "174379", "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893058b10ded782b7157", "k", "s", "")
-	ts := d.timestamp()
-	if len(ts) != 14 {
-		t.Errorf("timestamp %q not YYYYMMDDHHMMSS", ts)
-	}
-	if _, err := time.Parse("20060102150405", ts); err != nil {
-		t.Errorf("timestamp unparseable: %v", err)
-	}
-	pw := d.password(ts)
-	if pw == "" || strings.Contains(pw, " ") {
-		t.Error("password must be non-empty base64")
-	}
-}
-
 func TestCallbackJSONMarshal(t *testing.T) {
 	// The webhook handler reads raw bodies; ensure the sample is valid JSON.
 	if !json.Valid([]byte(darajaCallbackSample)) {

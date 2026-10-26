@@ -25,7 +25,7 @@ import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
-import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, CreditCard, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck, Undo2, LifeBuoy, KeyRound } from 'lucide-react'
+import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck, Undo2, LifeBuoy, KeyRound, Smartphone } from 'lucide-react'
 
 type SettingsMap = Record<string, string>
 
@@ -126,7 +126,7 @@ export function Settings() {
   }
   useEffect(() => { load() }, [])
 
-  const checkPaystack = async () => {
+  const checkPayConfig = async () => {
     setCheckingPay(true)
     try {
       setPayConfig(await api.get<PaymentConfig>('/api/v1/payments/config'))
@@ -147,7 +147,7 @@ export function Settings() {
     if (tab === 'system' && !update) {
       api.get<UpdateStatus>('/api/v1/system/update').then(setUpdate).catch(() => setUpdate(null))
     }
-    if (tab === 'payments' && !payConfig) checkPaystack()
+    if (tab === 'payments' && !payConfig) checkPayConfig()
   }, [tab])
 
   const set = (k: string, v: string) => setValues((s) => (s ? { ...s, [k]: v } : s))
@@ -263,47 +263,28 @@ export function Settings() {
           <div className="px-4 pb-4 sm:px-5 grid sm:grid-cols-2 gap-3">
             <div className="sm:col-span-2 flex flex-wrap items-start justify-between gap-2 bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
               <p className="min-w-56 flex-1">
-                <strong className="text-ink inline-flex items-center gap-1.5"><CreditCard size={15} strokeWidth={2.25} aria-hidden />Card &amp; M-Pesa payments.</strong>{' '}
-                Already set up for you, no pasting, no per-machine setup.
+                <strong className="text-ink inline-flex items-center gap-1.5"><Smartphone size={15} strokeWidth={2.25} aria-hidden />M-Pesa payments.</strong>{' '}
+                Card checkout rode the retired Paystack rail and was removed in v1.4.4; KCB Buni STK is the electronic tender.
                 Staff only touch the Till / Paybill numbers below.
               </p>
               <div className="flex items-center gap-2">
                 {payConfig ? (
                   <StatusPill
-                    status={payConfig.paystack.configured && payConfig.paystack.enabled ? 'paid' : 'pending'}
+                    status={payConfig.mpesa.route === 'buni' ? 'paid' : 'pending'}
                     label={
-                      payConfig.paystack.configured && payConfig.paystack.enabled
-                        ? 'Connected, ready at checkout'
-                        : payConfig.paystack.configured
-                          ? 'Connected, checkout currently off'
-                          : 'Setting up, payments turn on automatically'
+                      payConfig.mpesa.route === 'buni'
+                        ? 'Buni STK connected, ready at checkout'
+                        : `M-Pesa route: ${payConfig.mpesa.route}`
                     }
                   />
                 ) : (
                   <StatusPill status="info" label="Connection state unknown" />
                 )}
-                <Button size="sm" variant="ghost" onClick={checkPaystack} disabled={checkingPay}>
+                <Button size="sm" variant="ghost" onClick={checkPayConfig} disabled={checkingPay}>
                   {checkingPay ? <Spinner className="border-t-brand-ink" /> : <RefreshCw size={13} strokeWidth={2.5} aria-hidden />}
                   Check
                 </Button>
               </div>
-            </div>
-            <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink sm:col-span-2">
-              <input
-                type="checkbox"
-                checked={payConfig ? payConfig.paystack.enabled : (values.paystack_enabled ?? 'true') === 'true'}
-                onChange={(e) => set('paystack_enabled', String(e.target.checked))}
-                className="w-5 h-5 accent-[#10B981]"
-              />
-              Accept card &amp; M-Pesa payments
-            </label>
-            <div className="sm:col-span-2 flex items-start gap-2 bg-info-bg border-2 border-info-text/30 rounded-input p-3 text-[12px] text-info-text font-semibold">
-              <MonitorSmartphone size={15} strokeWidth={2.25} className="shrink-0 mt-0.5" aria-hidden />
-              <p>
-                {payConfig?.paystack.configured
-                  ? <>Card &amp; M-Pesa payments are ready at checkout.</>
-                  : <>This till activates payments automatically once they are enabled for your business, nothing to paste, nothing to type.</>}
-              </p>
             </div>
 
             <div className="sm:col-span-2 border-t-2 border-line pt-3 mt-1">

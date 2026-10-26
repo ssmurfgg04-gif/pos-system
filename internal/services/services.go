@@ -19,7 +19,6 @@ import (
 	"posapp/internal/models"
 	"posapp/internal/mpesa"
 	"posapp/internal/offsite"
-	"posapp/internal/paystack"
 	"posapp/internal/printer"
 	"posapp/internal/settings"
 	"posapp/internal/ws"
@@ -33,18 +32,12 @@ type Service struct {
 	offsite  *offsite.Worker
 	mock     *mpesa.Mock
 
-	darajaKey string
-	daraja    *mpesa.Daraja
-
 	buniKey string
 	buni    *mpesa.BuniCloud
 
 	// claimBuniEventsForTest, when set, replaces the cloud claim call
 	// (tests only — never wired in production).
 	claimBuniEventsForTest func([]string) []buniClaimedEvent
-
-	paystackKey string
-	paystack    *paystack.Client
 
 	appVersion string
 
@@ -56,18 +49,10 @@ type Service struct {
 	shopID string // ws broadcast scoping (set by the ShopPool)
 
 	orderSeqMu sync.Mutex
-
-	// STK cancel grace: Paystack verify can report abandoned/failed while
-	// the customer is still typing their M-Pesa PIN. The first terminal
-	// verify for an STK reference starts a short window; the leg only
-	// flips to FAILED after it expires. Keyed by reference.
-	stkFailMu sync.Mutex
-	stkFailAt map[string]time.Time
 }
 
 func New(db *database.DB, st *settings.Store, hub *ws.Hub, pw *printer.Worker) *Service {
-	return &Service{db: db, settings: st, hub: hub, printer: pw, mock: mpesa.NewMock(4*time.Second, 0),
-		stkFailAt: map[string]time.Time{}}
+	return &Service{db: db, settings: st, hub: hub, printer: pw, mock: mpesa.NewMock(4*time.Second, 0)}
 }
 
 // Settings exposes the shop's settings store (per-tenant).
@@ -130,29 +115,18 @@ const (
 
 // GetProvider returns the active STK provider per settings.
 //
+// v1.4.4: the direct Safaricom Daraja provider is RETIRED — real M-Pesa STK
+// rides the KCB Buni cloud route (see payments_buni_cloud.go) or nothing.
 // FAKE-MONEY GUARD: the auto-succeeding mock provider is ONLY available
-// when ALLOW_MOCK_PAYMENTS=true (demos/tests). Shops that never set Daraja
-// credentials get "manual" mode — cashier types the M-Pesa receipt code;
-// nothing ever completes by itself. Incomplete Daraja credentials are a
-// loud error, never a silent fall back to fake money.
+// when ALLOW_MOCK_PAYMENTS=true (demos/tests). Shops without the Buni link
+// get "manual" mode — the cashier types the M-Pesa receipt code; nothing
+// ever completes by itself. A till still set to sandbox/production gets a
+// LOUD error, never a silent fall back to fake money.
 func (s *Service) GetProvider() (mpesa.Provider, error) {
 	env := s.settings.GetString("mpesa_env", "manual")
 	switch env {
 	case "sandbox", "production":
-		key := s.settings.Get("mpesa_consumer_key")
-		secret := s.settings.Get("mpesa_consumer_secret")
-		shortcode := s.settings.Get("mpesa_shortcode")
-		passkey := s.settings.Get("mpesa_passkey")
-		callback := s.settings.Get("mpesa_callback_url")
-		if key == "" || secret == "" || shortcode == "" || passkey == "" {
-			return nil, fmt.Errorf("mpesa_env=%s but Daraja credentials are incomplete, set them (or switch M-Pesa to Paystack) in settings; refusing to simulate payments", env)
-		}
-		cacheKey := env + "|" + shortcode + "|" + key + "|" + secret + "|" + passkey + "|" + callback
-		if s.darajaKey != cacheKey {
-			s.darajaKey = cacheKey
-			s.daraja = mpesa.NewDaraja(env, shortcode, passkey, key, secret, callback)
-		}
-		return s.daraja, nil
+		return nil, fmt.Errorf("Daraja was retired in v1.4.4 — use the Buni cloud route (main) or set M-Pesa to manual; refusing to simulate payments (mpesa_env=%s)", env)
 	case "mock":
 		// Training wheels: only with the explicit env opt-in. This is what
 		// keeps a till from "confirming" payments nobody made.
@@ -161,33 +135,27 @@ func (s *Service) GetProvider() (mpesa.Provider, error) {
 			return s.mock, nil
 		}
 		return nil, fmt.Errorf("mock M-Pesa is disabled (ALLOW_MOCK_PAYMENTS!=true), real shops never auto-complete payments")
-	default: // "manual", "paystack", or anything else: no local STK provider.
-		// When Paystack is configured, STK rides the Paystack mobile-money
-		// charge (see InitiateSTK) and verifies through SweepPaystack.
+	default: // "manual" or anything else: no local STK provider.
 		return nil, nil
 	}
 }
 
-// stkProviderReady reports whether a non-Paystack STK provider is usable.
+// stkProviderReady reports whether a local STK provider is usable (mock
+// training mode only, since the Daraja retirement).
 func (s *Service) stkProviderReady() bool {
 	p, err := s.GetProvider()
 	return err == nil && p != nil
 }
 
 // MpesaRoute tells the till how M-Pesa STK currently runs:
-//   - "buni":     real STK through the KCB Buni cloud route (MAIN RAIL —
-//     keys live in Edge Function secrets, never in the binary)
-//   - "paystack": real STK through the shop's Paystack integration (FALLBACK
-//     — demoted below Buni, still first for shops without Buni)
-//   - "daraja":   real STK through Safaricom Daraja credentials
-//   - "mock":     training mode (ALLOW_MOCK_PAYMENTS=true only)
-//   - "manual":   no STK — cashier enters the receipt code
+//   - "buni":   real STK through the KCB Buni cloud route (the ONLY STK
+//     rail since v1.4.4 — keys live in Edge Function secrets, never in
+//     the binary)
+//   - "mock":   training mode (ALLOW_MOCK_PAYMENTS=true only)
+//   - "manual": no STK — cashier enters the receipt code
 func (s *Service) MpesaRoute() string {
 	if s.buniUsable() {
 		return "buni"
-	}
-	if s.paystackConfigured() && s.settings.GetBool("paystack_enabled", true) {
-		return "paystack"
 	}
 	if s.stkProviderReady() {
 		if p, _ := s.GetProvider(); p != nil {

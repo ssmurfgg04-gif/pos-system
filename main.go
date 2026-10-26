@@ -178,7 +178,7 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
 	gin.SetMode(cfg.GinMode)
 
 	// Deployment secrets (.env next to the database) load BEFORE anything
-	// reads the environment — PAYSTACK_SECRET_KEY and friends belong in
+	// reads the environment — OFFSITE_ENDPOINT and friends belong in
 	// the file, not in a settings form. Real env vars always win.
 	config.LoadEnvFileNear(cfg.SQLitePath)
 
@@ -202,10 +202,10 @@ func startApp(cfg *config.Config, addr string, desk *desktopMeta, onQuit chan st
 	if err := db.Seed(cfg.SeedDemoData); err != nil {
 		log.Fatalf("seed: %v", err)
 	}
-	// Secrets at rest (paystack_secret_key, mpesa_passkey, ...): the
-	// vault key lives NEXT TO the database, outside it — a copied DB
-	// file alone reveals no payment secrets. Existing plaintext rows
-	// are re-encrypted transparently on this boot.
+	// Secrets at rest (mpesa_passkey on legacy tills, sync_service_key,
+	// ...): the vault key lives NEXT TO the database, outside it — a
+	// copied DB file alone reveals no payment secrets. Existing
+	// plaintext rows are re-encrypted transparently on this boot.
 	keyDir := filepath.Dir(cfg.SQLitePath)
 	if keyDir == "" || keyDir == "." {
 		keyDir = "."
