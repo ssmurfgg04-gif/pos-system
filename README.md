@@ -226,13 +226,18 @@ Demo accounts (seeded once, safe to delete):
 
 | Username | Password   | PIN  | Role    |
 |----------|------------|------|---------|
-| admin    | 0000       | 1234 | Admin   |
-| cashier  | 0000       | 2222 | Cashier |
-| designer | 0000       | 3333 | Designer |
+| admin    | admin123   | 1234 | Admin   |
+| cashier  | cashier123 | 2222 | Cashier |
+| designer | designer123 | 3333 | Designer |
 
-M-Pesa runs through **Paystack** once connected: the M-Pesa button pushes a
+(Seeded accounts are force-rotated on first boot and any account still
+using these public defaults is disabled by the v13 purge — they exist for
+the in-browser demo and fresh installs.)
+
+M-Pesa runs through **KCB Buni** (the main rail): the M-Pesa button pushes a
 real STK prompt to the customer's phone and the sale completes only after
-Paystack confirms the money. Without a provider, M-Pesa falls back to
+the KCB callback confirms the money (fail-closed amount gate). Without a
+provider, M-Pesa falls back to
 **manual receipt-code entry**, nothing ever completes by itself (the old
 auto-succeeding "mock" provider is tests/demos only, gated behind
 `ALLOW_MOCK_PAYMENTS=true`). Connect Paystack in **Settings → Payments**
@@ -248,10 +253,12 @@ or drop a `.env` file next to the database (see below).
 | `POSTGRES_DSN`|,          | e.g. `postgres://user:pw@host/db`    |
 | `SEED_DEMO`   | `false`    | Seed the demo catalog (demos/tests)  |
 | `MDNS_ENABLED`| `true`     | LAN discovery broadcast              |
-| `PAYSTACK_SECRET_KEY` |,  | `sk_live_…`, server-side only      |
-| `PAYSTACK_PUBLIC_KEY` |,  | `pk_live_…`, checkout popup        |
-| `PAYSTACK_CALLBACK_URL` |, | defaults to `https://awesomeposs.netlify.app/` |
 | `ALLOW_MOCK_PAYMENTS` | `false` | Opt-in for the auto-succeeding test provider (tests/demos) |
+| `ALLOW_SIGNUP` | `false` | Self-serve owner signup on the login screen |
+| `CORS_EXTRA_ORIGINS` | — | Extra browser origins for appliance deployments (the Android client origin is built in) |
+
+(The Paystack env keys retired with that rail in v1.4.4; Buni keys live in
+Supabase Edge Function secrets, never on tills — see docs/ACCESS-CONTROL.md.)
 
 **Secrets belong in `.env`, not forms.** Place a `.env` file next to the
 database (desktop: `%APPDATA%\LedgerPOS\.env`) with the keys above and
@@ -290,7 +297,7 @@ sensitive ever appears in the Settings UI.
 - Put the binary on a disk that survives reboots; the SQLite file *is*
   the till. WAL mode + `synchronous=NORMAL` is the right trade for a POS.
 - Run it behind Caddy/nginx for TLS if terminals connect over Wi-Fi you
-  don't fully trust. The API allows all origins by design (LAN appliance)
+  don't fully trust. The API uses a strict origin allowlist (same-origin + dev hosts + the Android client; extras via CORS_EXTRA_ORIGINS) (LAN appliance)
  , scope that down if you expose it publicly.
 - `GET /api/v1/health` for uptime checks; the audit log is under
   Settings → Audit log.

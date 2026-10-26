@@ -10,12 +10,12 @@ LTD (Kiambu Main): retail, cyber, branding, designer services. Two runtimes
 from one Go binary:
 
 - **desktop** (default): a self-contained till. Go + Gin serving an embedded
-  React SPA on localhost, SQLite per shop, Electron shell around it,
+  React SPA on localhost, SQLite per shop, go-webview2 shell (not Electron) around it,
   auto-updates via OTA manifests.
 - **server**: the same binary multi-shop (`SHOPS_DIR` + tenancy registry).
 
 Live surfaces: tills run the desktop app; https://awesomeposs.netlify.app
-is the download/demo site, **Netlify Git integration deploys whatever is
+is the download/demo site, **Netlify deploys when the repo's NETLIFY_* secrets are set (CI warns on the run summary when the live site is stale) whatever is
 pushed to GitHub main, no secrets needed** (push = deploy; oversized
 artifacts in a commit are the classic way deploys silently fail, keep
 installers out of any push unless they belong there, see the downloads/

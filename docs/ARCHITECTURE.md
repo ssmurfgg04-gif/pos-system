@@ -136,3 +136,22 @@ SQLite runs with one pooled connection. Never issue a query while rows
 from another query are open — collect, close, then enrich. This is the
 bug class the codebase is hardened against; see `docs/DEADLOCK.md` and
 the comments in `completePayment` for the canonical example.
+
+---
+
+## Addendum — v1.4.4 sales visibility & attribution
+
+- `orders.device_id` (migration v19) records the ORIGINATING TILL of every
+  sale, stamped at checkout and carried through sync events. The daily
+  report's by-till table aggregates it and reconciles to the orders list
+  by construction.
+- `orders.view.all` (Admin/Owner only) is the cross-till oversight
+  permission. Every order-reading path — list, detail, receipt, events,
+  notes, void, notify, customer history, held carts — scopes non-holders
+  to their own sales through `GetOrderScoped`/`AssertOrderVisible`
+  (`internal/services/queries.go`). WS broadcasts carry only
+  `{id, number, status, cashierName, deviceId}`.
+- The Paystack/Daraja rails retired; Buni M-Pesa via Edge Functions is
+  the only STK rail (route priority: buni → mock → manual).
+- The Android client (`frontend/android`) is a thin LAN terminal for a
+  till in serve mode; its WebView origin is allowlisted in CORS.

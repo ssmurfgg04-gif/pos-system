@@ -1,0 +1,123 @@
+# Changelog
+
+Release notes and known limitations. The full commit history is on GitHub;
+this file records what each release means for the shop.
+
+## v1.4.4 — sales privacy, till attribution, single payment rail
+
+### Sales visibility & accountability (the headline)
+
+- **Only Admin/Owner browse individual sale records.** A new
+  `orders.view.all` permission gates the whole order surface (list,
+  detail, receipt, timeline, notes, void, WhatsApp notify, customer
+  purchase history, held carts). Staff without it see only their own
+  sales — probing URLs or ids answers "not found" and reveals nothing.
+- **Every sale now carries its originating till** (`device_id`), completing
+  the traceability chain: till → cashier → timestamps → payment legs →
+  status. The daily report gains a **By till** breakdown that reconciles
+  to the orders screen by construction.
+- Live reports reconcile: daily/monthly tenders are now keyed to the
+  parent order's window (the midnight-crossing skew is gone). Shift X/Z
+  keeps real cash-drawer semantics.
+- WebSocket broadcasts no longer carry line items or totals — a staff
+  client sees "Order ORD… paid", nothing more.
+- Other staff's shift Z reports need `reports.view`.
+
+### Payments
+
+- **"Duplicated MSISDN" fixed at the source**: a 75-second per-order
+  cooldown refuses a second STK push while a prompt may still be on the
+  customer's phone (KCB error 4999), with a friendly counter message; the
+  raw KCB error text is translated everywhere; the Resend button is locked
+  while a prompt is live.
+- **Paystack and Daraja rails retired** (owner decision — unused since the
+  Buni migration). Removed: providers, routes, CSP entries, edge-function
+  mirrors, the Card tender tile, card split legs, and all config/secrets
+  (edge secret + cloud config rows deleted). Historical card payments stay
+  readable everywhere (orders, receipts, reports). M-Pesa STK (Buni),
+  manual M-Pesa, cash, store credit, loyalty and splits (cash/credit/
+  M-Pesa) are the tenders. If card acquiring is ever needed again, it
+  returns as a NEW integration — the old one was removed, not disabled.
+- Unconfirmed payments still never complete by themselves: callback-only
+  completion, fail-closed amount gate, exactly-once claims.
+
+### Performance (the ones that pay rent at fleet size)
+
+- Offline queue: failed-sale bookkeeping went from rewriting the entire
+  queue per failure to a single-record update; badge counts no longer
+  re-walk the queue three times per flush.
+- Checkout number allocation: the daily "heal" probe uses the index range
+  instead of a LIKE scan inside every sale's write transaction.
+- Receipt printer worker no longer takes the checkout write lock every 2s
+  when idle.
+- POS screen: product reloads can no longer stack on a reconnect.
+
+### Android client (new)
+
+- `ledgerpos-android-<version>.apk`: a thin LAN terminal for a till in
+  serve mode. First-launch Connect screen captures the till address; the
+  app never falls back to the demo backend. Built by CI on every frontend
+  change; release-signed once the keystore secrets are configured.
+
+### Docs
+
+- New: `docs/GUIDE-CASHIER.md`, `docs/GUIDE-ADMIN.md`,
+  `docs/TROUBLESHOOTING.md`, `docs/DEVELOPER.md`, `docs/OPERATIONS.md`,
+  `docs/DEADLOCK.md`, and this changelog.
+
+## v1.4.3 — hardening release
+
+- STK supersede is now one transaction on all rails; a completed push can
+  no longer be resurrected by a retry.
+- Admin password change refuses the seeded default passwords.
+- Paystack webhook edge function gained a 256KB body cap (DoS guard).
+- payments(status, completed_at) index for X/Z and daily reports.
+- The download-site version is derived from the release manifest (the
+  site can no longer drift from the release train).
+
+## v1.4.2 — fleet + brand
+
+- Buni account reference on the customer prompt became the stable brand
+  tag `7853959-CDC` (was `-ORD2` fragments).
+- Cloud DB hardening: RLS closed on 8 tables, anon write grants revoked
+  (incl. TRUNCATE), app_config writes admin-only.
+
+## v1.4.1 — install fix
+
+- The OTA offer could loop forever ("install v1.4" after installing) —
+  fixed; store-name edits persisted reliably.
+
+## v1.4.0 — KCB Buni is the M-Pesa rail
+
+- Buni STK via Supabase Edge Functions (keys never on tills), callback-
+  driven completion, real-money E2E verified. Paystack demoted to
+  fallback (later retired in v1.4.4). Signed OTA update train.
+
+## Known limitations (honest list)
+
+- **No returns document** — refunds of taken money are a void + refund-
+  owed flag; the money moves on the provider dashboard. A returns flow is
+  the top roadmap item.
+- **No cash pay-in/payout ledger on shifts** — drawer drops/expenses make
+  Z variances look worse than they are; note them on paper.
+- **No per-product stock movements ledger** — stock truth is guarded
+  quantity updates + audit rows; FEATURES.md's old claim of a movements
+  ledger was removed.
+- **eTIMS not integrated** — buyer KRA PIN and VAT exports are ready;
+  integration waits for KRA enforcement timelines.
+- **Local till DB is unencrypted** — use OS disk encryption; a stolen till
+  can read synced data at rest (staff API access is still scoped).
+- **Sync replicates all tills' orders to every till's disk** (needed for
+  offline ops) — reading is scoped per user; at-rest scoping is a future
+  sync-filter feature.
+- **`sync_events` grows unbounded** — pruning is an owner decision away.
+- **Discount reporting is thin** — order-level discounts are stored and
+  audited but not yet aggregated as a report line (sales CSV next).
+- **Two stocktake systems exist** — prefer Inventory → Stock count; the
+  supplier-screen stocktake is legacy and will be retired.
+- **Print via the OS dialog on Windows** uses driver rendering, not raw
+  ESC/POS — set the printer target to the ESC/POS device for best
+  receipts.
+- **The Android APK is a LAN terminal** — it needs a till running in serve
+  mode on the shop network; it is not a standalone cloud POS (deliberate:
+  money logic stays in the audited Go binary).

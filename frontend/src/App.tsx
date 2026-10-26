@@ -24,6 +24,7 @@ import { Shifts } from './pages/Shifts'
 import { Reports } from './pages/Reports'
 import { Users } from './pages/Users'
 import { Settings } from './pages/Settings'
+import { Help } from './pages/Help'
 
 export function App() {
   const [path] = useRoute()
@@ -112,6 +113,8 @@ function GatedApp({ path, user }: { path: string; user: User }) {
         return user.permissions.includes('users.manage') ? <Users /> : <NoPerm perm="users.manage" />
       case path.startsWith('/settings'):
         return user.permissions.includes('settings.manage') ? <Settings /> : <NoPerm perm="settings.manage" />
+      case path.startsWith('/help'):
+        return <Help />
       default:
         return <NotFound />
     }

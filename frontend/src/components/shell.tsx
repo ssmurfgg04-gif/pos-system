@@ -11,11 +11,13 @@ import { useNet } from '../offline/heartbeat'
 import { backendMode, isDemoSync, getDesktopStatus, api, type DesktopStatus, setToken } from '../lib/api'
 import {
   ShoppingCart, ReceiptText, Palette, Package, Coins, BarChart3, Users, Settings,
-  LogOut, RefreshCw, FlaskConical, Power, PowerOff, BookUser, Truck, Search, AlertTriangle, FileText,
+  LogOut, RefreshCw, FlaskConical, Power, PowerOff, BookUser, Truck, Search, AlertTriangle, FileText, LifeBuoy,
 } from 'lucide-react'
 
 // Nav items: shown strictly by permission (server enforces regardless).
 // Lucide icons (shadcn's icon set) — no emoji anywhere in the chrome.
+// perm '' = visible to every signed-in user (the Help page is operational
+// knowledge, not a privilege).
 const NAV: { to: string; label: string; perm: string; icon: typeof ShoppingCart }[] = [
   { to: '/', label: 'Sell', perm: 'pos.sell', icon: ShoppingCart },
   { to: '/orders', label: 'Orders', perm: 'orders.view', icon: ReceiptText },
@@ -28,6 +30,7 @@ const NAV: { to: string; label: string; perm: string; icon: typeof ShoppingCart 
   { to: '/reports', label: 'Reports', perm: 'reports.view', icon: BarChart3 },
   { to: '/users', label: 'People', perm: 'users.manage', icon: Users },
   { to: '/settings', label: 'Settings', perm: 'settings.manage', icon: Settings },
+  { to: '/help', label: 'Help', perm: '', icon: LifeBuoy },
 ]
 
 // Desktop composition: 72px header on top; below it a dark 190px navigation
@@ -111,7 +114,7 @@ export function AppShell({ current, children }: { current: string; children: Rea
     disconnectWs()
   }
 
-  const items = NAV.filter((n) => user?.permissions.includes(n.perm))
+  const items = NAV.filter((n) => !n.perm || user?.permissions.includes(n.perm))
   const active = (to: string) => (to === '/' ? current === '/' : current.startsWith(to))
 
   return (
