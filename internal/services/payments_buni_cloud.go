@@ -90,9 +90,25 @@ func (s *Service) buniMpesaSTK(ctx context.Context, order *models.Order, pay *mo
 	// EXCLUDING the leg being pushed: it is itself a pending mpesa leg, and
 	// a blanket supersede would mark it FAILED before the new checkout id
 	// could bind (the push would "succeed" while the till stored nothing).
-	s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new STK push' WHERE order_id = ? AND method = 'mpesa' AND status = 'PENDING' AND id != ?`), order.ID, pay.ID)
-	// This payment now belongs to the Buni route.
-	s.db.Exec(s.db.Rebind(`UPDATE payments SET method = 'mpesa', mode = 'stk' WHERE id = ? AND status = 'PENDING'`), pay.ID)
+	// Supersede + re-tag run in ONE transaction: as two autocommits, a
+	// concurrent push (double-tap) could interleave and leave TWO live
+	// full-balance legs → two prompts, over-recorded payment.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new STK push' WHERE order_id = ? AND method = 'mpesa' AND status = 'PENDING' AND id != ?`), order.ID, pay.ID); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	// This payment now belongs to the Buni route (only while still pending).
+	if _, err := tx.Exec(s.db.Rebind(`UPDATE payments SET method = 'mpesa', mode = 'stk' WHERE id = ? AND status = 'PENDING'`), pay.ID); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 
 	invoiceRef := buniInvoiceRef(order.Number)
 	resp, err := prov.InitiateSTK(ctx, mpesa.STKRequest{
@@ -110,8 +126,19 @@ func (s *Service) buniMpesaSTK(ctx context.Context, order *models.Order, pay *mo
 		s.Audit(p.ID, p.Username, "BUNI_MPESA_FAILED", "order", order.Number, err.Error())
 		return nil, err
 	}
-	s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, merchant_request_id = ?, result_desc = ? WHERE id = ?`),
+	// Bind the checkout id ONLY while the leg is still pending — if it
+	// was voided or re-pushed mid-flight, the live leg owns completion
+	// and resurrecting this one would double the exposure. The claim
+	// sweep still recovers recently-FAILED legs that DID get bound.
+	res, err := s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, merchant_request_id = ?, result_desc = ? WHERE id = ? AND status = 'PENDING'`),
 		mpesa.BuniCheckoutPrefix+resp.CheckoutRequestID, resp.MerchantRequestID, truncStr(resp.CustomerMessage, 200), pay.ID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		s.Audit(p.ID, p.Username, "BUNI_MPESA_ORPHAN", "order", order.Number,
+			"checkout "+resp.CheckoutRequestID+" arrived on a leg that is no longer pending")
+	}
 	s.Audit(p.ID, p.Username, "BUNI_MPESA_INIT", "order", order.Number, "checkout "+resp.CheckoutRequestID)
 	return s.GetOrder(order.ID)
 }

@@ -1076,6 +1076,22 @@ CREATE INDEX IF NOT EXISTS idx_quotes_created ON quotes(created_at);
 `,
 		Go: backfillRolePermsV17,
 	},
+	{
+		// v18 — money-path index backstop. The X/Z cash close and the
+		// daily reports filter payments by (status, completed_at
+		// range); the existing single-column idx_payments_status has
+		// COMPLETED as the dominant value, so every close/report
+		// degenerated toward a full scan as history grew. Composite
+		// index makes the date-range probe index-driven. Same SQL on
+		// both dialects.
+		Version: 18,
+		SQLite: `
+CREATE INDEX IF NOT EXISTS idx_payments_status_completed ON payments(status, completed_at);
+`,
+		Pg: `
+CREATE INDEX IF NOT EXISTS idx_payments_status_completed ON payments(status, completed_at);
+`,
+	},
 }
 
 // backfillRolePermsV17 unions the quotation permissions into the seeded

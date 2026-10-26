@@ -162,6 +162,12 @@ jobs:
             if [ "${{ steps.netlify.outputs.deployed }}" = "true" ]; then
               exit 1
             fi
+            # No Netlify secrets → staleness is expected, but it must be
+            # IMPOSSIBLE to miss: put it on the run summary page too, not
+            # just a log warning nobody opens.
+            echo "⚠️ **LIVE SITE STALE — awesomeposs.netlify.app still serves the OLD installers.**" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No \`NETLIFY_AUTH_TOKEN\`/\`NETLIFY_SITE_ID\` repo secrets and the Netlify GitHub integration is not connected, so every release skips the site deploy (site frozen at v1.3.6). Fix: set the two secrets (workflow header has the steps) or drag-drop the fresh \`ledgerpos-netlify-site\` bundle onto app.netlify.com → Deploys." >> "$GITHUB_STEP_SUMMARY"
             echo "::warning::Verification skipped as non-fatal: no repo deploy ran this run (no NETLIFY secrets), so the staleness is expected until Netlify is connected. Once Netlify deploys from CI, mismatches fail the build again."
             exit 0
           fi

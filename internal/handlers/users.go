@@ -306,6 +306,13 @@ func (h *H) SetPassword(c *gin.Context) {
 		h.fail(c, 400, "password must be at least 6 characters")
 		return
 	}
+	// Rotation exists to move OFF the public default list; rotating
+	// admin/admin123 back to admin123 must not clear must_rotate (would
+	// hand a publicly-known password full admin). Same gate as signup.
+	if auth.IsDefaultPassword(body.Password) {
+		h.fail(c, 400, "choose a stronger password, that one is public")
+		return
+	}
 	hash, err := auth.HashPassword(body.Password)
 	if err != nil {
 		h.fail(c, 500, err.Error())

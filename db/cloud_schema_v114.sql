@@ -55,7 +55,12 @@ begin
   return json_build_object('ok', true, 'key', btrim(p_key));
 end $function$;
 
-revoke execute on function public.upsert_app_config(text, text, boolean) from anon, authenticated;
+-- OWNER/CI ONLY. The revoke MUST name PUBLIC: functions carry a default
+-- PUBLIC execute grant, and revoking only anon/authenticated leaves the
+-- "=X" PUBLIC entry live (verified live — deploy-v142.sql had to repair
+-- exactly this). Every future CREATE OR REPLACE of this function resets
+-- the ACL back to PUBLIC — re-run the revoke after any edit.
+revoke execute on function public.upsert_app_config(text, text, boolean) from anon, authenticated, PUBLIC;
 
 -- Device-gated read: every approved, non-revoked till receives the full
 -- config map (secrets decrypted inside the database, over TLS only).

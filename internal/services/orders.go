@@ -1035,8 +1035,18 @@ func (s *Service) InitiateSTK(ctx context.Context, orderID int64, p *auth.Princi
 		s.Audit(p.ID, p.Username, "STK_FAILED", "order", order.Number, err.Error())
 		return s.GetOrder(orderID)
 	}
-	s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, merchant_request_id = ?, result_desc = ? WHERE id = ?`),
+	// Bind the checkout id ONLY while the leg is still pending — a void or
+	// re-push racing the network call must not leave a live checkout bound
+	// to a dead leg (the completion path would then trust it).
+	res, err := s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, merchant_request_id = ?, result_desc = ? WHERE id = ? AND status = 'PENDING'`),
 		resp.CheckoutRequestID, resp.MerchantRequestID, resp.CustomerMessage, pay.ID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		s.Audit(p.ID, p.Username, "STK_ORPHAN", "order", order.Number,
+			"checkout "+resp.CheckoutRequestID+" arrived on a leg that is no longer pending")
+	}
 	s.Audit(p.ID, p.Username, "STK_INITIATED", "order", order.Number, resp.CheckoutRequestID)
 	// Reload AFTER STK state changes so the response reflects reality
 	// (the original build returned a stale snapshot here).
@@ -1057,19 +1067,32 @@ func (s *Service) RetrySTKWithPhone(ctx context.Context, orderID int64, phone st
 	if order.Status != models.OrderPending {
 		return nil, fmt.Errorf("%w: cannot push STK for %s order", ErrInvalidState, order.Status)
 	}
-	// Supersede existing pending payments for this order.
-	for _, pm := range order.Payments {
-		if pm.Status == models.PaymentPending {
-			s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by retry' WHERE id = ?`), pm.ID)
-		}
-	}
-	res, err := s.db.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, phone, created_at)
-                VALUES (?, 'mpesa', 'stk', ?, 'PENDING', ?, ?)`),
-		orderID, roundToShilling(order.TotalCents), norm, nowStamp())
+	// Supersede existing pending payments and mint the fresh leg in ONE
+	// transaction — a void interleaving between the two statements used to
+	// be able to strand a new pending leg on a dead order.
+	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
+	for _, pm := range order.Payments {
+		if pm.Status == models.PaymentPending {
+			if _, err := tx.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by retry' WHERE id = ?`), pm.ID); err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+		}
+	}
+	res, err := tx.Exec(s.db.Rebind(`INSERT INTO payments (order_id, method, mode, amount_cents, status, phone, created_at)
+                VALUES (?, 'mpesa', 'stk', ?, 'PENDING', ?, ?)`),
+		orderID, roundToShilling(order.TotalCents), norm, nowStamp())
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 	_ = res
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return s.InitiateSTK(ctx, orderID, p)
 }
 

@@ -305,10 +305,27 @@ func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay
 	}
 	wirePhone := paystackWirePhoneKe(phone)
 
-	// Supersede previous pending paystack attempts (fresh reference each time).
-	s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new STK push' WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING'`), order.ID)
-	// This payment now belongs to Paystack.
-	s.db.Exec(s.db.Rebind(`UPDATE payments SET method = 'paystack', mode = 'stk' WHERE id = ? AND status = 'PENDING'`), pay.ID)
+	// Supersede previous pending paystack attempts (fresh reference each
+	// time), EXCLUDING the leg being pushed — the old blanket supersede
+	// marked THIS leg FAILED and the unguarded final update resurrected
+	// it, which is exactly the double-live-leg window. Supersede + re-tag
+	// run in ONE transaction so a concurrent push cannot interleave.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = 'superseded by new STK push' WHERE order_id = ? AND method = 'paystack' AND status = 'PENDING' AND id != ?`), order.ID, pay.ID); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	// This payment now belongs to Paystack (only while still pending).
+	if _, err := tx.Exec(s.db.Rebind(`UPDATE payments SET method = 'paystack', mode = 'stk' WHERE id = ? AND status = 'PENDING'`), pay.ID); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 
 	reference := fmt.Sprintf("LP-%s-%s", order.Number, randToken(4))
 	email := "customer+" + strings.ToLower(order.Number) + "@ledgerpos.app"
@@ -354,8 +371,17 @@ func (s *Service) paystackMpesaSTK(ctx context.Context, order *models.Order, pay
 		s.Audit(p.ID, p.Username, "PAYSTACK_MPESA_FAILED", "order", order.Number, initErr.Error())
 		return nil, initErr
 	}
-	s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, email = ?, result_desc = ? WHERE id = ?`),
+	// Bind the reference ONLY while the leg is still pending — if it was
+	// voided or re-pushed mid-flight, the live leg owns completion.
+	res, err := s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'PENDING', checkout_request_id = ?, email = ?, result_desc = ? WHERE id = ? AND status = 'PENDING'`),
 		reference, email, truncStr(init.DisplayText, 200), pay.ID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		s.Audit(p.ID, p.Username, "PAYSTACK_MPESA_ORPHAN", "order", order.Number,
+			"ref "+reference+" arrived on a leg that is no longer pending")
+	}
 	s.Audit(p.ID, p.Username, "PAYSTACK_MPESA_INIT", "order", order.Number, "ref "+reference)
 	_ = ctx
 	return s.GetOrder(order.ID)

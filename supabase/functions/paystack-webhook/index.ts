@@ -44,7 +44,19 @@ function safeEqualHex(a: string, b: string): boolean {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ ok: false, error: "POST only" }, 405);
+  // Size cap BEFORE reading the body: this is the only fully-public cloud
+  // endpoint, and the signature check is HMAC over the raw bytes — a huge
+  // body would cost memory + HMAC CPU before any auth (the local Go twin
+  // caps at 1 MB, handlers/paystack.go). Real Paystack events are KBs;
+  // 256 KB is ~100x headroom.
+  const len = Number(req.headers.get("content-length") ?? "0");
+  if (Number.isFinite(len) && len > 256 * 1024) {
+    return json({ ok: false, error: "body too large" }, 413);
+  }
   const raw = new Uint8Array(await req.arrayBuffer());
+  if (raw.byteLength > 256 * 1024) {
+    return json({ ok: false, error: "body too large" }, 413);
+  }
   const signature = (req.headers.get("x-paystack-signature") ?? "").trim().toLowerCase();
   const key = await paystackKey();
   if (!key.startsWith("sk_")) return json({ ok: false, error: "not configured" }, 503);

@@ -29,7 +29,17 @@ const backfillBatch = 200
 // Returns how many events were (re)enqueued. Safe to run concurrently with
 // the sync loop: every insert is an ordinary Emit and the sync cycle
 // serializes pushes itself.
+//
+// The probes below are written in SQLite dialect (datetime('now'),
+// json_extract) — on server-mode Postgres they would silently error to 0
+// every cycle, i.e. the reconciliation this file exists for would be dead
+// code exactly where it claims coverage. Guard loudly until someone ports
+// the queries (Postgres: now() - interval, payload->>').
 func (s *Service) BackfillMissingEvents() int {
+	if !s.db.IsSQLite() {
+		log.Printf("[backfill] skipped: probes are SQLite-dialect, server-mode Postgres not supported yet")
+		return 0
+	}
 	total := s.backfillOrders() + s.backfillVoids() + s.backfillLedger()
 	return total
 }
