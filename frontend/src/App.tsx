@@ -3,6 +3,7 @@ import { useRoute, homeFor, withBase, navigate } from './lib/router'
 import { useAuth } from './stores/auth'
 import { useBranding } from './stores/branding'
 import { AppShell, Booting } from './components/shell'
+import { ConnectScreen, useConnectGate } from './components/ConnectGate'
 import { Lock } from 'lucide-react'
 
 import { api, User } from './lib/api'
@@ -28,12 +29,16 @@ export function App() {
   const [path] = useRoute()
   const { user, ready, refresh } = useAuth()
   const { loaded, load } = useBranding()
+  // Android client: gate on till connectivity BEFORE anything else mounts
+  // (auth refresh would just error-loop against an unreachable server).
+  const needsConnect = useConnectGate()
 
   useEffect(() => {
     refresh()
     load()
   }, [])
 
+  if (needsConnect) return <ConnectScreen onConnected={() => window.location.reload()} />
   if (!ready || !loaded) return <Booting />
 
   // Public routes.

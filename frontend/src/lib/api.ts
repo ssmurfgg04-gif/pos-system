@@ -26,6 +26,29 @@ export class ApiError extends Error {
 
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? '' // same origin by default; Vite dev proxies /api → :3000
 
+// Android client: the APK bundles this SPA and talks to a till server on
+// the shop LAN. The till address is set once on the connect screen and
+// stored in localStorage. When set it OVERRIDES same-origin AND disables
+// the demo fallback — a POS client must never silently swap to fake data
+// just because the till is unreachable (it shows a connect error instead).
+export const SERVER_URL_KEY = 'ledgerpos_server_url'
+export function serverUrl(): string {
+  try {
+    return localStorage.getItem(SERVER_URL_KEY) || BASE
+  } catch {
+    return BASE
+  }
+}
+export function setServerUrl(url: string): void {
+  try {
+    localStorage.setItem(SERVER_URL_KEY, url.replace(/\/+$/, ''))
+  } catch { /* storage unavailable — keep the in-memory value only */ }
+}
+export function clearServerUrl(): void {
+  try { localStorage.removeItem(SERVER_URL_KEY) } catch { /* noop */ }
+}
+const RUNTIME_BASE = serverUrl()
+
 // ---- backend selection ----
 
 type Mode = 'real' | 'demo'
@@ -41,12 +64,12 @@ export function demoForced(): boolean {
 }
 
 async function resolveMode(): Promise<Mode> {
-  if (BASE) return 'real' // explicit backend URL → never silently demo
+  if (RUNTIME_BASE) return 'real' // explicit backend URL → never silently demo
   if (demoForced()) return 'demo'
   try {
     const ctl = new AbortController()
     const t = window.setTimeout(() => ctl.abort(), 1500)
-    const res = await fetch('/api/v1/health', { cache: 'no-store', signal: ctl.signal })
+    const res = await fetch(`${RUNTIME_BASE}/api/v1/health`, { cache: 'no-store', signal: ctl.signal })
     window.clearTimeout(t)
     // A static host answers /api/* with the SPA fallback (200 text/html) or
     // a 404 page — neither is the health JSON. Only JSON counts as "live".
@@ -94,7 +117,7 @@ export async function getDesktopStatus(): Promise<DesktopStatus> {
   let status: DesktopStatus = { desktop: false }
   try {
     if ((await backendMode()) === 'real') {
-      const res = await fetch(BASE + '/api/v1/system/desktop', { cache: 'no-store' })
+      const res = await fetch(RUNTIME_BASE + '/api/v1/system/desktop', { cache: 'no-store' })
       if (res.ok) {
         const j = await res.json()
         if (j?.data && typeof j.data.desktop === 'boolean') status = j.data
@@ -141,7 +164,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const t = token()
   if (t) headers['Authorization'] = 'Bearer ' + t
   if (body !== undefined && !(body instanceof FormData)) headers['Content-Type'] = 'application/json'
-  const res = await fetch(BASE + path, {
+  const res = await fetch(RUNTIME_BASE + path, {
     method,
     headers,
     body: body === undefined ? undefined : body instanceof FormData ? body : JSON.stringify(body),
@@ -186,7 +209,7 @@ export async function raw(path: string): Promise<string> {
   const headers: Record<string, string> = {}
   const t = token()
   if (t) headers['Authorization'] = 'Bearer ' + t
-  const res = await fetch(BASE + path, { headers })
+  const res = await fetch(RUNTIME_BASE + path, { headers })
   if (!res.ok) {
     let msg = `Download failed (${res.status})`
     try {
@@ -261,8 +284,9 @@ export interface Product {
 
 /** Photo URL for a product ('' when none) — public, cache-busted route. */
 export function productImageUrl(p: Pick<Product, 'id' | 'updatedAt'>): string {
-  if (!p.updatedAt) return `/api/v1/products/${p.id}/image`
-  return `/api/v1/products/${p.id}/image?v=${encodeURIComponent(p.updatedAt)}`
+  const q = p.updatedAt ? `?v=${encodeURIComponent(p.updatedAt)}` : ''
+  // RUNTIME_BASE is '' on same-origin deploys → URLs stay relative there.
+  return `${RUNTIME_BASE}/api/v1/products/${p.id}/image${q}`
 }
 
 export interface OrderItem {

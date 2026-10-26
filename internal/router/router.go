@@ -404,6 +404,11 @@ func corsMiddleware() gin.HandlerFunc {
 		"https://localhost:5173": true,
 		"http://localhost:3000":  true,
 		"http://127.0.0.1:3000":  true,
+		// The official Android client (frontend/android, Capacitor): the
+		// WebView origin is fixed and first-party, so it ships allowlisted
+		// — a till needs no per-shop CORS config for the APK to work.
+		"https://appassets.androidplatform.net": true,
+		"capacitor://localhost":                 true,
 	}
 	for _, o := range strings.Split(os.Getenv("CORS_EXTRA_ORIGINS"), ",") {
 		if o = strings.TrimSpace(o); o != "" {

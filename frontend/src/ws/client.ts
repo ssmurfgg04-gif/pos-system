@@ -61,9 +61,16 @@ export function connectWs() {
 }
 
 function openSocket() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  // Same-origin by default; the Android client overrides via the stored
+  // till address (serverUrl()).
+  let target = `${location.host}`
   try {
-    ws = new WebSocket(`${proto}://${location.host}/api/v1/ws`)
+    const stored = localStorage.getItem('ledgerpos_server_url')
+    if (stored) target = stored.replace(/^https?:\/\//, '').replace(/\/+$/, '')
+  } catch { /* private mode — stay same-origin */ }
+  const proto = location.protocol === 'https:' || target.startsWith('https') ? 'wss' : 'ws'
+  try {
+    ws = new WebSocket(`${proto}://${target}/api/v1/ws`)
   } catch {
     scheduleReconnect()
     return

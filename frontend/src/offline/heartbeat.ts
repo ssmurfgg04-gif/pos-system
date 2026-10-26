@@ -165,7 +165,8 @@ export function startHeartbeat() {
 
   const check = async () => {
     try {
-      await fetch('/api/v1/health', { cache: 'no-store' })
+      const base = await import('../lib/api').then((m) => m.serverUrl()).catch(() => '')
+      await fetch(`${base}/api/v1/health`, { cache: 'no-store' })
       const was = useNet.getState().online
       useNet.getState().setOnline(true)
       // Flush on reconnect AND at startup — a sale queued before an app
