@@ -1133,25 +1133,22 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (!o) throw new ApiError(404, 'order not found')
     return orderDTO(o) as T
   }
-  // WhatsApp receipt (demo): same shape as the server endpoint — a wa.me
-  // deep link built from the demo order, never queued (no gateway here).
-  if (m === 'POST' && p.match(/^\/orders\/(\d+)\/whatsapp$/)) {
-    requirePerm(perms, 'pos.sell')
-    const o = d.orders.find((x) => x.id === Number(p.match(/^\/orders\/(\d+)\/whatsapp$/)![1]))
-    if (!o) throw new ApiError(404, 'order not found')
-    const store = String(d.settings.store_name || 'Store')
-    const lines = (o.items ?? []).map((it) => `${it.name}\n  ${it.qty} x ${(it.unitPriceCents / 100).toFixed(2)}`).join('\n')
-    const text = `*${store}*\nReceipt ${o.number}\n\n${lines}\n\nTOTAL: ${(o.totalCents / 100).toFixed(2)}`
-    const cust = o.customerId ? d.customers.find((c) => c.id === o.customerId) : undefined
-    const raw = String(cust?.phone || '').replace(/[^0-9]/g, '')
+  // WhatsApp queue (demo): automatic-only since v1.5.0 — demo mode never
+  // sends, so the admin list is empty and the test send fakes success.
+  if (m === 'GET' && p === '/whatsapp/jobs') {
+    requirePerm(perms, 'settings.manage')
+    return { jobs: [] } as T
+  }
+  if (m === 'POST' && p === '/whatsapp/test') {
+    requirePerm(perms, 'settings.manage')
+    const raw = String(body?.phone || '').replace(/[^0-9]/g, '')
     const intl = raw.startsWith('0') ? '254' + raw.slice(1) : raw
-    return {
-      phone: intl,
-      link: intl ? `https://wa.me/${intl}?text=${encodeURIComponent(text)}` : '',
-      text,
-      queued: false,
-      reason: intl ? 'demo mode — gateway not configured' : 'no customer phone on this order',
-    } as T
+    if (intl.length < 10) throw new ApiError(422, 'not a Kenyan mobile number: ' + (body?.phone || ''))
+    return { sent: true, phone: intl } as T
+  }
+  if (m === 'POST' && p.match(/^\/whatsapp\/jobs\/(\d+)\/retry$/)) {
+    requirePerm(perms, 'settings.manage')
+    throw new ApiError(404, 'job not found')
   }
   if (m === 'POST' && p === '/orders/checkout') {
     requirePerm(perms, 'pos.sell')
@@ -1360,10 +1357,8 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     }
     if (method === 'account') {
       const c = tabCustomer!
-      if (c.creditLimitCents <= 0) throw new ApiError(409, 'customer has no credit, cash only')
-      if (c.balanceCents + payable > c.creditLimitCents) {
-        throw new ApiError(409, `tab would exceed customer credit limit (${c.name})`)
-      }
+      // v1.5.0 policy: any active customer can be charged to tab; the
+      // credit-limit field is advisory (server parity — no gate).
       // Stock was fail-fast checked per line above; the guarded deduction
       // happens once at settle time (server parity, never here).
       o.payments.push(pay)

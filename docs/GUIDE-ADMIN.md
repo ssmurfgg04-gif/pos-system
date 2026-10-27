@@ -94,6 +94,18 @@ The one that matters most since v1.4.4:
   `internal/money` (half-away-from-zero). Per-order tax snapshots make
   historic KRA reports stable when the rate changes.
 - **Receipts/printing**: printer target, width, auto-print toggle.
+- **WhatsApp receipts (v1.5.0)**: connect once in Settings → WhatsApp —
+  create a whapi.cloud account, QR-link the shop's number, paste the API
+  token, press Send test. Every paid sale then texts the customer a
+  branded receipt image (shop logo + sale details + M-Pesa code) with an
+  English thank-you — automatically, with no cashier step and no
+  SMS/email fallback (Safaricom already texts the M-Pesa confirmation).
+  Failed sends appear in the same panel with a Retry button. The token
+  never team-syncs; set it on each till that completes sales.
+- **Tabs (customer accounts)**: no setup — any customer can be charged
+  to tab at checkout, with or without a credit limit (the field is
+  advisory). Customers → their record shows what they owe; take
+  repayment as cash and the balance clears.
 - **Backups**: automatic daily local backup + AES-256-GCM encrypted
   offsite copy — see `docs/OPERATIONS.md` for restore and drills.
 

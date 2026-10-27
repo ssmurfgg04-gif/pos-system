@@ -283,6 +283,11 @@ const DEMO_SETTINGS: Record<string, string> = {
   low_stock_threshold: '5',
   backup_auto: 'true',
   backup_keep: '7',
+  // WhatsApp receipts (v1.5.0): automatic-only via whapi.cloud. Demo mode
+  // never sends — the panel shows "not connected" with an empty queue.
+  whatsapp_auto_send: 'true',
+  whatsapp_api_url: '',
+  whatsapp_api_key: '',
 }
 
 // Deterministic PRNG so seeded history looks the same on every reload

@@ -3,12 +3,10 @@
 // endpoint round-trip). window.print() with print CSS produces a clean
 // 80mm-friendly printout; browser "Save as PDF" covers the no-printer case.
 
-import { useState } from 'react'
-import { Branding, Order, api } from '../lib/api'
+import { Branding, Order } from '../lib/api'
 import { centsToAmount } from '../lib/money'
 import { Button, Modal } from './ui'
 import { Printer } from 'lucide-react'
-import { toast } from '../stores/toasts'
 
 export function ReceiptModal({ order, branding, open, onClose }: {
   order: Order
@@ -30,7 +28,6 @@ export function ReceiptModal({ order, branding, open, onClose }: {
       size="sm"
       footer={
         <>
-          <WhatsAppButton order={order} />
           <Button variant="primary" onClick={() => {
             document.body.classList.add('printing-receipt')
             window.print()
@@ -144,41 +141,10 @@ function paymentLabel(p: { method: string; status: string }): string {
   }
 }
 
-// WhatsAppButton — hands the receipt to the customer's WhatsApp. The
-// server builds the receipt text (single source of truth) and a wa.me
-// deep link into the SHOP's own WhatsApp (zero config, works today); when
-// the shop configured a gateway, the automated send is queued on the
-// server and the button becomes a re-send.
-function WhatsAppButton({ order }: { order: Order }) {
-  const [busy, setBusy] = useState(false)
-  const go = async () => {
-    if (!order.id || busy) return
-    setBusy(true)
-    try {
-      const res = await api.post<{ phone: string; link: string; queued: boolean; reason: string }>(
-        `/api/v1/orders/${order.id}/whatsapp`, {})
-      if (res.link) {
-        window.open(res.link, '_blank', 'noopener')
-        toast.success(res.queued ? 'Receipt queued for WhatsApp' : 'Opening WhatsApp',
-          res.queued ? `Sending to ${res.phone}` : res.reason || 'Press send in WhatsApp')
-      } else {
-        toast.info('No customer phone', 'Add the customer\u2019s number at checkout to send receipts on WhatsApp.')
-      }
-    } catch (e: any) {
-      toast.error('WhatsApp failed', e?.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <Button variant="ghost" onClick={go} disabled={busy || !order.id} title="Send this receipt to the customer on WhatsApp">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-        <path d="M12.04 2a9.9 9.9 0 0 0-8.4 15.2L2.2 21.8l4.7-1.4A9.9 9.9 0 1 0 12.04 2Zm5.8 14.2c-.25.7-1.45 1.35-2 1.4-.55.05-1.05.25-3.5-.75s-3.95-3.5-4.1-3.7c-.15-.2-1-1.35-1-2.6s.65-1.85.9-2.1c.25-.25.5-.3.7-.3h.5c.15 0 .35-.05.55.4.2.5.7 1.75.75 1.9.05.1.1.25 0 .4-.1.15-.15.25-.3.4-.15.15-.3.35-.2.55.1.2.5.85 1.05 1.35.7.65 1.3.85 1.5.95.2.1.35.05.5-.1.15-.15.6-.7.75-.95.15-.25.35-.2.55-.15.2.1 1.3.65 1.5.75.2.15.4.2.45.3.05.15.05.65-.2 1.35Z"/>
-      </svg>
-      {busy ? '…' : 'WhatsApp'}
-    </Button>
-  )
-}
+// (v1.5.0) WhatsApp receipts are automatic-only: a paid sale enqueues one
+// branded image send to the customer's number via whapi.cloud (Settings →
+// WhatsApp). There is deliberately no cashier button, no wa.me deep link,
+// and no prompt — the receipt screen only prints.
 
 function Row({ label, value }: { label: string; value: string }) {
   return (

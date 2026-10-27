@@ -310,24 +310,3 @@ const receiptTemplate = `<!doctype html>
         </div>
 </div>
 </body></html>`
-
-// SendOrderWhatsapp (pos.sell) — build the WhatsApp receipt for one order:
-// receipt text + wa.me deep link (manual path, always available) and, when
-// the shop configured a gateway, a queued automated send. Visibility rides
-// GetOrderScoped: staff can only send receipts for orders they may see.
-func (h *H) SendOrderWhatsapp(c *gin.Context) {
-	id, ok := h.pathID(c, "id")
-	if !ok {
-		return
-	}
-	if _, err := h.svc(c).GetOrderScoped(h.principal(c), id); err != nil {
-		h.fail(c, 404, "order not found")
-		return
-	}
-	out, err := h.svc(c).BuildWhatsappReceipt(id)
-	if err != nil {
-		h.mapErr(c, err)
-		return
-	}
-	h.ok(c, out)
-}

@@ -197,26 +197,32 @@ export function CheckoutRail({
     (!splitLegs.some((l) => l.method === 'mpesa') || online) &&
     (!splitMpesaLeg || manualMode || !!normalizePhoneKe(splitMpesaLeg.phone || '') || !!normalizedPhone)
 
-  // Tab / store-credit customer search (server enforces limits at charge time).
+  // Tab / store-credit customer search (tab = any active customer, no
+  // eligibility check since v1.5.0; store credit still needs balance).
+  // With an empty query the roster loads immediately — any customer is one
+  // tap away whether or not they were picked beforehand; typing only narrows.
   useEffect(() => {
     if (mode !== 'idle') return
     if (method !== 'tab' && method !== 'credit' && !splitNeedsCustomer) return
     const q = tabQuery.trim()
     if (!q) {
-      setTabOptions([])
-      setTabSearchedFor('')
-      return
+      if (tabCustomer) return
+      let live = true
+      api.get<Customer[]>('/api/v1/customers')
+        .then((cs) => { if (live) setTabOptions(cs) })
+        .catch(() => { /* offline — tabs/credit need the server to record the charge */ })
+      return () => { live = false }
     }
     const t = window.setTimeout(async () => {
       try {
         setTabOptions(await api.get<Customer[]>(`/api/v1/customers?search=${encodeURIComponent(q)}`))
         setTabSearchedFor(q)
       } catch {
-        /* offline — tabs need the server for limit checks */
+        /* offline — tabs/credit need the server to record the charge */
       }
     }, 250)
     return () => window.clearTimeout(t)
-  }, [method, mode, tabQuery, splitNeedsCustomer])
+  }, [method, mode, tabQuery, tabCustomer, splitNeedsCustomer])
 
   // STK waiting loop — poll the order; the backend Buni claim sweeper
   // completes it from the provider callback and the poll surfaces it.
@@ -708,7 +714,8 @@ function PaymentForm(props: {
       : (method === 'cash' && !canCash) ||
         (canDiscount && discountCents >= props.totals.subtotal && discountCents > 0) ||
         (method === 'mpesa' && !manualMode && !normalizePhoneKe(phone)) ||
-        ((method === 'tab' || method === 'credit') && (!online || !tabCustomer || (method === 'tab' ? tabCustomer.creditLimitCents <= 0 : creditOf(tabCustomer) <= 0))) ||
+        (method === 'tab' && (!online || !tabCustomer)) ||
+        (method === 'credit' && (!online || !tabCustomer || creditOf(tabCustomer) <= 0)) ||
         ((method === 'mpesa' && !manualMode) && !online))
 
   const chargeLabel = busy
@@ -905,7 +912,7 @@ function PaymentForm(props: {
           </Field>
           {!tabCustomer && !tabQuery.trim() && (
             <p className="text-[12px] text-ink-muted -mt-1">
-              Type the customer's name above, tap their name in the list — the charge button unlocks then.
+              Tap the customer to charge — anyone works. Type a name or phone to search if the list is long.
             </p>
           )}
           {!tabCustomer && tabOptions.length > 0 && (
@@ -924,11 +931,13 @@ function PaymentForm(props: {
                   <span className={`text-[12px] font-bold ${
                     method === 'credit'
                       ? creditOf(c) > 0 ? 'text-paid-text' : 'text-ink-subtle'
-                      : c.creditLimitCents <= 0 ? 'text-ink-subtle' : c.balanceCents >= c.creditLimitCents ? 'text-danger-text' : 'text-ink-muted'
+                      : c.creditLimitCents > 0 && c.balanceCents >= c.creditLimitCents ? 'text-danger-text' : 'text-ink-muted'
                   }`}>
                     {method === 'credit'
                       ? creditOf(c) > 0 ? `${formatMoneyCompact(creditOf(c))} credit` : 'no credit'
-                      : c.creditLimitCents <= 0 ? 'cash only' : `owes ${formatMoney(c.balanceCents)} / ${formatMoney(c.creditLimitCents)}`}
+                      : c.creditLimitCents > 0
+                        ? `owes ${formatMoney(c.balanceCents)} / ${formatMoney(c.creditLimitCents)}`
+                        : `owes ${formatMoney(c.balanceCents)}`}
                   </span>
                 </button>
               ))}
@@ -936,17 +945,12 @@ function PaymentForm(props: {
           )}
           {!tabCustomer && tabQuery.trim() && tabSearchedFor === tabQuery.trim() && tabOptions.length === 0 && (
             <p className="text-[13px] font-semibold text-ink -mt-1">
-              No customer matches “{tabQuery.trim()}” — add them on the Customers page first (set a credit limit for tabs), then pick them here.
+              No customer matches “{tabQuery.trim()}” — add them on the Customers page first, then pick them here.
             </p>
           )}
           {method === 'credit' && tabCustomer && creditOf(tabCustomer) <= 0 && (
             <p className="text-danger-text text-[13px] font-semibold">
               {tabCustomer.name} has no store credit — top up from their record on the Customers page first.
-            </p>
-          )}
-          {method === 'tab' && tabCustomer && tabCustomer.creditLimitCents <= 0 && (
-            <p className="text-danger-text text-[13px] font-semibold">
-              {tabCustomer.name} is cash-only (no credit limit set). Open the Customers page, edit them, set a Credit limit — the tab charge unlocks right after.
             </p>
           )}
           {!online && (

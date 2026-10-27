@@ -18,6 +18,7 @@ import {
   TeamSyncStatus,
   UpdateStatus,
   VoidReason,
+  WhatsappJob,
   backendMode,
 } from '../lib/api'
 import { resetDemo } from '../demo/backend'
@@ -858,63 +859,121 @@ function VoidReasonsAdmin() {
 }
 
 // ---- WhatsApp receipts (WhatsApp tab) ----
-// Two paths: the receipt screen's WhatsApp button is ALWAYS on (wa.me deep
-// link into the shop's own WhatsApp — zero config). Automated delivery
-// needs a linked-number gateway: pick a provider, paste its API key, flip
-// auto-send on, and every paid order's receipt goes to the customer's
-// number with retries. The key is masked on read ("__SET__") and never
-// team-syncs — each till that completes sales needs its own key.
+// v1.5.0 policy: automatic-only. One gateway (whapi.cloud), one setup
+// step (paste the token), zero cashier steps — every paid sale enqueues
+// one branded receipt image (shop logo + sale details + thank-you) to the
+// customer's number, delivered with bounded retries in the background.
+// Failed sends land in the list below; nothing ever blocks a sale and no
+// key means no sends at all — sales complete normally either way.
 
 function WhatsappPanel({ values, set }: { values: SettingsMap; set: (k: string, v: string) => void }) {
-  const autoOn = (values.whatsapp_auto_send ?? 'false') === 'true'
-  const provider = values.whatsapp_provider ?? ''
-  const gateReady = (values.whatsapp_api_key ?? '') !== '' && provider !== '' &&
-    (provider !== 'custom' || (values.whatsapp_api_url ?? '') !== '')
+  const connected = (values.whatsapp_api_key ?? '') !== ''
+  const autoOn = (values.whatsapp_auto_send ?? 'true') === 'true'
+  const [jobs, setJobs] = useState<WhatsappJob[] | null>(null)
+  const [testPhone, setTestPhone] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [busyJob, setBusyJob] = useState(0)
+
+  const loadJobs = async () => {
+    try {
+      const r = await api.get<{ jobs: WhatsappJob[] }>('/api/v1/whatsapp/jobs?limit=50')
+      setJobs(r.jobs ?? [])
+    } catch {
+      setJobs([])
+    }
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadJobs() }, [])
+
+  const sendTest = async () => {
+    if (!testPhone.trim() || testing) return
+    setTesting(true)
+    try {
+      const r = await api.post<{ sent: boolean; phone: string }>('/api/v1/whatsapp/test', { phone: testPhone.trim() })
+      toast.success('Test sent', `WhatsApp accepted the message for ${r.phone} — check the phone for the "connected" note.`)
+    } catch (e: any) {
+      toast.error('Test failed', e?.message)
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const retry = async (j: WhatsappJob) => {
+    if (busyJob) return
+    setBusyJob(j.id)
+    try {
+      await api.post(`/api/v1/whatsapp/jobs/${j.id}/retry`, {})
+      toast.success('Re-queued', `Receipt ${j.orderNumber} will be sent again shortly.`)
+      await loadJobs()
+    } catch (e: any) {
+      toast.error('Retry failed', e?.message)
+    } finally {
+      setBusyJob(0)
+    }
+  }
+
   return (
     <div className="px-4 pb-4 sm:px-5 grid sm:grid-cols-2 gap-3">
       <div className="sm:col-span-2 bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted space-y-1">
-        <p><strong className="text-ink">Every receipt gains a WhatsApp button</strong> — it opens the shop's own WhatsApp with the receipt typed out; the cashier presses send. Nothing to configure here for that.</p>
-        <p><strong className="text-ink">Automatic sending</strong> (below) delivers the receipt to the customer's number the moment payment completes — the customer's phone is captured at checkout. Requires a linked-number gateway account (whapi.cloud or ultramsg: sign up, scan the QR with the shop's WhatsApp number, paste the API key here). Unofficial-gateway caution: sending receipts to paying customers is normal usage, but the number CAN be banned if used for spam — don't bulk-message.</p>
+        <p><strong className="text-ink">Receipts send themselves.</strong> The moment a sale is paid, the branded receipt image (your logo, the sale details, a thank-you note) goes to the customer's WhatsApp automatically — no button, nothing for the cashier to do. Paper receipts still print as usual.</p>
+        <p><strong className="text-ink">Setup, once:</strong> 1) create a whapi.cloud account and link the shop's WhatsApp number there (scan the QR in their dashboard), 2) copy the API token, 3) paste it below and send a test. No token = no sends; sales are never blocked or delayed by WhatsApp.</p>
       </div>
-      <Field label="Shop WhatsApp number (display only)" hint="The number the till's WhatsApp is linked to, e.g. 0718 630 570.">
-        <Input value={values.whatsapp_sender ?? ''} onChange={(e) => set('whatsapp_sender', e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" />
-      </Field>
-      <Field label="Gateway provider" hint="whapi.cloud and ultramsg are preconfigured; custom = any HTTP endpoint taking {to, text}.">
-        <Select value={provider} onChange={(e) => set('whatsapp_provider', e.target.value)}>
-          <option value="">None (manual WhatsApp button only)</option>
-          <option value="whapi">whapi.cloud</option>
-          <option value="ultramsg">ultramsg</option>
-          <option value="custom">Custom endpoint</option>
-        </Select>
-      </Field>
-      {provider === 'ultramsg' && (
-        <Field label="Instance URL" hint="Full instance URL incl. path, e.g. https://ultramsg.com/INSTANCE83xxx">
-          <Input value={values.whatsapp_api_url ?? ''} onChange={(e) => set('whatsapp_api_url', e.target.value)} placeholder="https://ultramsg.com/INSTANCE…" />
-        </Field>
-      )}
-      {provider === 'custom' && (
-        <Field label="Gateway endpoint URL" hint="POST {to, text, order} — Authorization: Bearer <key>">
-          <Input value={values.whatsapp_api_url ?? ''} onChange={(e) => set('whatsapp_api_url', e.target.value)} placeholder="https://…" />
-        </Field>
-      )}
-      <Field label="Gateway API key" hint={values.whatsapp_api_key ? 'A key is saved (shown masked). Paste a new one to replace it.' : 'From your gateway dashboard.'}>
+      <Field label="whapi.cloud API token" hint={values.whatsapp_api_key ? 'A token is saved (shown masked). Paste a new one to replace it.' : 'From your whapi.cloud dashboard after linking the shop number.'}>
         <Input type="password" value={values.whatsapp_api_key ?? ''} onChange={(e) => set('whatsapp_api_key', e.target.value)} placeholder="__SET__ = keep current" autoComplete="off" />
+      </Field>
+      <Field label="Send a test to" hint="Usually the shop's own number — proves the token and the linked number work end to end.">
+        <div className="flex gap-2">
+          <Input value={testPhone} onChange={(e) => setTestPhone(e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" />
+          <Button variant="ghost" onClick={sendTest} disabled={!connected || !testPhone.trim() || testing} title={connected ? 'Send the test message' : 'Paste the token first'}>
+            {testing ? '…' : 'Send test'}
+          </Button>
+        </div>
       </Field>
       <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink sm:col-span-2">
         <input
           type="checkbox"
           checked={autoOn}
-          disabled={!gateReady}
           onChange={(e) => set('whatsapp_auto_send', String(e.target.checked))}
           className="w-5 h-5 accent-[#10B981]"
         />
-        Auto-send the receipt on WhatsApp when payment completes
+        Auto-send the branded receipt when a sale is paid
       </label>
       <p className="sm:col-span-2 text-[12px] text-ink-subtle">
-        {gateReady
-          ? 'Gateway configured. Receipts will be delivered automatically (retried up to 5 times; failures land in the audit log).'
-          : 'Automation is off until a provider and API key are saved. The receipt button keeps working regardless.'}
+        {connected
+          ? 'Connected. Paid sales with a customer phone enqueue exactly one send, retried up to 5 times; failures appear below.'
+          : 'Not connected — sales complete normally and nothing is sent. Paste a token to switch automatic receipts on.'}
       </p>
+      <div className="sm:col-span-2">
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-[12px] font-bold uppercase tracking-wide text-ink-subtle">Recent sends</p>
+          <Button variant="ghost" onClick={loadJobs} title="Refresh"><RefreshCw size={13} strokeWidth={2.25} aria-hidden /> Refresh</Button>
+        </div>
+        {!jobs ? (
+          <div className="py-6 flex justify-center"><Spinner /></div>
+        ) : jobs.length === 0 ? (
+          <p className="text-[13px] text-ink-subtle py-2">Nothing sent yet — the queue fills as paid sales carry customer numbers.</p>
+        ) : (
+          <Table head={['Phone', 'Receipt', 'Status', 'When', '']}>
+            {jobs.map((j) => (
+              <tr key={j.id}>
+                <td className="px-3 py-2 text-[13px] font-bold text-ink">{j.phone}</td>
+                <td className="px-3 py-2 text-[13px] text-ink-muted">{j.orderNumber}</td>
+                <td className="px-3 py-2 text-[12px] font-bold">
+                  {j.status === 'SENT' && <span className="text-paid-text">Sent</span>}
+                  {j.status === 'PENDING' && <span className="text-pending-text">Sending{j.attempts > 0 ? ` (retry ${j.attempts})` : ''}</span>}
+                  {j.status === 'FAILED' && <span className="text-danger-text" title={j.lastError}>Failed: {j.lastError.slice(0, 60)}</span>}
+                </td>
+                <td className="px-3 py-2 text-[12px] text-ink-subtle">{(j.sentAt || j.createdAt).slice(0, 16).replace('T', ' ')}</td>
+                <td className="px-3 py-2 text-right">
+                  {j.status === 'FAILED' && (
+                    <Button variant="ghost" disabled={busyJob === j.id} onClick={() => retry(j)}>Retry</Button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </Table>
+        )}
+      </div>
     </div>
   )
 }

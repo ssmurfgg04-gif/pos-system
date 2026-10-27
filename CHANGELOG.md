@@ -3,6 +3,57 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.5.0 — tabs for anyone, WhatsApp receipts that send themselves
+
+### Tab: charge anyone, no setup (the "button not clickable" fix)
+
+- **Root cause of the dead button:** until v1.4.7 a customer needed a
+  credit limit before tab charges unlocked — nobody had one, so the
+  button never lit up. That gate is gone for good.
+- **New policy: a tab is always allowed for any customer.** No
+  eligibility flag, no credit-limit requirement, no blocklist. Pick the
+  customer, press the button, done — whether or not they were picked
+  beforehand. The credit-limit field stays on the Customers page as an
+  advisory number only; refusing a tab is a human call at the counter,
+  never a software stop.
+- **The customer list is right there when you tap Tab** — the roster
+  loads the moment the tab panel opens (no typing needed), and typing
+  just narrows it. Enter picks the first match. Store credit stays a
+  completely separate tender with its own balance rule.
+- Backend: the charge moves the customer's balance atomically inside
+  the checkout transaction (two tills can never lose an increment);
+  stock is still checked before the tab is created and deducted once at
+  settle.
+
+### WhatsApp: branded receipt images, sent automatically
+
+- **Automatic-only.** The manual WhatsApp button is gone; a paid sale
+  enqueues exactly one WhatsApp job by itself and the customer receives
+  a **branded receipt image** — the shop's logo (or a brand-colored
+  monogram), itemized lines, discount, VAT, TOTAL, and the M-Pesa code —
+  with a short English caption ("Thank you for shopping with {store} —
+  we're glad you chose us"). No SMS/email fallback: Safaricom already
+  texts the customer about the payment.
+- **One gateway: whapi.cloud.** Admin pastes the API token once per till
+  in Settings → WhatsApp (the number is QR-linked on whapi's side),
+  presses Send test, and every paid sale after that delivers on its
+  own. No token = nothing is queued and the sale completes normally.
+- **Zero cashier steps, zero risk to the sale.** Sending is best-effort
+  like printing: it never blocks or fails a checkout. Retries are
+  bounded (5 attempts, a minute apart); permanent failures land in
+  Settings → WhatsApp → Failed sends with a Retry button. Voided sales
+  cancel their queued receipt. The token never team-syncs.
+- Receipt images render server-side (`receipt_image.go`) from the same
+  data as the paper receipt, so the two can never disagree.
+
+### Also
+
+- Settings → WhatsApp is the only WhatsApp surface: token, auto-send
+  toggle, one-click test send, failed-sends list with retry. The old
+  provider presets (ultramsg/custom) and shop-number fields are gone.
+- Regression sweep: full Go suite + 108 vitest + E2E smoke extended
+  with v1.5.0 checks (zero-limit tab charge, WhatsApp admin endpoints).
+
 ## v1.4.7 — daily report hotfix (found by the 58-check E2E sweep)
 
 - **The daily report 500'd on any day that HAD sales.** SQLite's AVG()

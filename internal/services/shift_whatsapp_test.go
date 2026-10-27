@@ -3,17 +3,12 @@ package services
 // shift_whatsapp_test.go — v1.4.6 regression coverage:
 //  1. Shifts now travel team sync (open on till A appears on the admin's
 //     till B; the close replays once; replays are idempotent).
-//  2. WhatsApp receipts: text/link building, manual path without a
-//     gateway, queued automated delivery (exactly-once per drain),
-//     auto-send OFF by default, and dead-lettering after the retry cap.
+//  2. WhatsApp phone normalization (the automatic receipt path lives in
+//     whatsapp_v150_test.go since v1.5.0 — image sends via whapi.cloud).
 
 import (
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
-	"time"
 
 	"posapp/internal/auth"
 	"posapp/internal/database"
@@ -157,154 +152,6 @@ func v146OrderFixture(t *testing.T, s *Service) (orderID, customerID int64) {
 	s.db.Exec(`INSERT INTO payments (order_id, method, mode, amount_cents, status, phone, mpesa_receipt, created_at, completed_at)
                 VALUES (?, 'mpesa', '', 1000, 'COMPLETED', '254717344440', 'UJRQBBDEU3', '2026-10-27T08:00:00.000Z', '2026-10-27T08:05:00.000Z')`, orderID)
 	return orderID, customerID
-}
-
-func TestWhatsappReceiptTextLinkManualPath(t *testing.T) {
-	s := openV146Till(t)
-	s.settings.Update(map[string]string{"store_name": "Creative Divine Concepts"})
-	orderID, _ := v146OrderFixture(t, s)
-
-	out, err := s.BuildWhatsappReceipt(orderID)
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-	if out.Phone != "254717344440" {
-		t.Fatalf("phone normalization: %q", out.Phone)
-	}
-	if !strings.HasPrefix(out.Link, "https://wa.me/254717344440?text=") {
-		t.Fatalf("link: %q", out.Link)
-	}
-	for _, want := range []string{"Creative Divine Concepts", "Receipt ORD146", "TOTAL", "UJRQBBDEU3", "Served by"} {
-		if !strings.Contains(out.Text, want) {
-			t.Fatalf("receipt text missing %q:\n%s", want, out.Text)
-		}
-	}
-	if out.Queued {
-		t.Fatalf("nothing should queue without a gateway")
-	}
-	if out.Reason == "" {
-		t.Fatalf("manual path must explain why it did not queue")
-	}
-}
-
-func TestWhatsappAutoSendQueuedAndDelivered(t *testing.T) {
-	var gotTo, gotBody string
-	var gotAuth string
-	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		var req map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		gotTo, gotBody = req["to"], req["text"]
-		w.WriteHeader(200)
-		w.Write([]byte(`{"ok":true}`))
-	}))
-	defer gw.Close()
-
-	s := openV146Till(t)
-	orderID, _ := v146OrderFixture(t, s)
-	s.settings.Update(map[string]string{
-		"whatsapp_auto_send": "true",
-		"whatsapp_provider":  "custom",
-		"whatsapp_api_url":   gw.URL,
-		"whatsapp_api_key":   "test-key-123",
-	})
-
-	// The completion hook queues (never errors, never blocks).
-	order, err := s.GetOrder(orderID)
-	if err != nil {
-		t.Fatalf("order: %v", err)
-	}
-	s.QueueWhatsappReceipt(order)
-
-	var count int
-	s.db.QueryRow(`SELECT COUNT(*) FROM whatsapp_jobs WHERE status='PENDING'`).Scan(&count)
-	if count != 1 {
-		t.Fatalf("want 1 queued job, got %d", count)
-	}
-
-	// Worker drain delivers to the gateway exactly once.
-	if sent := s.drainWhatsappJobs(time.Now()); sent != 1 {
-		t.Fatalf("drain sent %d", sent)
-	}
-	if gotTo != "254717344440" {
-		t.Fatalf("gateway got to=%q", gotTo)
-	}
-	if gotAuth != "Bearer test-key-123" {
-		t.Fatalf("gateway auth %q", gotAuth)
-	}
-	if !strings.Contains(gotBody, "Receipt ORD146") {
-		t.Fatalf("gateway body missing receipt: %q", gotBody)
-	}
-	status := ""
-	s.db.QueryRow(`SELECT status FROM whatsapp_jobs`).Scan(&status)
-	if status != "SENT" {
-		t.Fatalf("job status %s", status)
-	}
-	// Timeline + audit trail exist.
-	var events int
-	s.db.QueryRow(`SELECT COUNT(*) FROM order_events WHERE order_id = ? AND kind = 'whatsapp' AND message LIKE '%254717344440%'`, orderID).Scan(&events)
-	if events != 1 {
-		t.Fatalf("order timeline missing the send: %d", events)
-	}
-	// A second drain is a no-op (already SENT).
-	if sent := s.drainWhatsappJobs(time.Now()); sent != 0 {
-		t.Fatalf("second drain re-sent: %d", sent)
-	}
-}
-
-func TestWhatsappAutoSendOffByDefault(t *testing.T) {
-	s := openV146Till(t)
-	orderID, _ := v146OrderFixture(t, s)
-	order, _ := s.GetOrder(orderID)
-	s.QueueWhatsappReceipt(order)
-	var count int
-	s.db.QueryRow(`SELECT COUNT(*) FROM whatsapp_jobs`).Scan(&count)
-	if count != 0 {
-		t.Fatalf("auto-send must be opt-in; %d jobs queued", count)
-	}
-}
-
-func TestWhatsappDeadLetterAfterRetryCap(t *testing.T) {
-	calls := 0
-	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		w.WriteHeader(500)
-	}))
-	defer gw.Close()
-
-	s := openV146Till(t)
-	orderID, _ := v146OrderFixture(t, s)
-	s.settings.Update(map[string]string{
-		"whatsapp_auto_send": "true",
-		"whatsapp_provider":  "custom",
-		"whatsapp_api_url":   gw.URL,
-		"whatsapp_api_key":   "test-key-123",
-	})
-	order, _ := s.GetOrder(orderID)
-	s.QueueWhatsappReceipt(order)
-
-	now := time.Now()
-	// Attempt 1 now, then retry windows 1..4 minutes later.
-	base := now.Add(-24 * time.Hour) // created_at is fixed in fixture; backoff reads created_at… use fresh stamps instead
-	_ = base
-	// The queue wrote created_at = nowStamp(); simulate elapsed retries by
-	// draining with progressively later "now" values.
-	for i := 0; i < whatsappMaxAttempts; i++ {
-		s.drainWhatsappJobs(now.Add(time.Duration(i) * 2 * time.Minute))
-	}
-	status, attempts := "", 0
-	s.db.QueryRow(`SELECT status, attempts FROM whatsapp_jobs`).Scan(&status, &attempts)
-	if status != "FAILED" || attempts != whatsappMaxAttempts {
-		t.Fatalf("dead-letter: status=%s attempts=%d", status, attempts)
-	}
-	if calls != whatsappMaxAttempts {
-		t.Fatalf("gateway called %d times, want %d", calls, whatsappMaxAttempts)
-	}
-	lastError := ""
-	s.db.QueryRow(`SELECT last_error FROM whatsapp_jobs`).Scan(&lastError)
-	if lastError == "" {
-		t.Fatalf("FAILED job must keep the last error")
-	}
 }
 
 func TestWhatsappPhoneNormalizationRejectsGarbage(t *testing.T) {

@@ -271,35 +271,38 @@ describe('demo tabs & credit parity', () => {
     let list = await demoRequest<Any[]>('GET', '/api/v1/customers?search=Kevin')
     expect(list[0].balanceCents).toBe(o.totalCents)
 
-    // Over-limit rejected: 55000 owed + 2 x 55000 > 100000 limit.
-    await expect(
-      demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-        items: [{ productId: 1, qty: 2 }],
-        paymentMethod: 'account',
-        customerId: kevin.id,
-      }),
-    ).rejects.toMatchObject({ status: 409 })
+    // v1.5.0 policy: over an ADVISORY limit is still allowed — Kevin owes
+    // 55000, his limit says 100000, the charge lands anyway (human call).
+    const over = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 1, qty: 2 }],
+      paymentMethod: 'account',
+      customerId: kevin.id,
+    })
+    expect(over.status).toBe('PENDING')
 
-    // Cash-only customer rejected.
+    // A zero-limit customer charges fine too — no cash-only state exists.
     const brian = customers.find((c: Any) => c.name === 'Brian O.')!
+    const brianOrder = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: 1, qty: 1 }],
+      paymentMethod: 'account',
+      customerId: brian.id,
+    })
+    expect(brianOrder.status).toBe('PENDING')
+
+    // Walk-in overpayment rejected (over Kevin's NEW balance — he now
+    // carries two pending tab charges).
+    list = await demoRequest<Any[]>('GET', '/api/v1/customers?search=Kevin')
+    const owed = list[0].balanceCents
     await expect(
-      demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-        items: [{ productId: 1, qty: 1 }],
-        paymentMethod: 'account',
-        customerId: brian.id,
-      }),
+      demoRequest<Any>('POST', `/api/v1/customers/${kevin.id}/payments`, { amountCents: owed + 1 }),
     ).rejects.toMatchObject({ status: 409 })
 
-    // Walk-in overpayment rejected.
-    await expect(
-      demoRequest<Any>('POST', `/api/v1/customers/${kevin.id}/payments`, { amountCents: o.totalCents + 1 }),
-    ).rejects.toMatchObject({ status: 409 })
-
-    // Settle in cash: PAID, balance zero, loyalty earned (1 pt / 100 KES).
+    // Settle the first tab in cash: PAID, balance drops to the second
+    // charge, loyalty earned (1 pt / 100 KES).
     const settled = await demoRequest<Any>('POST', `/api/v1/orders/${o.id}/settle`, { method: 'cash' })
     expect(settled.status).toBe('PAID')
     list = await demoRequest<Any[]>('GET', '/api/v1/customers?search=Kevin')
-    expect(list[0].balanceCents).toBe(0)
+    expect(list[0].balanceCents).toBe(over.totalCents)
     expect(list[0].loyaltyPoints).toBe(Math.floor(o.totalCents / 10000))
 
     const ledger = await demoRequest<Any[]>('GET', `/api/v1/customers/${kevin.id}/ledger`)

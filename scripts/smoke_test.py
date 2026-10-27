@@ -377,12 +377,36 @@ def main():
 
     # -- 16. Settings masking ------------------------------------------------------------
     # whatsapp_api_key is the live secret-class key (Daraja keys retired v1.4.4).
+    # auto-send is explicitly OFF here so the fake token can never reach the
+    # real whapi endpoint from a smoke run.
     st, body = req("PUT", "/api/v1/settings", admin, body={
-        "values": {"whatsapp_api_key": "top-secret", "store_name": "Smoke Shop"}})
+        "values": {"whatsapp_api_key": "top-secret", "whatsapp_auto_send": "false", "store_name": "Smoke Shop"}})
     txt = json.dumps(body)
     check("settings update masks secrets", st == 200 and "top-secret" not in txt and "__SET__" in txt, f"{st}")
     st, body = req("PUT", "/api/v1/settings", admin, body={"values": {"jwt_secret": "nope"}})
     check("jwt_secret not writable via API", st == 400, f"{st}")
+
+    # -- 17. Tab for any customer + WhatsApp admin queue (v1.5.0) ---------
+    st, body = req("POST", "/api/v1/customers", admin, body={
+        "name": "Smoke Zero Limit", "phone": "0710000001", "creditLimitCents": 0})
+    zero_cust = data(body)
+    tab_prod = get_product(cashier, "Classic Cotton Tee, Black")
+    st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
+        "items": [{"productId": tab_prod["id"], "qty": 1}], "paymentMethod": "account",
+        "customerId": zero_cust["id"], "clientUuid": "smoke-tab-zero"})
+    check("tab charge succeeds for a ZERO-limit customer (v1.5.0 policy)", st == 201, f"{st} {body}")
+    tab_order = data(body)
+    check("zero-limit tab is PENDING with an account leg",
+          tab_order["status"] == "PENDING" and tab_order["payments"][0]["method"] == "account", f"{tab_order['status']}")
+    st, body = req("POST", f"/api/v1/orders/{tab_order['id']}/void", admin, body={"reason": "smoke tab"})
+    check("void reverses the zero-limit tab", st == 200, f"{st}")
+
+    st, body = req("GET", "/api/v1/whatsapp/jobs?limit=50", admin)
+    check("whatsapp jobs list (admin, one-place view)", st == 200 and isinstance(data(body).get("jobs"), list), f"{st}")
+    st, body = req("GET", "/api/v1/whatsapp/jobs", cashier)
+    check("whatsapp jobs list refuses cashier 403", st == 403, f"{st}")
+    st, body = req("POST", "/api/v1/whatsapp/test", admin, body={"phone": "12345"})
+    check("whatsapp test rejects garbage phone 422", st == 422, f"{st}")
 
     # -- Summary ------------------------------------------------------------
     print(f"\n== {PASS} passed, {FAIL} failed ==")

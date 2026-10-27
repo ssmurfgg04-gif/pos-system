@@ -576,7 +576,19 @@ export interface Customer {
   updatedAt: string
 }
 
-/** One line of an order's activity timeline (job moves, WhatsApp, notes). */
+/** One WhatsApp receipt delivery job (admin queue view, Settings → WhatsApp). */
+export interface WhatsappJob {
+  id: number
+  orderId: number
+  orderNumber: string
+  phone: string
+  status: 'PENDING' | 'SENT' | 'FAILED' | string
+  attempts: number
+  lastError: string
+  createdAt: string
+  sentAt: string
+}
+
 export interface OrderEvent {
   id: number
   orderId: number

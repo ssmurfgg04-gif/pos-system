@@ -204,11 +204,13 @@ describe('Cart quantity semantics (card stepper)', () => {
   })
 })
 
-// ---- Tab charge (field report v1.4.5: "the button is not clickable") ----
-// The tab charge button is DELIBERATELY gated: a customer must be picked and
-// carry a credit limit > 0 (server enforces the same rule atomically). The
-// regressions here lock the FIX, not the gate: the cashier is never left
-// staring at a dead button — every blocked state names the exact unlock.
+// ---- Tab charge (v1.5.0 policy: tab for ANY customer) ----
+// The only gate left is a picked customer: tab enables as soon as one is
+// selected — any customer, whether or not they were picked beforehand. The
+// roster loads the moment the Tab field appears (no typing needed), typing
+// only narrows. No credit-limit gate, no cash-only banner — refusing someone
+// is a human call at the counter, not a software stop. Store credit keeps
+// its balance requirement — a completely separate tender.
 
 describe('Tab charge — the button is never a dead end', () => {
   const customer = (over: Record<string, unknown> = {}) => ({
@@ -225,14 +227,30 @@ describe('Tab charge — the button is never a dead end', () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 320)) }) // past the 250ms debounce
   }
 
-  test('no customer picked yet: the rail says exactly what unlocks the button', async () => {
+  test('no customer picked yet: the roster is already on screen, button waits for the tap', async () => {
     useCart.setState({ lines: [line()] })
     mount(<CheckoutRail products={null} payConfig={null} onOrderPaid={() => {}} onOrderVoided={() => {}} />)
     await click(tabPill()!)
 
+    // The roster loads with NO typing required — any customer is one tap away.
+    expect(getMock).toHaveBeenCalledWith('/api/v1/customers')
     expect(chargeBtn()!.disabled).toBe(true)
-    expect(container.textContent).toContain('Type the customer')
-    expect(container.textContent).toContain('the charge button unlocks then')
+    expect(container.textContent).toContain('Tap the customer to charge')
+    expect(container.textContent).toContain('anyone works')
+  })
+
+  test('roster loads with no typing — tap anyone straight from it, charge enables', async () => {
+    getMock.mockImplementation(async (path: string) =>
+      String(path).includes('/customers') ? [customer({ creditLimitCents: 0 })] : [])
+    useCart.setState({ lines: [line()] })
+    mount(<CheckoutRail products={null} payConfig={null} onOrderPaid={() => {}} onOrderVoided={() => {}} />)
+    await click(tabPill()!)
+
+    // Never typed a thing — the list is there anyway; pick and charge.
+    await click(Array.from(container.querySelectorAll('button')).find((b) => (b.textContent || '').includes('Sal'))!)
+    const charge = chargeBtn()!
+    expect(charge.disabled).toBe(false)
+    expect(charge.textContent).toMatch(/Charge KES 550\.00 to tab/)
   })
 
   test('a typed name with no match points to the Customers page instead of silence', async () => {
@@ -250,7 +268,7 @@ describe('Tab charge — the button is never a dead end', () => {
     expect(chargeBtn()!.disabled).toBe(true)
   })
 
-  test('picked customer without a limit: cash-only warning names the fix, charge stays disabled', async () => {
+  test('picked customer WITHOUT a credit limit: charge enables — no gate, no cash-only banner (v1.5.0 policy)', async () => {
     getMock.mockImplementation(async (path: string) =>
       String(path).includes('/customers') ? [customer()] : [])
     useCart.setState({ lines: [line()] })
@@ -264,9 +282,12 @@ describe('Tab charge — the button is never a dead end', () => {
     // cart header's Clear button shares classes and sits earlier in the DOM)
     await click(Array.from(container.querySelectorAll('button')).find((b) => (b.textContent || '').includes('Sal'))!)
 
-    expect(container.textContent).toContain('Sal is cash-only')
-    expect(container.textContent).toContain('set a Credit limit')
-    expect(chargeBtn()!.disabled).toBe(true)
+    // The old "is cash-only (no credit limit set)" trap is gone for good.
+    expect(container.textContent).not.toContain('cash-only')
+    expect(container.textContent).not.toContain('set a Credit limit')
+    const charge = chargeBtn()!
+    expect(charge.disabled).toBe(false)
+    expect(charge.textContent).toMatch(/Charge KES 550\.00 to tab/)
   })
 
   test('picked customer WITH a limit: charge enables, label carries the amount; Enter picks a single match', async () => {

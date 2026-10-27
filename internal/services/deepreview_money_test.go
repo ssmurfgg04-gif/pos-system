@@ -3,8 +3,9 @@ package services
 // deepreview_money_test.go — regression tests for the deep-review money
 // fixes: void refunds store credit (the refund used to read a always-zero
 // sum), voided gift cards stop being redeemable, tab settlement posts its
-// ledger payment exactly once, the tab credit limit is enforced atomically
-// inside the transaction, and checkout ledger movements follow the team.
+// ledger payment exactly once, tab charges move the balance atomically
+// inside the transaction (v1.5.0: no credit-limit gate — any active
+// customer can be charged), and checkout ledger movements follow the team.
 
 import (
 	"context"
@@ -30,7 +31,7 @@ func newMoneyTill(t *testing.T) *moneyFixture {
 	var prodID, userID, roleID int64
 	s.db.Exec(`INSERT INTO categories (name, slug) VALUES ('C', 'c')`)
 	s.db.Exec(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty)
-		SELECT 'SKU-M1', 'M1', id, 60000, 50 FROM categories LIMIT 1`)
+                SELECT 'SKU-M1', 'M1', id, 60000, 50 FROM categories LIMIT 1`)
 	s.db.QueryRow(`SELECT id FROM products WHERE sku='SKU-M1'`).Scan(&prodID)
 	s.db.QueryRow(`SELECT id FROM users WHERE username='cash1'`).Scan(&userID)
 	s.db.QueryRow(`SELECT id FROM roles WHERE name='Cashier'`).Scan(&roleID)
@@ -136,36 +137,37 @@ func TestMoneyVoidKillsGiftCards(t *testing.T) {
 	}
 }
 
-// TestMoneyTabLimitAtomicInsideTx — the tab limit must be enforced against
-// the IN-TX balance. (The old pre-tx read let two concurrent checkouts both
-// pass a stale check; this test pins the atomic guarded-UPDATE semantics
-// with a direct second charge that must be refused.)
-func TestMoneyTabLimitAtomicInsideTx(t *testing.T) {
+// TestMoneyTabAlwaysAllowedAtomic — v1.5.0 policy: tab is available for
+// ANY active customer. No eligibility flag, no credit-limit gate, no
+// cash-only state: a customer with ZERO credit limit gets charged, and a
+// customer already over their (advisory) limit gets charged too. The
+// balance still moves atomically inside the immediate tx — every charge
+// lands exactly once, whatever the interleaving.
+func TestMoneyTabAlwaysAllowedAtomic(t *testing.T) {
 	f := newMoneyTill(t)
-	// Limit is 200000 (KES 2,000); product costs 60000.
-	// First tab: fine (0 + 60000 ≤ 200000).
-	o1, err := f.checkout(models.MethodAccount, f.cust.ID, "money-tab-1")
-	if err != nil {
-		t.Fatalf("first tab: %v", err)
+	// Drop the fixture's advisory limit to zero: the classic v1.4.x
+	// "no credit, cash only" trap must not come back.
+	if _, err := f.s.db.Exec(`UPDATE customers SET credit_limit_cents = 0 WHERE id = ?`, f.cust.ID); err != nil {
+		t.Fatalf("clear limit: %v", err)
 	}
-	if got := f.balance(f.cust.ID); got != 60000 {
-		t.Fatalf("balance after tab = %d, want 60000", got)
-	}
-	// Second + third tabs sequentially: third must be refused atomically
-	// (60000+60000 = 120000 ok; +60000 = 180000 ok; +60000 = 240000 > limit).
-	for i := 2; i <= 4; i++ {
-		_, err := f.checkout(models.MethodAccount, f.cust.ID, "money-tab-"+string(rune('0'+i)))
-		if i <= 3 && err != nil {
-			t.Fatalf("tab %d should fit the limit: %v", i, err)
-		}
-		if i == 4 && err == nil {
-			t.Fatal("tab over the credit limit was accepted")
-		}
-		if i == 4 && err != nil && f.balance(f.cust.ID) != 180000 {
-			t.Fatalf("balance after refused tab = %d, want 180000 (no partial application)", f.balance(f.cust.ID))
+	for i := 1; i <= 4; i++ {
+		if _, err := f.checkout(models.MethodAccount, f.cust.ID, "money-tab-"+string(rune('0'+i))); err != nil {
+			t.Fatalf("tab %d on a zero-limit customer must be allowed: %v", i, err)
 		}
 	}
-	_ = o1
+	if got := f.balance(f.cust.ID); got != 240000 {
+		t.Fatalf("balance after 4 tabs = %d, want 240000 (every charge applied exactly once)", got)
+	}
+	// Over an advisory limit (set it below the balance): still allowed.
+	if _, err := f.s.db.Exec(`UPDATE customers SET credit_limit_cents = 100000 WHERE id = ?`, f.cust.ID); err != nil {
+		t.Fatalf("set advisory limit: %v", err)
+	}
+	if _, err := f.checkout(models.MethodAccount, f.cust.ID, "money-tab-5"); err != nil {
+		t.Fatalf("tab over an ADVISORY limit must be allowed (human decides at the counter): %v", err)
+	}
+	if got := f.balance(f.cust.ID); got != 300000 {
+		t.Fatalf("balance after 5th tab = %d, want 300000", got)
+	}
 }
 
 // TestMoneySettleTabLedgerOnce — settling a tab twice (double-click /

@@ -23,7 +23,6 @@ var (
 	ErrDuplicateReceipt  = errors.New("receipt code already recorded")
 	ErrOrderAlreadyPaid  = errors.New("order already paid")
 	ErrOverpayment       = errors.New("payment exceeds balance")
-	ErrCreditLimit       = errors.New("tab would exceed customer credit limit")
 	ErrNoStoreCredit     = errors.New("not enough store credit")
 	ErrLoyaltyPoints     = errors.New("not enough loyalty points")
 	ErrNotConfigured     = errors.New("payment provider not configured")
@@ -96,9 +95,11 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 	if method == models.MethodCredit && !s.settings.GetBool("credit_enabled", true) {
 		return nil, fmt.Errorf("store credit is disabled")
 	}
-	// Tab checkout needs a live customer up front (limit enforced at
-	// insert time inside the transaction). Credit checkout needs a
-	// live customer with enough prepaid store credit.
+	// Tab checkout needs a live, active customer — ANY customer works
+	// (v1.5.0 policy: tab is always allowed, the credit-limit field is
+	// advisory only, and refusing someone is a human call at the counter,
+	// not a software gate). Credit checkout still needs a live customer
+	// with enough prepaid store credit.
 	var tabCustomer *models.Customer
 	if method == models.MethodAccount || method == models.MethodCredit {
 		if req.CustomerID == 0 {
@@ -658,29 +659,22 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 		} else if method == models.MethodAccount {
 			// Tab: like M-Pesa, the order stays PENDING and stock
 			// deducts once at settle via completePayment — never
-			// here, or settling would double-deduct. Limit is
-			// enforced here inside the tx (0 = cash only, no tab)
-			// against the payable (after discount + points).
-			if tabCustomer.CreditLimitCents <= 0 {
-				tx.Rollback()
-				return nil, fmt.Errorf("customer has no credit, cash only")
-			}
-			// Limit enforced ATOMICALLY against the in-tx balance:
-			// tabCustomer above was read before BEGIN, so two
-			// concurrent checkouts could both pass a stale check.
-			// The guarded UPDATE inside the same immediate
-			// transaction serializes the decision (balance can
-			// never jump past the limit, whatever the interleaving).
+			// here, or settling would double-deduct. Any active
+			// customer can be charged (v1.5.0 policy — no credit-limit
+			// gate, no cash-only state; the limit field is advisory).
+			// The balance still moves ATOMICALLY inside this immediate
+			// transaction: two concurrent checkouts can never lose an
+			// increment, whatever the interleaving.
 			gres, err := tx.Exec(s.db.Rebind(`UPDATE customers SET balance_cents = balance_cents + ?, updated_at = ?
-                                WHERE id = ? AND balance_cents + ? <= credit_limit_cents`),
-				payable, now, tabCustomer.ID, payable)
+                                WHERE id = ?`),
+				payable, now, tabCustomer.ID)
 			if err != nil {
 				tx.Rollback()
 				return nil, err
 			}
 			if n, _ := gres.RowsAffected(); n != 1 {
 				tx.Rollback()
-				return nil, fmt.Errorf("%w (%s)", ErrCreditLimit, tabCustomer.Name)
+				return nil, fmt.Errorf("%w: %s", ErrNotFound, tabCustomer.Name)
 			}
 			// Fail fast on stock BEFORE creating the tab (read
 			// check only — the guarded deduction happens once,

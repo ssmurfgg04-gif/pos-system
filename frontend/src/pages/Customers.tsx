@@ -1,6 +1,7 @@
-// Customers — tabs, credit limits & store credit. A customer with a credit
-// limit can take goods now and pay later; store credit is prepaid money the
-// shop owes them (topped up here, redeemed at checkout). The ledger is the
+// Customers — tabs, credit limits & store credit. Any active customer can
+// be charged to tab (v1.5.0 policy: the credit limit is advisory — a
+// human decides at the counter); store credit is prepaid money the shop
+// owes them (topped up here, redeemed at checkout). The ledger is the
 // audit trail (charges, payments, adjustments, loyalty, credit top-ups and
 // redemptions). Cashiers see balances and take payments; managing customers
 // needs customers.manage, topping up credit needs credit.manage.
@@ -80,7 +81,7 @@ export function Customers() {
     <div className="space-y-4">
       <Card
         title="Customers"
-        sub="Tabs, credit limits, loyalty, money owed lives here, not in anyone's head"
+        sub="Tabs, loyalty, money owed lives here, not in anyone's head"
         actions={manage ? <Button variant="primary" size="sm" onClick={() => setEditing('new')}>+ Customer</Button> : undefined}
         pad={false}
       >
@@ -106,7 +107,7 @@ export function Customers() {
                   {c.storeCreditCents !== undefined ? formatMoney(c.storeCreditCents) : ', '}
                 </td>
                 <td className="px-3 py-2.5 text-[13px] text-ink-muted">
-                  {c.creditLimitCents > 0 ? formatMoney(c.creditLimitCents) : 'cash only'}
+                  {c.creditLimitCents > 0 ? formatMoney(c.creditLimitCents) : '—'}
                 </td>
                 <td className="px-3 py-2.5 text-[13px] text-ink-muted">{c.loyaltyPoints} pts</td>
                 <td className="px-3 py-2.5">
@@ -275,7 +276,7 @@ function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: (
       <Field label="Notes (optional)">
         <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Preferences, sizes, delivery notes…" />
       </Field>
-      <Field label="Credit limit (KES)" hint="0 means cash only, no tab">
+      <Field label="Credit limit (KES, advisory)" hint="Just a note for the counter — tab charges are allowed for every customer regardless of this number.">
         <Input value={limit} onChange={(e) => setLimit(e.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" placeholder="0" />
       </Field>
       {initial && (

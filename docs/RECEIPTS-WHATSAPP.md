@@ -1,7 +1,7 @@
 # Receipts, WhatsApp & Notifications — LedgerPOS
 
 What the till prints, what it sends to the customer's WhatsApp, and how
-to turn automated sending on. Current as of v1.4.6.
+to turn automated sending on. Current as of v1.5.0.
 
 ## Thermal receipt printing
 
@@ -27,59 +27,62 @@ The receipt pipeline is fully offline:
 without a thermal printer (ReceiptHTML handler) — same content, browser
 print dialog, still fully offline on the LAN.
 
-## WhatsApp receipts (v1.4.6) — the strategy
+## WhatsApp receipts (v1.5.0) — automatic only, one gateway
 
-**Best path chosen: text receipts over WhatsApp, two delivery paths, one
-message source (`internal/services/whatsapp.go`).** The receipt travels
-as a formatted WhatsApp chat message (bold store name, monospaced
-item/totals block, M-Pesa code) — it opens natively in any WhatsApp, no
-PDF/JPG attachment to fail. Meta's official WABA API was deliberately
-NOT used: business verification, template approval and per-conversation
-billing are not justified for a single-shop receipt flow.
+**Policy: automatic-only, one gateway (whapi.cloud), zero cashier
+steps.** When a sale completes as PAID and a whapi token is saved on the
+till, the completion hook enqueues exactly one job in `whatsapp_jobs`;
+a worker (`WhatsappWorker`, one per shop, next to the STK sweeper)
+delivers a **branded receipt image** to the customer's number. There is
+no manual send button, no provider picker, no cashier prompt anywhere —
+the only WhatsApp UI is Settings → WhatsApp (admin). No SMS or email
+fallback by design: Safaricom already texts the customer about the
+M-Pesa payment; WhatsApp is purely the shop's branded extra.
 
-### Path 1 — Manual (always available, zero config)
+### The branded receipt image
 
-Every receipt gains a **WhatsApp button** (receipt screen, next to
-Print). Pressing it:
+`internal/services/receipt_image.go` renders a PNG at send time from the
+same data the paper receipt uses:
 
-1. Asks the server to build the receipt text + a `wa.me` deep link.
-2. Opens the SHOP's own WhatsApp (phone app or WhatsApp Desktop linked
-   to the business number, e.g. 0181 630 570) with the receipt already
-   typed to the customer's number.
-3. The cashier presses send. No vendor, no API key, nothing can break
-   the money path.
+- The shop's uploaded logo (Settings → uploaded logo file) at the top —
+  or a brand-colored monogram fallback when no logo is on file.
+- Brand-colored header with the store name, then the itemized lines,
+  discount, VAT and TOTAL, and the payment legs with the M-Pesa receipt
+  code. Automatic sends only happen for PAID orders, so every leg is
+  complete — no "(pending)" markers here either.
+- The message caption is short English thanks: "Hi {name}! Thank you
+  for shopping with {store} — we're glad you chose us." (or the
+  no-name variant when the checkout had no customer name).
 
-The customer's number comes from the checkout (phone field / CRM
-record), normalized to 2547… — no typing at send time.
+### Delivery contract
 
-### Path 2 — Automated (opt-in, gateway)
-
-When a linked-number gateway is configured in **Settings → WhatsApp**,
-payment completion queues the receipt in `whatsapp_jobs` and a worker
-(`WhatsappWorker`, one per shop, next to the STK sweeper) delivers it to
-the customer's number:
-
-- Presets: **whapi.cloud** and **ultramsg** (linked-number gateways —
-  sign up, scan the QR with the shop's WhatsApp number, paste the API
-  key), or a **custom** HTTP endpoint (`POST {to, text, order}`,
-  Bearer auth).
-- Bounded retries with backoff (5 attempts, 1 min apart), then
+- Gateway: whapi.cloud, `POST https://gate.whapi.cloud/messages/image`,
+  Bearer auth, multipart fields `to`, `caption`, `media` (the PNG).
+  The customer's number is normalized to 2547… from the checkout's
+  phone field / CRM record; malformed numbers are rejected by the job,
+  not the sale.
+- Bounded retries with backoff (5 attempts, a minute apart), then
   dead-letter with the error in the audit log AND the order's activity
   timeline. Jobs persist in SQLite — a restart never loses a receipt.
 - **Guardrails:** sending never blocks or fails a sale (best-effort,
-  like printing); only COMPLETED orders queue; the gateway key is a
-  masked secret (`__SET__` on read) that never team-syncs — each till
-  that completes sales needs its own key; auto-send defaults OFF.
-- A pending M-Pesa leg is honestly labelled "M-Pesa (pending)" in the
-  text instead of "Paid M-Pesa".
+  like printing); no token = no job at all — the sale completes normally
+  and nothing is queued; only PAID orders queue; a job whose order is
+  no longer PAID (voided before the worker reached it) is cancelled,
+  not sent; the gateway key is a masked secret (`__SET__` on read) that
+  never team-syncs — each till that completes sales needs its own key.
+- Auto-send defaults ON (`whatsapp_auto_send`) but does nothing until a
+  token exists — the flag only controls an already-connected till.
 
-### Setup checklist (Creative Divine)
+### Admin setup (once per till, Settings → WhatsApp)
 
-1. Decide the sender number (the WhatsApp-linked business number).
-2. For automated sending: create a whapi.cloud (or ultramsg) account,
-   link the number by scanning the QR, copy the API token.
-3. On the till(s): Settings → WhatsApp → pick the provider, paste the
-   token, flip "Auto-send" on. Manual button needs nothing.
+1. Create a whapi.cloud account, link the shop's WhatsApp number by
+   scanning the QR once, copy the API token.
+2. Settings → WhatsApp → paste the token (it saves masked), press
+   **Send test** to prove the pipe, done. From the next paid sale on,
+   receipts go out on their own.
+3. **Failed sends** lists undelivered jobs with their error and a
+   **Retry** button — the one place to watch; nothing ever nags the
+   cashier.
 4. Caution: this is a normal business-use pattern, but the number CAN
    be banned for spam — receipts to paying customers only, never bulk.
 
@@ -91,14 +94,12 @@ the customer's number:
   lists and settings screens re-render without polling.
 - **LAN delivery** between tills (stock changes, orders, shifts) rides
   the same sync events — a sale or shift opened on till A shows on till
-  B without a cloud round trip (v1.4.6 added shifts to team sync).
+  B without a cloud round trip (shifts ride team sync since v1.4.6).
 - **Print failure surfacing**: stuck print jobs keep their attempt count
   and last error on `print_jobs`; the till surfaces them instead of
   silently swallowing a receipt.
 
 ## Open items (tracked)
 
-- PDF/image receipt attachment over WhatsApp (a document/file send via
-  the gateway's media endpoint) — only if a customer segment asks.
 - Signed public receipt links (browser-openable receipt page) — needs
   the scoped public route + TTL design before implementation.

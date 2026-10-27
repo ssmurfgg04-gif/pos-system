@@ -154,7 +154,12 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	authd.POST("/orders/:id/stkpush", perm("pos.sell"), h.RetrySTK)
 	authd.POST("/orders/:id/manual", perm("payments.manual"), h.ManualConfirm)
 	authd.POST("/orders/:id/recheck", perm("pos.sell"), h.OrderRecheck)
-	authd.POST("/orders/:id/whatsapp", perm("pos.sell"), h.SendOrderWhatsapp)
+	// WhatsApp receipts: automatic sends ride payment completion (no
+	// cashier step, no per-order endpoint). These admin endpoints manage
+	// the queue — the failed-sends list, a retry, and the setup test.
+	authd.GET("/whatsapp/jobs", perm("settings.manage"), h.ListWhatsappJobs)
+	authd.POST("/whatsapp/jobs/:id/retry", perm("settings.manage"), h.RetryWhatsappJob)
+	authd.POST("/whatsapp/test", perm("settings.manage"), h.TestWhatsapp)
 	authd.GET("/payments/config", h.PaymentConfig)
 	authd.POST("/sync", perm("pos.sell"), h.Sync)
 

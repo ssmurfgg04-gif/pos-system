@@ -310,7 +310,6 @@ func isSyncRejection(err error) bool {
 		errors.Is(err, ErrOrderAlreadyPaid),
 		errors.Is(err, ErrDuplicateReceipt),
 		errors.Is(err, ErrOverpayment),
-		errors.Is(err, ErrCreditLimit),
 		errors.Is(err, ErrNoStoreCredit),
 		errors.Is(err, ErrLoyaltyPoints),
 		errors.Is(err, ErrNotFound):

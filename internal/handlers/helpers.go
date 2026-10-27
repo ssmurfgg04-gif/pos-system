@@ -194,7 +194,6 @@ func (h *H) mapErr(c *gin.Context, err error) {
 		errors.Is(err, services.ErrInvalidState),
 		errors.Is(err, services.ErrOrderAlreadyPaid),
 		errors.Is(err, services.ErrDuplicateReceipt),
-		errors.Is(err, services.ErrCreditLimit),
 		errors.Is(err, services.ErrNoStoreCredit),
 		errors.Is(err, services.ErrLoyaltyPoints),
 		errors.Is(err, services.ErrOverpayment),

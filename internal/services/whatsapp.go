@@ -1,23 +1,21 @@
-// whatsapp.go — receipt delivery over WhatsApp (v1.4.6).
+// whatsapp.go — automatic WhatsApp receipts (v1.5.0).
 //
-// Two paths, one message source:
+// One gateway (whapi.cloud), one trigger (payment completed), zero
+// cashier steps. When a sale completes as PAID, the completion hook
+// enqueues one job in whatsapp_jobs; a worker delivers a branded receipt
+// IMAGE (logo, brand color, sale details — see receipt_image.go) with a
+// short English caption to the customer's number, with bounded retries.
 //
-//  1. MANUAL (always available, zero config): the receipt screen's
-//     "WhatsApp" button asks the server for the receipt text + wa.me deep
-//     link and hands them to the shop's own WhatsApp (phone app or
-//     WhatsApp Desktop linked to the business number). The cashier
-//     presses send. No vendor, no token, nothing can break the money path.
-//
-//  2. AUTOMATED (opt-in): when a linked-number gateway is configured
-//     (whapi.cloud / ultramsg presets or a custom endpoint), payment
-//     completion queues the receipt in whatsapp_jobs and a worker delivers
-//     it to the customer's number with bounded retries. Jobs persist, so
-//     restarts never lose a receipt; failures land in the audit log and
-//     the order's activity timeline.
-//
-// Design guardrails: sending NEVER blocks or fails a sale (queue is
-// best-effort, like printing); the gateway key is a masked secret that
-// deliberately does NOT team-sync; and only COMPLETED orders queue.
+// Policy guardrails:
+//   - Sending NEVER blocks or fails a sale (the queue is best-effort,
+//     like printing). No key configured = no job, sale completes normally.
+//   - No cashier-facing state exists: no manual button, no prompts. The
+//     only WhatsApp UI is Settings (admin) — token setup, a test send,
+//     and the failed-sends list with retry.
+//   - The gateway token is a masked secret that deliberately does NOT
+//     team-sync (each till that completes sales needs its own key).
+//   - A job whose order is no longer PAID (voided/refunded before the
+//     worker got to it) is cancelled, not sent.
 
 package services
 
@@ -28,8 +26,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -39,90 +37,17 @@ import (
 
 const (
 	whatsappMaxAttempts   = 5
-	whatsappHTTPTimeout   = 15 * time.Second
+	whatsappHTTPTimeout   = 20 * time.Second
 	whatsappTickInterval  = 10 * time.Second
 	whatsappRetryInterval = 60 * time.Second // a failed job waits a minute before attempt 2+
+	whatsappDefaultBase   = "https://gate.whapi.cloud"
 )
 
-// WhatsappReceipt is what the manual-send endpoint hands the frontend.
-type WhatsappReceipt struct {
-	Phone  string `json:"phone"`  // normalized 2547… ("" when unknown)
-	Link   string `json:"link"`   // https://wa.me/…?text=… ("" when no phone)
-	Text   string `json:"text"`   // the receipt body (single source of truth)
-	Queued bool   `json:"queued"` // automated send enqueued (gateway configured)
-	Reason string `json:"reason"` // why not queued ("" when queued)
-}
-
-// receiptText renders the plain-text WhatsApp receipt. WhatsApp renders
-// *bold* between asterisks and keeps monospace for ``` blocks — the
-// items/totals block is fenced so columns line up on any phone.
-func (s *Service) receiptText(o *models.Order) string {
-	store := s.settings.Get("store_name")
-	if store == "" {
-		store = s.settings.Get("app_name")
-	}
-	if store == "" {
-		store = "Store"
-	}
-	symbol := s.settings.Get("currency_symbol")
-	if symbol == "" {
-		symbol = "KES"
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "*%s*\n", store)
-	fmt.Fprintf(&b, "Receipt %s\n", o.Number)
-	if t, err := time.Parse(time.RFC3339, o.PaidAtOrCreated()); err == nil {
-		b.WriteString(t.Local().Format("02/01/2006 15:04"))
-		b.WriteString("\n")
-	}
-	b.WriteString("\n```\n")
-	for _, it := range o.Items {
-		fmt.Fprintf(&b, "%s\n  %d x %s", it.Name, it.Qty, printer.FormatMoney(it.UnitPriceCents, symbol))
-		if it.LineTotalCents != it.UnitPriceCents*int64(it.Qty) {
-			// discounted line: show the charged total
-			fmt.Fprintf(&b, " -> %s", printer.FormatMoney(it.LineTotalCents, symbol))
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("```\n\n")
-	if o.DiscountCents != 0 {
-		fmt.Fprintf(&b, "Discount: -%s\n", printer.FormatMoney(o.DiscountCents, symbol))
-	}
-	if o.TaxCents != 0 {
-		fmt.Fprintf(&b, "VAT (%s%%): %s\n", trimPercent(o.TaxPercent), printer.FormatMoney(o.TaxCents, symbol))
-	}
-	fmt.Fprintf(&b, "*TOTAL: %s*\n", printer.FormatMoney(o.TotalCents, symbol))
-	for _, pm := range o.Payments {
-		if pm.Status == "FAILED" {
-			continue
-		}
-		fmt.Fprintf(&b, "%s: %s\n", paymentWord(pm), printer.FormatMoney(pm.AmountCents, symbol))
-		if pm.MpesaReceipt != "" {
-			fmt.Fprintf(&b, "M-Pesa code: %s\n", pm.MpesaReceipt)
-		}
-	}
-	if o.CustomerName != "" {
-		fmt.Fprintf(&b, "Customer: %s\n", o.CustomerName)
-	}
-	if o.CashierName != "" {
-		fmt.Fprintf(&b, "Served by: %s\n", o.CashierName)
-	}
-	if note := s.settings.Get("receipt_footer"); note != "" {
-		b.WriteString("\n")
-		b.WriteString(note)
-		b.WriteString("\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
+// paymentWord names a payment leg on the customer-facing receipt. The
+// "(pending)" marker the client removed from the paper receipt is gone
+// here too: automatic sends only happen for PAID orders, where every leg
+// has completed.
 func paymentWord(pm models.Payment) string {
-	// A not-yet-confirmed leg must never read as money received (the
-	// client explicitly removed "(pending)" from the PAPER receipt — the
-	// WhatsApp text keeps the honest marker instead of hiding the state).
-	if pm.Method == "mpesa" && pm.Status != models.PaymentCompleted {
-		return "M-Pesa (pending)"
-	}
 	switch pm.Method {
 	case "cash":
 		return "Paid cash"
@@ -168,14 +93,6 @@ func (s *Service) customerPhone(o *models.Order) string {
 	return norm
 }
 
-// whatsappLink builds the wa.me deep link for the manual path.
-func whatsappLink(phone, text string) string {
-	if phone == "" {
-		return ""
-	}
-	return fmt.Sprintf("https://wa.me/%s?text=%s", phone, url.QueryEscape(text))
-}
-
 // normalizeWhatsappPhone mirrors mpesa.NormalizePhone (07…/01…/+254/254 →
 // 2547XXXXXXXX) without importing the payment package here.
 func normalizeWhatsappPhone(in string) (string, error) {
@@ -196,49 +113,69 @@ func normalizeWhatsappPhone(in string) (string, error) {
 		p = "254" + p
 	}
 	if len(p) < 10 || !strings.HasPrefix(p, "254") {
-		return "", fmt.Errorf("not a Kenyan mobile number: %s", in)
+		// Message mentions "phone" on purpose: the handler's error map turns
+		// that into a 422 (bad input), not a 500 (server fault).
+		return "", fmt.Errorf("invalid phone number (need a Kenyan mobile): %s", in)
 	}
 	return p, nil
 }
 
-// WhatsappReceiptResult builds (and optionally queues) the WhatsApp
-// receipt for one order. Manual path: the frontend opens Link. Auto path:
-// QueueWhatsappReceipt was already called by the completion hooks; this
-// re-queues on demand (re-send from the order screen).
-func (s *Service) BuildWhatsappReceipt(orderID int64) (*WhatsappReceipt, error) {
-	o, err := s.GetOrder(orderID)
-	if err != nil {
-		return nil, err
+// receiptCaption is the short English message that travels with the
+// branded receipt image: the thank-you the owner asked for plus just
+// enough sale detail to identify the receipt at a glance.
+func (s *Service) receiptCaption(o *models.Order) string {
+	store := s.settings.Get("store_name")
+	if store == "" {
+		store = s.settings.Get("app_name")
 	}
-	text := s.receiptText(o)
-	phone := s.customerPhone(o)
-	out := &WhatsappReceipt{Phone: phone, Text: text, Link: whatsappLink(phone, text)}
-	if phone == "" {
-		out.Reason = "no customer phone on this order"
-		return out, nil
+	if store == "" {
+		store = "us"
 	}
-	if !s.whatsappGatewayReady() {
-		out.Reason = "gateway not configured — opening WhatsApp to send manually"
-		return out, nil
+	symbol := s.settings.Get("currency_symbol")
+	if symbol == "" {
+		symbol = "KES"
 	}
-	if err := s.queueWhatsappJob(o, phone, text); err != nil {
-		out.Reason = "queue failed: " + err.Error()
-		return out, nil
+
+	var b strings.Builder
+	first := o.CustomerName
+	if i := strings.IndexByte(first, ' '); i > 0 {
+		first = first[:i]
 	}
-	out.Queued = true
-	return out, nil
+	if first != "" {
+		fmt.Fprintf(&b, "Hi %s! Thank you for shopping with %s — we're glad you chose us.\n", first, store)
+	} else {
+		fmt.Fprintf(&b, "Thank you for shopping with %s — we're glad you chose us.\n", store)
+	}
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "Receipt %s", o.Number)
+	if t, err := time.Parse(time.RFC3339, o.PaidAtOrCreated()); err == nil {
+		fmt.Fprintf(&b, " · %s", t.Local().Format("02/01/2006 15:04"))
+	}
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "Total: %s\n", printer.FormatMoney(o.TotalCents, symbol))
+	for _, pm := range o.Payments {
+		if pm.Status == "FAILED" {
+			continue
+		}
+		fmt.Fprintf(&b, "%s: %s\n", paymentWord(pm), printer.FormatMoney(pm.AmountCents, symbol))
+		if pm.MpesaReceipt != "" {
+			fmt.Fprintf(&b, "M-Pesa code: %s\n", pm.MpesaReceipt)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // QueueWhatsappReceipt is the completion hook: best-effort, never errors
-// into the money path. Queues only when auto-send is on, the gateway is
-// configured, and the order carries a customer phone.
+// into the money path. Queues only when the gateway is configured, the
+// order is PAID, and it carries a customer phone. Auto-send is ON by
+// default — connecting the token in Settings is the only setup step.
 func (s *Service) QueueWhatsappReceipt(o *models.Order) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[whatsapp] queue panic: %v", r)
 		}
 	}()
-	if !s.settings.GetBool("whatsapp_auto_send", false) || !s.whatsappGatewayReady() {
+	if !s.settings.GetBool("whatsapp_auto_send", true) || !s.whatsappGatewayReady() {
 		return
 	}
 	if o.Status != models.OrderPaid {
@@ -248,77 +185,92 @@ func (s *Service) QueueWhatsappReceipt(o *models.Order) {
 	if phone == "" {
 		return
 	}
-	if err := s.queueWhatsappJob(o, phone, s.receiptText(o)); err != nil {
+	if err := s.queueWhatsappJob(o, phone, s.receiptCaption(o)); err != nil {
 		log.Printf("[whatsapp] queue %s: %v", o.Number, err)
 	}
 }
 
-func (s *Service) queueWhatsappJob(o *models.Order, phone, text string) error {
+func (s *Service) queueWhatsappJob(o *models.Order, phone, caption string) error {
 	_, err := s.db.Exec(s.db.Rebind(`
                 INSERT INTO whatsapp_jobs (order_id, order_number, phone, body, status, created_at)
-                VALUES (?, ?, ?, ?, 'PENDING', ?)`), o.ID, o.Number, phone, text, nowStamp())
+                VALUES (?, ?, ?, ?, 'PENDING', ?)`), o.ID, o.Number, phone, caption, nowStamp())
 	return err
 }
 
 // whatsappGatewayReady reports whether an automated send can happen on
-// this device: a provider preset (or custom URL) plus an API key.
+// this device: a saved whapi.cloud token. One gateway, one field.
 func (s *Service) whatsappGatewayReady() bool {
-	if s.settings.Get("whatsapp_api_key") == "" {
-		return false
-	}
-	switch s.settings.Get("whatsapp_provider") {
-	case "whapi", "ultramsg", "custom":
-		return s.settings.Get("whatsapp_api_url") != "" || s.settings.Get("whatsapp_provider") == "whapi"
-	}
-	return false
+	return s.settings.Get("whatsapp_api_key") != ""
 }
 
-// sendWhatsappJob performs one delivery attempt against the configured
-// gateway. Presets:
-//   - whapi:   POST {base}/messages/text        Bearer <key>   {"to","body"}
-//   - ultramsg: POST {url}                      (URL holds instance path) {"token","to","body"}
-//   - custom:  POST {url}                       Bearer <key>   {"to","text","order"}
-func (s *Service) sendWhatsappJob(orderNumber, phone, body string) error {
-	key := s.settings.Get("whatsapp_api_key")
-	provider := s.settings.Get("whatsapp_provider")
-	apiURL := s.settings.Get("whatsapp_api_url")
-
-	var payload map[string]any
-	var headers map[string]string
-	switch provider {
-	case "whapi":
-		base := apiURL
-		if base == "" {
-			base = "https://gate.whapi.cloud"
-		}
-		payload = map[string]any{"to": phone, "body": body}
-		headers = map[string]string{"Authorization": "Bearer " + key}
-		apiURL = strings.TrimRight(base, "/") + "/messages/text"
-	case "ultramsg":
-		if apiURL == "" {
-			return fmt.Errorf("ultramsg instance URL not set")
-		}
-		payload = map[string]any{"token": key, "to": phone, "body": body}
-	default:
-		if apiURL == "" {
-			return fmt.Errorf("gateway URL not set")
-		}
-		payload = map[string]any{"to": phone, "text": body, "order": orderNumber}
-		headers = map[string]string{"Authorization": "Bearer " + key}
+func whatsappBase(svc *Service) string {
+	if base := strings.TrimRight(svc.settings.Get("whatsapp_api_url"), "/"); base != "" {
+		return base // hidden override; also the test seam
 	}
+	return whatsappDefaultBase
+}
 
-	buf, err := json.Marshal(payload)
+// sendWhatsappImage performs one delivery attempt: multipart upload of
+// the branded receipt PNG to whapi.cloud.
+//
+//	POST {base}/messages/image   Authorization: Bearer <key>
+//	fields: to, caption, media (file)
+func (s *Service) sendWhatsappImage(orderNumber, phone, caption string, png []byte) error {
+	key := s.settings.Get("whatsapp_api_key")
+	if key == "" {
+		return fmt.Errorf("whatsapp token not set")
+	}
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("to", phone); err != nil {
+		return err
+	}
+	if err := mw.WriteField("caption", caption); err != nil {
+		return err
+	}
+	fh, err := mw.CreateFormFile("media", "receipt-"+orderNumber+".png")
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(buf))
+	if _, err := fh.Write(png); err != nil {
+		return err
+	}
+	if err := mw.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, whatsappBase(s)+"/messages/image", &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	return doWhatsapp(req)
+}
+
+// sendWhatsappText posts a plain text message (the Settings test send).
+//
+//	POST {base}/messages/text   {"to","body"}
+func (s *Service) sendWhatsappText(phone, body string) error {
+	key := s.settings.Get("whatsapp_api_key")
+	if key == "" {
+		return fmt.Errorf("whatsapp token not set")
+	}
+	payload, err := json.Marshal(map[string]string{"to": phone, "body": body})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, whatsappBase(s)+"/messages/text", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	return doWhatsapp(req)
+}
+
+func doWhatsapp(req *http.Request) error {
 	client := &http.Client{Timeout: whatsappHTTPTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -327,9 +279,28 @@ func (s *Service) sendWhatsappJob(orderNumber, phone, body string) error {
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("gateway %d: %s", resp.StatusCode, truncStr(string(data), 200))
+		return fmt.Errorf("whatsapp gateway %d: %s", resp.StatusCode, truncStr(string(data), 200))
 	}
 	return nil
+}
+
+// WhatsappTestSend validates a freshly pasted token end-to-end by
+// messaging the given number (usually the shop's own). Returns the
+// normalized phone on success.
+func (s *Service) WhatsappTestSend(phone string) (string, error) {
+	norm, err := normalizeWhatsappPhone(phone)
+	if err != nil {
+		return "", err
+	}
+	store := s.settings.Get("store_name")
+	if store == "" {
+		store = "Your shop"
+	}
+	body := fmt.Sprintf("%s: WhatsApp receipts are connected. This was a test message from your POS.", store)
+	if err := s.sendWhatsappText(norm, body); err != nil {
+		return "", err
+	}
+	return norm, nil
 }
 
 // drainWhatsappJobs runs one worker tick: every due PENDING job gets a
@@ -360,7 +331,7 @@ func (s *Service) drainWhatsappJobs(now time.Time) int {
 	for _, j := range batch {
 		if j.attempts > 0 {
 			// retry backoff: nth attempt waits n minutes (1, 2, 3…) —
-			// stored implicitly via updated created_at + attempts math
+			// stored implicitly via created_at + attempts math
 			if err := s.db.QueryRow(s.db.Rebind(`SELECT 1 FROM whatsapp_jobs WHERE id = ? AND created_at <= ?`),
 				j.id, now.Add(-time.Duration(j.attempts)*whatsappRetryInterval).Format(nowStampLayout)).Scan(new(int)); err == nil {
 				// due
@@ -368,7 +339,19 @@ func (s *Service) drainWhatsappJobs(now time.Time) int {
 				continue
 			}
 		}
-		err := s.sendWhatsappJob(j.orderNumber, j.phone, j.body)
+		// The order may have changed between queue and send (voided,
+		// refunded): never deliver a receipt for a sale that isn't paid.
+		o, err := s.GetOrder(j.orderID)
+		if err == nil && o.Status != models.OrderPaid {
+			s.db.Exec(s.db.Rebind(`UPDATE whatsapp_jobs SET status = 'FAILED', attempts = ?, last_error = ? WHERE id = ?`),
+				j.attempts+1, "order no longer paid — receipt send cancelled", j.id)
+			s.Audit(0, "system", "WHATSAPP_FAILED", "order", j.orderNumber, "cancelled: order no longer paid")
+			continue
+		}
+		png, err := s.receiptPNG(o)
+		if err == nil {
+			err = s.sendWhatsappImage(j.orderNumber, j.phone, j.body, png)
+		}
 		if err == nil {
 			s.db.Exec(s.db.Rebind(`UPDATE whatsapp_jobs SET status = 'SENT', sent_at = ?, last_error = '' WHERE id = ?`),
 				nowStamp(), j.id)
@@ -391,6 +374,66 @@ func (s *Service) drainWhatsappJobs(now time.Time) int {
 			attempts, truncStr(err.Error(), 200), j.id)
 	}
 	return sent
+}
+
+// WhatsappJobRow is one entry of the admin's failed-sends view.
+type WhatsappJobRow struct {
+	ID          int64  `json:"id"`
+	OrderID     int64  `json:"orderId"`
+	OrderNumber string `json:"orderNumber"`
+	Phone       string `json:"phone"`
+	Status      string `json:"status"`
+	Attempts    int64  `json:"attempts"`
+	LastError   string `json:"lastError"`
+	CreatedAt   string `json:"createdAt"`
+	SentAt      string `json:"sentAt"`
+}
+
+// ListWhatsappJobs returns the most recent delivery jobs (newest first).
+func (s *Service) ListWhatsappJobs(limit int) ([]WhatsappJobRow, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.db.Query(s.db.Rebind(`
+                SELECT id, order_id, order_number, phone, status, attempts, COALESCE(last_error,''),
+                       created_at, COALESCE(sent_at,'')
+                FROM whatsapp_jobs ORDER BY id DESC LIMIT ?`), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []WhatsappJobRow{} // never nil — JSON null breaks the admin panel
+	for rows.Next() {
+		var j WhatsappJobRow
+		if err := rows.Scan(&j.ID, &j.OrderID, &j.OrderNumber, &j.Phone, &j.Status, &j.Attempts, &j.LastError, &j.CreatedAt, &j.SentAt); err == nil {
+			out = append(out, j)
+		}
+	}
+	return out, nil
+}
+
+// RetryWhatsappJob re-queues a FAILED job (admin action from the failed-
+// sends list). Refuses when the order is no longer paid — a cancelled
+// receipt must not resurrect.
+func (s *Service) RetryWhatsappJob(id int64) error {
+	var orderID int64
+	var status string
+	if err := s.db.QueryRow(s.db.Rebind(`SELECT order_id, status FROM whatsapp_jobs WHERE id = ?`), id).Scan(&orderID, &status); err != nil {
+		return ErrNotFound
+	}
+	if status != "FAILED" {
+		return fmt.Errorf("only failed sends can be retried")
+	}
+	o, err := s.GetOrder(orderID)
+	if err != nil {
+		return err
+	}
+	if o.Status != models.OrderPaid {
+		return fmt.Errorf("order %s is no longer paid — receipt send stays cancelled", o.Number)
+	}
+	_, err = s.db.Exec(s.db.Rebind(`UPDATE whatsapp_jobs SET status = 'PENDING', attempts = 0, last_error = '', created_at = ? WHERE id = ?`),
+		nowStamp(), id)
+	return err
 }
 
 // WhatsappWorker drains the receipt queue for one shop (started per shop
