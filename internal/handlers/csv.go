@@ -249,7 +249,17 @@ func uniqueSKUTx(tx *sql.Tx, name string) string {
 			return candidate
 		}
 	}
-	return fmt.Sprintf("sku-%d", 99999)
+	// 99 rows already share this name-slug: switch to date+random instead of a
+	// constant that may itself already be taken (the create-path constant
+	// fallback is what broke product creation fleet-wide in Oct 2026).
+	for i := 0; i < 10; i++ {
+		candidate := services.AutoSKU()
+		var count int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM products WHERE sku = ?`, candidate).Scan(&count); err == nil && count == 0 {
+			return candidate
+		}
+	}
+	return services.AutoSKU()
 }
 
 func parseBoolCSV(s string) int {

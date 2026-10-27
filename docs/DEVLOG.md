@@ -1,6 +1,25 @@
 # Worklog
 
 ---
+Task ID: v1.4.5
+Agent: main (Super Z)
+Task: Fix "can't add products — UNIQUE constraint failed: products.sku (2067)" + fleet-wide regression sweep
+
+Work Log:
+- Diagnosed from cloud data: the fleet catalog consumed ALL 50 fixed-window SKUs (SKU-100000..SKU-100049) during Sept-Oct catalog entry; uniqueSKU's exhausted-window fallback was the constant SKU-999999, already taken by "KRA - Pin Registration" — so every blank-SKU create died on UNIQUE(products.sku) 2067
+- New services.AutoSKU(): date + random token (SKU-261027-1a2b3c4d) — unbounded, and two tills generating offline cannot realistically converge (protects the sku-keyed LWW sync from silently merging two distinct products into one)
+- CreateProduct: user-typed duplicate SKUs pre-checked -> readable 409; auto SKUs regenerate+retry (3x) on a lost insert race; create response now carries the generated sku
+- UpdateProduct: renaming onto another product's SKU -> readable 409 (the SKU is the cross-till sync identity)
+- CSV import uniqueSKUTx: constant fallback replaced with checked AutoSKU candidates; teamsync_apply SKU-SYNC token 32->48 bits
+- Frontend ProductModal: raw constraint dumps mapped to "That SKU is already in use. Change it, or clear the SKU field to auto-generate a new one."
+- Regression tests (handlers): exhausted-window create, duplicate 409, 12-way parallel blank creates all-distinct, update-duplicate 409 + blank-sku keep
+
+Stage Summary:
+- Root cause was a bounded generator, not data corruption — no data migration needed; existing SKUs untouched
+- Full sweep green: go vet ./... clean; go test ./... ALL packages (incl. p0 sync hardening, adversarial money paths); vitest 103/103; vite production build OK
+- Shipped v1.4.5 via the CI release train; OTA manifest published to fleet app_config (tills on 1.4.4 pick it up at boot / 6h check)
+
+---
 Task ID: 1-3
 Agent: main (Super Z)
 Task: Install tooling (codegraph, design skills), clone smart-vat-kenya, analyze codebase

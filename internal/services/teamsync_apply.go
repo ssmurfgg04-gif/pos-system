@@ -289,7 +289,7 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
 	}
 	sku := pr.SKU
 	if sku == "" {
-		sku = "SKU-SYNC-" + randToken(4)
+		sku = "SKU-SYNC-" + randToken(6) // 48-bit token: a collision here would dead-letter the event
 	}
 	_, err = s.db.Exec(s.db.Rebind(`
                 INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card, updated_at)

@@ -34,6 +34,21 @@ func randToken(n int) string {
 	return hex.EncodeToString(b)
 }
 
+// AutoSKU proposes a generated product SKU: date + random token, e.g.
+// SKU-261027-1a2b3c4d.
+//
+// The previous scheme walked a FIXED window (SKU-100000..SKU-100049) and,
+// when all 50 were taken, handed out the constant SKU-999999. This fleet's
+// catalog consumed every slot (Sept-Oct catalog entry), so every blank-SKU
+// create died with "UNIQUE constraint failed: products.sku (2067)" and no
+// new product could be added anywhere. Date+random is unbounded, and two
+// tills generating offline cannot realistically converge on the same
+// value - which also protects team sync, where the SKU is the cross-till
+// identity and a collision would silently LWW-merge two distinct products.
+func AutoSKU() string {
+	return fmt.Sprintf("SKU-%s-%s", time.Now().Format("060102"), randToken(4))
+}
+
 // ---- Held (parked) sales ----
 
 // HoldSale parks the current cart. Items are frozen as submitted (the

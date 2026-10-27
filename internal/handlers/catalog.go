@@ -147,22 +147,68 @@ func (h *H) CreateProduct(c *gin.Context) {
 		gift = 1
 		track = 0 // gift cards are value, not shelf stock
 	}
-	if err := models.CheckProductInput(body.Name, body.SKU, body.Barcode, body.PriceCents, body.CostCents, stock); err != nil {
+	sku := strings.TrimSpace(body.SKU)
+	auto := sku == ""
+	if auto {
+		sku = services.AutoSKU()
+	}
+	if err := models.CheckProductInput(body.Name, sku, body.Barcode, body.PriceCents, body.CostCents, stock); err != nil {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	res, err := h.db(c).Exec(h.db(c).Rebind(`
-                INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-		uniqueSKU(h.db(c), body.SKU), body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift)
-	if err != nil {
+	// A SKU the user typed is checked up front so the shop gets a readable
+	// 409 instead of a raw constraint dump (auto SKUs rely on the retry
+	// below instead - the INSERT is the authoritative check for those).
+	if !auto {
+		var count int
+		if err := h.db(c).QueryRow(`SELECT COUNT(*) FROM products WHERE sku = ?`, sku).Scan(&count); err == nil && count > 0 {
+			h.fail(c, 409, "SKU already exists - change it, or leave it blank to auto-generate one")
+			return
+		}
+	}
+	var res sql.Result
+	var err error
+	for attempt := 0; ; attempt++ {
+		res, err = h.db(c).Exec(h.db(c).Rebind(`
+            INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift)
+		if err == nil {
+			break
+		}
+		// A generated SKU can still lose a race (two clerks creating at the
+		// same instant, or a sibling till syncing in between). Regenerate
+		// and retry rather than surfacing the raw constraint error.
+		if isDuplicateSKUErr(err) {
+			if auto && attempt < 3 {
+				sku = services.AutoSKU()
+				continue
+			}
+			h.fail(c, 409, "SKU already exists - change it, or leave it blank to auto-generate one")
+			return
+		}
 		h.fail(c, 500, err.Error())
 		return
 	}
 	id, _ := res.LastInsertId()
 	h.svc(c).Audit(p.ID, p.Username, "PRODUCT_CREATED", "product", body.Name, "")
 	h.svc(c).EmitProduct(id, true)
-	h.created(c, gin.H{"id": id})
+	h.created(c, gin.H{"id": id, "sku": sku})
+}
+
+// isDuplicateSKUErr reports whether err is the storage engine's UNIQUE
+// violation on products.sku (SQLite 2067 / Postgres 23505).
+func isDuplicateSKUErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "products.sku") {
+		return false
+	}
+	return strings.Contains(strings.ToLower(msg), "unique") ||
+		strings.Contains(strings.ToLower(msg), "duplicate") ||
+		strings.Contains(msg, "23505")
 }
 
 func defaultStock(body productBody) (int, int) {
@@ -175,21 +221,6 @@ func defaultStock(body productBody) (int, int) {
 		track = 0
 	}
 	return stock, track
-}
-
-// uniqueSKU generates a non-colliding SKU when empty.
-func uniqueSKU(db interface{ QueryRow(string, ...any) *sql.Row }, sku string) string {
-	if strings.TrimSpace(sku) != "" {
-		return strings.TrimSpace(sku)
-	}
-	for i := 0; i < 50; i++ {
-		candidate := fmt.Sprintf("SKU-%06d", 100000+i)
-		var count int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM products WHERE sku = ?`, candidate).Scan(&count); err == nil && count == 0 {
-			return candidate
-		}
-	}
-	return fmt.Sprintf("SKU-%d", 999999)
 }
 
 // UpdateProduct (products.manage).
@@ -224,12 +255,23 @@ func (h *H) UpdateProduct(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
+	// Renaming onto another product's SKU would corrupt the cross-till
+	// identity (team sync keys catalog rows on sku) - block it readably.
+	var dupID int64
+	if err := h.db(c).QueryRow(`SELECT id FROM products WHERE sku = ? AND id <> ?`, sku, id).Scan(&dupID); err == nil {
+		h.fail(c, 409, "SKU already exists on another product")
+		return
+	}
 	res, err := h.db(c).Exec(h.db(c).Rebind(`
                 UPDATE products SET sku = ?, barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
                         stock_qty = ?, track_stock = ?, is_active = ?, is_gift_card = ?, updated_at = ?
                 WHERE id = ?`), sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift, services.NowStamp(), id)
 	if err != nil {
-		h.fail(c, 500, err.Error())
+		if isDuplicateSKUErr(err) {
+			h.fail(c, 409, "SKU already exists on another product")
+		} else {
+			h.fail(c, 500, err.Error())
+		}
 		return
 	}
 	if n(res) != 1 {

@@ -582,7 +582,13 @@ function ProductModal({
         PriceCents: 'Price must be zero or more.',
         CostCents: 'Cost must be zero or more.',
       }
-      setError(known[field] || raw)
+      if (/products\.sku/i.test(raw) && /(unique|duplicate)/i.test(raw)) {
+        // Raw "UNIQUE constraint failed: products.sku (2067)" means nothing
+        // to a shop attendant — say what to do instead.
+        setError('That SKU is already in use. Change it, or clear the SKU field to auto-generate a new one.')
+      } else {
+        setError(known[field] || raw)
+      }
     } finally {
       setBusy(false)
     }
