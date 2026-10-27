@@ -1,6 +1,38 @@
 # Worklog
 
 ---
+Task ID: v1.4.7
+Agent: main (Super Z)
+Task: Feature regression sweep (the client's "test every major feature" rule)
+  — full E2E smoke against a live server after the v1.4.6 work.
+
+Work Log:
+- scripts/smoke_test.py realigned with the product: seed names use commas
+  ("Classic Cotton Tee, Black" — em dashes renamed long ago), Daraja
+  settings key swapped for whatsapp_api_key (masking check), design board
+  roles (front desk creates, designers work), fresh DB per run
+- Smoke found a REAL production bug: /api/v1/reports/daily 500'd on any
+  day WITH sales — COALESCE(AVG(total_cents),0) scans float into int64;
+  quiet days (NULL → 0) masked it. Fixed with CAST(... AS INTEGER) +
+  reports_regression_test.go (sales-day values + empty-day health)
+- Two design-board refusals returned 500 for policy violations; reworded
+  onto the "permission" mapErr keyword → 403 (designer create + others'
+  jobs)
+- Smoke taught to flip buni_enabled=false locally: a fresh box inherits
+  the fleet's buni_via_cloud row and the STK push left for the Buni proxy
+  (which rightly refused the smoke device) before the mock rail ran
+- RESULT: 58/58 smoke checks pass (auth, RBAC, catalog, cash checkout +
+  stock + idempotent replay, insufficient stock, mock STK via sweeper +
+  receipt code, callback amount-mismatch flag, manual entry + dedupe,
+  offline sync + replay safety, void + restore, shifts, reports, receipt
+  HTML, roles CRUD, design board, audit, settings masking)
+
+Stage Summary:
+- The reports fix ships as v1.4.7 (release train + OTA); smoke suite is
+  now part of the release ritual — run it against a built binary before
+  every tag
+
+---
 Task ID: v1.4.6
 Agent: main (Super Z)
 Task: Finish WhatsApp receipt bot (manual + automated paths), team-sync shifts

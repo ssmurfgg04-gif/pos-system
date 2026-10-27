@@ -124,8 +124,11 @@ def main():
 
     # The smoke drives the auto-succeeding mock STK provider on purpose.
     # Real tills refuse it (ALLOW_MOCK_PAYMENTS + settings gate), so the
-    # test explicitly opts in through the admin settings API.
-    st, body = req("PUT", "/api/v1/settings", admin, body={"values": {"mpesa_env": "mock"}})
+    # test explicitly opts in through the admin settings API. buni_enabled
+    # is the local kill-switch: without it a fresh box inherits the fleet's
+    # buni_via_cloud row and the STK push leaves for the Buni proxy, which
+    # (rightly) refuses a smoke device — the mock rail never gets the leg.
+    st, body = req("PUT", "/api/v1/settings", admin, body={"values": {"mpesa_env": "mock", "buni_enabled": "false"}})
     check("mock provider opt-in (settings)", st == 200, f"{st}")
 
     st, body = req("POST", "/api/v1/auth/login", body={"username": "admin", "password": "wrong"})
@@ -167,7 +170,7 @@ def main():
     st, body = req("GET", "/api/v1/products", cashier)
     check("products list (cashier can read)", st == 200 and len(data(body)) >= 13, f"{st} n={len(data(body))}")
 
-    p = get_product(cashier, "Classic Cotton Tee — Black")
+    p = get_product(cashier, "Classic Cotton Tee, Black")
     check("product search works", p is not None, "not found")
 
     st, body = req("GET", "/api/v1/products?categoryId=" + str(p["categoryId"]), cashier)
@@ -187,7 +190,7 @@ def main():
     check("cash checkout -> PAID", st == 201 and order.get("status") == "PAID", f"{st} {body}")
     check("total is 2 x 550 = 1100.00 (VAT incl.)", order.get("totalCents") == 110000, f"{order.get('totalCents')}")
 
-    p2 = get_product(cashier, "Classic Cotton Tee — Black")
+    p2 = get_product(cashier, "Classic Cotton Tee, Black")
     check("stock decremented 40 -> 38", p2["stockQty"] == stock_before - 2, f"{p2['stockQty']}")
 
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
@@ -197,7 +200,7 @@ def main():
     })
     check("idempotent replay returns same order", st == 201 and data(body)["id"] == order["id"], f"{st}")
 
-    p3 = get_product(cashier, "Classic Cotton Tee — Black")
+    p3 = get_product(cashier, "Classic Cotton Tee, Black")
     check("replay did not double-deduct", p3["stockQty"] == stock_before - 2, f"{p3['stockQty']}")
 
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
@@ -349,13 +352,20 @@ def main():
     check("system role editable", st == 200, f"{st}")
 
     # -- 14. Design board ------------------------------------------------------------
-    st, body = req("POST", "/api/v1/design", designer, body={
+    # The front desk (orders.assign) creates jobs; designers work them.
+    st, body = req("POST", "/api/v1/design", admin, body={
         "title": "Jersey concept", "productName": "Premium Heavyweight Tee",
         "customerName": "Acme FC", "notes": "two-color", "status": "queue"})
     job = data(body)
     check("design job created", st == 201 and job.get("id"), f"{st}")
-    st, body = req("POST", f"/api/v1/design/{job['id']}/move", designer, body={"status": "in_progress"})
+    # The assigner moves their own job; the designer's scope is enforced too.
+    st, body = req("POST", f"/api/v1/design/{job['id']}/move", admin, body={"status": "in_progress"})
     check("design job moved", st == 200 and data(body)["status"] == "in_progress", f"{st}")
+    st, body = req("POST", f"/api/v1/design/{job['id']}/move", designer, body={"status": "delivered"})
+    check("designer blocked from others' jobs (403)", st == 403, f"{st}")
+    st, body = req("POST", "/api/v1/design", designer, body={
+        "title": "Nope", "productName": "Tee", "status": "queue"})
+    check("designer cannot create jobs (403)", st == 403, f"{st}")
 
     # -- 15. Audit ---------------------------------------------------------------------
     st, body = req("GET", "/api/v1/audit", admin)
@@ -366,8 +376,9 @@ def main():
           f"{sorted(actions)[:8]}")
 
     # -- 16. Settings masking ------------------------------------------------------------
+    # whatsapp_api_key is the live secret-class key (Daraja keys retired v1.4.4).
     st, body = req("PUT", "/api/v1/settings", admin, body={
-        "values": {"mpesa_consumer_secret": "top-secret", "store_name": "Smoke Shop"}})
+        "values": {"whatsapp_api_key": "top-secret", "store_name": "Smoke Shop"}})
     txt = json.dumps(body)
     check("settings update masks secrets", st == 200 and "top-secret" not in txt and "__SET__" in txt, f"{st}")
     st, body = req("PUT", "/api/v1/settings", admin, body={"values": {"jwt_secret": "nope"}})
