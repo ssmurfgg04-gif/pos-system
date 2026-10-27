@@ -1121,6 +1121,50 @@ CREATE INDEX IF NOT EXISTS idx_orders_cashier_created ON orders(cashier_id, crea
 `,
 		Go: backfillRolePermsV19,
 	},
+	{
+		// v20 — two independent upgrades:
+		//  1) shifts.client_uuid: shifts were the last major entity
+		//     that never rode team sync (a shift opened on one till
+		//     was invisible on the admin's device). The uuid makes
+		//     replay idempotent exactly like orders.client_uuid.
+		//  2) whatsapp_jobs: persistent delivery queue for WhatsApp
+		//     receipt sends (survives restarts, retried with cap).
+		Version: 20,
+		SQLite: `
+ALTER TABLE shifts ADD COLUMN client_uuid TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shifts_uuid ON shifts(client_uuid) WHERE client_uuid <> '';
+CREATE TABLE IF NOT EXISTS whatsapp_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL DEFAULT 0,
+        order_number TEXT NOT NULL DEFAULT '',
+        phone TEXT NOT NULL DEFAULT '',
+        body TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        sent_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_jobs_status ON whatsapp_jobs(status, id);
+`,
+		Pg: `
+ALTER TABLE shifts ADD COLUMN client_uuid TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shifts_uuid ON shifts(client_uuid) WHERE client_uuid <> '';
+CREATE TABLE IF NOT EXISTS whatsapp_jobs (
+        id SERIAL PRIMARY KEY,
+        order_id INTEGER NOT NULL DEFAULT 0,
+        order_number TEXT NOT NULL DEFAULT '',
+        phone TEXT NOT NULL DEFAULT '',
+        body TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        sent_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_jobs_status ON whatsapp_jobs(status, id);
+`,
+	},
 }
 
 // backfillRolePermsV19 unions the v19 sales-oversight permission into the

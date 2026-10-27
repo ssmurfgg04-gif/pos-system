@@ -1,6 +1,51 @@
 # Worklog
 
 ---
+Task ID: v1.4.6
+Agent: main (Super Z)
+Task: Finish WhatsApp receipt bot (manual + automated paths), team-sync shifts
+  (the "shift not visible on Admin" report), Tab-charge guidance (the "button
+  not clickable" report), receipt pending-label removal; release v1.4.6.
+
+Work Log:
+- WhatsApp service (internal/services/whatsapp.go): receiptText single source
+  (bold store, fenced items/totals, M-Pesa code, VAT, footer); wa.me manual
+  path (zero config); automated path = whatsapp_jobs queue + WhatsappWorker
+  (5 attempts, 1-min backoff, dead-letter into audit + order timeline);
+  presets whapi/ultramsg/custom; customer phone from the CRM record,
+  normalized 2547…; queue best-effort — never blocks a sale
+- Hooks: QueueWhatsappReceipt at every completion path (split/credit/cash
+  checkout, completePayment); POST /orders/:id/whatsapp (pos.sell, rides
+  GetOrderScoped visibility); Receipt screen gains the WhatsApp button;
+  Settings gains the WhatsApp tab (provider, key masked __SET__, auto-send
+  default OFF, sender display number); demo backend mirrors the endpoint
+- Migration v20: shifts.client_uuid (unique partial index) + whatsapp_jobs
+- Shifts ride team sync now: EmitShift on open/close (username resolved
+  locally on receivers via the same fallback as orders; replay-keyed,
+  close-only updates, idempotent)
+- Tab UX: the guarded charge button now explains every blocked state (no
+  customer / no match / cash-only / offline names the exact unlock); Enter
+  picks the first search match; "no match" points to the Customers page
+- Receipts: unconfirmed M-Pesa leg prints plain "M-Pesa" on paper, and
+  "M-Pesa (pending)" in the WhatsApp text — never a fake "Paid"
+- Tests: shift_whatsapp_test.go (open/close cross-device replay, text/link,
+  manual path, queued delivery exactly-once, auto-send OFF default,
+  dead-letter cap, phone normalization); checkoutrail regression +4 (tab
+  guidance states, pick, Enter shortcut, charge enables)
+- Docs: RECEIPTS-WHATSAPP rewritten to the shipped strategy (WABA rejected:
+  verification + per-conversation billing not justified; linked-number
+  gateway chosen); CHANGELOG v1.4.6 + backfilled v1.4.5
+- Gates: gofmt clean, go vet clean, go test ./... 14/14 packages, vitest
+  107/107, tsc + vite build green
+
+Stage Summary:
+- Client answers: receipt format = WhatsApp text (opens natively — their
+  "any format" requirement); their number 0181 630 570 links via the
+  gateway QR or just uses the manual button; pending section removed from
+  the receipt; shifts cross-till visibility fixed; tab button unblocked
+  (guidance) — customers need a one-time credit limit set from Customers
+
+---
 Task ID: v1.4.5
 Agent: main (Super Z)
 Task: Fix "can't add products — UNIQUE constraint failed: products.sku (2067)" + fleet-wide regression sweep

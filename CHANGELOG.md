@@ -3,6 +3,57 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.4.6 — WhatsApp receipts, team-visible shifts, honest tab guidance
+
+### WhatsApp receipts to the customer's number (the headline)
+
+- **Every receipt gains a WhatsApp button.** One tap opens the shop's own
+  WhatsApp with the receipt already typed to the customer's number — the
+  cashier presses send. Zero configuration, works from day one, cannot
+  break the money path.
+- **Automated sending is opt-in**: Settings → WhatsApp → pick a gateway
+  (whapi.cloud / ultramsg presets or a custom endpoint), paste its API
+  key, flip auto-send on. Every completed sale with a customer phone then
+  delivers its receipt without anyone touching a phone.
+- Delivery is a persistent queue (`whatsapp_jobs`) drained by a worker
+  with bounded retries — a restart never loses a receipt; permanent
+  failures land in the audit log and the order's timeline. The gateway
+  key is a masked secret that never team-syncs.
+- Receipt text is one source of truth shared by both paths: bold store
+  name, aligned item/totals block, M-Pesa code, VAT, served-by. An
+  unconfirmed M-Pesa leg reads "M-Pesa (pending)" — never "Paid".
+
+### Shifts are now team-wide (the "not visible on Admin" report)
+
+- A shift opened on one till reaches every other till's Shifts page the
+  moment it opens, and its close-out travels too (replay-keyed, exactly
+  once). Before this release shifts were the one major entity that never
+  left the machine they were opened on — an admin on another device
+  simply could not see them.
+
+### Tab (charge-to-account) guidance
+
+- The tab charge button is guarded by design: pick a customer who has a
+  credit limit, or the button stays disabled. What changed is that the
+  rail now SAYS what unlocks it — every blocked state (no customer yet,
+  no match, cash-only customer, offline) names the exact fix instead of
+  a dead button.
+- Pressing Enter in the tab-customer search picks the first match.
+
+### Also
+
+- The paper receipt no longer prints "(pending)" next to an unconfirmed
+  M-Pesa leg; the M-Pesa code row prints only once the code exists.
+- New database migration v20 (shifts.client_uuid + whatsapp_jobs).
+
+## v1.4.5 — product creation unblocked (SKU 2067)
+
+- **"Can't add products — product failed sku 2067" is fixed.** The old
+  generator drew blank-SKU product codes from a fixed window that the
+  fleet had exhausted; every new product hit the unique constraint. The
+  generator is now date+random (unbounded), duplicate SKUs answer with a
+  clear 409, and CSV imports fall back safely. Existing SKUs untouched.
+
 ## v1.4.4 — sales privacy, till attribution, single payment rail
 
 ### Sales visibility & accountability (the headline)

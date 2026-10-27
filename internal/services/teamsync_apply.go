@@ -52,6 +52,8 @@ func (s *Service) applyEvent(entity, op string, payload json.RawMessage) error {
 			return s.applyVoidReasonDelete(payload)
 		}
 		return s.applyVoidReason(payload)
+	case "shift":
+		return s.applyShift(payload)
 	default:
 		return nil // unknown entity types are skipped (forward compatibility)
 	}
@@ -773,4 +775,77 @@ func (s *Service) applyDesign(payload json.RawMessage) error {
                 VALUES (?, ?, ?, ?, ?, 'synced', ?, ?)`),
 		dj.Title, dj.ProductName, dj.CustomerName, dj.Notes, dj.Status, dj.UpdatedAt, dj.UpdatedAt)
 	return err
+}
+
+// applyShift replays a remote cash-drawer session: the shift appears in
+// this device's history (admin visibility across tills), closes here when
+// the owner device closes it, and never double-applies (client_uuid is
+// the replay key, exactly like orders). The username resolves to a local
+// user with the SAME fallback applyOrder uses for cashiers, so the X/Z
+// report window lands on the same user the synced orders are attributed
+// to. Replay of a close on an already-closed local copy is a no-op.
+
+func (s *Service) applyShift(payload json.RawMessage) error {
+	var ev struct {
+		ClientUUID   string `json:"clientUuid"`
+		UserName     string `json:"userName"`
+		OpeningFloat int64  `json:"openingFloatCents"`
+		Expected     int64  `json:"expectedCents"`
+		Counted      int64  `json:"countedCents"`
+		Variance     int64  `json:"varianceCents"`
+		OpenedAt     string `json:"openedAt"`
+		ClosedAt     string `json:"closedAt"`
+	}
+	if err := json.Unmarshal(payload, &ev); err != nil {
+		return err
+	}
+	if ev.ClientUUID == "" {
+		return fmt.Errorf("shift event missing clientUuid")
+	}
+	var existing int64
+	var localClosed string
+	err := s.db.QueryRow(s.db.Rebind(`SELECT id, COALESCE(closed_at,'') FROM shifts WHERE client_uuid = ?`),
+		ev.ClientUUID).Scan(&existing, &localClosed)
+	if err == nil {
+		// Known shift: the only meaningful replay is the remote close.
+		if localClosed == "" && ev.ClosedAt != "" {
+			_, err = s.db.Exec(s.db.Rebind(`UPDATE shifts SET expected_cents = ?, counted_cents = ?, variance_cents = ?, closed_at = ?
+                                WHERE id = ? AND closed_at = ''`),
+				ev.Expected, ev.Counted, ev.Variance, ev.ClosedAt, existing)
+			if err != nil {
+				return err
+			}
+			if sh, err := s.GetShift(existing); err == nil {
+				s.broadcast(EventShiftUpdate, sh)
+			}
+		}
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	uid := s.resolveLocalCashierID(tx, ev.UserName)
+	if uid == 0 {
+		// A shift with no user to attribute to is still worth keeping
+		// (the drawer math is real money) — but users.id is NOT NULL,
+		// so mirror applyOrder's fallback contract: at least one user
+		// always exists on a booted box.
+		return fmt.Errorf("shift %s: no local user to attribute to", ev.ClientUUID)
+	}
+	if _, err := tx.Exec(s.db.Rebind(`
+                INSERT INTO shifts (user_id, opening_float_cents, expected_cents, counted_cents, variance_cents, opened_at, closed_at, client_uuid)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+		uid, ev.OpeningFloat, ev.Expected, ev.Counted, ev.Variance, ev.OpenedAt, ev.ClosedAt, ev.ClientUUID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.broadcast(EventShiftUpdate, map[string]any{"synced": true, "userName": ev.UserName})
+	return nil
 }

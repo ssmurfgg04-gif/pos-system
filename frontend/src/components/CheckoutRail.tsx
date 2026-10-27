@@ -70,6 +70,9 @@ export function CheckoutRail({
   const [tabQuery, setTabQuery] = useState('')
   const [tabOptions, setTabOptions] = useState<Customer[]>([])
   const [tabCustomer, setTabCustomer] = useState<Customer | null>(null)
+  // the query the server actually answered (the 250ms debounce means
+  // tabOptions can lag tabQuery — "no matches" must never flash mid-debounce)
+  const [tabSearchedFor, setTabSearchedFor] = useState('')
   // order-level adjustments
   const [discountCents, setDiscountCents] = useState(0)
   const [discountLabel, setDiscountLabel] = useState('')
@@ -201,11 +204,13 @@ export function CheckoutRail({
     const q = tabQuery.trim()
     if (!q) {
       setTabOptions([])
+      setTabSearchedFor('')
       return
     }
     const t = window.setTimeout(async () => {
       try {
         setTabOptions(await api.get<Customer[]>(`/api/v1/customers?search=${encodeURIComponent(q)}`))
+        setTabSearchedFor(q)
       } catch {
         /* offline — tabs need the server for limit checks */
       }
@@ -606,7 +611,7 @@ export function CheckoutRail({
               phone, setPhone, phoneOk, normalizedPhone, email, setEmail, customerName, setCustomerName,
               buyerPin, setBuyerPin,
               received, setReceived, quick, change, canCash,
-              tabQuery, setTabQuery, tabOptions, tabCustomer, setTabCustomer,
+              tabQuery, setTabQuery, tabOptions, tabCustomer, setTabCustomer, tabSearchedFor,
               discountCents, setDiscountCents, discountLabel, setDiscountLabel, redeem, setRedeem,
               splitMode, setSplitMode, splitLegs, setSplitLegs, splitValid, splitNeedsCustomer, splitAsyncLeg,
               canDiscount, canRedeem, loyaltyEnabled, tabCustomerLoyalty: tabCustomer,
@@ -666,7 +671,7 @@ function PaymentForm(props: {
   email: string; setEmail: (v: string) => void
   customerName: string; setCustomerName: (v: string) => void
   received: number | null; setReceived: (n: number | null) => void; quick: number[]; change: number | null; canCash: boolean
-  tabQuery: string; setTabQuery: (v: string) => void; tabOptions: Customer[]; tabCustomer: Customer | null; setTabCustomer: (c: Customer | null) => void
+  tabQuery: string; setTabQuery: (v: string) => void; tabOptions: Customer[]; tabCustomer: Customer | null; setTabCustomer: (c: Customer | null) => void; tabSearchedFor: string
   discountCents: number; setDiscountCents: (n: number) => void; discountLabel: string; setDiscountLabel: (v: string) => void
   redeem: number; setRedeem: (n: number) => void
   splitMode: boolean; setSplitMode: (b: boolean) => void; splitLegs: SplitLeg[]; setSplitLegs: (l: SplitLeg[]) => void
@@ -682,7 +687,7 @@ function PaymentForm(props: {
     phone, setPhone, phoneOk, normalizedPhone, email, setEmail, customerName, setCustomerName,
     buyerPin, setBuyerPin,
     received, setReceived, quick, change, canCash,
-    tabQuery, setTabQuery, tabOptions, tabCustomer, setTabCustomer,
+    tabQuery, setTabQuery, tabOptions, tabCustomer, setTabCustomer, tabSearchedFor,
     discountCents, setDiscountCents, discountLabel, setDiscountLabel, redeem, setRedeem,
     splitMode, setSplitMode, splitLegs, setSplitLegs, splitValid, splitNeedsCustomer, splitAsyncLeg,
     canDiscount, canRedeem, loyaltyEnabled, tabCustomerLoyalty,
@@ -886,9 +891,23 @@ function PaymentForm(props: {
                   : tabQuery
               }
               onChange={(e) => { setTabCustomer(null); setTabQuery(e.target.value) }}
+              onKeyDown={(e) => {
+                // Enter picks the first match — the search box doubles as the
+                // picker (field report v1.4.5: cashiers typed the name and
+                // stared at a dead charge button, never seeing the result list).
+                if (e.key === 'Enter' && !tabCustomer && tabOptions.length > 0) {
+                  setTabCustomer(tabOptions[0])
+                  setTabQuery('')
+                }
+              }}
               placeholder="Type a name or phone…"
             />
           </Field>
+          {!tabCustomer && !tabQuery.trim() && (
+            <p className="text-[12px] text-ink-muted -mt-1">
+              Type the customer's name above, tap their name in the list — the charge button unlocks then.
+            </p>
+          )}
           {!tabCustomer && tabOptions.length > 0 && (
             <div className="border border-line rounded-input overflow-hidden">
               {tabOptions.slice(0, 6).map((c) => (
@@ -915,11 +934,20 @@ function PaymentForm(props: {
               ))}
             </div>
           )}
+          {!tabCustomer && tabQuery.trim() && tabSearchedFor === tabQuery.trim() && tabOptions.length === 0 && (
+            <p className="text-[13px] font-semibold text-ink -mt-1">
+              No customer matches “{tabQuery.trim()}” — add them on the Customers page first (set a credit limit for tabs), then pick them here.
+            </p>
+          )}
           {method === 'credit' && tabCustomer && creditOf(tabCustomer) <= 0 && (
-            <p className="text-danger-text text-[13px] font-semibold">This customer has no store credit, top up from their profile first.</p>
+            <p className="text-danger-text text-[13px] font-semibold">
+              {tabCustomer.name} has no store credit — top up from their record on the Customers page first.
+            </p>
           )}
           {method === 'tab' && tabCustomer && tabCustomer.creditLimitCents <= 0 && (
-            <p className="text-danger-text text-[13px] font-semibold">This customer is cash-only, pick someone with credit.</p>
+            <p className="text-danger-text text-[13px] font-semibold">
+              {tabCustomer.name} is cash-only (no credit limit set). Open the Customers page, edit them, set a Credit limit — the tab charge unlocks right after.
+            </p>
           )}
           {!online && (
             <p className="text-pending-text text-[13px] font-bold">You're offline, {method === 'credit' ? 'store credit' : 'tabs'} need the server for checks.</p>

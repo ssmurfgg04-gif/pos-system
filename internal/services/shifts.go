@@ -22,7 +22,8 @@ func (s *Service) OpenShift(p *auth.Principal, openingFloatCents int64) (*models
 	if err != sql.ErrNoRows {
 		return nil, err
 	}
-	res, err := s.db.Exec(s.db.Rebind(`INSERT INTO shifts (user_id, opening_float_cents, opened_at) VALUES (?, ?, ?)`), p.ID, openingFloatCents, nowStamp())
+	res, err := s.db.Exec(s.db.Rebind(`INSERT INTO shifts (user_id, opening_float_cents, opened_at, client_uuid) VALUES (?, ?, ?, ?)`),
+		p.ID, openingFloatCents, nowStamp(), randToken(12))
 	if err != nil {
 		return nil, err
 	}
@@ -31,6 +32,7 @@ func (s *Service) OpenShift(p *auth.Principal, openingFloatCents int64) (*models
 	shift, err := s.GetShift(sid)
 	if err == nil {
 		s.broadcast(EventShiftUpdate, shift)
+		s.EmitShift(sid) // the team's admin sees this session the moment it opens
 	}
 	return shift, err
 }
@@ -113,6 +115,7 @@ func (s *Service) CloseShift(p *auth.Principal, countedCents int64) (*models.Shi
 	out, err := s.GetShift(shift.ID)
 	if err == nil {
 		s.broadcast(EventShiftUpdate, out)
+		s.EmitShift(shift.ID) // the frozen close-out travels with it
 	}
 	return out, err
 }

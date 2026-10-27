@@ -163,6 +163,9 @@ func (p *ShopPool) EnsureStarted(ctx context.Context, shopID string) {
 	svc.StartBackupScheduler()
 	go ow.Run(ctx)
 	go NewSweeper(svc).Run(ctx)
+	// WhatsApp receipts: drains whatsapp_jobs (auto-send path). No-ops
+	// unless the shop configured a gateway + auto-send.
+	go NewWhatsappWorker(svc).Run(ctx)
 	// Team sync: links this till to the rest of the team through the
 	// Supabase event log. The loop no-ops while sync is disabled.
 	go svc.TeamSyncLoop(ctx, svc.AppVersion())

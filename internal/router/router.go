@@ -154,6 +154,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	authd.POST("/orders/:id/stkpush", perm("pos.sell"), h.RetrySTK)
 	authd.POST("/orders/:id/manual", perm("payments.manual"), h.ManualConfirm)
 	authd.POST("/orders/:id/recheck", perm("pos.sell"), h.OrderRecheck)
+	authd.POST("/orders/:id/whatsapp", perm("pos.sell"), h.SendOrderWhatsapp)
 	authd.GET("/payments/config", h.PaymentConfig)
 	authd.POST("/sync", perm("pos.sell"), h.Sync)
 

@@ -81,6 +81,18 @@ var DefaultSettings = map[string]string{
 	"credit_enabled":         "true",  // prepaid store credit feature toggle
 	"crm_auto_capture":       "true",  // checkout links/creates CRM records from the sale phone
 	"whatsapp_ready_note":    "",      // appended to ready-pickup WhatsApp drafts
+	// WhatsApp receipts (v1.4.6): the receipt's "WhatsApp" button is
+	// zero-config (wa.me deep link into the shop's own WhatsApp).
+	// Automated sending rides a linked-number gateway (whapi.cloud /
+	// ultramsg): paste the API key, flip auto-send on, and every paid
+	// order's receipt goes to the customer's number. The key is a
+	// SECRET (masked + encrypted at rest) and deliberately does NOT
+	// team-sync — each till that completes sales needs its own.
+	"whatsapp_auto_send": "false", // queue the receipt on payment completion
+	"whatsapp_provider":  "",      // "" (manual only) | whapi | ultramsg
+	"whatsapp_api_url":   "",      // gateway base URL (preset fills the default)
+	"whatsapp_api_key":   "",      // SECRET — gateway token, masked in API
+	"whatsapp_sender":    "",      // the shop's WhatsApp number (display only)
 	// Team sync: links standalone tills through the shop's Supabase
 	// project (same one offsite backups use). Secrets masked in API.
 	"sync_enabled":     "false",

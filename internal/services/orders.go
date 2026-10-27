@@ -815,18 +815,21 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 		s.Audit(p.ID, p.Username, "CHECKOUT_SPLIT", "order", orderNumber, fmt.Sprintf("total %d, mixed tender", payable))
 		if order, err := s.GetOrder(orderID); err == nil {
 			s.printer.Enqueue(order)
+			s.QueueWhatsappReceipt(order) // auto-send path (no-op unless configured)
 			s.broadcast(EventOrderPaid, orderBroadcastPayload(order))
 		}
 	} else if immediateCredit {
 		s.Audit(p.ID, p.Username, "CHECKOUT_CREDIT", "order", orderNumber, fmt.Sprintf("total %d, store credit", payable))
 		if order, err := s.GetOrder(orderID); err == nil {
 			s.printer.Enqueue(order)
+			s.QueueWhatsappReceipt(order) // auto-send path (no-op unless configured)
 			s.broadcast(EventOrderPaid, orderBroadcastPayload(order))
 		}
 	} else if immediateCash {
 		s.Audit(p.ID, p.Username, "CHECKOUT_CASH", "order", orderNumber, fmt.Sprintf("total %d", payable))
 		if order, err := s.GetOrder(orderID); err == nil {
 			s.printer.Enqueue(order)
+			s.QueueWhatsappReceipt(order) // auto-send path (no-op unless configured)
 			s.broadcast(EventOrderPaid, orderBroadcastPayload(order))
 		}
 	} else if !isManual {
@@ -1226,6 +1229,7 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
 		return nil, err
 	}
 	s.printer.Enqueue(order)
+	s.QueueWhatsappReceipt(order) // auto-send path (no-op unless configured)
 	if payMethod == models.MethodCash {
 		// Best-effort drawer kick after commit — never fails the sale.
 		if err := s.printer.Kick(); err != nil {

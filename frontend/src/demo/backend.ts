@@ -1133,6 +1133,26 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (!o) throw new ApiError(404, 'order not found')
     return orderDTO(o) as T
   }
+  // WhatsApp receipt (demo): same shape as the server endpoint — a wa.me
+  // deep link built from the demo order, never queued (no gateway here).
+  if (m === 'POST' && p.match(/^\/orders\/(\d+)\/whatsapp$/)) {
+    requirePerm(perms, 'pos.sell')
+    const o = d.orders.find((x) => x.id === Number(p.match(/^\/orders\/(\d+)\/whatsapp$/)![1]))
+    if (!o) throw new ApiError(404, 'order not found')
+    const store = String(d.settings.store_name || 'Store')
+    const lines = (o.items ?? []).map((it) => `${it.name}\n  ${it.qty} x ${(it.unitPriceCents / 100).toFixed(2)}`).join('\n')
+    const text = `*${store}*\nReceipt ${o.number}\n\n${lines}\n\nTOTAL: ${(o.totalCents / 100).toFixed(2)}`
+    const cust = o.customerId ? d.customers.find((c) => c.id === o.customerId) : undefined
+    const raw = String(cust?.phone || '').replace(/[^0-9]/g, '')
+    const intl = raw.startsWith('0') ? '254' + raw.slice(1) : raw
+    return {
+      phone: intl,
+      link: intl ? `https://wa.me/${intl}?text=${encodeURIComponent(text)}` : '',
+      text,
+      queued: false,
+      reason: intl ? 'demo mode — gateway not configured' : 'no customer phone on this order',
+    } as T
+  }
   if (m === 'POST' && p === '/orders/checkout') {
     requirePerm(perms, 'pos.sell')
     const items = Array.isArray(body?.items) ? body.items : []

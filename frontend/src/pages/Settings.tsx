@@ -89,7 +89,7 @@ function SecretField({
 
 export function Settings() {
   const reloadBranding = useBranding((s) => s.load)
-  const [tab, setTab] = useState<'store' | 'payments' | 'printer' | 'team' | 'system' | 'audit'>('store')
+  const [tab, setTab] = useState<'store' | 'payments' | 'printer' | 'whatsapp' | 'team' | 'system' | 'audit'>('store')
   const [values, setValues] = useState<SettingsMap | null>(null)
   const [busy, setBusy] = useState(false)
   const [payConfig, setPayConfig] = useState<PaymentConfig | null>(null)
@@ -180,6 +180,7 @@ export function Settings() {
               { key: 'store' as const, label: 'Store' },
               { key: 'payments' as const, label: 'Payments' },
               { key: 'printer' as const, label: 'Printer' },
+              { key: 'whatsapp' as const, label: 'WhatsApp' },
               { key: 'team' as const, label: 'Team' },
               { key: 'system' as const, label: 'System' },
               { key: 'audit' as const, label: 'Audit log' },
@@ -396,6 +397,8 @@ export function Settings() {
             </label>
           </div>
         )}
+
+        {tab === 'whatsapp' && <WhatsappPanel values={values} set={set} />}
 
         {tab === 'team' && <TeamSyncPanel />}
 
@@ -850,6 +853,68 @@ function VoidReasonsAdmin() {
         />
         <Button type="submit" variant="primary" disabled={busy || !label.trim()}>Add reason</Button>
       </form>
+    </div>
+  )
+}
+
+// ---- WhatsApp receipts (WhatsApp tab) ----
+// Two paths: the receipt screen's WhatsApp button is ALWAYS on (wa.me deep
+// link into the shop's own WhatsApp — zero config). Automated delivery
+// needs a linked-number gateway: pick a provider, paste its API key, flip
+// auto-send on, and every paid order's receipt goes to the customer's
+// number with retries. The key is masked on read ("__SET__") and never
+// team-syncs — each till that completes sales needs its own key.
+
+function WhatsappPanel({ values, set }: { values: SettingsMap; set: (k: string, v: string) => void }) {
+  const autoOn = (values.whatsapp_auto_send ?? 'false') === 'true'
+  const provider = values.whatsapp_provider ?? ''
+  const gateReady = (values.whatsapp_api_key ?? '') !== '' && provider !== '' &&
+    (provider !== 'custom' || (values.whatsapp_api_url ?? '') !== '')
+  return (
+    <div className="px-4 pb-4 sm:px-5 grid sm:grid-cols-2 gap-3">
+      <div className="sm:col-span-2 bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted space-y-1">
+        <p><strong className="text-ink">Every receipt gains a WhatsApp button</strong> — it opens the shop's own WhatsApp with the receipt typed out; the cashier presses send. Nothing to configure here for that.</p>
+        <p><strong className="text-ink">Automatic sending</strong> (below) delivers the receipt to the customer's number the moment payment completes — the customer's phone is captured at checkout. Requires a linked-number gateway account (whapi.cloud or ultramsg: sign up, scan the QR with the shop's WhatsApp number, paste the API key here). Unofficial-gateway caution: sending receipts to paying customers is normal usage, but the number CAN be banned if used for spam — don't bulk-message.</p>
+      </div>
+      <Field label="Shop WhatsApp number (display only)" hint="The number the till's WhatsApp is linked to, e.g. 0718 630 570.">
+        <Input value={values.whatsapp_sender ?? ''} onChange={(e) => set('whatsapp_sender', e.target.value)} inputMode="tel" placeholder="07XX XXX XXX" />
+      </Field>
+      <Field label="Gateway provider" hint="whapi.cloud and ultramsg are preconfigured; custom = any HTTP endpoint taking {to, text}.">
+        <Select value={provider} onChange={(e) => set('whatsapp_provider', e.target.value)}>
+          <option value="">None (manual WhatsApp button only)</option>
+          <option value="whapi">whapi.cloud</option>
+          <option value="ultramsg">ultramsg</option>
+          <option value="custom">Custom endpoint</option>
+        </Select>
+      </Field>
+      {provider === 'ultramsg' && (
+        <Field label="Instance URL" hint="Full instance URL incl. path, e.g. https://ultramsg.com/INSTANCE83xxx">
+          <Input value={values.whatsapp_api_url ?? ''} onChange={(e) => set('whatsapp_api_url', e.target.value)} placeholder="https://ultramsg.com/INSTANCE…" />
+        </Field>
+      )}
+      {provider === 'custom' && (
+        <Field label="Gateway endpoint URL" hint="POST {to, text, order} — Authorization: Bearer <key>">
+          <Input value={values.whatsapp_api_url ?? ''} onChange={(e) => set('whatsapp_api_url', e.target.value)} placeholder="https://…" />
+        </Field>
+      )}
+      <Field label="Gateway API key" hint={values.whatsapp_api_key ? 'A key is saved (shown masked). Paste a new one to replace it.' : 'From your gateway dashboard.'}>
+        <Input type="password" value={values.whatsapp_api_key ?? ''} onChange={(e) => set('whatsapp_api_key', e.target.value)} placeholder="__SET__ = keep current" autoComplete="off" />
+      </Field>
+      <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink sm:col-span-2">
+        <input
+          type="checkbox"
+          checked={autoOn}
+          disabled={!gateReady}
+          onChange={(e) => set('whatsapp_auto_send', String(e.target.checked))}
+          className="w-5 h-5 accent-[#10B981]"
+        />
+        Auto-send the receipt on WhatsApp when payment completes
+      </label>
+      <p className="sm:col-span-2 text-[12px] text-ink-subtle">
+        {gateReady
+          ? 'Gateway configured. Receipts will be delivered automatically (retried up to 5 times; failures land in the audit log).'
+          : 'Automation is off until a provider and API key are saved. The receipt button keeps working regardless.'}
+      </p>
     </div>
   )
 }

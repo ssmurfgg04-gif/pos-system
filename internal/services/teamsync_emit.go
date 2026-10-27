@@ -207,3 +207,38 @@ func (s *Service) EmitDesign(title, productName, customerName, notes, status str
 		"notes": notes, "status": status, "updatedAt": nowStamp(),
 	})
 }
+
+// EmitShift queues a cash-drawer shift (open or close) so the whole team
+// sees every till's sessions — before v1.4.6 shifts were the one major
+// entity that never left the machine they were opened on (an admin on
+// another device simply could not see a shift opened elsewhere). The
+// local user_id never ships: ids differ per device, so the payload
+// carries the username and receivers resolve (or fall back) locally.
+
+func (s *Service) EmitShift(shiftID int64) {
+	var ev struct {
+		ClientUUID   string `json:"clientUuid"`
+		DeviceID     string `json:"deviceId"`
+		UserName     string `json:"userName"`
+		OpeningFloat int64  `json:"openingFloatCents"`
+		Expected     int64  `json:"expectedCents"`
+		Counted      int64  `json:"countedCents"`
+		Variance     int64  `json:"varianceCents"`
+		OpenedAt     string `json:"openedAt"`
+		ClosedAt     string `json:"closedAt"`
+	}
+	err := s.db.QueryRow(s.db.Rebind(`
+                SELECT COALESCE(sh.client_uuid,''), COALESCE(u.username,''), sh.opening_float_cents,
+                        sh.expected_cents, sh.counted_cents, sh.variance_cents, sh.opened_at, COALESCE(sh.closed_at,'')
+                FROM shifts sh JOIN users u ON u.id = sh.user_id WHERE sh.id = ?`), shiftID).
+		Scan(&ev.ClientUUID, &ev.UserName, &ev.OpeningFloat, &ev.Expected, &ev.Counted,
+			&ev.Variance, &ev.OpenedAt, &ev.ClosedAt)
+	if err != nil {
+		return
+	}
+	if ev.ClientUUID == "" {
+		return // pre-v20 shift, nothing to key replay on
+	}
+	ev.DeviceID = s.deviceID()
+	s.Emit("shift", "upsert", ev)
+}

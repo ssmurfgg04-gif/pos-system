@@ -30,10 +30,11 @@ const paidOrder = (id: number) => ({
 })
 
 const postMock = vi.fn(async (_path: string, _body?: unknown) => paidOrder(42))
+const getMock = vi.fn(async (_path: string) => [] as unknown)
 
 vi.mock('../src/lib/api', () => ({
   api: {
-    get: vi.fn(async () => []),
+    get: (path: string) => getMock(path),
     post: (...a: unknown[]) => postMock(a[0] as string, a[1]),
     put: vi.fn(async () => ({})),
     del: vi.fn(async () => ({})),
@@ -109,6 +110,8 @@ const line = (over: Partial<CartLine> = {}): CartLine => ({
 beforeEach(() => {
   useCart.setState({ lines: [], customerName: '', note: '' })
   postMock.mockClear()
+  getMock.mockReset()
+  getMock.mockImplementation(async () => [])
 })
 
 afterEach(() => { unmount() })
@@ -198,5 +201,96 @@ describe('Cart quantity semantics (card stepper)', () => {
     expect(useCart.getState().lines[0].qty).toBe(1)
     act(() => { useCart.getState().setQty(7, 0) })
     expect(useCart.getState().lines).toHaveLength(0)
+  })
+})
+
+// ---- Tab charge (field report v1.4.5: "the button is not clickable") ----
+// The tab charge button is DELIBERATELY gated: a customer must be picked and
+// carry a credit limit > 0 (server enforces the same rule atomically). The
+// regressions here lock the FIX, not the gate: the cashier is never left
+// staring at a dead button — every blocked state names the exact unlock.
+
+describe('Tab charge — the button is never a dead end', () => {
+  const customer = (over: Record<string, unknown> = {}) => ({
+    id: 11, name: 'Sal', phone: '254722000111', email: '', notes: '',
+    balanceCents: 0, creditLimitCents: 0, storeCreditCents: 0, loyaltyPoints: 0,
+    active: true, createdAt: '', updatedAt: '', ...over,
+  })
+
+  const tabPill = () =>
+    Array.from(container.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === 'Tab')
+  const chargeBtn = () =>
+    Array.from(container.querySelectorAll('button')).find((b) => /to tab/.test(b.textContent || ''))
+  const settleSearch = async () => {
+    await act(async () => { await new Promise((r) => setTimeout(r, 320)) }) // past the 250ms debounce
+  }
+
+  test('no customer picked yet: the rail says exactly what unlocks the button', async () => {
+    useCart.setState({ lines: [line()] })
+    mount(<CheckoutRail products={null} payConfig={null} onOrderPaid={() => {}} onOrderVoided={() => {}} />)
+    await click(tabPill()!)
+
+    expect(chargeBtn()!.disabled).toBe(true)
+    expect(container.textContent).toContain('Type the customer')
+    expect(container.textContent).toContain('the charge button unlocks then')
+  })
+
+  test('a typed name with no match points to the Customers page instead of silence', async () => {
+    useCart.setState({ lines: [line()] })
+    mount(<CheckoutRail products={null} payConfig={null} onOrderPaid={() => {}} onOrderVoided={() => {}} />)
+    await click(tabPill()!)
+
+    const search = container.querySelector('input[placeholder="Type a name or phone…"]') as HTMLInputElement
+    typeInto(search, 'nobody-here')
+    await settleSearch()
+
+    expect(getMock).toHaveBeenCalledWith(expect.stringContaining('/api/v1/customers?search=nobody-here'))
+    expect(container.textContent).toContain('No customer matches')
+    expect(container.textContent).toContain('Customers page first')
+    expect(chargeBtn()!.disabled).toBe(true)
+  })
+
+  test('picked customer without a limit: cash-only warning names the fix, charge stays disabled', async () => {
+    getMock.mockImplementation(async (path: string) =>
+      String(path).includes('/customers') ? [customer()] : [])
+    useCart.setState({ lines: [line()] })
+    mount(<CheckoutRail products={null} payConfig={null} onOrderPaid={() => {}} onOrderVoided={() => {}} />)
+    await click(tabPill()!)
+
+    const search = container.querySelector('input[placeholder="Type a name or phone…"]') as HTMLInputElement
+    typeInto(search, 'sal')
+    await settleSearch()
+    // pick the first result — matched by name, NOT by a class selector (the
+    // cart header's Clear button shares classes and sits earlier in the DOM)
+    await click(Array.from(container.querySelectorAll('button')).find((b) => (b.textContent || '').includes('Sal'))!)
+
+    expect(container.textContent).toContain('Sal is cash-only')
+    expect(container.textContent).toContain('set a Credit limit')
+    expect(chargeBtn()!.disabled).toBe(true)
+  })
+
+  test('picked customer WITH a limit: charge enables, label carries the amount; Enter picks a single match', async () => {
+    getMock.mockImplementation(async (path: string) =>
+      String(path).includes('/customers') ? [customer({ creditLimitCents: 50000 })] : [])
+    useCart.setState({ lines: [line()] })
+    mount(<CheckoutRail products={null} payConfig={null} onOrderPaid={() => {}} onOrderVoided={() => {}} />)
+    await click(tabPill()!)
+
+    const search = container.querySelector('input[placeholder="Type a name or phone…"]') as HTMLInputElement
+    typeInto(search, 'sal')
+    await settleSearch()
+    // Enter is a shortcut for picking the first match (search box = picker)
+    await act(async () => {
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await new Promise((r) => setTimeout(r, 30))
+    })
+
+    // The picked customer is displayed INSIDE the search input (an input
+    // value — invisible to textContent) and the charge button unlocks with
+    // the amount on its label.
+    expect(search.value).toMatch(/Sal · owes/)
+    const charge = chargeBtn()!
+    expect(charge.disabled).toBe(false)
+    expect(charge.textContent).toMatch(/Charge KES 550\.00 to tab/)
   })
 })
