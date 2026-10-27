@@ -41,14 +41,18 @@ func assertJobAccess(p *auth.Principal, job *models.DesignJob) error {
 		return nil
 	}
 	if job.AssigneeID != p.ID {
-		return fmt.Errorf("this job is assigned to someone else")
+		// "permission" keyword routes mapErr to 403 — a designer poking at
+		// another person's job is policy, not an outage.
+		return fmt.Errorf("permission denied: this job is assigned to someone else")
 	}
 	return nil
 }
 
 func (s *Service) CreateDesignJob(p *auth.Principal, in DesignJobInput) (*models.DesignJob, error) {
 	if !canDelegate(p) {
-		return nil, fmt.Errorf("only the front desk and owners can create jobs, designers work the jobs assigned to them")
+		// "permission" keyword routes mapErr to 403 (designer refusals are
+		// policy, not server faults — a 500 here read as an outage).
+		return nil, fmt.Errorf("permission denied: only the front desk and owners create jobs, designers work the jobs assigned to them")
 	}
 	status := in.Status
 	if status == "" {

@@ -73,13 +73,17 @@ func (s *Service) GetDailySummary(date string) (*DailySummary, error) {
 
 	err := s.db.QueryRow(s.db.Rebind(`
                 SELECT COALESCE(SUM(total_cents),0), COUNT(*),
-                        COALESCE(AVG(total_cents),0),
+                        CAST(COALESCE(AVG(total_cents),0) AS INTEGER),
                         COALESCE(SUM(CASE WHEN discrepancy != 0 THEN 1 ELSE 0 END),0)
                 FROM orders WHERE status = 'PAID' AND created_at BETWEEN ? AND ?`), from, to).
 		Scan(&out.SalesCents, &out.OrdersPaid, &out.AvgOrderCents, &out.Discrepancies)
 	if err != nil {
 		return nil, err
 	}
+	// Authoritative average is sum/count (integer math); the CAST above
+	// only keeps the scan alive — SQLite's AVG() is float, and scanning a
+	// float into an int64 field 500'd every daily report that HAD sales
+	// (quiet days worked: AVG is NULL → COALESCE yields the integer 0).
 	if out.OrdersPaid > 0 {
 		out.AvgOrderCents = out.SalesCents / int64(out.OrdersPaid)
 	}

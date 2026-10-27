@@ -3,6 +3,19 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.4.7 — daily report hotfix (found by the 58-check E2E sweep)
+
+- **The daily report 500'd on any day that HAD sales.** SQLite's AVG()
+  returns a float and the summary scanned it into an integer — quiet
+  days worked (NULL → 0), busy days broke. Fixed with an integer CAST;
+  a regression test locks a sales-day + an empty-day summary.
+- Design-board refusals are 403s now, not 500s: designers cannot create
+  jobs (front desk/owners do) and cannot move jobs assigned to others —
+  both are policy, not server faults.
+- The E2E smoke suite was realigned with the product (seed product names,
+  design-board roles, retired Daraja settings keys) and taught to switch
+  the Buni route off locally; it runs 58/58 against a live server.
+
 ## v1.4.6 — WhatsApp receipts, team-visible shifts, honest tab guidance
 
 ### WhatsApp receipts to the customer's number (the headline)
