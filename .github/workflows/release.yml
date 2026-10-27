@@ -287,6 +287,38 @@ jobs:
           fi
           git push "https://x-access-token:${RELEASES_TOKEN}@github.com/${{ env.REPO_SLUG }}.git" HEAD:main
 
+      - name: Deploy the download site (same build path as CI)
+        # The manifest-sync push above does not always trigger CI (GitHub
+        # skips workflow runs for pushes made with some token types), and
+        # when it doesn't, the download site serves a stale version until
+        # the next code change. Deploy here, in the release run itself,
+        # from the manifest this run just synced — and verify it live.
+        if: steps.meta.outputs.publish == 'true' && !contains(steps.meta.outputs.tag, '-')
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if [ -z "$NETLIFY_AUTH_TOKEN" ] || [ -z "$NETLIFY_SITE_ID" ]; then
+            echo "::warning::NETLIFY_AUTH_TOKEN / NETLIFY_SITE_ID not set — site deploy skipped; the download site goes stale until CI deploys it (dispatch ci.yml on main)."
+            exit 0
+          fi
+          python3 scripts/netlify_build.py
+          npx --yes netlify-cli@latest deploy \
+            --dir frontend/dist \
+            --site "$NETLIFY_SITE_ID" \
+            --auth "$NETLIFY_AUTH_TOKEN" \
+            --prod \
+            --message "release deploy $TAG"
+          expected=$(awk '/ledgerpos-setup-windows-x64.exe/{print $1}' downloads/checksums.txt)
+          live=$(curl -fsSL --max-time 30 https://awesomeposs.netlify.app/downloads/checksums.txt \
+                 | awk '/ledgerpos-setup-windows-x64.exe/{print $1}' || true)
+          if [ "$live" != "$expected" ]; then
+            echo "::error::download site did not pick up $TAG (expected sha256 $expected, live ${live:-<unreachable>})"
+            exit 1
+          fi
+          echo "download site verified at $TAG"
+
       - name: Job summary — manifest, signature, and the fleet SQL
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
