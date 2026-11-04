@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"html/template"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +47,38 @@ func (h *H) ListOrders(c *gin.Context) {
 		orders = []models.Order{}
 	}
 	h.ok(c, orders)
+}
+
+// ListOrderCashiers (orders.view, orders.view.all required) — the filter
+// dropdown's options for the Orders page. Staff without orders.view.all
+// only ever see their own sales, so a cashier picker is meaningless (and
+// an information leak) for them: 403.
+func (h *H) ListOrderCashiers(c *gin.Context) {
+	p := h.principal(c)
+	if !p.Can("orders.view.all") {
+		h.fail(c, 403, "the cashier filter needs full order access")
+		return
+	}
+	rows, err := h.db(c).Query(h.db(c).Rebind(`
+                SELECT u.id, COALESCE(NULLIF(u.full_name,''), u.username)
+                FROM users u WHERE u.is_active = 1 ORDER BY 2`))
+	if err != nil {
+		h.fail(c, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	type cashier struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+	}
+	out := []cashier{}
+	for rows.Next() {
+		var cs cashier
+		if err := rows.Scan(&cs.ID, &cs.Name); err == nil {
+			out = append(out, cs)
+		}
+	}
+	h.ok(c, out)
 }
 
 // GetOrder (orders.view).
@@ -214,6 +247,16 @@ func (h *H) Sync(c *gin.Context) {
 	h.ok(c, results)
 }
 
+// trimPercentLabel formats 16.00 → "16", 13.5 → "13.5" for VAT labels
+// (mirrors services.trimPercent).
+func trimPercentLabel(f float64) string {
+	s := strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", f), "0"), ".")
+	if s == "" {
+		return "0"
+	}
+	return s
+}
+
 // ReceiptHTML renders a printable receipt page (browser print fallback for
 // shops without a thermal printer).
 func (h *H) ReceiptHTML(c *gin.Context) {
@@ -228,19 +271,52 @@ func (h *H) ReceiptHTML(c *gin.Context) {
 	}
 	symbol := h.settings(c).GetString("currency_symbol", "KES")
 	fm := func(cents int64) string { return printer.FormatMoney(cents, symbol) }
+	// Day-first — Kenya reads 02/01/2006, not the American 01/02/2006.
 	when := order.PaidAtOrCreated()
 	if t, err := time.Parse(time.RFC3339, when); err == nil {
-		when = t.Local().Format("2006-01-02 15:04")
+		when = t.Local().Format("02/01/2006 15:04")
 	}
+	// Honest legs (same rules as the paper + branded-image renderers):
+	// a leg the provider has not confirmed must never say "PAID".
 	var payLines []string
+	tabCharge := false
 	for _, pm := range order.Payments {
+		if pm.Status == "FAILED" {
+			continue
+		}
+		done := pm.Status == "COMPLETED"
 		switch pm.Method {
 		case models.MethodCash:
 			payLines = append(payLines, "PAID: Cash")
 		case models.MethodMpesa:
-			s := "PAID: M-Pesa"
-			if pm.MpesaReceipt != "" {
-				s += " " + pm.MpesaReceipt
+			s := "M-Pesa (pending)"
+			if done {
+				s = "PAID: M-Pesa"
+				if pm.MpesaReceipt != "" {
+					s += " " + pm.MpesaReceipt
+				}
+			}
+			if pm.Phone != "" {
+				s += " (" + pm.Phone + ")"
+			}
+			payLines = append(payLines, s)
+		case "account":
+			tabCharge = true
+			s := "Tab charge"
+			if !done {
+				s += " (pending)"
+			}
+			payLines = append(payLines, s)
+		case "credit":
+			s := "Store credit"
+			if !done {
+				s += " (pending)"
+			}
+			payLines = append(payLines, s)
+		case "paystack":
+			s := "Card / mobile money (pending)"
+			if done {
+				s = "PAID: Card / mobile money"
 			}
 			payLines = append(payLines, s)
 		}
@@ -248,22 +324,63 @@ func (h *H) ReceiptHTML(c *gin.Context) {
 	if order.Status == models.OrderVoided {
 		payLines = append(payLines, "*** VOIDED ***")
 	}
+	// Gift-card codes minted by this sale — the printed page is the
+	// customer's copy of the value, same as paper and the branded image.
+	var giftCards []string
+	if gcRows, err := h.db(c).Query(`SELECT code FROM gift_cards WHERE order_id = ? ORDER BY id`, order.ID); err == nil {
+		for gcRows.Next() {
+			var code string
+			if gcRows.Scan(&code) == nil {
+				giftCards = append(giftCards, code)
+			}
+		}
+		gcRows.Close()
+	}
+	// What the customer owes NOW on their tab (this charge already moved
+	// the balance) — mirrors the branded image's "Tab balance now".
+	tabBalance := ""
+	if tabCharge && order.CustomerID > 0 {
+		var bal int64
+		if err := h.db(c).QueryRow(`SELECT balance_cents FROM customers WHERE id = ?`, order.CustomerID).Scan(&bal); err == nil && bal > 0 {
+			tabBalance = fm(bal)
+		}
+	}
+	taxIncluded := order.TaxIncluded
+	pc := h.settings(c).GetInt("loyalty_point_cents", 100)
+	if pc < 0 {
+		pc = 100
+	}
 	data := map[string]any{
-		"Store":    h.settings(c).GetString("store_name", "My Store"),
-		"Address":  h.settings(c).Get("store_address"),
-		"Phone":    h.settings(c).Get("store_phone"),
-		"Footer":   h.settings(c).Get("receipt_footer"),
-		"Number":   order.Number,
-		"When":     when,
-		"Cashier":  order.CashierName,
-		"Customer": order.CustomerName,
-		"Items":    order.Items,
-		"Subtotal": fm(order.SubtotalCents),
-		"Tax":      fm(order.TaxCents),
-		"Total":    fm(order.TotalCents),
-		"PayLines": payLines,
-		"Status":   order.Status,
-		"FM":       fm,
+		"Store":          h.settings(c).GetString("store_name", "My Store"),
+		"Address":        h.settings(c).Get("store_address"),
+		"Phone":          h.settings(c).Get("store_phone"),
+		"KraPin":         h.settings(c).Get("kra_pin"),
+		"Footer":         h.settings(c).Get("receipt_footer"),
+		"Number":         order.Number,
+		"When":           when,
+		"Cashier":        order.CashierName,
+		"Customer":       order.CustomerName,
+		"BuyerPin":       order.BuyerPIN,
+		"Items":          order.Items,
+		"Subtotal":       fm(order.SubtotalCents),
+		"PointsRedeemed": order.PointsRedeemed,
+		"Tax":            fm(order.TaxCents),
+		"TaxCents":       order.TaxCents, // int64 gate — the formatted "KES 0.00" string is truthy
+		"PointsCents":    order.PointsRedeemed * int64(pc),
+		"PointsPts":      order.PointsRedeemed,
+		"TaxLabel":       fmt.Sprintf("VAT (%s%%)%s", trimPercentLabel(order.TaxPercent), map[bool]string{true: " — included", false: ""}[taxIncluded]),
+		"Total":          fm(order.TotalCents),
+		"PayLines":       payLines,
+		"GiftCards":      giftCards,
+		"TabBalance":     tabBalance,
+		"Status":         order.Status,
+		"FM":             fm,
+	}
+	if order.DiscountCents != 0 { // a zero "KES 0.00" string is truthy in templates — gate here
+		data["Discount"] = fm(order.DiscountCents)
+		if order.DiscountLabel != "" { // bare label — the template wraps it in parens
+			data["DiscountLabel"] = order.DiscountLabel
+		}
 	}
 	tpl := template.Must(template.New("receipt").Parse(receiptTemplate))
 	c.Header("Content-Type", "text/html; charset=utf-8")
@@ -282,31 +399,64 @@ const receiptTemplate = `<!doctype html>
         .row{display:flex;justify-content:space-between;gap:8px}
         .line{display:flex;justify-content:space-between;gap:8px}
         .muted{color:#444}
+        .voided{color:#b91c1c;font-weight:700;letter-spacing:.15em;text-align:center;font-size:15px}
         @media print{body{background:#fff;padding:0}.receipt{box-shadow:none;width:72mm}.noprint{display:none}}
 </style></head><body>
 <div class="receipt">
         <div class="center bold large">{{.Store}}</div>
         {{if .Address}}<div class="center muted">{{.Address}}</div>{{end}}
         {{if .Phone}}<div class="center muted">{{.Phone}}</div>{{end}}
+        {{if .KraPin}}<div class="center muted">KRA PIN: {{.KraPin}}</div>{{end}}
         <hr>
-        <div class="row"><span>Receipt</span><span class="bold">{{.Number}}</span></div>
+        <div class="row"><span>{{if .BuyerPin}}Tax Invoice{{else}}Receipt{{end}}</span><span class="bold">{{.Number}}</span></div>
         <div class="row"><span>Date</span><span>{{.When}}</span></div>
         {{if .Cashier}}<div class="row"><span>Served by</span><span>{{.Cashier}}</span></div>{{end}}
         {{if .Customer}}<div class="row"><span>Customer</span><span>{{.Customer}}</span></div>{{end}}
+        {{if .BuyerPin}}<div class="row"><span>Buyer PIN</span><span>{{.BuyerPin}}</span></div>{{end}}
         <hr>
         {{range .Items}}
         <div class="bold">{{.Name}}</div>
-        <div class="line"><span class="muted">{{.Qty}} x {{printf "%d" .UnitPriceCents}}</span><span>{{printf "%d" .LineTotalCents}}</span></div>
+        <div class="line"><span class="muted">{{.Qty}} x {{call $.FM .UnitPriceCents}}</span><span>{{call $.FM .LineTotalCents}}</span></div>
         {{end}}
         <hr>
         <div class="row"><span>Subtotal</span><span>{{.Subtotal}}</span></div>
-        <div class="row"><span>Tax</span><span>{{.Tax}}</span></div>
+        {{if .Discount}}<div class="row"><span class="muted">Discount{{if .DiscountLabel}} ({{.DiscountLabel}}){{end}}</span><span class="muted">-{{.Discount}}</span></div>{{end}}
+        {{if .PointsCents}}<div class="row"><span class="muted">Points redeemed ({{.PointsPts}} pts)</span><span class="muted">-{{call $.FM .PointsCents}}</span></div>{{end}}
+        {{if .TaxCents}}<div class="row"><span>{{.TaxLabel}}</span><span>{{.Tax}}</span></div>{{end}}
         <div class="row large bold"><span>TOTAL</span><span>{{.Total}}</span></div>
         <hr>
         {{range .PayLines}}<div class="row"><span>{{.}}</span><span></span></div>{{end}}
+        {{range .GiftCards}}<div class="row"><span>Gift card</span><span class="bold">{{.}}</span></div>{{end}}
+        {{if .TabBalance}}<div class="row"><span>Tab balance now</span><span>{{.TabBalance}}</span></div>{{end}}
+        {{if eq .Status "VOIDED"}}<div class="voided">* * *  V O I D E D  * * *</div>{{end}}
         {{if .Footer}}<hr><div class="center muted">{{.Footer}}</div>{{end}}
         <div class="center noprint" style="margin-top:16px">
                 <button onclick="window.print()" style="padding:8px 20px;font-size:14px">Print</button>
         </div>
 </div>
 </body></html>`
+
+// ReceiptImage (orders.view) — the branded receipt PNG (watermarked, see
+// internal/services/receipt_watermark.go) for the Share-via-WhatsApp
+// button. ?download=1 sets an attachment filename; default is inline so
+// the browser/Web Share path can treat it as a plain image.
+func (h *H) ReceiptImage(c *gin.Context) {
+	id, ok := h.pathID(c, "id")
+	if !ok {
+		return
+	}
+	order, err := h.svc(c).GetOrderScoped(h.principal(c), id)
+	if err != nil {
+		h.fail(c, 404, "order not found")
+		return
+	}
+	png, err := h.svc(c).ReceiptPNG(order)
+	if err != nil {
+		h.mapErr(c, err)
+		return
+	}
+	if c.Query("download") == "1" {
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="receipt-%s.png"`, order.Number))
+	}
+	c.Data(http.StatusOK, "image/png", png)
+}

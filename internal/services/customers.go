@@ -40,10 +40,12 @@ func (s *Service) GetCustomer(id int64) (*models.Customer, error) {
 
 // ListCustomers returns active-first matches for name/phone/email search.
 func (s *Service) ListCustomers(search string) ([]models.Customer, error) {
-	q := "%" + strings.TrimSpace(search) + "%"
+	// LOWER on both sides: user-facing search is case-insensitive on
+	// SQLite AND on Postgres (bare LIKE is case-sensitive there).
+	q := "%" + strings.ToLower(strings.TrimSpace(search)) + "%"
 	rows, err := s.db.Query(s.db.Rebind(`
                 SELECT `+customerColumns+` FROM customers
-                WHERE name LIKE ? OR phone LIKE ? OR COALESCE(email,'') LIKE ?
+                WHERE LOWER(name) LIKE ? OR LOWER(phone) LIKE ? OR LOWER(COALESCE(email,'')) LIKE ?
                 ORDER BY is_active DESC, balance_cents DESC, name ASC
                 LIMIT 200`), q, q, q)
 	if err != nil {

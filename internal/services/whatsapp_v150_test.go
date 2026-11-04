@@ -25,6 +25,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"posapp/internal/models"
 )
 
 func waOrder(t *testing.T, s *Service) (orderID, customerID int64) {
@@ -89,9 +91,12 @@ func TestWhatsappCaptionThankYouAndDetails(t *testing.T) {
 		t.Fatalf("order: %v", err)
 	}
 	cap := s.receiptCaption(o)
+	// The order NUMBER comes from a package-wide sequence — other tests'
+	// fixtures advance it, so assert on the number THIS order carries
+	// (the caption contract is "carries the order's own number").
 	for _, want := range []string{
 		"Hi Sal!", "Creative Divine Concepts", "we're glad you chose us",
-		"Receipt ORD-WA001", "Total:", "Paid M-Pesa", "UJRQBBDEU3",
+		"Receipt " + o.Number, "Total:", "Paid M-Pesa", "UJRQBBDEU3",
 	} {
 		if !strings.Contains(cap, want) {
 			t.Fatalf("caption missing %q:\n%s", want, cap)
@@ -351,7 +356,7 @@ func TestReceiptPNGRendersWithAndWithoutLogo(t *testing.T) {
 	})
 	orderID, _ := waOrder(t, s)
 	o, _ := s.GetOrder(orderID)
-	png1, err := s.receiptPNG(o)
+	png1, err := s.ReceiptPNG(o)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -380,7 +385,7 @@ func TestReceiptPNGRendersWithAndWithoutLogo(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.settings.Update(map[string]string{"brand_logo": "1"})
-	png2, err := s.receiptPNG(o)
+	png2, err := s.ReceiptPNG(o)
 	if err != nil {
 		t.Fatalf("render with logo: %v", err)
 	}
@@ -438,6 +443,131 @@ func TestWhatsappPhoneValidationMapsTo422(t *testing.T) {
 		}
 		if got != want {
 			t.Fatalf("%q: normalized to %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestResendWhatsappReceiptPaths — the Share-via-WhatsApp button's server
+// leg (v1.6.0). Three outcomes, each with the UI path it drives:
+//
+//	token + PAID + phone  → one PENDING job queued (customer gets the
+//	                        branded IMAGE server-side), phone returned;
+//	no token              → fallback=true (device share sheet / download);
+//	pending order + token → hard refusal (never message payment "proof"
+//	                        for money that has not arrived).
+//
+// A re-send is ALLOWED after an automatic send: "I didn't get it" is the
+// button's reason to exist, so no dedupe.
+func TestResendWhatsappReceiptPaths(t *testing.T) {
+	s := openV146Till(t)
+	orderID, _ := waOrder(t, s)
+	o, err := s.GetOrder(orderID)
+	if err != nil {
+		t.Fatalf("get order: %v", err)
+	}
+
+	// 1. Gateway not connected → fallback to the device paths.
+	phone, fallback, err := s.ResendWhatsappReceipt(o)
+	if err == nil || !fallback || phone != "" {
+		t.Fatalf("no token: want fallback refusal, got phone=%q fallback=%v err=%v", phone, fallback, err)
+	}
+
+	// 2. Token connected → queues exactly one PENDING image job.
+	s.settings.Update(map[string]string{"whatsapp_api_key": "tok-resend"})
+	phone, fallback, err = s.ResendWhatsappReceipt(o)
+	if err != nil || fallback {
+		t.Fatalf("connected: unexpected refusal phone=%q fallback=%v err=%v", phone, fallback, err)
+	}
+	if phone != "254717344440" {
+		t.Fatalf("queued phone = %q, want the normalized customer number", phone)
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM whatsapp_jobs WHERE order_id = ? AND status = 'PENDING'`, orderID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("pending jobs = %d (err %v), want exactly 1", n, err)
+	}
+
+	// 3. Deliberate re-send: "I didn't get it" — allowed, second job.
+	if _, fallback, err := s.ResendWhatsappReceipt(o); err != nil || fallback {
+		t.Fatalf("resend refused: fallback=%v err=%v", fallback, err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM whatsapp_jobs WHERE order_id = ?`, orderID).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("jobs after resend = %d (err %v), want 2 (resend is deliberate)", n, err)
+	}
+
+	// 4. A pending (unpaid) sale is refused outright — its "receipt" is
+	// not proof of anything.
+	o.Status = models.OrderPending
+	if _, fallback, err := s.ResendWhatsappReceipt(o); err == nil || fallback {
+		t.Fatalf("pending order: want hard refusal, got fallback=%v err=%v", fallback, err)
+	}
+}
+
+// TestDrainSkipsDeadOrderWithoutStarvingQueue — criticism fix P1-5: a job
+// whose order row is gone must FAIL (not panic-and-stay-PENDING at the
+// head of the batch), and the NEXT job in the same tick must still send.
+func TestDrainSkipsDeadOrderWithoutStarvingQueue(t *testing.T) {
+	calls := 0
+	gw := waGatewayImage(t, 200, &calls, func(*http.Request, string, string, []byte) {})
+	defer gw.Close()
+
+	s := openV146Till(t)
+	s.settings.Update(map[string]string{"whatsapp_api_key": "tok", "whatsapp_api_url": gw.URL})
+
+	// Job A: points at an order id that does not exist (max+10).
+	var maxID int64
+	_ = s.db.QueryRow(`SELECT COALESCE(MAX(id),0) FROM orders`).Scan(&maxID)
+	dead := maxID + 10
+	_, err := s.db.Exec(s.db.Rebind(`
+                INSERT INTO whatsapp_jobs (order_id, order_number, phone, body, status, created_at)
+                VALUES (?, ?, ?, ?, 'PENDING', ?)`), dead, "ORD-DEAD", "254700000001", "caption", nowStamp())
+	if err != nil {
+		t.Fatalf("seed dead job: %v", err)
+	}
+
+	// Job B: a healthy paid order.
+	orderID, _ := waOrder(t, s)
+	o, _ := s.GetOrder(orderID)
+	if err := s.queueWhatsappJob(o, "254700000002", "caption"); err != nil {
+		t.Fatalf("seed live job: %v", err)
+	}
+
+	sent := s.drainWhatsappJobs(time.Now()) // must not panic
+	if sent != 1 {
+		t.Fatalf("sent %d, want 1 (the live job) — a dead job must not starve the batch", sent)
+	}
+	var st string
+	if err := s.db.QueryRow(`SELECT status FROM whatsapp_jobs WHERE order_id = ?`, dead).Scan(&st); err != nil || st != "FAILED" {
+		t.Fatalf("dead job status %q (err %v), want FAILED", st, err)
+	}
+	if calls != 1 {
+		t.Fatalf("gateway calls = %d, want 1", calls)
+	}
+}
+
+// TestPaymentWordIsStatusHonest — criticism fix P0-2: the branded image's
+// payment rows come from paymentWord; an unconfirmed leg must never say
+// "Paid" now that pending sales share through the manual button.
+func TestPaymentWordIsStatusHonest(t *testing.T) {
+	cases := []struct {
+		pm   models.Payment
+		want string
+	}{
+		{models.Payment{Method: "mpesa", Status: "PENDING"}, "M-Pesa (pending)"},
+		{models.Payment{Method: "mpesa", Status: "PROCESSING"}, "M-Pesa (pending)"},
+		{models.Payment{Method: "mpesa", Status: "COMPLETED"}, "Paid M-Pesa"},
+		{models.Payment{Method: "account", Status: "PENDING"}, "Tab charge (pending)"},
+		{models.Payment{Method: "credit", Status: "PENDING"}, "Store credit (pending)"},
+		{models.Payment{Method: "paystack", Status: "PENDING"}, "Card / mobile money (pending)"},
+		{models.Payment{Method: "paystack", Status: "COMPLETED"}, "Paid card / mobile money"},
+		{models.Payment{Method: "cash", Status: "PENDING"}, "Paid cash"},
+	}
+	for _, c := range cases {
+		got := paymentWord(c.pm)
+		if got != c.want {
+			t.Fatalf("paymentWord(%s/%s) = %q, want %q", c.pm.Method, c.pm.Status, got, c.want)
+		}
+		if strings.Contains(strings.ToLower(got), "paid") && !strings.Contains(strings.ToLower(c.want), "paid") {
+			t.Fatalf("%s/%s: %q claims Paid", c.pm.Method, c.pm.Status, got)
 		}
 	}
 }

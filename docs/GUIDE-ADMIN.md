@@ -94,14 +94,25 @@ The one that matters most since v1.4.4:
   `internal/money` (half-away-from-zero). Per-order tax snapshots make
   historic KRA reports stable when the rate changes.
 - **Receipts/printing**: printer target, width, auto-print toggle.
-- **WhatsApp receipts (v1.5.0)**: connect once in Settings → WhatsApp —
+- **WhatsApp receipts (v1.6.0)**: connect once in Settings → WhatsApp —
   create a whapi.cloud account, QR-link the shop's number, paste the API
-  token, press Send test. Every paid sale then texts the customer a
+  token, press Send test. Every paid sale then sends the customer a
   branded receipt image (shop logo + sale details + M-Pesa code) with an
-  English thank-you — automatically, with no cashier step and no
-  SMS/email fallback (Safaricom already texts the M-Pesa confirmation).
-  Failed sends appear in the same panel with a Retry button. The token
-  never team-syncs; set it on each till that completes sales.
+  English thank-you — automatically, no cashier step, no SMS/email
+  fallback (Safaricom already texts the M-Pesa confirmation). While the
+  gateway is off (or for "I didn't get it" re-sends), the receipt
+  screen's **Share via WhatsApp** button sends the same image: through
+  the gateway when connected, otherwise from the device (share sheet, or
+  save + the customer's chat opens with the caption typed). Failed sends
+  appear in the same panel with a Retry button. The token never
+  team-syncs; set it on each till that completes sales.
+- **Proving a receipt is genuine (v1.6.0)**: every branded image carries
+  an invisible, tamper-evident watermark. Settings → WhatsApp →
+  **Verify a receipt image** — upload the screenshot a customer sent as
+  "proof of payment" and the till answers plainly: genuine and
+  unmodified, doctored (the hidden total no longer matches the order),
+  issued against a voided/pending sale, or not from this shop at all
+  (AI-generated fakes and other shops' receipts fail).
 - **Tabs (customer accounts)**: no setup — any customer can be charged
   to tab at checkout, with or without a credit limit (the field is
   advisory). Customers → their record shows what they owe; take

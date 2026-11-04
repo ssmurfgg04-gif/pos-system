@@ -3,6 +3,109 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.6.0 — the Share button is back, receipts you can prove, orders you can find
+
+### Share via WhatsApp — the image, three ways
+
+The whapi gateway is still under review, so the manual path is back —
+and it sends the **branded receipt image**, never bare text:
+
+- **Server leg (gateway connected):** the receipt screen's Share button
+  queues the branded image straight to the customer's number — one tap,
+  the customer receives the picture with the thank-you caption on the
+  shop's own WhatsApp. It is an honest re-send: "I didn't get it" is the
+  button's reason to exist, and every attempt lands in the Settings
+  queue list and the audit log.
+- **Device share (no gateway):** the same PNG rides the phone's share
+  sheet (image + caption into WhatsApp) where the device supports file
+  sharing — on a LAN HTTP till the button saves the image and opens the
+  customer's chat with the caption typed; the cashier drags the picture
+  in and presses send.
+- **Format:** PNG on purpose — for a text receipt it is *smaller* than a
+  JPEG at usable quality, it is lossless (the invisible watermark's
+  exact layer survives every lossless copy), and WhatsApp accepts it
+  like any photo.
+
+### The invisible watermark — proof you can verify
+
+Every branded image now carries a hidden, HMAC-signed payload (order id,
+issue time, total) keyed with a per-shop secret that never leaves the
+shop (it rides team sync so any till can verify any till's receipts):
+
+- Two layers: an exact one that survives every lossless copy, and a
+  JPEG-survivable one (majority-voted cells in a dedicated white strip)
+  that rides out WhatsApp's own re-encoding and screenshots of flat
+  areas.
+- **Verify a receipt:** Settings → WhatsApp → *Verify a receipt image*.
+  Upload the screenshot a customer sent "as proof": the shop reads its
+  own hidden mark and answers plainly — genuine, or not issued by this
+  shop / modified past recovery; for genuine ones it also compares the
+  watermarked total against the order **as it exists now** and flags
+  doctored amounts, and refuses VOIDED receipts as proof of anything.
+  Edited amounts, AI-generated fakes and foreign shops' receipts fail.
+
+### The receipt content audit — every copy reconciles
+
+All four renderers (branded image, thermal paper, browser print, on-screen)
+were audited against a Kenyan counter's needs and now agree:
+
+- Contact row (shop phone · address) and **KRA PIN** where set; a buyer
+  PIN turns the document into a **TAX INVOICE** with the buyer's PIN on
+  it (eTIMS habit).
+- **Subtotal → Discount (with the reason) → Points redeemed as money →
+  VAT (rate + "included" when tax-inclusive) → TOTAL** reconciles on
+  every renderer — points redemption prints the shillings it took off,
+  not just "120 pts", and VAT-off shops no longer print "KES 0.00" rows.
+- **Honest payment legs everywhere**: an unconfirmed M-Pesa leg says
+  "M-Pesa (pending)" on paper, browser and image alike — a pending
+  sale's image carries a **\*\*\* PENDING \*\*\*** banner and a voided
+  one \*\*\* VOIDED \*\*\*; neither can be mistaken for proof of
+  payment.
+- Gift-card codes minted by the sale print on every copy (the code IS
+  the value); tab charges show the customer's **balance after this
+  charge**; the on-screen receipt shows the paid-at time (an STK sale
+  paid at 10:02 no longer prints 09:55).
+
+### Orders you can actually find
+
+- The Orders page gained **server-side date filters (Nairobi calendar
+  days — a 23:59:59 sale belongs to its own day), a cashier filter**
+  (Admin/Owner only — scoped staff see their own sales, and the picker
+  refuses to leak the roster) **and pagination** (50 rows a page).
+- Case-insensitive customer + quote search on the cloud Postgres (bare
+  LIKE was case-sensitive there).
+
+### Fixes for the pages nobody was watching
+
+- **Reports**: dates are Nairobi-local (midnight-to-3am sales no longer
+  land on yesterday), best sellers finally render, all-shop view no
+  longer trips on per-day series, the payment-split bars are
+  proportional (the old 12% floor showed 48% for a 10% share), and the
+  consolidated average is total ÷ count (the old average-of-averages
+  read 5,500 for a real ~1,089).
+- **Inventory**: restoring an archived product no longer wipes its
+  stock, tracking flag and barcode.
+- **Suppliers**: a purchase-order line's unit cost no longer multiplies
+  by 100 twice (a KES 50 part priced as KES 5,000).
+- **Design board**: creating a job follows the one true rule
+  (`orders.assign` — the front desk hands work to the studio) at every
+  layer; staff without it only see jobs assigned to them.
+- **WhatsApp queue**: an order that vanished can no longer starve every
+  later send (the job fails instead of panic-looping at the head of the
+  batch), and demo boxes (SEED_DEMO=true) no longer inherit production
+  secrets from the cloud vault.
+
+### For the record
+
+- Smoke suite grew to 82 checks (orders filters + pagination, watermark
+  roundtrip, share-button server leg, receipt-HTML audit rows); Go tests
+  20 packages, vitest 126.
+- Known notes: on a LAN HTTP till the Web-Share sheet is unavailable
+  (browsers require HTTPS for file sharing) — the Save + chat fallback
+  is the expected path there; payment-label wording still varies
+  slightly between modal and server renderers (cosmetic, tracked for
+  v1.6.1); receipt verification stays admin-only (Settings) for now.
+
 ## v1.5.0 — tabs for anyone, WhatsApp receipts that send themselves
 
 ### Tab: charge anyone, no setup (the "button not clickable" fix)

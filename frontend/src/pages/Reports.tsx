@@ -7,11 +7,14 @@ import { useEffect, useState } from 'react'
 import { api, downloadFile, DailySummary, MonthlySummary } from '../lib/api'
 import { Button, Card, EmptyState, Input, Spinner, StatusPill, Tabs } from '../components/ui'
 import { centsToAmount, formatMoney } from '../lib/money'
+import { todayLocal, thisMonthLocal } from '../lib/katime'
 import { toast } from '../stores/toasts'
 import { BarChart3, Banknote, Smartphone, CreditCard, Wallet, Download, FileSpreadsheet } from 'lucide-react'
 
-const today = () => new Date().toISOString().slice(0, 10)
-const thisMonth = () => new Date().toISOString().slice(0, 7)
+// Local (EAT) date strings — toISOString() is UTC and put Nairobi's
+// 00:00-03:00 sales on yesterday's report.
+const today = todayLocal
+const thisMonth = thisMonthLocal
 
 export function Reports() {
   const [view, setView] = useState<'daily' | 'monthly'>('daily')
@@ -62,7 +65,8 @@ function Daily() {
   }
   useEffect(() => { load(date) }, [date, allShops])
 
-  const max = Math.max(1, ...(data?.series.map((s) => s.salesCents) ?? [1]))
+  const series = data?.series ?? [] // consolidated (all-shops) payloads carry no per-day series
+  const max = Math.max(1, ...series.map((s) => s.salesCents), 1)
 
   return (
     <Card
@@ -170,7 +174,7 @@ function Daily() {
           <div className="mt-5">
             <p className="text-[12px] uppercase font-bold text-ink-muted mb-2">Last 7 days</p>
             <div className="flex items-end gap-2 border-b-2 border-line pb-px" role="img" aria-label="Sales per day for the last 7 days">
-              {data.series.map((s) => (
+              {series.map((s) => (
                 <div key={s.date} className="flex-1 flex flex-col items-center gap-1 group h-32">
                   <span className="text-[10px] font-bold text-ink-muted tabular opacity-0 group-hover:opacity-100 transition-opacity">
                     {centsToAmount(s.salesCents)}
@@ -198,6 +202,24 @@ function Daily() {
                     <span className="font-semibold text-ink flex-1 truncate">{st.name}</span>
                     <span className="text-ink-muted tabular">{st.orders} order{st.orders === 1 ? '' : 's'}</span>
                     <span className="font-bold tabular text-ink min-w-24 text-right">{centsToAmount(st.salesCents)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Best sellers — the SQL already ran for this on every load;
+              it just never reached the screen. Owners reorder from this. */}
+          {!!data.topProducts && data.topProducts.length > 0 && (
+            <div className="mt-5">
+              <p className="text-[12px] uppercase font-bold text-ink-muted mb-2">Top products today</p>
+              <div className="border-2 border-line rounded-input overflow-hidden">
+                {data.topProducts.map((tp, i) => (
+                  <div key={`${tp.productId}-${i}`} className={`flex items-center gap-3 px-3 py-2 text-[13px] ${i % 2 ? 'bg-surface-muted' : 'bg-surface'}`}>
+                    <span className="w-5 text-ink-subtle tabular font-bold">{i + 1}</span>
+                    <span className="font-semibold text-ink flex-1 truncate">{tp.name}</span>
+                    <span className="text-ink-muted tabular">{tp.qty} sold</span>
+                    <span className="font-bold tabular text-ink min-w-24 text-right">{centsToAmount(tp.salesCents)}</span>
                   </div>
                 ))}
               </div>
@@ -263,7 +285,8 @@ function Monthly() {
     }
   }
 
-  const max = Math.max(1, ...(data?.series.map((s) => s.salesCents) ?? [1]))
+  const mseries = data?.series ?? []
+  const max = Math.max(1, ...mseries.map((s) => s.salesCents), 1)
 
   return (
     <Card
@@ -304,7 +327,7 @@ function Monthly() {
           <div className="mt-5">
             <p className="text-[12px] uppercase font-bold text-ink-muted mb-2">Daily sales, {month}</p>
             <div className="flex items-end gap-[3px] h-24 border-b-2 border-line pb-px" role="img" aria-label={`Sales per day during ${month}`}>
-              {data.series.map((s) => (
+              {mseries.map((s) => (
                 <div
                   key={s.date}
                   className="flex-1 min-w-[3px] rounded-t-[2px] bg-brand border-t-2 border-line-strong transition-[height]"
@@ -314,8 +337,8 @@ function Monthly() {
               ))}
             </div>
             <div className="flex justify-between mt-1">
-              <span className="text-[10px] text-ink-subtle">{data.series[0]?.date?.slice(5)}</span>
-              <span className="text-[10px] text-ink-subtle">{data.series[data.series.length - 1]?.date?.slice(5)}</span>
+              <span className="text-[10px] text-ink-subtle">{mseries[0]?.date?.slice(5)}</span>
+              <span className="text-[10px] text-ink-subtle">{mseries[mseries.length - 1]?.date?.slice(5)}</span>
             </div>
           </div>
 
@@ -333,8 +356,10 @@ function Monthly() {
 }
 
 function pct(part: number, whole: number) {
+  // Proportional on purpose: the old 12% floor meant four ~10% legs
+  // rendered a 48%-full bar and a 90/10 split read as 90/12.
   if (whole <= 0) return 0
-  return `${Math.max(12, Math.round((part / whole) * 100))}%`
+  return `${Math.max(2, Math.round((part / whole) * 100))}%` // 2% keeps a sliver visible for hover
 }
 
 function Stat({ label, value, big, warn, highlight }: { label: string; value: string; big?: boolean; warn?: boolean; highlight?: boolean }) {

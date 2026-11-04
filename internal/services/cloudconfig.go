@@ -240,7 +240,17 @@ func (s *Service) CloudConfigLoop(ctx context.Context) {
 
 // StartCloudConfig performs the boot-time fetch in the background and
 // starts the refresh loop. A slow/unreachable cloud never delays startup.
+//
+// SEED_DEMO=true servers (smoke CI, demo boxes) opt OUT entirely: a demo
+// till must never inherit production secrets from the vault (payment
+// keys, the WhatsApp token — a smoke test would silently send with the
+// shop's real gateway), and every pull registers a throwaway device in
+// the cloud's approval list.
 func (s *Service) StartCloudConfig(ctx context.Context) {
+	if os.Getenv("SEED_DEMO") == "true" {
+		log.Printf("[config] demo server (SEED_DEMO=true): cloud config pull disabled — no production secrets on a demo box")
+		return
+	}
 	go func() {
 		if err := s.RefreshCloudConfig(); err != nil {
 			log.Printf("[config] boot fetch: %v", err)

@@ -1,5 +1,7 @@
 // receipt_image.go — the branded receipt PNG that rides every automatic
-// WhatsApp send (v1.5.0).
+// WhatsApp send (v1.5.0) and the manual Share-via-WhatsApp button
+// (v1.6.0). Every image carries the invisible shop watermark (see
+// receipt_watermark.go).
 //
 // The customer receives a real image with the shop's logo (or a monogram
 // rendered from the shop name when no logo is uploaded), the shop's brand
@@ -11,19 +13,25 @@
 // Layout (720px wide, dynamic height):
 //
 //      [ brand-colored header band: logo/monogram + shop name ]
+//      phone · address                     KRA PIN (when set)
 //      RECEIPT <number>                    <date>
+//      Customer: <name>                    Served by <cashier>
 //      ------------------------------------------
 //      item name                                amount
 //      2 x KES 500.00   (gray sub-line)
 //      ------------------------------------------
-//      Discount            -KES 50.00
+//      Discount (staff 10%) -KES 50.00
+//      Points redeemed        120 pts
 //      VAT (16%)            KES 69.00
 //      TOTAL               KES 1,250.00   (big, bold)
 //      Paid M-Pesa         KES 1,250.00
 //      M-Pesa code: QGH7XYZ1
+//      Tab balance now     KES   500.00   (tab charges only)
+//      *** VOIDED ***                     (voided orders only, red)
 //      ------------------------------------------
 //      We're glad you chose us!   (brand color, centered)
 //      <receipt footer setting>   (centered, gray)
+//      [ invisible watermark strip ]
 
 package services
 
@@ -188,16 +196,23 @@ func scaleLogo(src image.Image, hPx int) image.Image {
 	return dst
 }
 
-// shopMonogram renders the fallback logo: a white disc with the shop
-// name's initials (up to two letters) in the brand color.
-func shopMonogram(store string, brand color.RGBA, radius int) image.Image {
+// shopMonogram renders the fallback logo: a solid disc with the shop
+// name's initials (up to two letters) in the text color. disc/text are
+// picked for contrast at the call site (white-on-brand, or ink-on-white
+// when the shop's brand color is too light to carry white text).
+func shopMonogram(store string, disc, text color.RGBA, radius int) image.Image {
 	d := radius * 2
 	img := image.NewRGBA(image.Rect(0, 0, d, d))
-	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{R: 255, G: 255, B: 255, A: 255}), image.Point{}, draw.Src)
+	draw.Draw(img, img.Bounds(), image.NewUniform(disc), image.Point{}, draw.Src)
 	words := strings.Fields(store)
 	initials := ""
 	for _, w := range words {
-		if r := []rune(w); len(r) > 0 && len(initials) < 2 {
+		r := []rune(strings.TrimSpace(w))
+		// Skip filler words — "The Secret Garden" reads "SG", not "TS".
+		if len(r) == 0 || strings.EqualFold(w, "the") || strings.EqualFold(w, "a") {
+			continue
+		}
+		if len(initials) < 2 {
 			initials += strings.ToUpper(string(r[0]))
 		}
 	}
@@ -205,7 +220,7 @@ func shopMonogram(store string, brand color.RGBA, radius int) image.Image {
 		initials = "S"
 	}
 	f := faceFor(mustBold(), float64(radius))
-	drawTextCenter(img, f, brand, 0, d, d/2+radius/2, initials)
+	drawTextCenter(img, f, text, 0, d, d/2+radius/2, initials)
 	return img
 }
 
@@ -233,8 +248,27 @@ func (s *Service) shopLogo() image.Image {
 	return src
 }
 
-// receiptPNG renders the branded receipt image for one order.
-func (s *Service) receiptPNG(o *models.Order) ([]byte, error) {
+// ReceiptPNG renders the branded receipt image for one order: content,
+// then the invisible watermark (block layer in a white strip under the
+// footer + exact LSB layer), then PNG-encodes. PNG is deliberate: for a
+// text receipt it is SMALLER than JPEG at usable quality, it is
+// lossless (the LSB layer survives every lossless copy), and WhatsApp
+// accepts it as an image upload like any other.
+func (s *Service) ReceiptPNG(o *models.Order) ([]byte, error) {
+	img, err := s.renderReceiptImage(o)
+	if err != nil {
+		return nil, err
+	}
+	marked := embedWatermark(o, img, time.Now(), s.watermarkKey())
+	var out bytes.Buffer
+	if err := png.Encode(&out, marked); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// renderReceiptImage draws the receipt content (no watermark, no strip).
+func (s *Service) renderReceiptImage(o *models.Order) (image.Image, error) {
 	reg, bold, err := loadGoFonts()
 	if err != nil {
 		return nil, fmt.Errorf("fonts: %w", err)
@@ -258,6 +292,17 @@ func (s *Service) receiptPNG(o *models.Order) ([]byte, error) {
 	faint := color.RGBA{R: 0x9C, G: 0xA3, B: 0xAF, A: 255}
 	line := color.RGBA{R: 0xE5, G: 0xE7, B: 0xEB, A: 255}
 	white := color.RGBA{R: 255, G: 255, B: 255, A: 255}
+	// A very light brand color on a white band would erase the white
+	// header text and monogram — fall back to ink for this receipt.
+	brandLuma := (int(brand.R)*299 + int(brand.G)*587 + int(brand.B)*114) / 1000
+	headerText := white
+	monogramDisc := white
+	monogramText := brand
+	if brandLuma > 200 {
+		headerText = ink
+		monogramDisc = ink
+		monogramText = white
+	}
 
 	fName := faceFor(bold, 21)
 	fSub := faceFor(reg, 15)
@@ -269,8 +314,13 @@ func (s *Service) receiptPNG(o *models.Order) ([]byte, error) {
 	fFooter := faceFor(reg, 14)
 	fStore := faceFor(bold, 30)
 
-	// Generous canvas; cropped to the drawn height at the end.
+	// Generous canvas; cropped to the drawn height at the end. MUST be
+	// painted white first: NewRGBA is transparent, and WhatsApp's JPEG
+	// pipeline drops alpha to BLACK — an unpainted body delivers the
+	// customer a black receipt (and makes the white watermark strip glow
+	// like a crop target).
 	canvas := image.NewRGBA(image.Rect(0, 0, receiptW, 3600))
+	draw.Draw(canvas, canvas.Bounds(), image.NewUniform(white), image.Point{}, draw.Src)
 	right := receiptW - receiptMargin
 
 	y := 0
@@ -290,7 +340,7 @@ func (s *Service) receiptPNG(o *models.Order) ([]byte, error) {
 			logoX += sb.Dx() + 18
 		}
 	} else {
-		mg := shopMonogram(store, brand, logoH/2)
+		mg := shopMonogram(store, monogramDisc, monogramText, logoH/2)
 		mb := mg.Bounds()
 		draw.Draw(canvas, image.Rect(logoX, (bandH-mb.Dy())/2, logoX+mb.Dx(), (bandH-mb.Dy())/2+mb.Dy()), mg, image.Point{}, draw.Over)
 		logoX += mb.Dx() + 18
@@ -300,25 +350,57 @@ func (s *Service) receiptPNG(o *models.Order) ([]byte, error) {
 		if i == 1 {
 			fStore = faceFor(bold, 22) // long names shrink on the wrap
 		}
-		drawText(canvas, fStore, white, logoX, nameY, l)
+		drawText(canvas, fStore, headerText, logoX, nameY, l)
 		nameY += 32
 		if nameY > bandH { // safety: never paint outside the band
 			break
 		}
 	}
 
-	y = bandH + 34
+	y = bandH + 30
+	// ---- Contact row: phone · address on the left, KRA PIN on the
+	// right (a Kenyan customer calls the number to verify; the KRA PIN
+	// mirrors the paper + browser receipts).
+	contact := strings.TrimSpace(strings.Join(nonEmpty([]string{
+		s.settings.Get("store_phone"), s.settings.Get("store_address"),
+	}), " · "))
+	if contact != "" {
+		drawText(canvas, fSub, muted, receiptMargin, y, contact)
+	}
+	if pin := s.settings.Get("kra_pin"); pin != "" {
+		drawTextRight(canvas, fSub, muted, right, y, "KRA PIN: "+pin)
+	}
+
+	y += 34
 	// ---- Meta ----
-	drawText(canvas, faceFor(reg, 13), faint, receiptMargin, y, "RECEIPT")
+	head := "RECEIPT"
+	if o.BuyerPIN != "" {
+		head = "TAX INVOICE" // eTIMS: a buyer PIN turns the receipt into one
+	}
+	drawText(canvas, faceFor(reg, 13), faint, receiptMargin, y, head)
 	drawText(canvas, fName, ink, receiptMargin, y+30, o.Number)
 	if t, err := time.Parse(time.RFC3339, o.PaidAtOrCreated()); err == nil {
 		drawTextRight(canvas, fMeta, muted, right, y+30, t.Local().Format("02/01/2006 15:04"))
 	}
-	if o.CashierName != "" {
-		y += 30
-		drawTextRight(canvas, fSub, muted, right, y, "Served by "+o.CashierName)
+	y += 30
+	// Right column stacks — never overprint: Buyer PIN and Served by
+	// each need their own baseline (both present = two rows).
+	rightY := y + 8
+	if o.CustomerName != "" {
+		drawText(canvas, fSub, muted, receiptMargin, y+8, "Customer: "+o.CustomerName)
 	}
-	y += 46
+	if o.BuyerPIN != "" {
+		drawTextRight(canvas, fSub, muted, right, rightY, "Buyer PIN: "+o.BuyerPIN)
+		rightY += 20
+	}
+	if o.CashierName != "" {
+		drawTextRight(canvas, fSub, muted, right, rightY, "Served by "+o.CashierName)
+	}
+	if o.BuyerPIN != "" && o.CashierName != "" {
+		y += 48 // two stacked rows on the right
+	} else {
+		y += 34
+	}
 	hline(canvas, line, y)
 
 	// ---- Items ----
@@ -354,11 +436,37 @@ func (s *Service) receiptPNG(o *models.Order) ([]byte, error) {
 		y += 32
 	}
 	y += 26
+	// Subtotal first: Subtotal − Discount (+ VAT when exclusive) must
+	// reconcile to TOTAL on the paper in the customer's hand. Under
+	// tax-inclusive pricing the VAT row says so — it is INSIDE the
+	// total, not added on top.
+	row("Subtotal", o.SubtotalCents, false, fTotalLbl, ink)
 	if o.DiscountCents != 0 {
-		row("Discount", o.DiscountCents, true, fTotalLbl, muted)
+		lbl := "Discount"
+		if o.DiscountLabel != "" {
+			lbl = fmt.Sprintf("Discount (%s)", o.DiscountLabel) // the WHY matters at the counter
+		}
+		row(lbl, o.DiscountCents, true, fTotalLbl, muted)
+	}
+	if o.PointsRedeemed > 0 {
+		// The row must RECONCILE like discount: the redemption is
+		// money off (points × point-cents), not a curiosity. The
+		// cents are exactly recoverable (orders.go mints whole
+		// points only).
+		pc := s.settings.GetInt("loyalty_point_cents", 100)
+		if pc < 0 {
+			pc = 100
+		}
+		drawText(canvas, fTotalLbl, muted, receiptMargin, y, fmt.Sprintf("Points redeemed (%d pts)", o.PointsRedeemed))
+		drawTextRight(canvas, fTotalLbl, muted, right, y, "-"+printer.FormatMoney(o.PointsRedeemed*int64(pc), symbol))
+		y += 32
 	}
 	if o.TaxCents != 0 {
-		row(fmt.Sprintf("VAT (%s%%)", trimPercent(o.TaxPercent)), o.TaxCents, false, fTotalLbl, muted)
+		vatLbl := fmt.Sprintf("VAT (%s%%)", trimPercent(o.TaxPercent))
+		if o.TaxIncluded {
+			vatLbl = fmt.Sprintf("VAT (%s%%, included)", trimPercent(o.TaxPercent))
+		}
+		row(vatLbl, o.TaxCents, false, fTotalLbl, muted)
 	}
 	drawText(canvas, fTotal, ink, receiptMargin, y+6, "TOTAL")
 	drawTextRight(canvas, fTotal, ink, right, y+6, printer.FormatMoney(o.TotalCents, symbol))
@@ -372,9 +480,39 @@ func (s *Service) receiptPNG(o *models.Order) ([]byte, error) {
 		if pm.MpesaReceipt != "" {
 			drawText(canvas, fSub, muted, receiptMargin, y-22, "M-Pesa code: "+pm.MpesaReceipt)
 		}
+		if pm.Method == "account" {
+			// The tab line the customer actually needs: what they owe
+			// NOW (this charge already moved the balance).
+			if bal := s.customerBalanceCents(o.CustomerID); bal > 0 {
+				row("Tab balance now", bal, false, fSub, muted)
+			}
+		}
+	}
+	// Gift cards bought in this sale: the code IS the value — the
+	// branded image is the delivery vehicle (admin sees them in Orders;
+	// the paying customer gets them here).
+	for _, code := range s.orderGiftCardCodes(o.ID) {
+		drawText(canvas, fSub, ink, receiptMargin, y, "Gift card: "+code)
+		y += 30
 	}
 	y += 6
 	hline(canvas, line, y)
+
+	if o.Status == models.OrderVoided {
+		// A voided receipt must never be usable as proof of payment.
+		y += 34
+		drawTextCenter(canvas, faceFor(bold, 24), color.RGBA{R: 0xB9, G: 0x1C, B: 0x1C, A: 255}, receiptMargin, right, y, "* * *   V O I D E D   * * *")
+		y += 20
+	}
+	if o.Status == models.OrderPending {
+		// Shareable before the money lands (tab settle reminders,
+		// quote-to-receipt flows) — the banner keeps it from being
+		// mistaken for proof of payment, and every unconfirmed leg
+		// says (pending) via paymentWord.
+		y += 34
+		drawTextCenter(canvas, faceFor(bold, 24), color.RGBA{R: 0x9A, G: 0x5B, B: 0x00, A: 255}, receiptMargin, right, y, "* * *   P E N D I N G   * * *")
+		y += 20
+	}
 
 	// ---- Footer ----
 	y += 38
@@ -388,10 +526,44 @@ func (s *Service) receiptPNG(o *models.Order) ([]byte, error) {
 	}
 	y += 26
 
-	crop := image.Rect(0, 0, receiptW, y)
-	var out bytes.Buffer
-	if err := png.Encode(&out, canvas.SubImage(crop)); err != nil {
-		return nil, err
+	return canvas.SubImage(image.Rect(0, 0, receiptW, y)), nil
+}
+
+// customerBalanceCents reads what a customer owes right now (0 when the
+// id is unknown — walk-in receipts have no balance line).
+func (s *Service) customerBalanceCents(id int64) int64 {
+	if id <= 0 {
+		return 0
 	}
-	return out.Bytes(), nil
+	var bal int64
+	_ = s.db.QueryRow(`SELECT balance_cents FROM customers WHERE id = ?`, id).Scan(&bal)
+	return bal
+}
+
+// orderGiftCardCodes lists the gift-card codes minted by one order.
+func (s *Service) orderGiftCardCodes(orderID int64) []string {
+	rows, err := s.db.Query(`SELECT code FROM gift_cards WHERE order_id = ? ORDER BY id`, orderID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var code string
+		if rows.Scan(&code) == nil {
+			out = append(out, code)
+		}
+	}
+	return out
+}
+
+// nonEmpty keeps the strings that carry content (contact row builder).
+func nonEmpty(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if strings.TrimSpace(v) != "" {
+			out = append(out, strings.TrimSpace(v))
+		}
+	}
+	return out
 }

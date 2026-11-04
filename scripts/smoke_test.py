@@ -4,7 +4,7 @@
 Usage: python3 scripts/smoke_test.py [base_url]
 Default base_url: http://127.0.0.1:3000
 
-41 checks against a running server seeded with demo data and
+82 checks against a running server seeded with demo data and
 mpesa_env=mock. The sweeper (5s interval) completes STK payments after the
 mock delay, exactly as it would against real Daraja stkpushquery.
 """
@@ -335,10 +335,14 @@ def main():
     check("report splits cash vs mpesa", r["cashCents"] > 0 and r["mpesaCents"] > 0, f"cash={r['cashCents']} mpesa={r['mpesaCents']}")
     check("7-day series present", len(r["series"]) == 7, f"{len(r['series'])}")
 
-    # -- 12. Receipt HTML ---------------------------------------------------------
+    # -- 12. Receipt HTML (v1.6.0 content audit parity: the browser
+    #        receipt reconciles like the paper + branded-image ones) ------
     st, raw = req("GET", f"/api/v1/orders/{order['id']}/receipt", cashier, raw=True)
     html = raw.decode()
     check("receipt HTML renders", st == 200 and "TOTAL" in html and order["number"] in html, f"{st}")
+    check("receipt HTML audit rows", "Subtotal" in html and "VAT" in html
+          and ("Served by" in html or "Customer" in html), f"sub={'Subtotal' in html} vat={'VAT' in html}")
+    check("receipt HTML honest legs", "PAID: Cash" in html, "completed cash leg must say PAID")
 
     # -- 13. Roles CRUD (dynamic RBAC) --------------------------------------------
     st, body = req("POST", "/api/v1/roles", admin, body={
@@ -349,7 +353,7 @@ def main():
     check("system role delete blocked 409", st == 409, f"{st}")
     st, body = req("PUT", "/api/v1/roles/2", admin, body={
         "name": "Cashier", "permissions": ["pos.sell", "pos.void", "orders.view", "payments.manual", "shifts.manage", "products.view"]})
-    check("system role editable", st == 200, f"{st}")
+    check("system role editable", st == 200, f"{st} {body}")
 
     # -- 14. Design board ------------------------------------------------------------
     # The front desk (orders.assign) creates jobs; designers work them.
@@ -407,6 +411,103 @@ def main():
     check("whatsapp jobs list refuses cashier 403", st == 403, f"{st}")
     st, body = req("POST", "/api/v1/whatsapp/test", admin, body={"phone": "12345"})
     check("whatsapp test rejects garbage phone 422", st == 422, f"{st}")
+
+    # -- 18. Orders query + receipt watermark (v1.6.0) ---------------------
+    # The Orders page's server-side date/cashier filters + pagination, and
+    # the receipt-image -> verify-receipt watermark roundtrip.
+    st, body = req("GET", "/api/v1/orders/cashiers", admin)
+    cashiers = data(body)
+    check("orders cashiers roster (admin)", st == 200 and isinstance(cashiers, list) and len(cashiers) >= 1
+          and all("id" in c and "name" in c for c in cashiers), f"{st}")
+    st, _ = req("GET", "/api/v1/orders/cashiers", cashier)
+    check("orders cashiers roster refuses cashier 403", st == 403, f"{st}")
+
+    eat_today = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 3 * 3600))
+    st, body = req("GET", f"/api/v1/orders?from={eat_today}&to={eat_today}&limit=200", admin)
+    todays = data(body)
+    check("orders date filter (EAT today) includes today's sale",
+          st == 200 and any(o["id"] == order["id"] for o in todays), f"{st} n={len(todays)}")
+    st, body = req("GET", "/api/v1/orders?from=2030-01-01&to=2030-01-02", admin)
+    check("orders future window is empty", st == 200 and data(body) == [], f"{st}")
+    st, body = req("GET", "/api/v1/orders?cashierId=999999", admin)
+    check("orders unknown cashier filter is empty", st == 200 and data(body) == [], f"{st}")
+
+    st, raw = req("GET", f"/api/v1/orders/{order['id']}/receipt-image", admin, raw=True)
+    check("receipt image renders (PNG)", st == 200 and raw[:8] == b"\x89PNG\r\n\x1a\n"
+          and len(raw) > 2000, f"{st} len={len(raw)}")
+
+    # Verify roundtrip: the image the Share button carries, handed back
+    # like a customer's "proof", must verify as this shop's own.
+    boundary = "smokev160"
+    part = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"proof.png\"\r\n"
+            f"Content-Type: image/png\r\n\r\n").encode() + raw + f"\r\n--{boundary}--\r\n".encode()
+    url = BASE + "/api/v1/whatsapp/verify-receipt"
+    r = urllib.request.Request(url, data=part, method="POST", headers={
+        "Authorization": "Bearer " + admin, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(r, timeout=30) as resp:
+            vst, vbody = resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        vst, vbody = e.code, json.loads(e.read() or b"{}")
+    v = data(vbody)
+    check("watermark verify: genuine receipt passes",
+          vst == 200 and v.get("valid") is True and v.get("orderId") == order["id"]
+          and v.get("totalMatchesOrder") is True and v.get("number") == order["number"], f"{vst} {vbody}")
+
+    part = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"fake.png\"\r\n"
+            f"Content-Type: image/png\r\n\r\nnot-a-receipt\r\n--{boundary}--\r\n").encode()
+    r = urllib.request.Request(url, data=part, method="POST", headers={
+        "Authorization": "Bearer " + admin, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(r, timeout=30) as resp:
+            vst = resp.status
+    except urllib.error.HTTPError as e:
+        vst = e.code
+    check("watermark verify: fabricated image fails 422", vst == 422, f"{vst}")
+
+    r = urllib.request.Request(url, data=part, method="POST", headers={
+        "Authorization": "Bearer " + cashier, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(r, timeout=30) as resp:
+            vst = resp.status
+    except urllib.error.HTTPError as e:
+        vst = e.code
+    check("watermark verify refuses cashier 403", vst == 403, f"{vst}")
+
+    # Share-via-WhatsApp server leg, on its own checkout (the customer
+    # phone auto-captures the CRM record the send needs): no token →
+    # 409 fallback (the UI then shares the image from the device);
+    # token set → 200 + queued 2547…; re-send allowed ("I didn't get it").
+    # (The secrets-class check in section 9 legitimately set a token —
+    # clear it first so the no-token refusal is really tested.)
+    st, _ = req("PUT", "/api/v1/settings", admin, body={"values": {"whatsapp_api_key": "__CLEAR__"}})
+    check("clear token for no-gateway test", st == 200, f"{st}")
+    st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
+        "items": [{"productId": p["id"], "qty": 1}],
+        "paymentMethod": "cash",
+        "clientUuid": "smoke-wa-send-1",
+        "customerPhone": "0733444555",
+        "customerName": "WA Smoke",
+    })
+    wa_order = data(body)
+    check("wa-send checkout -> PAID", st == 201 and wa_order.get("status") == "PAID", f"{st} {body}")
+    st, body = req("POST", f"/api/v1/orders/{wa_order['id']}/whatsapp-send", cashier, body={})
+    check("whatsapp-send without token 409 + fallback",
+          st == 409 and data(body).get("fallback") is True, f"{st} {body}")
+    st, _ = req("PUT", "/api/v1/settings", admin, body={"values": {
+        "whatsapp_api_key": "smoke-tok",
+        "whatsapp_api_url": "http://127.0.0.1:9",  # test seam: dead end, no live gateway call
+    }})
+    check("save whatsapp token (dead-end gateway)", st == 200, f"{st}")
+    st, body = req("POST", f"/api/v1/orders/{wa_order['id']}/whatsapp-send", cashier, body={})
+    queued = data(body)
+    check("whatsapp-send queues the branded image (200, 2547…)",
+          st == 200 and queued.get("queued") is True and str(queued.get("phone", "")).startswith("2547"), f"{st} {body}")
+    st, body = req("POST", f"/api/v1/orders/{wa_order['id']}/whatsapp-send", cashier, body={})
+    check("whatsapp-send re-send allowed (I didn't get it)", st == 200, f"{st}")
+    st, _ = req("PUT", "/api/v1/settings", admin, body={"values": {
+        "whatsapp_api_key": "__CLEAR__", "whatsapp_api_url": "__CLEAR__"}})
+    check("clear smoke whatsapp token", st == 200, f"{st}")
 
     # -- Summary ------------------------------------------------------------
     print(f"\n== {PASS} passed, {FAIL} failed ==")

@@ -17,6 +17,7 @@ import {
   TeamInviteCreated,
   TeamSyncStatus,
   UpdateStatus,
+  VerifyVerdict,
   VoidReason,
   WhatsappJob,
   backendMode,
@@ -26,6 +27,7 @@ import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
+import { centsToAmount } from '../lib/money'
 import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck, Undo2, LifeBuoy, KeyRound, Smartphone } from 'lucide-react'
 
 type SettingsMap = Record<string, string>
@@ -873,6 +875,13 @@ function WhatsappPanel({ values, set }: { values: SettingsMap; set: (k: string, 
   const [testPhone, setTestPhone] = useState('')
   const [testing, setTesting] = useState(false)
   const [busyJob, setBusyJob] = useState(0)
+  // Verify a receipt (v1.6.0): the customer's "proof" image goes in, the
+  // invisible watermark verdict comes out. Owners settle "but I sent the
+  // money" arguments with this instead of guesswork.
+  const [verifyFile, setVerifyFile] = useState<File | null>(null)
+  const [verifying, setVerifying] = useState(false)
+  const [verdict, setVerdict] = useState<VerifyVerdict | null>(null)
+  const [verdictError, setVerdictError] = useState('')
 
   const loadJobs = async () => {
     try {
@@ -912,11 +921,28 @@ function WhatsappPanel({ values, set }: { values: SettingsMap; set: (k: string, 
     }
   }
 
+  const verifyReceipt = async () => {
+    if (!verifyFile || verifying) return
+    setVerifying(true)
+    setVerdict(null)
+    setVerdictError('')
+    try {
+      const form = new FormData()
+      form.append('file', verifyFile)
+      setVerdict(await api.form<VerifyVerdict>('/api/v1/whatsapp/verify-receipt', form))
+    } catch (e: any) {
+      setVerdictError(e?.message || 'Could not verify this image')
+    } finally {
+      setVerifying(false)
+    }
+  }
+
   return (
     <div className="px-4 pb-4 sm:px-5 grid sm:grid-cols-2 gap-3">
       <div className="sm:col-span-2 bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted space-y-1">
-        <p><strong className="text-ink">Receipts send themselves.</strong> The moment a sale is paid, the branded receipt image (your logo, the sale details, a thank-you note) goes to the customer's WhatsApp automatically — no button, nothing for the cashier to do. Paper receipts still print as usual.</p>
-        <p><strong className="text-ink">Setup, once:</strong> 1) create a whapi.cloud account and link the shop's WhatsApp number there (scan the QR in their dashboard), 2) copy the API token, 3) paste it below and send a test. No token = no sends; sales are never blocked or delayed by WhatsApp.</p>
+        <p><strong className="text-ink">Receipts send themselves — and the cashier can share them by hand.</strong> The moment a sale is paid, the branded receipt image (your logo, the sale details, a thank-you note) goes to the customer's WhatsApp automatically. When the gateway is off (it is under review), the receipt screen's <strong className="text-ink">Share via WhatsApp</strong> button hands the same image to the cashier: one tap through the phone's share sheet, or it saves the picture and opens the customer's chat with the thank-you typed.</p>
+        <p><strong className="text-ink">Setup, once:</strong> 1) create a whapi.cloud account and link the shop's WhatsApp number there (scan the QR in their dashboard), 2) copy the API token, 3) paste it below and send a test. No token = no automatic sends; sales are never blocked or delayed by WhatsApp.</p>
+        <p><strong className="text-ink">Every receipt image carries an invisible watermark.</strong> When a customer forwards a screenshot as "proof of payment", upload it below: the shop reads its own hidden mark and tells you whether the image is genuinely yours, unmodified — and whether its total still matches the order. Edited amounts and AI-generated fakes fail.</p>
       </div>
       <Field label="whapi.cloud API token" hint={values.whatsapp_api_key ? 'A token is saved (shown masked). Paste a new one to replace it.' : 'From your whapi.cloud dashboard after linking the shop number.'}>
         <Input type="password" value={values.whatsapp_api_key ?? ''} onChange={(e) => set('whatsapp_api_key', e.target.value)} placeholder="__SET__ = keep current" autoComplete="off" />
@@ -943,6 +969,40 @@ function WhatsappPanel({ values, set }: { values: SettingsMap; set: (k: string, 
           ? 'Connected. Paid sales with a customer phone enqueue exactly one send, retried up to 5 times; failures appear below.'
           : 'Not connected — sales complete normally and nothing is sent. Paste a token to switch automatic receipts on.'}
       </p>
+      <div className="sm:col-span-2">
+        <p className="text-[12px] font-bold uppercase tracking-wide text-ink-subtle mb-1">Verify a receipt image</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(e) => { setVerifyFile(e.target.files?.[0] ?? null); setVerdict(null); setVerdictError('') }}
+            className="text-[13px] text-ink-muted file:mr-2 file:py-1.5 file:px-3 file:rounded-input file:border-2 file:border-line file:bg-surface file:text-[12px] file:font-bold file:text-ink"
+            aria-label="Receipt image to verify"
+          />
+          <Button variant="secondary" disabled={!verifyFile || verifying} onClick={verifyReceipt}>
+            <ShieldCheck size={15} strokeWidth={2.25} aria-hidden /> {verifying ? 'Checking…' : 'Verify'}
+          </Button>
+        </div>
+        {verdictError && (
+          <p className="mt-2 rounded-input border-2 border-danger-text/30 bg-danger-bg px-3 py-2 text-[12px] font-semibold text-danger-text">
+            Not verified: {verdictError}
+          </p>
+        )}
+        {verdict && (
+          <div className={`mt-2 rounded-input border-2 px-3 py-2 text-[13px] ${verdict.usable && verdict.totalMatchesOrder ? 'border-paid-text/40 bg-paid-bg' : 'border-pending-text/40 bg-pending-bg'}`}>
+            <p className="font-bold text-ink">
+              {verdict.usable && verdict.totalMatchesOrder ? 'Genuine — issued by this shop, unmodified' : 'Genuine mark, but check the details below'}
+            </p>
+            <p className="text-ink-muted">
+              Receipt <strong className="text-ink">{verdict.number || `#${verdict.orderId}`}</strong>
+              {' '}· issued {verdict.issuedAt.slice(0, 16).replace('T', ' ')}
+              {verdict.totalCents !== undefined && <> · watermarked total <strong className="text-ink">KES {centsToAmount(verdict.totalCents)}</strong></>}
+              {' '}· read via the {verdict.layer === 'block' ? 're-encoded-safe' : 'exact'} layer
+            </p>
+            {verdict.note && <p className="mt-1 font-semibold text-ink">{verdict.note}</p>}
+          </div>
+        )}
+      </div>
       <div className="sm:col-span-2">
         <div className="flex items-center justify-between mb-1">
           <p className="text-[12px] font-bold uppercase tracking-wide text-ink-subtle">Recent sends</p>

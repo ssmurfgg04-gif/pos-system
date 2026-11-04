@@ -339,7 +339,7 @@ func (s *Service) TeamOverview() ([]models.TeamMember, error) {
 	srows, err := s.db.Query(s.db.Rebind(`
                 SELECT cashier_id, COUNT(*), COALESCE(SUM(total_cents),0), MAX(COALESCE(NULLIF(paid_at,''), created_at))
                 FROM orders
-                WHERE status = 'PAID' AND COALESCE(NULLIF(paid_at,''), created_at) BETWEEN ? AND ?
+                WHERE status = 'PAID' AND COALESCE(NULLIF(paid_at,''), created_at) >= ? AND COALESCE(NULLIF(paid_at,''), created_at) < ?
                 GROUP BY cashier_id`), from, to)
 	if err == nil {
 		for srows.Next() {

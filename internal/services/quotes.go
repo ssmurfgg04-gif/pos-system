@@ -133,8 +133,10 @@ func (s *Service) ListQuotes(status, q string, limit int) ([]models.Quote, error
 		}
 	}
 	if qq := strings.TrimSpace(q); qq != "" {
-		where = append(where, "(quote_no LIKE ? OR customer_name LIKE ? OR customer_phone LIKE ?)")
-		like := "%" + qq + "%"
+		// LOWER on both sides: bare LIKE is case-SENSITIVE on Postgres
+		// (this app's cloud DB) even though the dev SQLite tolerates it.
+		where = append(where, "(LOWER(quote_no) LIKE ? OR LOWER(customer_name) LIKE ? OR LOWER(customer_phone) LIKE ?)")
+		like := "%" + strings.ToLower(qq) + "%"
 		args = append(args, like, like, like)
 	}
 	args = append(args, limit)

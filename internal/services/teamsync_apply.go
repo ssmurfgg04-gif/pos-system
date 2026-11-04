@@ -72,7 +72,11 @@ func (s *Service) applyEvent(entity, op string, payload json.RawMessage) error {
 var configSyncWhitelist = map[string]bool{
 	"app_name": true, "store_name": true, "store_address": true,
 	"store_phone": true, "receipt_footer": true,
-	"currency_code": true, "currency_symbol": true,
+	// The receipt watermark key MUST sync: any till must be able to
+	// verify a receipt image any other till issued (it is a verification
+	// secret, never exposed in the UI or on the receipt itself).
+	"receipt_watermark_key": true,
+	"currency_code":         true, "currency_symbol": true,
 	"tax_percent": true, "tax_included": true, "brand_color": true,
 	"payment_mode": true, "till_number": true, "paybill_number": true,
 	"loyalty_enabled": true, "loyalty_earn_per_cents": true,

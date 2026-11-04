@@ -159,6 +159,29 @@ func (w *Worker) printJob(ctx context.Context, jobID int64) {
 		w.settings.Get("store_phone"),
 		w.settings.Get("receipt_footer"),
 		w.settings.GetString("currency_symbol", "KES"))
+	data.KraPin = w.settings.Get("kra_pin") // eTIMS header on paper too
+	// Loyalty redemption as MONEY — the printed rows must reconcile
+	// (Subtotal − Discount − Points ± VAT = TOTAL), like the branded
+	// image. Points are minted whole, so cents are exact.
+	if order.PointsRedeemed > 0 {
+		pc := w.settings.GetInt("loyalty_point_cents", 100)
+		if pc < 0 {
+			pc = 100
+		}
+		data.PointsPts = order.PointsRedeemed
+		data.PointsCents = order.PointsRedeemed * int64(pc)
+	}
+	// Gift-card codes minted by this sale — the printed slip is the
+	// customer's copy of the value, same as the branded image.
+	if rows, err := w.db.Query(`SELECT code FROM gift_cards WHERE order_id = ? ORDER BY id`, order.ID); err == nil {
+		for rows.Next() {
+			var code string
+			if rows.Scan(&code) == nil {
+				data.GiftCards = append(data.GiftCards, code)
+			}
+		}
+		rows.Close()
+	}
 	width := w.settings.GetInt("printer_width", 80)
 	cols := 48
 	if width <= 58 {

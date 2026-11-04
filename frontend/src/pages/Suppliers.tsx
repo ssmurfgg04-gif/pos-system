@@ -257,7 +257,14 @@ function POForm({ onDone }: { onDone: () => void }) {
       .filter((l) => l.productId && Number(l.qty) > 0)
       .map((l) => {
         const prod = products.find((p) => p.id === Number(l.productId))
-        return { productId: Number(l.productId), qty: Math.round(Number(l.qty)), costCents: Math.max(0, Math.round(Number(l.cost || prod?.costCents || 0) * 100)) }
+        // l.cost is an AMOUNT (KES) — ×100 to cents. The fallback is
+        // prod.costCents, already in cents: multiplying it again priced
+        // every unit-cost line at a hundredfold (KES 50 stock entered
+        // as KES 5,000 on the purchase order). A typed "0" means zero.
+        const costCents = l.cost.trim() !== ''
+          ? Math.max(0, Math.round(Number(l.cost) * 100))
+          : Math.max(0, Math.round(Number(prod?.costCents || 0)))
+        return { productId: Number(l.productId), qty: Math.round(Number(l.qty)), costCents }
       })
     if (!supplierId || items.length === 0) {
       toast.error('Pick a supplier and at least one line with quantity')

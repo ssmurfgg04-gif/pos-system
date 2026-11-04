@@ -294,7 +294,7 @@ function QuoteEditor({
     if (custDebounce.current) clearTimeout(custDebounce.current)
     if (!custQ.trim()) { setCustResults([]); return }
     custDebounce.current = setTimeout(() => {
-      api.get<Customer[]>(`/api/v1/customers?q=${encodeURIComponent(custQ.trim())}`)
+      api.get<Customer[]>(`/api/v1/customers?search=${encodeURIComponent(custQ.trim())}`)
         .then(setCustResults).catch(() => setCustResults([]))
     }, 250)
   }, [custQ])

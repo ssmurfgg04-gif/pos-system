@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, DesignJob, GiftCard, Order, OrderEvent, WhatsAppContact } from '../lib/api'
 import { useAuth } from '../stores/auth'
-import { Button, Card, EmptyState, Input, Modal, Spinner, StatusPill, Table, Tabs, Textarea, Field } from '../components/ui'
+import { Button, Card, EmptyState, Input, Modal, Select, Spinner, StatusPill, Table, Tabs, Textarea, Field } from '../components/ui'
 import { ReceiptModal } from '../components/Receipt'
 import { useBranding } from '../stores/branding'
 import { centsToAmount, formatMoney } from '../lib/money'
@@ -47,6 +47,7 @@ export function Orders() {
   const canSell = useAuth((s) => !!s.user?.permissions.includes('pos.sell'))
   const canAssign = useAuth((s) => !!s.user?.permissions.includes('orders.assign'))
   const canNotify = useAuth((s) => !!s.user?.permissions.includes('orders.notify'))
+  const canViewAll = useAuth((s) => !!s.user?.permissions.includes('orders.view.all'))
   const [settleFor, setSettleFor] = useState<Order | null>(null)
   const [orders, setOrders] = useState<Order[] | null>(null)
   const [status, setStatus] = useState<'all' | 'PAID' | 'PENDING' | 'VOIDED'>('all')
@@ -57,6 +58,18 @@ export function Orders() {
   const [discrepancyOnly, setDiscrepancyOnly] = useState(false)
   const [receiptFor, setReceiptFor] = useState<Order | null>(null)
   const [checkingId, setCheckingId] = useState<number | null>(null)
+
+  // Query UI (v1.6.0): the server filters by date (EAT calendar days),
+  // cashier (orders.view.all holders only) and serves pages of PAGE rows.
+  // We fetch PAGE+1 to know whether an Older page exists without a
+  // separate count query.
+  const PAGE = 50
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [cashier, setCashier] = useState('all')
+  const [cashiers, setCashiers] = useState<{ id: number; name: string }[]>([])
+  const [offset, setOffset] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
 
   // Re-verify a stuck PENDING order's charges with the provider — the
   // recovery path for money that arrived after the till stopped watching
@@ -81,15 +94,30 @@ export function Orders() {
 
   const load = async () => {
     try {
-      const q = new URLSearchParams({ limit: '100' })
+      const q = new URLSearchParams({ limit: String(PAGE + 1), offset: String(offset) })
       if (status !== 'all') q.set('status', status)
       if (search.trim()) q.set('search', search.trim())
-      setOrders(await api.get<Order[]>(`/api/v1/orders?${q}`))
+      if (from) q.set('from', from)
+      if (to) q.set('to', to)
+      if (cashier !== 'all') q.set('cashierId', cashier)
+      const rows = await api.get<Order[]>(`/api/v1/orders?${q}`)
+      setHasMore(rows.length > PAGE)
+      setOrders(rows.slice(0, PAGE))
     } catch (e: any) {
       toast.error('Load failed', e?.message)
     }
   }
-  useEffect(() => { load() }, [status])
+  useEffect(() => { load() }, [status, from, to, cashier, offset])
+
+  // Cashier dropdown options — only full-order viewers get the filter
+  // (the endpoint 403s anyone else; their list is their own sales).
+  useEffect(() => {
+    if (!canViewAll) return
+    api.get<{ id: number; name: string }[]>('/api/v1/orders/cashiers').then(setCashiers).catch(() => setCashiers([]))
+  }, [canViewAll])
+
+  // A filter change means a fresh result set — always start at page one.
+  const resetPage = () => setOffset(0)
 
   const shown = useMemo(
     () => (orders ?? []).filter((o) => !discrepancyOnly || o.discrepancy),
@@ -120,16 +148,30 @@ export function Orders() {
             value={status}
             onChange={setStatus}
           />
-          <form className="flex-1 min-w-44" onSubmit={(e) => { e.preventDefault(); load() }}>
+          <form className="flex-1 min-w-44" onSubmit={(e) => { e.preventDefault(); resetPage(); load() }}>
             <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Order #, customer, receipt code, phone…" />
           </form>
-          <Button size="md" variant="secondary" onClick={load}>Search</Button>
+          <Button size="md" variant="secondary" onClick={() => { resetPage(); load() }}>Search</Button>
+          <div className="w-36"><Input type="date" value={from} onChange={(e) => { setFrom(e.target.value); resetPage() }} aria-label="From date" /></div>
+          <span className="text-[12px] font-bold text-ink-subtle">to</span>
+          <div className="w-36"><Input type="date" value={to} onChange={(e) => { setTo(e.target.value); resetPage() }} aria-label="To date" /></div>
+          {canViewAll && (
+            <div className="w-40"><Select value={cashier} onChange={(e) => { setCashier(e.target.value); resetPage() }} aria-label="Cashier">
+              <option value="all">All cashiers</option>
+              {cashiers.map((cs) => (
+                <option key={cs.id} value={String(cs.id)}>{cs.name}</option>
+              ))}
+            </Select></div>
+          )}
+          {(from || to || cashier !== 'all') && (
+            <Button size="md" variant="ghost" onClick={() => { setFrom(''); setTo(''); setCashier('all'); resetPage() }} title="Clear the date and cashier filters">Clear</Button>
+          )}
         </div>
 
         {!orders ? (
           <div className="py-12 flex justify-center"><Spinner /></div>
         ) : shown.length === 0 ? (
-          <EmptyState icon={<ReceiptText size={24} strokeWidth={2.25} />} title="No orders" body="Sales will appear here." />
+          <EmptyState icon={<ReceiptText size={24} strokeWidth={2.25} />} title="No orders" body={search || from || to || cashier !== 'all' ? 'Nothing matches these filters — clear one and try again.' : 'Sales will appear here.'} />
         ) : (
           <Table head={['Order', 'Status', 'Items', 'Total', 'Payment', 'Cashier', '']}>
             {shown.map((o) => {
@@ -183,6 +225,17 @@ export function Orders() {
               )
             })}
           </Table>
+        )}
+
+        {(offset > 0 || hasMore) && (
+          <div className="flex items-center justify-between px-4 py-3 border-t-2 border-line">
+            <Button size="sm" variant="secondary" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>← Newer</Button>
+            <span className="text-[12px] font-semibold text-ink-muted tabular">
+              {shown.length > 0 ? `${offset + 1}–${offset + shown.length}` : '0'}
+              {hasMore ? ' — older pages below' : ''}
+            </span>
+            <Button size="sm" variant="secondary" disabled={!hasMore} onClick={() => setOffset(offset + PAGE)}>Older →</Button>
+          </div>
         )}
       </Card>
 

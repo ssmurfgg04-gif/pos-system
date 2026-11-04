@@ -362,16 +362,23 @@ func (s *Store) Branding() map[string]any {
 	return map[string]any{
 		"app_name":        s.GetString("app_name", "Point of Sale"),
 		"store_name":      s.GetString("store_name", ""),
+		"store_address":   s.GetString("store_address", ""),
+		"store_phone":     s.GetString("store_phone", ""),
+		"receipt_footer":  s.GetString("receipt_footer", ""),
 		"brand_logo_url":  brandLogoURL(s.Get("brand_logo")),
 		"brand_color":     s.GetString("brand_color", "#10B981"),
 		"currency_symbol": s.GetString("currency_symbol", "KES"),
-		"currency_code":   s.GetString("currency_code", "KES"),
-		"tax_percent":     s.GetFloat("tax_percent", 16),
-		"tax_included":    s.GetBool("tax_included", true),
-		"payment_mode":    s.GetString("payment_mode", "auto"),
-		"till_number":     s.GetString("till_number", ""),
-		"paybill_number":  s.GetString("paybill_number", ""),
-		"mpesa_env":       s.GetString("mpesa_env", "mock"),
+		// Display-only: the on-screen receipt renders the loyalty
+		// redemption as money (points × point-cents) so its rows
+		// reconcile like every other renderer.
+		"loyalty_point_cents": s.GetInt("loyalty_point_cents", 100),
+		"currency_code":       s.GetString("currency_code", "KES"),
+		"tax_percent":         s.GetFloat("tax_percent", 16),
+		"tax_included":        s.GetBool("tax_included", true),
+		"payment_mode":        s.GetString("payment_mode", "auto"),
+		"till_number":         s.GetString("till_number", ""),
+		"paybill_number":      s.GetString("paybill_number", ""),
+		"mpesa_env":           s.GetString("mpesa_env", "mock"),
 		// eTIMS (P6): the shop's KRA PIN — when set, the receipt
 		// gains the tax-invoice header and the checkout rail offers
 		// a buyer PIN field.

@@ -240,6 +240,10 @@ type Order struct {
 	// document number (defaults to the order number).
 	BuyerPIN      string `json:"buyerPin"`
 	InvoiceNumber string `json:"invoiceNumber"`
+	// Gift-card codes minted by this sale — the code IS the value, so it
+	// rides the detail payload the on-screen receipt prints (not stored
+	// on the orders table; loaded from gift_cards on the detail read).
+	GiftCards []string `json:"giftCards,omitempty"`
 }
 
 // OrderSummary is one row of a customer's purchase history.

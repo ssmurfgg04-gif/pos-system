@@ -419,6 +419,7 @@ function productDTO(p: DemoDB['products'][number]) {
 
 function orderDTO(o: DemoOrder) {
   const u = db!.users.find((x) => x.id === o.cashierId)
+  const cards = ((db as DemoDBX | null)?.giftCards || []).filter((g) => g.orderId === o.id)
   return {
     id: o.id, number: o.number, status: o.status,
     subtotalCents: o.subtotalCents, taxCents: o.taxCents, totalCents: o.totalCents,
@@ -431,6 +432,8 @@ function orderDTO(o: DemoOrder) {
     voidedAt: o.voidedAt, voidReason: o.voidReason,
     items: o.items.map((i) => ({ ...i })),
     payments: o.payments.map((p) => ({ ...p })),
+    // The code IS the value — same rows as paper, image and HTML.
+    ...(cards.length ? { giftCards: cards.map((g) => g.code) } : {}),
   }
 }
 
@@ -1118,13 +1121,25 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
         o.customerName.toLowerCase().includes(search) ||
         o.payments.some((pay) => pay.mpesaReceipt.toLowerCase().includes(search) || pay.phone.includes(search)))
     }
+    const cashierId = q.get('cashierId')
+    if (cashierId) list = list.filter((o) => String(o.cashierId) === cashierId)
     const from = q.get('from')
     if (from) list = list.filter((o) => o.createdAt >= from + 'T00:00:00')
+    // Exclusive upper bound, matching the server: a 23:59:59.999 sale
+    // belongs to its own day (the old T23:59:59 compare dropped it).
     const to = q.get('to')
-    if (to) list = list.filter((o) => o.createdAt <= to + 'T23:59:59')
+    if (to) {
+      const toExcl = new Date(Date.parse(to + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10) + 'T00:00:00'
+      list = list.filter((o) => o.createdAt < toExcl)
+    }
     const limit = Math.min(200, Number(q.get('limit')) || 50)
     const offset = Number(q.get('offset')) || 0
     return list.slice(offset, offset + limit).map(orderDTO) as T
+  }
+  if (m === 'GET' && p === '/orders/cashiers') {
+    requirePerm(perms, 'orders.view')
+    if (!perms.includes('orders.view.all')) throw new ApiError(403, 'the cashier filter needs full order access')
+    return db!.users.filter((u) => u.active).map((u) => ({ id: u.id, name: u.fullName || u.username })).sort((a, b) => a.name.localeCompare(b.name)) as T
   }
   const orderMatch = p.match(/^\/orders\/(\d+)$/)
   if (m === 'GET' && orderMatch) {
@@ -1149,6 +1164,23 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   if (m === 'POST' && p.match(/^\/whatsapp\/jobs\/(\d+)\/retry$/)) {
     requirePerm(perms, 'settings.manage')
     throw new ApiError(404, 'job not found')
+  }
+  if (m === 'POST' && p === '/whatsapp/verify-receipt') {
+    requirePerm(perms, 'settings.manage')
+    // Demo has no real watermark engine; answer with the shape the
+    // Settings panel expects so the flow is demonstrable.
+    return { valid: true, layer: 'block', orderId: 42, number: 'ORD-1042', orderStatus: 'PAID', totalCents: 55000, totalMatchesOrder: true, issuedAt: new Date().toISOString() } as T
+  }
+  // Share-via-WhatsApp, server leg (v1.6.0). The demo has no gateway, so
+  // it mirrors the refusal the real till gives when no token is set —
+  // the UI falls back to the device share paths either way.
+  const waSendMatch = p.match(/^\/orders\/(\d+)\/whatsapp-send$/)
+  if (m === 'POST' && waSendMatch) {
+    requirePerm(perms, 'orders.view')
+    const o = d.orders.find((x) => x.id === Number(waSendMatch[1]))
+    if (!o) throw new ApiError(404, 'order not found')
+    if (o.status !== 'PAID') throw new ApiError(409, 'only a PAID sale can be sent to the customer’s WhatsApp')
+    throw new ApiError(409, 'WhatsApp gateway not connected on this till — the image is shared from the device instead')
   }
   if (m === 'POST' && p === '/orders/checkout') {
     requirePerm(perms, 'pos.sell')
@@ -2439,26 +2471,49 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     return { order: orderDTO(o), message: msg } as T
   }
 
-  // design board
+  // design board — scoping parity with the server: staff WITHOUT
+  // orders.assign only see the jobs assigned to them (services/design.go
+  // scopes the same way). The demo's designer role demonstrates it.
   if (m === 'GET' && p === '/design') {
     requirePerm(perms, 'design.view')
-    return d.designJobs.map((j) => ({
+    const scoped = perms.includes('orders.assign')
+      ? d.designJobs
+      : d.designJobs.filter((j) => j.assigneeId === user.id)
+    return scoped.map((j) => ({
       ...j,
       assigneeName: (d.users.find((u) => u.id === j.assigneeId)?.fullName) || '',
     })) as T
   }
   if (m === 'POST' && p === '/design') {
-    requirePerm(perms, 'design.manage')
+    // Creating is a DELEGATION action (router gates orders.assign), not
+    // design.manage — parity with the Go router.
+    requirePerm(perms, 'orders.assign')
     const job = {
       id: d.seq.job++, title: String(body?.title || 'Untitled'), productName: String(body?.productName || ''),
       customerName: String(body?.customerName || ''), notes: String(body?.notes || ''),
       status: 'queue' as const, assigneeId: Number(body?.assigneeId) || 3,
+      deadline: body?.deadline ? String(body.deadline) : '', priority: String(body?.priority || 'normal'),
       createdBy: user.username, createdAt: nowIso(), updatedAt: nowIso(),
     }
     d.designJobs.push(job)
     audit(user.id, user.username, 'DESIGN_JOB_CREATED', 'design', String(job.id), job.title)
     persist()
     return job as T
+  }
+  // Attachments + WhatsApp notify are real-till features (file storage,
+  // the whapi gateway) — the demo says so instead of 404ing.
+  if (/^\/design\/\d+\/files$/.test(p)) {
+    if (m === 'GET') requirePerm(perms, 'design.view')
+    if (m === 'POST') requirePerm(perms, 'design.manage')
+    throw new ApiError(501, 'Attachments live on a real till — try it there')
+  }
+  if (m === 'DELETE' && /^\/design\/\d+\/files\/\d+$/.test(p)) {
+    requirePerm(perms, 'design.manage')
+    throw new ApiError(501, 'Attachments live on a real till — try it there')
+  }
+  if (m === 'POST' && /^\/design-jobs\/\d+\/notify$/.test(p)) {
+    requirePerm(perms, 'orders.notify')
+    throw new ApiError(501, 'WhatsApp notify needs the whapi gateway on a real till')
   }
   const designMatch = p.match(/^\/design\/(\d+)$/)
   if (designMatch) {
@@ -2719,5 +2774,15 @@ export async function demoRaw(path: string): Promise<string> {
     ]
     return rows.join('\n') + '\n'
   }
+  if (/^\/orders\/\d+\/receipt-image$/.test(p)) {
+    requirePerm(perms, 'orders.view')
+    // Demo cannot render the Go-branded PNG; serve a small brand-colored
+    // placeholder so the Share flow is exercisable end to end.
+    return DEMO_RECEIPT_PNG
+  }
   throw new ApiError(404, 'not found')
 }
+
+// A 1x1 brand-blue PNG (43 bytes) — enough for the demo share flow.
+const DEMO_RECEIPT_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkqPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='

@@ -169,7 +169,6 @@ func (h *H) ConsolidatedDailyReport(c *gin.Context) {
 		open += s.OrdersOpen
 		voided += s.OrdersVoided
 		disc += s.Discrepancies
-		avg += s.AvgOrderCents
 		n++
 		out["shops"] = append(out["shops"].([]gin.H), gin.H{
 			"id": sid, "name": name,
@@ -179,8 +178,11 @@ func (h *H) ConsolidatedDailyReport(c *gin.Context) {
 			"ordersVoided": s.OrdersVoided, "discrepancies": s.Discrepancies,
 		})
 	}
-	if n > 0 {
-		avg /= int64(n)
+	// The consolidated average is total/count — the old average of
+	// per-shop averages showed 5,500 for one shop with a 10,000 sale and
+	// another with a hundred 1,000 sales (real answer: ~1,089).
+	if paid > 0 {
+		avg = totalSales / int64(paid)
 	}
 	out["salesCents"] = totalSales
 	out["ordersPaid"] = paid

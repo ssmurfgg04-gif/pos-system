@@ -221,6 +221,29 @@ export async function raw(path: string): Promise<string> {
   return res.text()
 }
 
+/** Authenticated binary GET — branded receipt PNGs (Share via WhatsApp).
+ *  Demo mode serves data URLs through the text channel; decode them. */
+export async function blob(path: string): Promise<Blob> {
+  const mode = await backendMode()
+  if (mode === 'demo') {
+    const dataUrl = await demoRaw(path)
+    return (await fetch(dataUrl)).blob()
+  }
+  const headers: Record<string, string> = {}
+  const t = token()
+  if (t) headers['Authorization'] = 'Bearer ' + t
+  const res = await fetch(RUNTIME_BASE + path, { headers })
+  if (!res.ok) {
+    let msg = `Download failed (${res.status})`
+    try {
+      const j = await res.json()
+      if (j?.error) msg = j.error
+    } catch { /* not JSON */ }
+    throw new ApiError(res.status, msg)
+  }
+  return res.blob()
+}
+
 /** Trigger a browser file download for an authenticated CSV endpoint. */
 export async function downloadFile(path: string, filename: string): Promise<void> {
   const text = await raw(path)
@@ -330,6 +353,7 @@ export interface Order {
   discountLabel?: string
   /** Loyalty points spent on this sale (refunded on void). */
   pointsRedeemed?: number
+  giftCards?: string[]
   taxPercent: number
   taxIncluded: boolean
   cashierId: number
@@ -359,7 +383,11 @@ export interface Order {
 export interface Branding {
   app_name: string
   store_name: string
+  store_address?: string
+  store_phone?: string
+  receipt_footer?: string
   brand_logo_url: string
+  loyalty_point_cents?: number
   brand_color: string
   currency_symbol: string
   currency_code: string
@@ -587,6 +615,21 @@ export interface WhatsappJob {
   lastError: string
   createdAt: string
   sentAt: string
+}
+
+/** Verdict for POST /whatsapp/verify-receipt — the invisible-watermark
+ *  authenticity check on a receipt image a customer sent as "proof". */
+export interface VerifyVerdict {
+  valid: boolean
+  layer: 'block' | 'lsb' | string
+  orderId: number
+  number?: string
+  orderStatus?: string
+  totalCents?: number
+  totalMatchesOrder?: boolean
+  usable?: boolean
+  issuedAt: string
+  note?: string
 }
 
 export interface OrderEvent {

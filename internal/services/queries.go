@@ -77,13 +77,19 @@ func (s *Service) ListOrders(f OrderFilter, p *auth.Principal) ([]models.Order, 
 		q.WriteString(` AND (LOWER(o.number) LIKE ? OR LOWER(COALESCE(o.customer_name,'')) LIKE ? OR o.id IN (SELECT order_id FROM payments WHERE LOWER(COALESCE(mpesa_receipt,'')) LIKE ? OR phone LIKE ?))`)
 		args = append(args, like, like, like, "%"+f.Search+"%")
 	}
+	// Date filters are EAT calendar days (see dayBounds): from is
+	// inclusive, to is the same-day inclusive bound expressed as the
+	// NEXT day's exclusive start — a sale at 23:59:59 Nairobi time is
+	// "to" day's sale, not the next one's.
 	if f.From != "" {
+		fm, _ := dayBounds(f.From)
 		q.WriteString(` AND o.created_at >= ?`)
-		args = append(args, f.From+"T00:00:00")
+		args = append(args, fm)
 	}
 	if f.To != "" {
-		q.WriteString(` AND o.created_at <= ?`)
-		args = append(args, f.To+"T23:59:59")
+		_, tx := dayBounds(f.To)
+		q.WriteString(` AND o.created_at < ?`)
+		args = append(args, tx)
 	}
 	q.WriteString(` ORDER BY o.id DESC`)
 	if f.Limit <= 0 || f.Limit > 200 {
@@ -229,6 +235,17 @@ func (s *Service) GetOrder(orderID int64) (*models.Order, error) {
 	pays, err := s.paymentsForOrders([]string{fmt.Sprint(orderID)})
 	if err == nil {
 		o.Payments = pays[orderID]
+	}
+	// Gift-card codes minted by this sale — the on-screen receipt is a
+	// delivery vehicle for the code exactly like paper and the image.
+	if rows, err := s.db.Query(`SELECT code FROM gift_cards WHERE order_id = ? ORDER BY id`, orderID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var code string
+			if rows.Scan(&code) == nil {
+				o.GiftCards = append(o.GiftCards, code)
+			}
+		}
 	}
 	return &o, nil
 }

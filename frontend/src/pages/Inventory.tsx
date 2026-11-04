@@ -103,11 +103,17 @@ export function Inventory() {
     if (removing) return
     setRemoving(p.id)
     try {
+      // UpdateProduct is a FULL replace: anything omitted resets (stock
+      // to 0, tracking on, barcode cleared). Send the archived row's
+      // values so a restore brings the product back exactly as it was.
       await api.put(`/api/v1/products/${p.id}`, {
         name: p.name,
         categoryId: p.categoryId,
         priceCents: p.priceCents,
         costCents: p.costCents,
+        stockQty: p.stockQty,
+        trackStock: p.trackStock,
+        barcode: p.barcode || '',
         active: true,
       })
       toast.success('Product restored', p.name)

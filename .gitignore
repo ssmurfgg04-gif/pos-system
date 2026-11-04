@@ -36,3 +36,4 @@ supabase/.temp/
 supabase/.branches/
 frontend/tsconfig.tsbuildinfo
 downloads/ledgerpos-setup.nsi
+posapp-smoke

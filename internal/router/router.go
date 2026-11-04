@@ -146,20 +146,24 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 
 	// Orders & payments.
 	authd.GET("/orders", perm("orders.view"), h.ListOrders)
+	authd.GET("/orders/cashiers", perm("orders.view"), h.ListOrderCashiers)
 	authd.GET("/orders/:id", perm("orders.view"), h.GetOrder)
 	authd.GET("/orders/:id/receipt", perm("orders.view"), h.ReceiptHTML)
+	authd.GET("/orders/:id/receipt-image", perm("orders.view"), h.ReceiptImage)
 	authd.POST("/orders/checkout", perm("pos.sell"), h.Checkout)
 	authd.POST("/orders/:id/void", perm("pos.void"), h.VoidOrder)
 	authd.POST("/orders/:id/settle", perm("pos.sell"), h.SettleTab)
 	authd.POST("/orders/:id/stkpush", perm("pos.sell"), h.RetrySTK)
 	authd.POST("/orders/:id/manual", perm("payments.manual"), h.ManualConfirm)
 	authd.POST("/orders/:id/recheck", perm("pos.sell"), h.OrderRecheck)
+	authd.POST("/orders/:id/whatsapp-send", perm("orders.view"), h.SendWhatsappNow)
 	// WhatsApp receipts: automatic sends ride payment completion (no
 	// cashier step, no per-order endpoint). These admin endpoints manage
 	// the queue — the failed-sends list, a retry, and the setup test.
 	authd.GET("/whatsapp/jobs", perm("settings.manage"), h.ListWhatsappJobs)
 	authd.POST("/whatsapp/jobs/:id/retry", perm("settings.manage"), h.RetryWhatsappJob)
 	authd.POST("/whatsapp/test", perm("settings.manage"), h.TestWhatsapp)
+	authd.POST("/whatsapp/verify-receipt", perm("settings.manage"), h.VerifyReceipt)
 	authd.GET("/payments/config", h.PaymentConfig)
 	authd.POST("/sync", perm("pos.sell"), h.Sync)
 
@@ -192,8 +196,12 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 
 	// Design board.
 	authd.GET("/design", perm("design.view"), h.ListDesignJobs)
+	// Creating a job is a DELEGATION action (the front desk hands
+	// work to the studio), matching the service rule — not a
+	// design.manage one (that governs moving/attaching). One rule at
+	// every layer: UI "+ Job" = router = CreateDesignJob.
+	authd.POST("/design", perm("orders.assign"), h.CreateDesignJob)
 	design := authd.Group("", perm("design.manage"))
-	design.POST("/design", h.CreateDesignJob)
 	design.PUT("/design/:id", h.UpdateDesignJob)
 	design.POST("/design/:id/move", h.MoveDesignJob)
 	// Job attachments: share files with the team (upload/manage gated,

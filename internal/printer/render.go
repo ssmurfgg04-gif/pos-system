@@ -56,6 +56,9 @@ type ReceiptData struct {
 	StoreName     string
 	StoreAddress  string
 	StorePhone    string
+	KraPin        string      // eTIMS: printed under the phone line when set
+	BuyerPin      string      // customer KRA PIN — turns the header into TAX INVOICE
+	GiftCards     []string    // codes minted by this sale — the customer's value
 	Logo          image.Image // nil = skip; printed centered above the name
 	Footer        string
 	OrderNumber   string
@@ -64,7 +67,13 @@ type ReceiptData struct {
 	Customer      string
 	Items         []models.OrderItem
 	SubtotalCents int64
+	DiscountCents int64  // shown as its own line so Subtotal − Discount + Tax = TOTAL reconciles
+	DiscountLabel string // "staff 10%" — the WHY matters at the counter
+	PointsCents   int64  // loyalty redemption as MONEY (points × point-cents) — the row must reconcile
+	PointsPts     int64  // the point count, shown beside the money
 	TaxCents      int64
+	TaxPercent    float64 // for the "VAT (16%, incl.)" label — inclusive pricing is Kenya's default
+	TaxIncluded   bool
 	TotalCents    int64
 	Currency      string
 	PayLines      []string // e.g. "M-Pesa NLJ7RT61SV", "Cash"
@@ -91,6 +100,15 @@ func padlr(l, r string, width int) string {
 	return l + strings.Repeat(" ", space) + r
 }
 
+// trimPct formats 16.00 → "16", 13.5 → "13.5" for the VAT label.
+func trimPct(f float64) string {
+	s := strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", f), "0"), ".")
+	if s == "" {
+		return "0"
+	}
+	return s
+}
+
 // Render produces ESC/POS bytes. widthCols: 48 (80mm) or 32 (58mm).
 func Render(d ReceiptData, widthCols int) ([]byte, error) {
 	var buf bytes.Buffer
@@ -114,6 +132,12 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 	}
 	if d.StorePhone != "" {
 		p.Write(truncate(d.StorePhone, widthCols) + "\n")
+	}
+	if d.KraPin != "" {
+		p.Write(truncate("KRA PIN: "+d.KraPin, widthCols) + "\n")
+	}
+	if d.BuyerPin != "" {
+		p.Write(padlr("TAX INVOICE", "Buyer PIN: "+d.BuyerPin, widthCols) + "\n")
 	}
 	p.Write(strings.Repeat("-", widthCols) + "\n")
 
@@ -139,7 +163,24 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 
 	p.Write(strings.Repeat("-", widthCols) + "\n")
 	p.Write(padlr("Subtotal", formatMoneyFull(d.SubtotalCents, d.Currency), widthCols) + "\n")
-	p.Write(padlr("Tax", formatMoneyFull(d.TaxCents, d.Currency), widthCols) + "\n")
+	if d.DiscountCents != 0 {
+		lbl := "Discount"
+		if d.DiscountLabel != "" {
+			lbl = "Discount (" + d.DiscountLabel + ")"
+		}
+		p.Write(padlr(truncate(lbl, widthCols-14), "-"+formatMoneyFull(d.DiscountCents, ""), widthCols) + "\n")
+	}
+	if d.PointsCents != 0 {
+		lbl := fmt.Sprintf("Points redeemed (%d pts)", d.PointsPts)
+		p.Write(padlr(truncate(lbl, widthCols-14), "-"+formatMoneyFull(d.PointsCents, ""), widthCols) + "\n")
+	}
+	if d.TaxCents != 0 {
+		lbl := fmt.Sprintf("VAT (%s%%)", trimPct(d.TaxPercent))
+		if d.TaxIncluded {
+			lbl = fmt.Sprintf("VAT (%s%%, incl.)", trimPct(d.TaxPercent))
+		}
+		p.Write(padlr(truncate(lbl, widthCols-14), formatMoneyFull(d.TaxCents, d.Currency), widthCols) + "\n")
+	}
 	p.Bold(true)
 	p.Size(1, 1)
 	p.Write(padlr("TOTAL", formatMoneyFull(d.TotalCents, d.Currency), widthCols) + "\n")
@@ -148,6 +189,9 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 	p.Write(strings.Repeat("-", widthCols) + "\n")
 	for _, pl := range d.PayLines {
 		p.Write(truncate(pl, widthCols) + "\n")
+	}
+	for _, code := range d.GiftCards {
+		p.Write(truncate("Gift card: "+code, widthCols) + "\n")
 	}
 	p.Write("\n")
 
@@ -169,20 +213,48 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 func BuildReceiptData(o *models.Order, storeName, storeAddr, storePhone, footer, currency string) ReceiptData {
 	when := o.PaidAtOrCreated()
 	if t, err := time.Parse(time.RFC3339, when); err == nil {
-		when = t.Local().Format("2006-01-02 15:04")
+		when = t.Local().Format("02/01/2006 15:04") // Kenya reads day-first
 	}
+	// Every leg prints, with an HONEST label: a leg the provider has not
+	// confirmed yet must never say "PAID" (that promise is in the docs,
+	// and cashiers re-print pending orders from the order screen).
 	var payLines []string
 	for _, pm := range o.Payments {
+		if pm.Status == "FAILED" {
+			continue
+		}
+		done := pm.Status == "COMPLETED"
 		switch pm.Method {
 		case models.MethodCash:
 			payLines = append(payLines, "PAID: Cash")
 		case models.MethodMpesa:
-			label := "PAID: M-Pesa"
-			if pm.MpesaReceipt != "" {
-				label += " " + pm.MpesaReceipt
+			label := "M-Pesa (pending)"
+			if done {
+				label = "PAID: M-Pesa"
+				if pm.MpesaReceipt != "" {
+					label += " " + pm.MpesaReceipt
+				}
 			}
 			if pm.Phone != "" {
 				label += " (" + pm.Phone + ")"
+			}
+			payLines = append(payLines, label)
+		case "account":
+			label := "Tab charge"
+			if !done {
+				label += " (pending)"
+			}
+			payLines = append(payLines, label)
+		case "credit":
+			label := "Store credit"
+			if !done {
+				label += " (pending)"
+			}
+			payLines = append(payLines, label)
+		case "paystack":
+			label := "Card / mobile money (pending)"
+			if done {
+				label = "PAID: Card / mobile money"
 			}
 			payLines = append(payLines, label)
 		}
@@ -194,7 +266,12 @@ func BuildReceiptData(o *models.Order, storeName, storeAddr, storePhone, footer,
 		StoreName: storeName, StoreAddress: storeAddr, StorePhone: storePhone,
 		Footer: footer, OrderNumber: o.Number, When: when,
 		Cashier: o.CashierName, Customer: o.CustomerName,
-		Items: o.Items, SubtotalCents: o.SubtotalCents, TaxCents: o.TaxCents,
-		TotalCents: o.TotalCents, Currency: currency, PayLines: payLines,
+		Items: o.Items, SubtotalCents: o.SubtotalCents,
+		DiscountCents: o.DiscountCents, DiscountLabel: o.DiscountLabel,
+		TaxCents:    o.TaxCents,
+		TaxPercent:  o.TaxPercent,
+		TaxIncluded: o.TaxIncluded,
+		TotalCents:  o.TotalCents, Currency: currency, PayLines: payLines,
+		BuyerPin: o.BuyerPIN,
 	}
 }

@@ -1,17 +1,25 @@
-// whatsapp.go — automatic WhatsApp receipts (v1.5.0).
+// whatsapp.go — WhatsApp receipt delivery (v1.5.0 automatic, v1.6.0
+// manual Share button too).
 //
-// One gateway (whapi.cloud), one trigger (payment completed), zero
-// cashier steps. When a sale completes as PAID, the completion hook
-// enqueues one job in whatsapp_jobs; a worker delivers a branded receipt
-// IMAGE (logo, brand color, sale details — see receipt_image.go) with a
-// short English caption to the customer's number, with bounded retries.
+// One gateway (whapi.cloud). Two triggers, one delivery pipeline:
+//
+//  1. AUTOMATIC (v1.5.0): when a sale completes as PAID, the completion
+//     hook enqueues one job; a worker delivers a branded receipt IMAGE
+//     (logo, brand color, sale details — see receipt_image.go) with a
+//     short English caption to the customer's number, with bounded
+//     retries. Zero cashier steps.
+//  2. MANUAL (v1.6.0): the receipt screen's Share-via-WhatsApp button.
+//     When the gateway is connected it queues the same branded IMAGE
+//     server-side (a deliberate re-send — the common trigger is "I
+//     didn't get it"); when it is not (the API sat under review for
+//     weeks), the cashier shares the very same image from the device:
+//     the Web Share sheet carries image + caption into WhatsApp, or the
+//     button saves the PNG and opens the customer's chat.
 //
 // Policy guardrails:
 //   - Sending NEVER blocks or fails a sale (the queue is best-effort,
-//     like printing). No key configured = no job, sale completes normally.
-//   - No cashier-facing state exists: no manual button, no prompts. The
-//     only WhatsApp UI is Settings (admin) — token setup, a test send,
-//     and the failed-sends list with retry.
+//     like printing). No key configured = no automatic job, sale
+//     completes normally; the manual button falls back to the device.
 //   - The gateway token is a masked secret that deliberately does NOT
 //     team-sync (each till that completes sales needs its own key).
 //   - A job whose order is no longer PAID (voided/refunded before the
@@ -43,22 +51,42 @@ const (
 	whatsappDefaultBase   = "https://gate.whapi.cloud"
 )
 
-// paymentWord names a payment leg on the customer-facing receipt. The
-// "(pending)" marker the client removed from the paper receipt is gone
-// here too: automatic sends only happen for PAID orders, where every leg
-// has completed.
+// paymentWord names a payment leg on the customer-facing receipt.
+// Status-honest (v1.6.0 criticism fix): the automatic path only fires for
+// PAID orders, but the SAME words now reach pending sales through the
+// manual Share button and the receipt-image endpoint — an unconfirmed
+// M-Pesa leg must never print "Paid" (that promise is the P1-4 rule the
+// paper + HTML renderers already follow).
 func paymentWord(pm models.Payment) string {
+	done := pm.Status == "COMPLETED"
 	switch pm.Method {
 	case "cash":
-		return "Paid cash"
+		return "Paid cash" // cash on the counter needs no confirmation
 	case "mpesa":
-		return "Paid M-Pesa"
+		if done {
+			return "Paid M-Pesa"
+		}
+		return "M-Pesa (pending)"
 	case "credit":
+		if !done {
+			return "Store credit (pending)"
+		}
 		return "Store credit"
 	case "account":
+		if !done {
+			return "Tab charge (pending)"
+		}
 		return "Tab charge"
+	case "paystack":
+		if done {
+			return "Paid card / mobile money"
+		}
+		return "Card / mobile money (pending)"
 	default:
-		return "Paid " + pm.Method
+		if done {
+			return "Paid " + pm.Method
+		}
+		return pm.Method + " (pending)"
 	}
 }
 
@@ -74,23 +102,31 @@ func trimPercent(f float64) string {
 
 // customerPhone resolves the number a receipt should go to: the linked
 // CRM record's phone (checkout auto-captures it), normalized to 2547….
+// Walk-in STK sales have no CRM record — the money's own payer phone
+// (on the payment leg) is the customer, so the receipt follows the
+// payment instead of silently skipping the shop's most common sale.
 func (s *Service) customerPhone(o *models.Order) string {
-	if o.CustomerID == 0 {
-		return ""
+	if o.CustomerID != 0 {
+		var phone string
+		if err := s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(phone,'') FROM customers WHERE id = ?`), o.CustomerID).Scan(&phone); err == nil {
+			phone = strings.TrimSpace(phone)
+			if phone != "" {
+				if norm, err := normalizeWhatsappPhone(phone); err == nil {
+					return norm
+				}
+			}
+		}
 	}
-	var phone string
-	if err := s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(phone,'') FROM customers WHERE id = ?`), o.CustomerID).Scan(&phone); err != nil {
-		return ""
+	// CRM record missing/phoneless: fall back to the payer leg.
+	for _, pm := range o.Payments {
+		if pm.Status == "FAILED" || strings.TrimSpace(pm.Phone) == "" {
+			continue
+		}
+		if norm, err := normalizeWhatsappPhone(pm.Phone); err == nil {
+			return norm
+		}
 	}
-	phone = strings.TrimSpace(phone)
-	if phone == "" {
-		return ""
-	}
-	norm, err := normalizeWhatsappPhone(phone)
-	if err != nil {
-		return ""
-	}
-	return norm
+	return ""
 }
 
 // normalizeWhatsappPhone mirrors mpesa.NormalizePhone (07…/01…/+254/254 →
@@ -195,6 +231,36 @@ func (s *Service) queueWhatsappJob(o *models.Order, phone, caption string) error
                 INSERT INTO whatsapp_jobs (order_id, order_number, phone, body, status, created_at)
                 VALUES (?, ?, ?, ?, 'PENDING', ?)`), o.ID, o.Number, phone, caption, nowStamp())
 	return err
+}
+
+// ResendWhatsappReceipt is the Share-via-WhatsApp button's SERVER leg:
+// one branded-image send queued to the customer through the gateway.
+// Unlike QueueWhatsappReceipt (fire-and-forget completion hook) this one
+// answers the UI: it returns the queued phone, or a refusal that says
+// which path to take instead.
+//
+//	fallback=true  → the gateway can't do it (not connected / the sale
+//	                 carries no phone): the UI shares the image from the
+//	                 DEVICE (Web Share sheet → download + wa.me chat).
+//	fallback=false → a real failure worth showing (unpaid order, DB).
+//
+// A re-send is deliberately allowed even when the automatic job already
+// ran: "I didn't get it" is the button's reason to exist.
+func (s *Service) ResendWhatsappReceipt(o *models.Order) (phone string, fallback bool, err error) {
+	if !s.whatsappGatewayReady() {
+		return "", true, fmt.Errorf("WhatsApp gateway not connected on this till — the image is shared from the device instead")
+	}
+	if o.Status != models.OrderPaid {
+		return "", false, fmt.Errorf("only a PAID sale can be sent to the customer's WhatsApp")
+	}
+	phone = s.customerPhone(o)
+	if phone == "" {
+		return "", true, fmt.Errorf("no customer phone on this sale — the image is shared from the device instead")
+	}
+	if err := s.queueWhatsappJob(o, phone, s.receiptCaption(o)); err != nil {
+		return "", false, err
+	}
+	return phone, false, nil
 }
 
 // whatsappGatewayReady reports whether an automated send can happen on
@@ -342,13 +408,23 @@ func (s *Service) drainWhatsappJobs(now time.Time) int {
 		// The order may have changed between queue and send (voided,
 		// refunded): never deliver a receipt for a sale that isn't paid.
 		o, err := s.GetOrder(j.orderID)
-		if err == nil && o.Status != models.OrderPaid {
+		if err != nil {
+			// Criticism fix (P1): a job whose order row is
+			// unreadable must FAIL, not panic — the tick-level
+			// recover would otherwise leave it PENDING at the
+			// head of the batch, starving every later send.
+			s.db.Exec(s.db.Rebind(`UPDATE whatsapp_jobs SET status = 'FAILED', attempts = ?, last_error = ? WHERE id = ?`),
+				j.attempts+1, "order not found — receipt send cancelled", j.id)
+			s.Audit(0, "system", "WHATSAPP_FAILED", "order", j.orderNumber, "cancelled: order not found")
+			continue
+		}
+		if o.Status != models.OrderPaid {
 			s.db.Exec(s.db.Rebind(`UPDATE whatsapp_jobs SET status = 'FAILED', attempts = ?, last_error = ? WHERE id = ?`),
 				j.attempts+1, "order no longer paid — receipt send cancelled", j.id)
 			s.Audit(0, "system", "WHATSAPP_FAILED", "order", j.orderNumber, "cancelled: order no longer paid")
 			continue
 		}
-		png, err := s.receiptPNG(o)
+		png, err := s.ReceiptPNG(o)
 		if err == nil {
 			err = s.sendWhatsappImage(j.orderNumber, j.phone, j.body, png)
 		}
