@@ -3,6 +3,46 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.6.1 — Share on WhatsApp that actually shows up on the desktop PC
+
+### What was wrong
+
+v1.6.0 put the Share button back, but it lived *inside* the receipt
+modal — and the till a shop runs on Windows was still on v1.5.0, where
+the button did not exist at all. From the cashier's chair: "the Share
+via WhatsApp button is not showing on the desktop PC." On top of that,
+the desktop's no-file-share fallback dead-ended in a downloaded file and
+an open browser tab — nothing that opens the WhatsApp **app** itself.
+
+### The fix — one Share, every device
+
+- **The button is now impossible to miss.** "Share on WhatsApp" sits
+  directly on the *Sale complete* screen (between "Start a new sale" and
+  "View receipt"), and stays in the receipt modal. Same one-tap action,
+  no modal hunting.
+- **Desktop PCs open the installed WhatsApp app itself.** The receipt
+  PNG lands on the **clipboard** (and in Downloads as a backup) and the
+  `whatsapp://send?phone=…` deep link jumps the **WhatsApp desktop app**
+  straight into the customer's chat with the thank-you typed — the
+  cashier presses **Ctrl+V, then Enter** and the picture is on its way.
+  First time only, Windows asks "Open WhatsApp?" — tick **Always
+  allow**. No WhatsApp app on that PC? WhatsApp Web stays one click away
+  ("Open WhatsApp Web instead" under the button).
+- **Phones keep the one-tap sheet** (image + caption straight into
+  WhatsApp) wherever the browser supports file sharing; the gateway path
+  (PAID order + token) is still the silent first leg everywhere.
+- The whole tree lives in one tested module (`lib/receipt-share.ts`):
+  server queue → native share sheet → desktop app hop → wa.me web.
+
+### Notes for the shop
+
+- The deep link needs the WhatsApp desktop app installed and logged in
+  (WhatsApp Desktop from the Microsoft Store or whatsapp.com). Without
+  it, the button still saves the image and offers WhatsApp Web.
+- Clipboard paste works in the LedgerPOS app and in Chrome/Edge; if the
+  clipboard is blocked, the toast says so and the Downloads copy is the
+  drag-in fallback.
+
 ## v1.6.0 — the Share button is back, receipts you can prove, orders you can find
 
 ### Share via WhatsApp — the image, three ways

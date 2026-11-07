@@ -136,17 +136,16 @@ describe('Receipt share via WhatsApp', () => {
     expect(arg.text).toContain('Hi Amina!')
   })
 
-  test('fallback: downloads the image and opens the customer wa.me chat', async () => {
-    // No Web Share API → the drag-and-drop path.
+  test('desktop PC (no Web Share): download + whatsapp:// opens the INSTALLED app; wa.me link rendered', async () => {
+    // No Web Share API → the desktop hop: image to the clipboard (jsdom has
+    // none, so the download backup carries it) + the app deep link.
     Object.defineProperty(navigator, 'share', { value: undefined, configurable: true })
     Object.defineProperty(navigator, 'canShare', { value: undefined, configurable: true })
-    const created: string[] = []
     URL.createObjectURL = vi.fn(() => 'blob:mock') as unknown as typeof URL.createObjectURL
     URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL
-    const open = vi.fn()
-    window.open = open as unknown as typeof window.open
+    const clicks: { download: string; href: string }[] = []
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
-      created.push(this.download)
+      clicks.push({ download: this.download, href: this.href })
     })
 
     mount(React.createElement(ReceiptModal, {
@@ -160,23 +159,31 @@ describe('Receipt share via WhatsApp', () => {
       btn!.click()
     })
     expect(blobMock).toHaveBeenCalledWith('/api/v1/orders/42/receipt-image')
-    expect(created).toEqual(['receipt-ORD-1042.png'])
-    expect(open).toHaveBeenCalledTimes(1)
-    const url = open.mock.calls[0][0] as string
-    expect(url.startsWith('https://wa.me/254722123456?text=')).toBe(true)
-    expect(decodeURIComponent(url)).toContain('Thank you for shopping with Creative Divine')
+    // The branded PNG is downloaded as the attach backup…
+    expect(clicks.filter((c) => c.download === 'receipt-ORD-1042.png')).toHaveLength(1)
+    // …and the INSTALLED WhatsApp app is opened straight in the chat.
+    const deep = clicks.find((c) => c.href.startsWith('whatsapp://send?phone=254722123456&text='))
+    expect(deep).toBeTruthy()
+    expect(decodeURIComponent(deep!.href)).toContain('Thank you for shopping with Creative Divine')
+    // No browser tab is opened automatically — WhatsApp Web stays one
+    // deliberate click away in the modal.
+    const waWeb = [...container.querySelectorAll('a')].find((a) => a.textContent?.includes('Open WhatsApp Web instead'))
+    expect(waWeb).toBeTruthy()
+    expect(waWeb!.getAttribute('href')?.startsWith('https://wa.me/254722123456?text=')).toBe(true)
+    expect(container.textContent).toContain('Receipt saved — drag it into WhatsApp')
 
     clickSpy.mockRestore()
   })
 
-  test('a stored 07… number normalizes to 2547… for wa.me (the server rule)', async () => {
+  test('a stored 07… number normalizes to 2547… for the app hop and wa.me (the server rule)', async () => {
     Object.defineProperty(navigator, 'share', { value: undefined, configurable: true })
     Object.defineProperty(navigator, 'canShare', { value: undefined, configurable: true })
     URL.createObjectURL = vi.fn(() => 'blob:mock') as unknown as typeof URL.createObjectURL
     URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL
-    const open = vi.fn()
-    window.open = open as unknown as typeof window.open
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const clicks: { download: string; href: string }[] = []
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicks.push({ download: this.download, href: this.href })
+    })
 
     mount(React.createElement(ReceiptModal, {
       order: order({ payments: [{ id: 2, method: 'cash', status: 'COMPLETED', amountCents: 55000, phone: '0711 222 333' }] }),
@@ -188,8 +195,9 @@ describe('Receipt share via WhatsApp', () => {
     await act(async () => {
       btn!.click()
     })
-    const url = open.mock.calls[0][0] as string
-    expect(url.startsWith('https://wa.me/254711222333?text=')).toBe(true)
+    expect(clicks.some((c) => c.href.startsWith('whatsapp://send?phone=254711222333&text='))).toBe(true)
+    const waWeb = [...container.querySelectorAll('a')].find((a) => a.textContent?.includes('Open WhatsApp Web instead'))
+    expect(waWeb!.getAttribute('href')?.startsWith('https://wa.me/254711222333?text=')).toBe(true)
     clickSpy.mockRestore()
   })
 
@@ -222,14 +230,15 @@ describe('Receipt share via WhatsApp', () => {
     expect(container.textContent).not.toContain('VAT')
   })
 
-  test('no customer phone on the order → wa.me without a number still opens', async () => {
+  test('no customer phone on the order → the app hop and wa.me both still work, numberless', async () => {
     Object.defineProperty(navigator, 'share', { value: undefined, configurable: true })
     Object.defineProperty(navigator, 'canShare', { value: undefined, configurable: true })
     URL.createObjectURL = vi.fn(() => 'blob:mock') as unknown as typeof URL.createObjectURL
     URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL
-    const open = vi.fn()
-    window.open = open as unknown as typeof window.open
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const clicks: { download: string; href: string }[] = []
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicks.push({ download: this.download, href: this.href })
+    })
 
     mount(React.createElement(ReceiptModal, {
       order: order({ payments: [{ id: 1, method: 'cash', status: 'COMPLETED', amountCents: 55000 }] }),
@@ -241,8 +250,9 @@ describe('Receipt share via WhatsApp', () => {
     await act(async () => {
       btn!.click()
     })
-    const url = open.mock.calls[0][0] as string
-    expect(url.startsWith('https://wa.me/?text=')).toBe(true)
+    expect(clicks.some((c) => c.href.startsWith('whatsapp://send?text='))).toBe(true)
+    const waWeb = [...container.querySelectorAll('a')].find((a) => a.textContent?.includes('Open WhatsApp Web instead'))
+    expect(waWeb!.getAttribute('href')?.startsWith('https://wa.me/?text=')).toBe(true)
     clickSpy.mockRestore()
   })
 })

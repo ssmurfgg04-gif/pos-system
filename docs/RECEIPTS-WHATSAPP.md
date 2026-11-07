@@ -67,27 +67,43 @@ customer's number is taken from the checkout's phone field / CRM record,
 falling back to the **payer phone on the payment leg** — a walk-in STK
 sale still gets its receipt.
 
-### 2. Manual (v1.6.0): the Share-via-WhatsApp button
+### 2. Manual (v1.6.1): the Share-on-WhatsApp button
 
-The receipt screen's **Share via WhatsApp** button is the human path —
-built for the weeks the gateway sits in review, and for "I didn't get
-it" re-sends forever after:
+The **Share on WhatsApp** button is the human path — built for the
+weeks the gateway sits in review, and for "I didn't get it" re-sends
+forever after. It sits in two places: directly on the **Sale complete**
+screen (v1.6.1 — no modal hunting on a desktop PC) and in the receipt
+modal next to Print. Every device gets the image through one decision
+tree (`lib/receipt-share.ts`), tried in order:
 
-- **Gateway connected** (PAID order): one tap queues the branded image
-  to the customer's number through the gateway — the picture arrives on
-  the shop's own WhatsApp with the thank-you caption, nothing for the
-  cashier to attach. Every attempt lands in the Settings queue list and
-  the audit log (`WHATSAPP_MANUAL_SEND`).
-- **No gateway:** the button shares the very same PNG from the device —
-  the phone's share sheet (image + caption straight into WhatsApp)
-  where the browser supports file sharing; otherwise it saves the image
-  and opens the customer's `wa.me` chat with the caption typed, and the
-  cashier drags the picture in and presses send.
+1. **Gateway connected** (PAID order): one tap queues the branded image
+   to the customer's number through the gateway — the picture arrives on
+   the shop's own WhatsApp with the thank-you caption, nothing for the
+   cashier to attach. Every attempt lands in the Settings queue list and
+   the audit log (`WHATSAPP_MANUAL_SEND`).
+2. **Native share sheet** (phones; Windows 11 with the Store WhatsApp
+   app): the PNG + caption ride the device's share sheet straight into
+   WhatsApp where the browser supports file sharing (HTTPS required).
+3. **Desktop app hop** (v1.6.1 — the desktop PC path): the PNG is put on
+   the **clipboard** and saved to **Downloads**, then a
+   `whatsapp://send?phone=2547…&text=…` deep link opens the **installed
+   WhatsApp desktop app** directly in the customer's chat with the
+   caption typed. The cashier presses **Ctrl+V, then Enter**. Windows
+   shows an "Open WhatsApp?" prompt the first time — tick **Always
+   allow**. Requires the WhatsApp desktop app (Microsoft Store or
+   whatsapp.com); the button's sub-line offers **Open WhatsApp Web
+   instead** for PCs without it.
+4. **WhatsApp Web** — the same `wa.me` chat link, one click away; the
+   downloaded PNG drags into the chat.
+
+The button label always tells the truth about what just happened
+("Image queued to 2547…", "In WhatsApp — Ctrl+V, then Enter", "Receipt
+saved — drag it into WhatsApp").
 - **Format: PNG on purpose** — for a text receipt it is smaller than a
   JPEG at usable quality, lossless (the watermark's exact layer survives
   every lossless copy), and WhatsApp uploads it like any photo.
-- Note: browsers only offer file sharing on HTTPS. On the LAN
-  (`http://…`) the Save + attach fallback is the expected path.
+- Note: the native share sheet needs HTTPS; on the LAN (`http://…`) the
+  desktop app hop and the Save + attach fallback are the expected paths.
 
 ### The caption
 

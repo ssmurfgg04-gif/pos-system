@@ -19,10 +19,11 @@ import { Button, EmptyState, Field, Input, MoneyInput, Spinner, StatusPill, Moda
 import { ProductPhoto } from './ProductPhoto'
 import { SplitTenderEditor, isAsyncLeg } from './SplitTenderEditor'
 import { ReceiptModal } from './Receipt'
+import { shareReceiptWhatsapp } from '../lib/receipt-share'
 import { toast } from '../stores/toasts'
 import { enqueue, newClientUuid } from '../offline/queue'
 import { useNet } from '../offline/heartbeat'
-import { ShoppingCart, Smartphone, Banknote, BookUser, Wallet, X, Minus, Plus, Check, AlertTriangle, RotateCcw, Ban, Star, SplitSquareHorizontal, Pause, Archive, Trash2 } from 'lucide-react'
+import { ShoppingCart, Smartphone, Banknote, BookUser, Wallet, X, Minus, Plus, Check, AlertTriangle, RotateCcw, Ban, Star, SplitSquareHorizontal, Pause, Archive, Trash2, Share2 } from 'lucide-react'
 
 type Method = 'mpesa' | 'cash' | 'tab' | 'credit'
 type StkStage = 'sending' | 'sent' | 'waiting' | 'slow' | 'paid' | 'failed'
@@ -1093,6 +1094,34 @@ function PaymentPanel({
   const [localPhone, setLocalPhone] = useState(phone)
   useEffect(() => { setLocalPhone(phone) }, [phone])
   const lastPayment = order.payments?.[order.payments.length - 1]
+  // v1.6.1: Share on WhatsApp sits DIRECTLY on the paid screen — on a
+  // desktop PC the cashier should not have to open the receipt modal to
+  // find it. Same decision tree as the modal's button (server queue →
+  // native share → whatsapp:// app hop → wa.me web).
+  const [waBusy, setWaBusy] = useState(false)
+  const [waDone, setWaDone] = useState(false)
+  const sharePaidReceipt = async () => {
+    if (!order || waBusy) return
+    setWaBusy(true)
+    try {
+      const r = await shareReceiptWhatsapp(order, branding.store_name || 'Store')
+      if (r.kind === 'cancelled') return
+      setWaDone(true)
+      if (r.kind === 'queued') {
+        toast.success('Receipt queued', `The branded image goes to ${r.phone} on WhatsApp — check Settings → WhatsApp if it fails.`)
+      } else if (r.kind === 'shared') {
+        toast.success('Shared', 'The receipt image went to WhatsApp.')
+      } else {
+        toast.info('WhatsApp opened', r.clipboardOk
+          ? 'Press Ctrl+V to paste the receipt into the chat, then Enter.'
+          : 'The receipt saved to Downloads — drag it into the chat, then Enter.')
+      }
+    } catch (e) {
+      toast.error('Could not share', e instanceof Error ? e.message : 'Open View receipt → Share via WhatsApp instead.')
+    } finally {
+      setWaBusy(false)
+    }
+  }
 
   // STK progress steps, the cashier should SEE the journey, not guess:
   // Initiating → Prompt sent → Waiting for PIN → Result (paid/failed).
@@ -1175,7 +1204,11 @@ function PaymentPanel({
             <Button variant="primary" size="lg" className="w-full" onClick={onNewSale}>
               Start a new sale
             </Button>
-            <Button variant="secondary" className="w-full" onClick={onReceipt}>
+            <Button variant="secondary" className="w-full" disabled={waBusy} onClick={sharePaidReceipt}>
+              {waDone ? <Check size={15} strokeWidth={2.5} aria-hidden /> : <Share2 size={15} strokeWidth={2.25} aria-hidden />}
+              {waBusy ? 'Preparing…' : waDone ? 'Receipt shared — share again' : 'Share on WhatsApp'}
+            </Button>
+            <Button variant="ghost" className="w-full" onClick={onReceipt}>
               View receipt
             </Button>
           </>

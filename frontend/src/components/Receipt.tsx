@@ -3,20 +3,21 @@
 // endpoint round-trip). window.print() with print CSS produces a clean
 // 80mm-friendly printout; browser "Save as PDF" covers the no-printer case.
 //
-// v1.6.0: the Share-via-WhatsApp button is back — the whapi gateway is
-// still under review, so the cashier needs a manual path. It shares the
-// BRANDED RECEIPT IMAGE (server-rendered PNG, invisible watermark
-// included) through the device's native share sheet where the browser
-// supports file sharing; otherwise it downloads the image and opens the
-// customer's WhatsApp chat with the thank-you typed — one drag and it's
-// sent.
+// v1.6.1: Share via WhatsApp works on EVERY device — the server queues
+// the branded image when the gateway is up; otherwise the native share
+// sheet carries it (Android, Windows 11 Store app); on desktop PCs the
+// whatsapp:// deep link opens the installed WhatsApp app with the image
+// on the clipboard for Ctrl+V, and wa.me is the last resort.
 
-import { Branding, Order, api, blob } from '../lib/api'
+import { Branding, Order } from '../lib/api'
 import { centsToAmount } from '../lib/money'
+import { receiptPhoneDigits, shareReceiptWhatsapp, ReceiptShareResult } from '../lib/receipt-share'
 import { toast } from '../stores/toasts'
 import { Button, Modal } from './ui'
 import { Check, Printer, Share2 } from 'lucide-react'
 import { useState } from 'react'
+
+type ShareState = 'idle' | 'working' | 'queued' | 'app-opened'
 
 export function ReceiptModal({ order, branding, open, onClose }: {
   order: Order
@@ -24,7 +25,8 @@ export function ReceiptModal({ order, branding, open, onClose }: {
   open: boolean
   onClose: () => void
 }) {
-  const [shareState, setShareState] = useState<'idle' | 'working' | 'saved' | 'queued'>('idle')
+  const [shareState, setShareState] = useState<ShareState>('idle')
+  const [shareDone, setShareDone] = useState<ReceiptShareResult | null>(null)
   const [shareError, setShareError] = useState('')
   if (!open) return null
   // Older orders (or a partial payload) may omit items/payments — the
@@ -32,82 +34,34 @@ export function ReceiptModal({ order, branding, open, onClose }: {
   const items = order.items ?? []
   const store = branding.store_name || 'Store'
 
-  const caption = () => {
-    const first = (order.customerName || '').trim().split(/\s+/)[0]
-    const base = `Thank you for shopping with ${store} — we're glad you chose us.`
-    return first ? `Hi ${first}! ${base}` : base
-  }
-  // wa.me needs full international form (2547…). A stored 07… number
-  // produced an invalid click-to-chat link — normalize like the server
-  // does for automatic sends (services/whatsapp.go normalizeWhatsappPhone).
-  const customerDigits = (): string => {
-    const p = (order.payments ?? []).find((x) => (x.phone || '').replace(/\D/g, '').length >= 9)
-    let d = (p?.phone || '').replace(/\D/g, '')
-    if (d.startsWith('0')) d = '254' + d.slice(1)
-    else if (d.startsWith('7') || d.startsWith('1')) d = '254' + d
-    return d
-  }
   // The cashier must SEE who is about to receive payment proof.
-  const shareTarget = customerDigits()
+  const shareTarget = receiptPhoneDigits(order)
 
   const shareWhatsapp = async () => {
     setShareState('working')
     setShareError('')
+    setShareDone(null)
     try {
-      // SERVER leg first (PAID orders, gateway connected): the branded
-      // IMAGE is queued to the customer's WhatsApp with the thank-you
-      // caption — the customer receives the picture without the cashier
-      // touching their phone. The button is an honest RESEND: pressing it
-      // again is exactly what "I didn't get it" needs.
-      if (order.status === 'PAID') {
-        try {
-          const r = await api.post<{ queued: boolean; phone: string }>(`/api/v1/orders/${order.id}/whatsapp-send`, {})
-          if (r.queued) {
-            setShareState('queued')
-            toast.success('Receipt queued', `The branded image goes to ${r.phone} on WhatsApp — check Settings → WhatsApp if it fails.`)
-            return
-          }
-        } catch {
-          /* gateway not connected (it is under review) or the sale has no
-             phone — the DEVICE paths below carry the very same image. */
-        }
-      }
-      const b = await blob(`/api/v1/orders/${order.id}/receipt-image`)
-      const file = new File([b], `receipt-${order.number}.png`, { type: 'image/png' })
-      // Native share (Android WebView, Edge/Chrome on Windows): the
-      // cashier picks WhatsApp and the IMAGE + thank-you go in one tap.
-      const nav = navigator as Navigator & {
-        canShare?: (d: ShareData) => boolean
-        share?: (d: ShareData) => Promise<void>
-      }
-      if (nav.share && nav.canShare?.({ files: [file] })) {
-        await nav.share({ files: [file], text: caption() })
-        setShareState('idle')
+      // One decision tree for every device (lib/receipt-share.ts):
+      // server queue → native share sheet → desktop app via whatsapp://
+      // with the image on the clipboard → wa.me web fallback.
+      const r = await shareReceiptWhatsapp(order, store)
+      if (r.kind === 'cancelled') { setShareState('idle'); return }
+      setShareDone(r)
+      if (r.kind === 'queued') {
+        setShareState('queued')
+        toast.success('Receipt queued', `The branded image goes to ${r.phone} on WhatsApp — check Settings → WhatsApp if it fails.`)
         return
       }
-      // Fallback: save the image + open the chat with the thank-you
-      // typed; the cashier drags the receipt in and presses send.
-      const url = URL.createObjectURL(b)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `receipt-${order.number}.png`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      window.setTimeout(() => URL.revokeObjectURL(url), 8000)
-      const digits = customerDigits()
-      const wa = digits
-        ? `https://wa.me/${digits}?text=${encodeURIComponent(caption())}`
-        : `https://wa.me/?text=${encodeURIComponent(caption())}`
-      const opened = window.open(wa, '_blank', 'noopener')
-      if (!opened) setShareError('The chat did not open — allow pop-ups for this page, then tap Share again.')
-      setShareState('saved')
+      if (r.kind === 'shared') { setShareState('idle'); return }
+      // app-opened — the WhatsApp APP is in the customer's chat.
+      setShareState('app-opened')
+      if (r.clipboardOk) {
+        toast.info('WhatsApp opened', 'The receipt is on the clipboard — press Ctrl+V to paste it into the chat, then Enter.')
+      } else {
+        toast.info('WhatsApp opened', 'The receipt saved to Downloads — drag it into the chat and press Enter.')
+      }
     } catch (e) {
-      // The cashier cancelling the share sheet is normal, not an error.
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        setShareState('idle')
-        return
-      }
       setShareState('idle')
       setShareError(e instanceof Error ? e.message : 'Could not prepare the receipt image')
     }
@@ -133,7 +87,7 @@ export function ReceiptModal({ order, branding, open, onClose }: {
             {shareState === 'queued' ? <Check size={16} strokeWidth={2.25} aria-hidden /> : <Share2 size={16} strokeWidth={2.25} aria-hidden />}
             {shareState === 'working' ? 'Preparing…'
               : shareState === 'queued' ? `Image queued to ${shareTarget || 'the customer'} on WhatsApp`
-              : shareState === 'saved' ? (shareTarget ? `Image saved — attach it in the chat for ${shareTarget}` : 'Image saved — attach it')
+              : shareState === 'app-opened' ? (shareDone?.clipboardOk ? 'In WhatsApp — Ctrl+V, then Enter' : 'Receipt saved — drag it into WhatsApp')
               : 'Share via WhatsApp'}
           </Button>
         </>
@@ -142,6 +96,13 @@ export function ReceiptModal({ order, branding, open, onClose }: {
       {shareError && (
         <p className="mb-2 rounded-input border-2 bg-danger-bg px-3 py-2 text-[12px] font-semibold text-danger-text border-danger-text/30">
           {shareError}
+        </p>
+      )}
+      {shareState === 'app-opened' && shareDone && (
+        <p className="mb-2 text-[11px] leading-snug text-ink-muted">
+          No WhatsApp app on this PC?{' '}
+          <a className="font-semibold text-brand underline underline-offset-2" href={shareDone.waWebUrl} target="_blank" rel="noreferrer">Open WhatsApp Web instead</a>
+          {shareDone.clipboardOk ? ' — the receipt is still on the clipboard for pasting.' : ' — the receipt saved to Downloads for dragging in.'}
         </p>
       )}
       <div id="receipt-print" className="mx-auto max-w-[340px] bg-surface border-2 border-line-strong rounded-input p-5 font-mono text-[12px] leading-relaxed text-ink">
