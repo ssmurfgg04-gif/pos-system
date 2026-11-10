@@ -640,10 +640,11 @@ INSERT INTO order_items (order_id, product_id, name, qty, unit_price_cents, line
 	if err := db.QueryRow(`SELECT COUNT(*) FROM customers`).Scan(&customers); err != nil {
 		t.Errorf("v2 tables missing after migration: %v", err)
 	}
-	// Migration ran exactly once (current head: v20 — shifts.client_uuid
+	// Migration ran exactly once (current head: v21 — orders.notify
+	// union into legacy till roles, after the v20 shifts.client_uuid
 	// team sync + whatsapp_jobs delivery queue).
-	if v := persistenceSchemaVersion(t, path); v != 20 {
-		t.Errorf("schema version after migrate = %d, want 20", v)
+	if v := persistenceSchemaVersion(t, path); v != 21 {
+		t.Errorf("schema version after migrate = %d, want 21", v)
 	}
 	if err := db.Migrate(); err != nil {
 		t.Errorf("re-migrate on old DB: %v", err)

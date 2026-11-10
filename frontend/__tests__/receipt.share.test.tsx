@@ -1,10 +1,16 @@
-// Receipt share button (v1.6.0) — the manual WhatsApp path while the
-// whapi gateway sits in review. Covers:
-//   1. the button renders with the right label;
-//   2. it fetches the branded receipt image via the authenticated blob
-//      channel (NOT a plain fetch — the demo and auth differ);
-//   3. the Web Share path is used when the device supports file sharing;
-//   4. otherwise: download + wa.me chat with the thank-you caption.
+// Receipt share button — v1.6.0 manual path, v1.6.2 open-the-app flow.
+// The customer complaints behind v1.6.2: on the desktop app (WebView2) the
+// v1.6.0 flow never opened the installed WhatsApp, and in a browser the
+// share sheet asked "which app?" with no contact loaded. The contract now:
+//   1. the gateway leg still wins for PAID orders (image queued server-side);
+//   2. the image ALWAYS downloads first — WhatsApp can't receive a link;
+//   3. HOST leg: POST /whatsapp-open opened=true → no browser fallback;
+//   4. HOST opened=false → honest hint, no silent nothing;
+//   5. HOST endpoint missing (old server / browser-only) → openWhatsAppChat
+//      deep link with the customer's digits + caption;
+//   6. secondary "Send image…" rides the Web Share sheet (files + caption);
+//   7. stored 07… numbers normalize to 2547…;
+//   8. no phone on the order → chat without a number.
 // @vitest-environment jsdom
 import { describe, expect, test, vi, beforeEach } from 'vitest'
 import React, { act } from 'react'
@@ -21,6 +27,11 @@ vi.mock('../src/lib/api', () => ({
   blob: (p: string) => blobMock(p),
   api: { post: (path: string, body?: unknown) => apiPostMock(path, body) },
   isDemoSync: () => false,
+}))
+
+const waChatMock = vi.fn()
+vi.mock('../src/lib/whatsapp', () => ({
+  openWhatsAppChat: (...a: unknown[]) => waChatMock(...a),
 }))
 
 import { ReceiptModal } from '../src/components/Receipt'
@@ -49,8 +60,11 @@ const order = (over: Partial<any> = {}) => ({
   ...over,
 })
 
+const branding = { store_name: 'Creative Divine', app_name: 'LedgerPOS', brand_color: '#10B981', currency_symbol: 'KES' }
+
 beforeEach(() => {
   blobMock.mockClear()
+  waChatMock.mockClear()
   apiPostMock.mockClear()
   apiPostMock.mockImplementation(async () => { throw new Error('WhatsApp gateway not connected') })
   if (root) {
@@ -58,147 +72,134 @@ beforeEach(() => {
     root = null
   }
   document.body.innerHTML = ''
+  URL.createObjectURL = vi.fn(() => 'blob:mock') as unknown as typeof URL.createObjectURL
+  URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL
 })
+
+function findBtn(text: string): HTMLButtonElement | undefined {
+  return [...container.querySelectorAll('button')].find((b) => b.textContent?.includes(text))
+}
 
 describe('Receipt share via WhatsApp', () => {
   test('PAID order: the gateway leg queues the IMAGE first and skips the device share', async () => {
-    const share = vi.fn(async () => {})
-    Object.defineProperty(navigator, 'share', { value: share, configurable: true })
-    Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true })
-    apiPostMock.mockImplementation(async () => ({ queued: true, phone: '254722123456' }))
+    apiPostMock.mockImplementation(async (path: string) => {
+      if (path.endsWith('/whatsapp-send')) return { queued: true, phone: '254722123456' }
+      throw new Error('unexpected: ' + path)
+    })
 
-    mount(React.createElement(ReceiptModal, {
-      order: order(),
-      branding: { store_name: 'Creative Divine', app_name: 'LedgerPOS', brand_color: '#10B981', currency_symbol: 'KES' },
-      open: true,
-      onClose: () => {},
-    }))
-    const btn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Share via WhatsApp'))
+    mount(React.createElement(ReceiptModal, { order: order(), branding, open: true, onClose: () => {} }))
     await act(async () => {
-      btn!.click()
+      findBtn('Share via WhatsApp')!.click()
     })
     // Server send ONLY: the customer receives the branded image from the
-    // shop's own number — no share sheet, no image fetch needed.
+    // shop's own number — no download, no app launch, no deep link.
     expect(apiPostMock).toHaveBeenCalledWith('/api/v1/orders/42/whatsapp-send', {})
     expect(blobMock).not.toHaveBeenCalled()
-    expect(share).not.toHaveBeenCalled()
-    const queued = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Image queued'))
-    expect(queued).toBeTruthy()
+    expect(waChatMock).not.toHaveBeenCalled()
+    expect(findBtn('Image queued')).toBeTruthy()
   })
 
-  test('gateway refusal (under review / no phone) falls through to the device image share', async () => {
+  test('HOST leg: the till opens WhatsApp with the chat preloaded — no browser fallback', async () => {
+    apiPostMock.mockImplementation(async (path: string) => {
+      if (path.endsWith('/whatsapp-send')) throw new Error('gateway not connected')
+      if (path.endsWith('/whatsapp-open')) return { opened: true, url: 'whatsapp://send?phone=254722123456' }
+      throw new Error('unexpected: ' + path)
+    })
+    const downloadSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    mount(React.createElement(ReceiptModal, { order: order(), branding, open: true, onClose: () => {} }))
+    await act(async () => {
+      findBtn('Share via WhatsApp')!.click()
+    })
+    // Image saved FIRST (WhatsApp can't receive a file over a link)…
+    expect(blobMock).toHaveBeenCalledWith('/api/v1/orders/42/receipt-image')
+    expect(downloadSpy).toHaveBeenCalled()
+    // …then the HOST launches the app; digits + caption ride the payload.
+    expect(apiPostMock).toHaveBeenCalledWith('/api/v1/whatsapp-open', {
+      phone: '254722123456',
+      text: expect.stringContaining('Thank you for shopping with Creative Divine'),
+    })
+    // No browser deep link when the app opened.
+    expect(waChatMock).not.toHaveBeenCalled()
+    expect(findBtn('Image saved — WhatsApp opened for 254722123456')).toBeTruthy()
+    downloadSpy.mockRestore()
+  })
+
+  test('HOST opened=false (WhatsApp not installed) → honest hint, no silent nothing', async () => {
+    apiPostMock.mockImplementation(async (path: string) => {
+      if (path.endsWith('/whatsapp-send')) throw new Error('gateway not connected')
+      if (path.endsWith('/whatsapp-open')) return { opened: false, hint: 'install WhatsApp Desktop' }
+      throw new Error('unexpected: ' + path)
+    })
+
+    mount(React.createElement(ReceiptModal, { order: order(), branding, open: true, onClose: () => {} }))
+    await act(async () => {
+      findBtn('Share via WhatsApp')!.click()
+    })
+    expect(container.textContent).toContain('WhatsApp is not installed')
+    expect(waChatMock).not.toHaveBeenCalled()
+  })
+
+  test('HOST endpoint missing (old server / browser-only) → deep link with digits + caption', async () => {
+    // Default mock: every api.post throws (no gateway, no whatsapp-open).
+    const downloadSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    mount(React.createElement(ReceiptModal, { order: order(), branding, open: true, onClose: () => {} }))
+    await act(async () => {
+      findBtn('Share via WhatsApp')!.click()
+    })
+    expect(blobMock).toHaveBeenCalledWith('/api/v1/orders/42/receipt-image')
+    expect(waChatMock).toHaveBeenCalledTimes(1)
+    expect(waChatMock).toHaveBeenCalledWith('254722123456', expect.stringContaining("we're glad you chose us"))
+    downloadSpy.mockRestore()
+  })
+
+  test('secondary Send image… rides the Web Share sheet with the file + caption', async () => {
     const share = vi.fn(async () => {})
     Object.defineProperty(navigator, 'share', { value: share, configurable: true })
     Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true })
+    const downloadSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 
-    mount(React.createElement(ReceiptModal, {
-      order: order(),
-      branding: { store_name: 'Creative Divine', app_name: 'LedgerPOS', brand_color: '#10B981', currency_symbol: 'KES' },
-      open: true,
-      onClose: () => {},
-    }))
-    const btn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Share via WhatsApp'))
+    mount(React.createElement(ReceiptModal, { order: order(), branding, open: true, onClose: () => {} }))
+    expect(findBtn('Send image…')).toBeTruthy()
     await act(async () => {
-      btn!.click()
+      findBtn('Send image…')!.click()
     })
-    expect(apiPostMock).toHaveBeenCalledTimes(1)
-    // Same image, device path: Web Share carries the FILE + caption.
-    expect(blobMock).toHaveBeenCalledWith('/api/v1/orders/42/receipt-image')
-    expect(share).toHaveBeenCalledTimes(1)
     const arg = share.mock.calls[0][0] as ShareData & { files: File[] }
     expect(arg.files?.[0].name).toBe('receipt-ORD-1042.png')
-  })
-
-  test('button renders; Web Share carries the image + caption when supported', async () => {
-    const share = vi.fn(async () => {})
-    const canShare = vi.fn(() => true)
-    Object.defineProperty(navigator, 'share', { value: share, configurable: true })
-    Object.defineProperty(navigator, 'canShare', { value: canShare, configurable: true })
-
-    mount(React.createElement(ReceiptModal, {
-      order: order(),
-      branding: { store_name: 'Creative Divine', app_name: 'LedgerPOS', brand_color: '#10B981', currency_symbol: 'KES' },
-      open: true,
-      onClose: () => {},
-    }))
-    const btn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Share via WhatsApp'))
-    expect(btn).toBeTruthy()
-    await act(async () => {
-      btn!.click()
-    })
-    expect(blobMock).toHaveBeenCalledWith('/api/v1/orders/42/receipt-image')
-    expect(canShare).toHaveBeenCalled()
-    expect(share).toHaveBeenCalledTimes(1)
-    const arg = share.mock.calls[0][0] as ShareData & { files: File[] }
-    expect(arg.files?.length).toBe(1)
-    expect(arg.files?.[0].name).toBe('receipt-ORD-1042.png')
-    expect(arg.text).toContain("we're glad you chose us")
     expect(arg.text).toContain('Hi Amina!')
-  })
-
-  test('desktop PC (no Web Share): download + whatsapp:// opens the INSTALLED app; wa.me link rendered', async () => {
-    // No Web Share API → the desktop hop: image to the clipboard (jsdom has
-    // none, so the download backup carries it) + the app deep link.
+    // The share-sheet path never asks the host to launch the app.
+    const openedCalls = apiPostMock.mock.calls.filter((c) => String(c[0]).endsWith('/whatsapp-open'))
+    expect(openedCalls).toHaveLength(0)
+    downloadSpy.mockRestore()
     Object.defineProperty(navigator, 'share', { value: undefined, configurable: true })
     Object.defineProperty(navigator, 'canShare', { value: undefined, configurable: true })
-    URL.createObjectURL = vi.fn(() => 'blob:mock') as unknown as typeof URL.createObjectURL
-    URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL
-    const clicks: { download: string; href: string }[] = []
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
-      clicks.push({ download: this.download, href: this.href })
-    })
-
-    mount(React.createElement(ReceiptModal, {
-      order: order(),
-      branding: { store_name: 'Creative Divine', app_name: 'LedgerPOS', brand_color: '#10B981', currency_symbol: 'KES' },
-      open: true,
-      onClose: () => {},
-    }))
-    const btn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Share via WhatsApp'))
-    await act(async () => {
-      btn!.click()
-    })
-    expect(blobMock).toHaveBeenCalledWith('/api/v1/orders/42/receipt-image')
-    // The branded PNG is downloaded as the attach backup…
-    expect(clicks.filter((c) => c.download === 'receipt-ORD-1042.png')).toHaveLength(1)
-    // …and the INSTALLED WhatsApp app is opened straight in the chat.
-    const deep = clicks.find((c) => c.href.startsWith('whatsapp://send?phone=254722123456&text='))
-    expect(deep).toBeTruthy()
-    expect(decodeURIComponent(deep!.href)).toContain('Thank you for shopping with Creative Divine')
-    // No browser tab is opened automatically — WhatsApp Web stays one
-    // deliberate click away in the modal.
-    const waWeb = [...container.querySelectorAll('a')].find((a) => a.textContent?.includes('Open WhatsApp Web instead'))
-    expect(waWeb).toBeTruthy()
-    expect(waWeb!.getAttribute('href')?.startsWith('https://wa.me/254722123456?text=')).toBe(true)
-    expect(container.textContent).toContain('Receipt saved — drag it into WhatsApp')
-
-    clickSpy.mockRestore()
   })
 
-  test('a stored 07… number normalizes to 2547… for the app hop and wa.me (the server rule)', async () => {
-    Object.defineProperty(navigator, 'share', { value: undefined, configurable: true })
-    Object.defineProperty(navigator, 'canShare', { value: undefined, configurable: true })
-    URL.createObjectURL = vi.fn(() => 'blob:mock') as unknown as typeof URL.createObjectURL
-    URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL
-    const clicks: { download: string; href: string }[] = []
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
-      clicks.push({ download: this.download, href: this.href })
-    })
-
+  test('a stored 07… number normalizes to 2547… for the chat (the server rule)', async () => {
+    const downloadSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     mount(React.createElement(ReceiptModal, {
       order: order({ payments: [{ id: 2, method: 'cash', status: 'COMPLETED', amountCents: 55000, phone: '0711 222 333' }] }),
-      branding: { store_name: 'Creative Divine', app_name: 'LedgerPOS', brand_color: '#10B981', currency_symbol: 'KES' },
-      open: true,
-      onClose: () => {},
+      branding, open: true, onClose: () => {},
     }))
-    const btn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Share via WhatsApp'))
     await act(async () => {
-      btn!.click()
+      findBtn('Share via WhatsApp')!.click()
     })
-    expect(clicks.some((c) => c.href.startsWith('whatsapp://send?phone=254711222333&text='))).toBe(true)
-    const waWeb = [...container.querySelectorAll('a')].find((a) => a.textContent?.includes('Open WhatsApp Web instead'))
-    expect(waWeb!.getAttribute('href')?.startsWith('https://wa.me/254711222333?text=')).toBe(true)
-    clickSpy.mockRestore()
+    expect(waChatMock).toHaveBeenCalledWith('254711222333', expect.any(String))
+    downloadSpy.mockRestore()
+  })
+
+  test('no customer phone on the order → chat opens without a number', async () => {
+    const downloadSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    mount(React.createElement(ReceiptModal, {
+      order: order({ payments: [{ id: 1, method: 'cash', status: 'COMPLETED', amountCents: 55000 }] }),
+      branding, open: true, onClose: () => {},
+    }))
+    await act(async () => {
+      findBtn('Share via WhatsApp')!.click()
+    })
+    expect(waChatMock).toHaveBeenCalledWith('', expect.any(String))
+    downloadSpy.mockRestore()
   })
 
   test('the configured receipt footer rides branding; generic line only as fallback', () => {
@@ -228,31 +229,5 @@ describe('Receipt share via WhatsApp', () => {
       onClose: () => {},
     }))
     expect(container.textContent).not.toContain('VAT')
-  })
-
-  test('no customer phone on the order → the app hop and wa.me both still work, numberless', async () => {
-    Object.defineProperty(navigator, 'share', { value: undefined, configurable: true })
-    Object.defineProperty(navigator, 'canShare', { value: undefined, configurable: true })
-    URL.createObjectURL = vi.fn(() => 'blob:mock') as unknown as typeof URL.createObjectURL
-    URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL
-    const clicks: { download: string; href: string }[] = []
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
-      clicks.push({ download: this.download, href: this.href })
-    })
-
-    mount(React.createElement(ReceiptModal, {
-      order: order({ payments: [{ id: 1, method: 'cash', status: 'COMPLETED', amountCents: 55000 }] }),
-      branding: { store_name: 'Creative Divine', app_name: 'LedgerPOS', brand_color: '#10B981', currency_symbol: 'KES' },
-      open: true,
-      onClose: () => {},
-    }))
-    const btn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Share via WhatsApp'))
-    await act(async () => {
-      btn!.click()
-    })
-    expect(clicks.some((c) => c.href.startsWith('whatsapp://send?text='))).toBe(true)
-    const waWeb = [...container.querySelectorAll('a')].find((a) => a.textContent?.includes('Open WhatsApp Web instead'))
-    expect(waWeb!.getAttribute('href')?.startsWith('https://wa.me/?text=')).toBe(true)
-    clickSpy.mockRestore()
   })
 })

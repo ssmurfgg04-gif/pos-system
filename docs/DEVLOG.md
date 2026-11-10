@@ -1,6 +1,86 @@
 # Worklog
 
 ---
+Task ID: v1.6.2
+Agent: main (Super Z)
+Task: "fix all these issues heres the customers complaints 1 When we share
+  on WhatsApp, but doesn't open app. 2 This interface is on the admin ones
+  alone, the cyber pc is not showing. Then from here it opens the app.
+  3 From here it asks which app to use for sharing and the contact doesn't
+  load automatically on whatsapp. cut and push the updates and fixes v1.6.2"
+  (mid-flight a parallel session shipped v1.6.1 — the share button on the
+  paid screen + the in-page desktop hop; v1.6.2 builds on it.)
+
+Work Log:
+- Diagnosis (all three complaints traced to v1.6.0 behaviour):
+  1. In the WebView2 desktop shell, window.open('wa.me') and custom-
+     protocol navigation go nowhere (and the old fallback landed on
+     WhatsApp Web) — the share button "doesn't open the app".
+  2. Orders.tsx / DesignBoard.tsx gate the WhatsApp contact interface on
+     `orders.notify`; till roles were created before that key existed and
+     the Cashier preset never carried it — the cyber PCs see nothing.
+  3. navigator.share({files}) is the OS share sheet by design — that is
+     where "which app?" + the empty contact box come from.
+- Go host opener: internal/handlers/whatsapp_open.go — POST
+  /api/v1/whatsapp-open {phone, text} → server-side url.Values builds
+  whatsapp://send?phone=&text= (numbers sanitized 07…/7…/+2547… →
+  2547…), the host process runs the OS opener (rundll32
+  FileProtocolHandler on Windows, open on macOS, xdg-open on Linux, 4s
+  timeout), answers {opened, url, hint?} and logs the principal. The
+  WebView2 page can finally make the HOST open the app.
+- Router: the new route plus both notify routes
+  (orders/:id/notify, design-jobs/:id/notify) move to
+  auth.RequirePermissionAny("orders.notify","pos.sell") — any-of
+  semantics; RequirePermission (all-of) unchanged.
+- Cashier preset gains "orders.notify"; migration v21 unions
+  orders.notify into the seeded Owner/Admin/Front Desk/Branding/Cyber/
+  Cashier roles on every till DB (union-only + idempotent, custom roles
+  and admin edits untouched; schema head v20 → v21).
+- Frontend: src/lib/whatsapp.ts — waDigits (Kenyan normalization),
+  waChatUrl (wa.me), waAppDeepLink (whatsapp://send), openWhatsAppChat:
+  deep-link the installed app FIRST, and only fall back to wa.me when
+  nothing took focus after ~2.2s (!document.hasFocus() ||
+  visibilityState === 'hidden'). The v1.6.1 decision tree
+  (lib/receipt-share.ts) gains the HOST leg: ShareDeps.hostOpen →
+  POST /api/v1/whatsapp-open first (clipboard + download backup still
+  fill first), in-page anchor hop only when the host is missing/refuses
+  (rebase note: v1.6.1 rewrote Receipt.tsx on this tree, so the merge
+  keeps its consumer and puts the host leg in the tree). Orders.tsx +
+  DesignBoard.tsx: canNotify = hasAny(user, 'orders.notify','pos.sell')
+  (hasAny helper in stores/auth.ts); their contact modals open the chat
+  via openWhatsAppChat. Demo backend parity (notify gate + demo
+  whatsapp-open endpoint + seed phone).
+- Tests: whatsapp.helper.test.ts (normalization, URL builders, app-first
+  / fallback / no-fallback / no-phone flows, fake timers);
+  receipt-share.test.ts extended with the host leg (host opened → no
+  anchor hop, host missing → v1.6.1 hop carries, opened:false → honest
+  result); Go tests for the endpoint (cashier 200 + normalization,
+  anonymous 401, malformed JSON) and migration v21 (legacy roles gain
+  orders.notify, re-migrate idempotent, custom roles untouched);
+  persistence probe updated to expect schema v21; orders.query mock
+  mirrors hasAny.
+- Gates: gofmt clean, go vet clean, go build OK, go test ./... all
+  packages, tsc clean, vitest 134/134 (was 126), vite build OK, live
+  smoke 84/84 (82 baseline + 2 new: cashier whatsapp-open 200 with the
+  2547… normalized url, anonymous 401). Runner script now wipes pos.db
+  per run and sets ALLOW_MOCK_PAYMENTS=true (the mock STK sweeper is
+  env-gated — bare `serve` boots manual mode and 3 checks fail; verified
+  the same 3 fail on pristine HEAD, so no regression chased).
+- Docs: CHANGELOG v1.6.2 entry, RECEIPTS-WHATSAPP.md share section
+  rewritten for the app-open flow + permission widening, this entry.
+- Release: commit → CI green → tag v1.6.2 → LedgerPOS release (7
+  assets) → manifest-sync → fleet DB backup → publish_ota_manifest
+  (5 upserts + byte-level readback) → check-cloud signature valid.
+
+Stage Summary:
+- The Share button opens WhatsApp the app with the customer loaded —
+  on the desktop tills the host does it (no WebView2 dead end), in a
+  browser the deep link does it, wa.me only as last resort.
+- No OS share sheet on the chat path: number + caption ride the link.
+- The contact interface is on every till role that can sell — cyber PCs
+  included — via preset + backfill, without touching custom roles.
+
+---
 Task ID: v1.4.7
 Agent: main (Super Z)
 Task: Feature regression sweep (the client's "test every major feature" rule)

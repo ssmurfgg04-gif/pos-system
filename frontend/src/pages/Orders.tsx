@@ -5,7 +5,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { api, DesignJob, GiftCard, Order, OrderEvent, WhatsAppContact } from '../lib/api'
-import { useAuth } from '../stores/auth'
+import { useAuth, hasAny } from '../stores/auth'
+import { openWhatsAppChat } from '../lib/whatsapp'
 import { Button, Card, EmptyState, Input, Modal, Select, Spinner, StatusPill, Table, Tabs, Textarea, Field } from '../components/ui'
 import { ReceiptModal } from '../components/Receipt'
 import { useBranding } from '../stores/branding'
@@ -46,7 +47,10 @@ export function Orders() {
   const canManual = useAuth((s) => !!s.user?.permissions.includes('payments.manual'))
   const canSell = useAuth((s) => !!s.user?.permissions.includes('pos.sell'))
   const canAssign = useAuth((s) => !!s.user?.permissions.includes('orders.assign'))
-  const canNotify = useAuth((s) => !!s.user?.permissions.includes('orders.notify'))
+  // v1.6.2: contacting a customer is orders.notify work, but till roles
+  // created before that key existed hold pos.sell — either may open the
+  // interface (matches the server's RequirePermissionAny on /notify).
+  const canNotify = useAuth((s) => hasAny(s.user, 'orders.notify', 'pos.sell'))
   const canViewAll = useAuth((s) => !!s.user?.permissions.includes('orders.view.all'))
   const [settleFor, setSettleFor] = useState<Order | null>(null)
   const [orders, setOrders] = useState<Order[] | null>(null)
@@ -555,12 +559,17 @@ function OrderDrawer({
               {contact.message}
             </p>
             <p className="text-[11.5px] text-ink-subtle">
-              WhatsApp opens with this draft prefilled, review it and press send there. The contact attempt is
-              already on the activity timeline; the app never sends automatically.
+              WhatsApp opens straight to this customer with the draft typed (in the desktop app or the
+              browser, whichever this machine answers) — review it, attach the receipt image if you like,
+              and press send there. The contact attempt is already on the activity timeline; the app never
+              sends automatically.
             </p>
             <Button variant="primary" size="lg" className="w-full"
               onClick={() => {
-                window.open(contact.url, '_blank', 'noopener')
+                // v1.6.2: the installed app first (contact preloaded) —
+                // window.open('wa.me') landed on WhatsApp Web in a tab and
+                // went nowhere in the WebView2 app window.
+                openWhatsAppChat(contact.phone, contact.message)
                 toast.success('WhatsApp opened', 'Send the message from there.')
                 refreshTimeline()
               }}

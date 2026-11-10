@@ -44,6 +44,9 @@ function deps(over: Partial<ShareDeps> = {}): ShareDeps {
     copyPng: vi.fn().mockResolvedValue(undefined),
     download: vi.fn(),
     openExternal: vi.fn(),
+    // default = old server / browser-only: the host leg answers
+    // opened:false so the in-page hop carries (v1.6.1 behaviour).
+    hostOpen: vi.fn().mockResolvedValue({ opened: false }),
     ...over,
   }
 }
@@ -104,6 +107,30 @@ describe('receipt-share decision tree', () => {
     expect(d.download).toHaveBeenCalledTimes(1)
     expect((d.download as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBe('receipt-L-0123.png')
     expect(d.openExternal).toHaveBeenCalledWith("whatsapp://send?phone=254712345678&text=Hi%20Amina!%20Thank%20you%20for%20shopping%20with%20Duka%20%E2%80%94%20we're%20glad%20you%20chose%20us.")
+  })
+
+  it('v1.6.2 host leg: the Go host opens the app → no in-page hop fires', async () => {
+    const d = deps({ hostOpen: vi.fn().mockResolvedValue({ opened: true }) })
+    const r = await shareReceiptWhatsapp(order(), 'Duka', d)
+    expect(r.kind).toBe('app-opened')
+    expect(r.hostOpened).toBe(true)
+    expect((d.hostOpen as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('254712345678')
+    expect(d.openExternal).not.toHaveBeenCalled()
+  })
+
+  it('v1.6.2 host missing (old server / browser-only) → the v1.6.1 hop carries', async () => {
+    const d = deps({ hostOpen: vi.fn().mockRejectedValue(new Error('404')) })
+    const r = await shareReceiptWhatsapp(order(), 'Duka', d)
+    expect(r.kind).toBe('app-opened')
+    expect(r.hostOpened).toBe(false)
+    expect(d.openExternal).toHaveBeenCalledTimes(1)
+  })
+
+  it('v1.6.2 host says not installed (opened:false) → hop still tries, result is honest', async () => {
+    const d = deps({ hostOpen: vi.fn().mockResolvedValue({ opened: false }) })
+    const r = await shareReceiptWhatsapp(order(), 'Duka', d)
+    expect(r.hostOpened).toBe(false)
+    expect(d.openExternal).toHaveBeenCalledTimes(1)
   })
 
   it('clipboard blocked → still opens the app; the downloaded PNG is the attach path', async () => {

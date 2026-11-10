@@ -29,6 +29,9 @@ export interface ReceiptShareResult {
   phone: string
   /** Desktop leg: the image is on the clipboard, ready for Ctrl+V. */
   clipboardOk: boolean
+  /** v1.6.2: the Go host opened the installed app itself (true) or the
+   *  in-page deep-link hop carried it (false). */
+  hostOpened: boolean
   /** wa.me click-to-chat URL shown in the UI as the fallback hop. */
   waWebUrl: string
 }
@@ -41,6 +44,11 @@ export interface ShareDeps {
   copyPng: (b: Blob) => Promise<void>
   download: (b: Blob, name: string) => void
   openExternal: (href: string) => void
+  /** v1.6.2: ask the Go host to open the installed WhatsApp app with
+   *  the chat preloaded (the reliable WebView2 path — the host process
+   *  runs the OS opener itself). Resolves {opened:false} on an old
+   *  server / browser-only box / WhatsApp missing. */
+  hostOpen: (phone: string, text: string) => Promise<{ opened: boolean }>
 }
 
 const IMG_NAME = (order: Order) => `receipt-${order.number}.png`
@@ -116,6 +124,16 @@ function defaultDeps(order: Order): ShareDeps {
       a.click()
       a.remove()
     },
+    // v1.6.2: the HOST leg. A non-2xx (endpoint missing on an old
+    // server) resolves {opened:false} so the caller falls back to the
+    // in-page hop — the decision tree never throws on it.
+    hostOpen: async (phone, text) => {
+      try {
+        return await api.post<{ opened: boolean }>('/api/v1/whatsapp-open', { phone, text })
+      } catch {
+        return { opened: false }
+      }
+    },
   }
 }
 
@@ -128,7 +146,7 @@ export async function shareReceiptWhatsapp(
   const caption = receiptCaption(order, store)
   const digits = receiptPhoneDigits(order)
   const waWeb = waMeLink(digits, caption)
-  const base = { phone: digits, clipboardOk: false, waWebUrl: waWeb }
+  const base = { phone: digits, clipboardOk: false, hostOpened: false, waWebUrl: waWeb }
 
   // Leg 1 — server queue (gateway connected, PAID order).
   if (order.status === 'PAID') {
@@ -159,8 +177,14 @@ export async function shareReceiptWhatsapp(
     }
   }
 
-  // Leg 3 — DESKTOP APP: clipboard + download backup + whatsapp:// deep
-  // link into the installed app's chat.
+  // Leg 3 — DESKTOP APP: clipboard + download backup, then the chat is
+  // opened with the contact preloaded. v1.6.2: the GO HOST is asked
+  // first (POST /api/v1/whatsapp-open — the host process runs the OS
+  // opener on whatsapp://send?phone=&text=; the reliable path inside
+  // the WebView2 shell, no "Open WhatsApp?" prompt). When the host is
+  // not there / refuses (old server, browser-only box, WhatsApp
+  // missing) the v1.6.1 in-page hop carries it: anchor deep link into
+  // the installed app's chat.
   let clipboardOk = false
   try {
     await d.copyPng(b)
@@ -174,6 +198,15 @@ export async function shareReceiptWhatsapp(
   } catch {
     /* a blocked download must not kill the chat hop */
   }
-  d.openExternal(whatsappDeepLink(digits, caption))
-  return { ...base, kind: 'app-opened', clipboardOk }
+  let hostOpened = false
+  try {
+    const r = await d.hostOpen(digits, caption)
+    hostOpened = !!r?.opened
+  } catch {
+    /* the host leg must never kill the hop */
+  }
+  if (!hostOpened) {
+    d.openExternal(whatsappDeepLink(digits, caption))
+  }
+  return { ...base, kind: 'app-opened', clipboardOk, hostOpened }
 }

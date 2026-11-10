@@ -1165,6 +1165,26 @@ CREATE TABLE IF NOT EXISTS whatsapp_jobs (
 CREATE INDEX IF NOT EXISTS idx_whatsapp_jobs_status ON whatsapp_jobs(status, id);
 `,
 	},
+	{
+		// v1.6.2: the "Contact customer on WhatsApp" interface came up
+		// admin-only on live tills — the till roles (Cashier on the
+		// cyber-café machines above all) were created before
+		// orders.notify existed and the v14 union predates it for
+		// DBs already on that version. Union-only, idempotent;
+		// custom roles and admin edits stay untouched.
+		Version: 21,
+		Go: func(d *DB, tx *sql.Tx) error {
+			extra := map[string][]string{
+				"Owner":      {"orders.notify"},
+				"Admin":      {"orders.notify"},
+				"Front Desk": {"orders.notify"},
+				"Branding":   {"orders.notify"},
+				"Cyber":      {"orders.notify"},
+				"Cashier":    {"orders.notify"},
+			}
+			return unionRolePerms(d, tx, extra)
+		},
+	},
 }
 
 // backfillRolePermsV19 unions the v19 sales-oversight permission into the

@@ -15,6 +15,10 @@ import { createRoot, Root } from 'react-dom/client'
 let userPerms: string[] = ['orders.view', 'orders.view.all', 'pos.sell']
 
 vi.mock('../src/stores/auth', () => ({
+  // v1.6.2: Orders.tsx gates the WhatsApp contact entry on hasAny(user,
+  // 'orders.notify','pos.sell') — mirror the real helper here.
+  hasAny: (u: { permissions: string[] } | null | undefined, ...perms: string[]): boolean =>
+    !!u && perms.some((p) => u.permissions.includes(p)),
   useAuth: Object.assign(
     vi.fn((sel: (s: any) => unknown) =>
       sel({ user: { id: 7, username: 'owner', permissions: userPerms } }),

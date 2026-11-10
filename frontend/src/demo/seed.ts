@@ -350,7 +350,7 @@ export function buildSeed(): DemoDB {
 
   const roles: DemoRole[] = [
     { id: 1, name: 'Admin', description: 'Full access: settings, users, stock, reports, KRA returns, and checkout when fixing problems', permissions: [...ALL_PERMS], system: true },
-    { id: 2, name: 'Cashier', description: 'Point of sale: checkout, manual M-Pesa entry, shifts', permissions: ['pos.sell', 'pos.void', 'orders.view', 'payments.manual', 'shifts.manage', 'customers.view', 'quotes.view'], system: true },
+    { id: 2, name: 'Cashier', description: 'Point of sale: checkout, manual M-Pesa entry, shifts', permissions: ['pos.sell', 'pos.void', 'orders.view', 'orders.notify', 'payments.manual', 'shifts.manage', 'customers.view', 'quotes.view'], system: true },
     { id: 3, name: 'Designer', description: 'Design & production board, catalog visibility', permissions: ['design.view', 'design.manage', 'orders.perform', 'products.view', 'orders.view', 'quotes.view'], system: true },
   ]
 

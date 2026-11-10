@@ -3,21 +3,26 @@
 // endpoint round-trip). window.print() with print CSS produces a clean
 // 80mm-friendly printout; browser "Save as PDF" covers the no-printer case.
 //
-// v1.6.1: Share via WhatsApp works on EVERY device — the server queues
-// the branded image when the gateway is up; otherwise the native share
-// sheet carries it (Android, Windows 11 Store app); on desktop PCs the
-// whatsapp:// deep link opens the installed WhatsApp app with the image
-// on the clipboard for Ctrl+V, and wa.me is the last resort.
+// v1.6.0: the Share-via-WhatsApp button — the whapi gateway is still under
+// review, so the cashier needs a manual path sharing the BRANDED RECEIPT
+// IMAGE (server-rendered PNG, invisible watermark included).
+//
+// v1.6.2: the customer complaints — the button "didn't open" anything on
+// the desktop app (the WebView2 shell swallows window.open and custom
+// protocols) and browser share sheets asked "which app?" with no contact
+// loaded. Now: the image ALWAYS lands in Downloads first, then the HOST
+// leg (POST /api/v1/whatsapp-open) launches the installed WhatsApp app
+// with the customer's chat + caption preloaded; browser-only boxes fall
+// back to the whatsapp:// deep link (wa.me/WhatsApp-Web last resort).
+// A secondary "Send image…" keeps the one-tap Web Share where it works.
 
-import { Branding, Order } from '../lib/api'
+import { Branding, Order, api, blob } from '../lib/api'
 import { centsToAmount } from '../lib/money'
-import { receiptPhoneDigits, shareReceiptWhatsapp, ReceiptShareResult } from '../lib/receipt-share'
+import { openWhatsAppChat } from '../lib/whatsapp'
 import { toast } from '../stores/toasts'
 import { Button, Modal } from './ui'
-import { Check, Printer, Share2 } from 'lucide-react'
+import { Check, ImageDown, Printer, Share2 } from 'lucide-react'
 import { useState } from 'react'
-
-type ShareState = 'idle' | 'working' | 'queued' | 'app-opened'
 
 export function ReceiptModal({ order, branding, open, onClose }: {
   order: Order
@@ -25,8 +30,7 @@ export function ReceiptModal({ order, branding, open, onClose }: {
   open: boolean
   onClose: () => void
 }) {
-  const [shareState, setShareState] = useState<ShareState>('idle')
-  const [shareDone, setShareDone] = useState<ReceiptShareResult | null>(null)
+  const [shareState, setShareState] = useState<'idle' | 'working' | 'saved' | 'queued'>('idle')
   const [shareError, setShareError] = useState('')
   if (!open) return null
   // Older orders (or a partial payload) may omit items/payments — the
@@ -34,34 +38,124 @@ export function ReceiptModal({ order, branding, open, onClose }: {
   const items = order.items ?? []
   const store = branding.store_name || 'Store'
 
+  const caption = () => {
+    const first = (order.customerName || '').trim().split(/\s+/)[0]
+    const base = `Thank you for shopping with ${store} — we're glad you chose us.`
+    return first ? `Hi ${first}! ${base}` : base
+  }
+  // wa.me needs full international form (2547…). A stored 07… number
+  // produced an invalid click-to-chat link — normalize like the server
+  // does for automatic sends (services/whatsapp.go normalizeWhatsappPhone).
+  const customerDigits = (): string => {
+    const p = (order.payments ?? []).find((x) => (x.phone || '').replace(/\D/g, '').length >= 9)
+    let d = (p?.phone || '').replace(/\D/g, '')
+    if (d.startsWith('0')) d = '254' + d.slice(1)
+    else if (d.startsWith('7') || d.startsWith('1')) d = '254' + d
+    return d
+  }
   // The cashier must SEE who is about to receive payment proof.
-  const shareTarget = receiptPhoneDigits(order)
+  const shareTarget = customerDigits()
+
+  // v1.6.2: save the branded PNG to the device (WhatsApp cannot receive a
+  // file over a link — the cashier attaches this in the chat), then open
+  // the customer's chat with the caption typed.
+  const saveReceiptImage = async (): Promise<Blob> => {
+    const b = await blob(`/api/v1/orders/${order.id}/receipt-image`)
+    const url = URL.createObjectURL(b)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `receipt-${order.number}.png`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 8000)
+    return b
+  }
 
   const shareWhatsapp = async () => {
     setShareState('working')
     setShareError('')
-    setShareDone(null)
     try {
-      // One decision tree for every device (lib/receipt-share.ts):
-      // server queue → native share sheet → desktop app via whatsapp://
-      // with the image on the clipboard → wa.me web fallback.
-      const r = await shareReceiptWhatsapp(order, store)
-      if (r.kind === 'cancelled') { setShareState('idle'); return }
-      setShareDone(r)
-      if (r.kind === 'queued') {
-        setShareState('queued')
-        toast.success('Receipt queued', `The branded image goes to ${r.phone} on WhatsApp — check Settings → WhatsApp if it fails.`)
+      // SERVER leg first (PAID orders, gateway connected): the branded
+      // IMAGE is queued to the customer's WhatsApp with the thank-you
+      // caption — the customer receives the picture without the cashier
+      // touching their phone. The button is an honest RESEND: pressing it
+      // again is exactly what "I didn't get it" needs.
+      if (order.status === 'PAID') {
+        try {
+          const r = await api.post<{ queued: boolean; phone: string }>(`/api/v1/orders/${order.id}/whatsapp-send`, {})
+          if (r.queued) {
+            setShareState('queued')
+            toast.success('Receipt queued', `The branded image goes to ${r.phone} on WhatsApp — check Settings → WhatsApp if it fails.`)
+            return
+          }
+        } catch {
+          /* gateway not connected (it is under review) or the sale has no
+             phone — the HOST/DEVICE paths below carry the very same image. */
+        }
+      }
+      await saveReceiptImage()
+      const digits = customerDigits()
+      // v1.6.2 HOST leg: the Go process on the till hands whatsapp:// to
+      // the OS — WhatsApp Desktop / the mobile app opens with the chat to
+      // the customer + thank-you preloaded. This is the leg that works
+      // inside the WebView2 app window, where in-page window.open and
+      // custom-protocol navigation go nowhere (the customer complaint).
+      try {
+        const r = await api.post<{ opened: boolean }>(`/api/v1/whatsapp-open`, { phone: digits, text: caption() })
+        if (r.opened) {
+          setShareState('saved')
+          toast.success('WhatsApp opened', digits ? `Chat to ${digits} is loaded — attach the saved receipt image and send.` : 'Pick the chat, attach the saved receipt image and send.')
+          return
+        }
+        setShareError('WhatsApp is not installed on this machine — the receipt image is saved; open a browser and press Share again, or install WhatsApp Desktop.')
+        setShareState('saved')
+        return
+      } catch {
+        /* browser-only mode or an older server — deep-link below */
+      }
+      // BROWSER leg: deep-link the installed app (contact preloaded); if
+      // nothing took focus the helper falls back to wa.me (WhatsApp Web)
+      // after ~2s — never a share sheet, never a dead click.
+      openWhatsAppChat(digits, caption())
+      setShareState('saved')
+    } catch (e) {
+      // The cashier cancelling the share sheet is normal, not an error.
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setShareState('idle')
         return
       }
-      if (r.kind === 'shared') { setShareState('idle'); return }
-      // app-opened — the WhatsApp APP is in the customer's chat.
-      setShareState('app-opened')
-      if (r.clipboardOk) {
-        toast.info('WhatsApp opened', 'The receipt is on the clipboard — press Ctrl+V to paste it into the chat, then Enter.')
-      } else {
-        toast.info('WhatsApp opened', 'The receipt saved to Downloads — drag it into the chat and press Enter.')
+      setShareState('idle')
+      setShareError(e instanceof Error ? e.message : 'Could not prepare the receipt image')
+    }
+  }
+
+  // Secondary, kept from v1.6.0: where the browser supports file sharing
+  // (Android, some desktops) the image rides the Web Share sheet into the
+  // chat in one tap — contact chosen there. Primary button stays the
+  // app-opening, contact-first path.
+  const shareImageSheet = async () => {
+    setShareState('working')
+    setShareError('')
+    try {
+      const b = await saveReceiptImage()
+      const file = new File([b], `receipt-${order.number}.png`, { type: 'image/png' })
+      const nav = navigator as Navigator & {
+        canShare?: (d: ShareData) => boolean
+        share?: (d: ShareData) => Promise<void>
       }
+      if (nav.share && nav.canShare?.({ files: [file] })) {
+        await nav.share({ files: [file], text: caption() })
+        setShareState('idle')
+        return
+      }
+      // No file-share support after all → the primary path.
+      await shareWhatsapp()
     } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setShareState('idle')
+        return
+      }
       setShareState('idle')
       setShareError(e instanceof Error ? e.message : 'Could not prepare the receipt image')
     }
@@ -87,22 +181,21 @@ export function ReceiptModal({ order, branding, open, onClose }: {
             {shareState === 'queued' ? <Check size={16} strokeWidth={2.25} aria-hidden /> : <Share2 size={16} strokeWidth={2.25} aria-hidden />}
             {shareState === 'working' ? 'Preparing…'
               : shareState === 'queued' ? `Image queued to ${shareTarget || 'the customer'} on WhatsApp`
-              : shareState === 'app-opened' ? (shareDone?.clipboardOk ? 'In WhatsApp — Ctrl+V, then Enter' : 'Receipt saved — drag it into WhatsApp')
+              : shareState === 'saved' ? (shareTarget ? `Image saved — WhatsApp opened for ${shareTarget}; attach and send` : 'Image saved — attach it in the chat')
               : 'Share via WhatsApp'}
           </Button>
+          {typeof navigator.share === 'function' && (
+            <Button variant="secondary" disabled={shareState === 'working'} onClick={shareImageSheet} title="The OS share sheet carries the image itself — pick WhatsApp there, the contact is chosen in the sheet">
+              <ImageDown size={16} strokeWidth={2.25} aria-hidden />
+              Send image…
+            </Button>
+          )}
         </>
       }
     >
       {shareError && (
         <p className="mb-2 rounded-input border-2 bg-danger-bg px-3 py-2 text-[12px] font-semibold text-danger-text border-danger-text/30">
           {shareError}
-        </p>
-      )}
-      {shareState === 'app-opened' && shareDone && (
-        <p className="mb-2 text-[11px] leading-snug text-ink-muted">
-          No WhatsApp app on this PC?{' '}
-          <a className="font-semibold text-brand underline underline-offset-2" href={shareDone.waWebUrl} target="_blank" rel="noreferrer">Open WhatsApp Web instead</a>
-          {shareDone.clipboardOk ? ' — the receipt is still on the clipboard for pasting.' : ' — the receipt saved to Downloads for dragging in.'}
         </p>
       )}
       <div id="receipt-print" className="mx-auto max-w-[340px] bg-surface border-2 border-line-strong rounded-input p-5 font-mono text-[12px] leading-relaxed text-ink">

@@ -12,6 +12,13 @@ interface AuthState {
   can: (perm: string) => boolean
 }
 
+/** v1.6.2: endpoints any-of-several permissions may use (the WhatsApp
+ *  contact interface is orders.notify OR pos.sell — till roles created
+ *  before the notify key existed were locked out of it). */
+export function hasAny(u: { permissions: string[] } | null | undefined, ...perms: string[]): boolean {
+  return !!u && perms.some((p) => u.permissions.includes(p))
+}
+
 export const useAuth = create<AuthState>((set, get) => ({
   user: null,
   ready: false,

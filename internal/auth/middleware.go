@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -166,5 +167,27 @@ func RequirePermission(perm string) gin.HandlerFunc {
 			return
 		}
 		c.Next()
+	}
+}
+
+// RequirePermissionAny is the gate for endpoints any of several permissions
+// may use. v1.6.2: contacting a customer on WhatsApp is orders.notify work,
+// but live tills (the cyber-café machines especially) run roles created
+// before that key existed — the cashier who made the sale (pos.sell) gets
+// the same interface instead of an admin-only button.
+func RequirePermissionAny(perms ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		p := FromContext(c)
+		if p == nil {
+			c.AbortWithStatusJSON(401, gin.H{"error": "Authentication required"})
+			return
+		}
+		for _, perm := range perms {
+			if p.Can(perm) {
+				c.Next()
+				return
+			}
+		}
+		c.AbortWithStatusJSON(403, gin.H{"error": "Missing permission: " + strings.Join(perms, " or ")})
 	}
 }

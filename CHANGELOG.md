@@ -3,6 +3,38 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.6.2 — WhatsApp opens WhatsApp: the app, the contact, every till
+
+Customer complaints on v1.6.1, fixed one by one:
+
+- **"We share on WhatsApp but it doesn't open the app."** The desktop
+  Share now asks the **Go host itself** to launch the customer's chat
+  (`POST /api/v1/whatsapp-open` — the host process hands
+  `whatsapp://send` with phone + caption preloaded straight to the OS,
+  no "Open WhatsApp?" dialog, no WebView2 moodiness). WhatsApp Desktop
+  opens the conversation ready; if WhatsApp is not installed the screen
+  says so honestly. The v1.6.1 in-page deep link and wa.me stay as
+  fallbacks for browser-only tills.
+- **"This interface is on the admin ones alone, the cyber PC is not
+  showing it."** The WhatsApp contact buttons on Orders and the Design
+  Board are no longer `orders.notify`-only: any role that can sell
+  (`pos.sell`) sees and uses them. Every till's local roles got
+  `orders.notify` unioned in by a database migration, and the Cashier
+  preset carries it for new shops — the cyber-café machines are first-
+  class users now.
+- **"It asks which app to use and the contact doesn't load."** The
+  contact-a-customer modals (order drawer, design board) now open the
+  chat directly through the same app-first flow — number + caption ride
+  the link, so the contact is loaded before WhatsApp even appears. The
+  OS share sheet is never on the chat path (it stays available for the
+  branded PNG where the device supports it).
+
+Also: Kenyan numbers normalize everywhere (07…, 7…, +2547… → 2547…) so
+the contact loads whether it came from checkout, CRM, or the payer's
+M-Pesa leg; the smoke suite grew to 84 checks with two WhatsApp-app
+checks; the schema is at v21 (union-only backfill, admin edits and
+custom roles untouched).
+
 ## v1.6.1 — Share on WhatsApp that actually shows up on the desktop PC
 
 ### What was wrong

@@ -4,7 +4,7 @@
 Usage: python3 scripts/smoke_test.py [base_url]
 Default base_url: http://127.0.0.1:3000
 
-82 checks against a running server seeded with demo data and
+84 checks against a running server seeded with demo data and
 mpesa_env=mock. The sweeper (5s interval) completes STK payments after the
 mock delay, exactly as it would against real Daraja stkpushquery.
 """
@@ -508,6 +508,18 @@ def main():
     st, _ = req("PUT", "/api/v1/settings", admin, body={"values": {
         "whatsapp_api_key": "__CLEAR__", "whatsapp_api_url": "__CLEAR__"}})
     check("clear smoke whatsapp token", st == 200, f"{st}")
+
+    # -- v1.6.2: host-side WhatsApp app opener (contact preloaded, no share
+    # sheet). The CASHIER token must be accepted — that is the whole point
+    # of the permission widening (orders.notify OR pos.sell on this route,
+    # Cashier preset + v21 backfill on legacy till roles).
+    st, body = req("POST", "/api/v1/whatsapp-open", cashier, body={
+        "phone": "0711 222 333", "text": "Thank you for your purchase!"})
+    check("whatsapp-open: cashier allowed (200) + phone normalized 2547…",
+          st == 200 and "phone=254711222333" in str(data(body).get("url", "")), f"{st} {body}")
+    st, body = req("POST", "/api/v1/whatsapp-open", None, body={
+        "phone": "254711222333", "text": "x"})
+    check("whatsapp-open: anonymous 401", st == 401, f"{st}")
 
     # -- Summary ------------------------------------------------------------
     print(f"\n== {PASS} passed, {FAIL} failed ==")

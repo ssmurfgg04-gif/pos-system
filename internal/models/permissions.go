@@ -115,7 +115,10 @@ var SeededRolePermissions = map[string][]string{
 		"products.view", "orders.view", "quotes.view",
 	},
 	"Cashier": {
-		"pos.sell", "pos.void", "orders.view", "payments.manual",
+		// v1.6.2: orders.notify joins the till — contacting a customer
+		// about their sale/receipt is cashier work (the cyber-café
+		// machines complained the WhatsApp interface was admin-only).
+		"pos.sell", "pos.void", "orders.view", "orders.notify", "payments.manual",
 		"shifts.manage", "customers.view", "quotes.view",
 	},
 }

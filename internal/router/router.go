@@ -79,6 +79,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 		c.Next()
 	}
 	perm := auth.RequirePermission
+	permAny := auth.RequirePermissionAny
 
 	api := r.Group("/api/v1")
 
@@ -317,7 +318,14 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	authd.POST("/gift-cards/redeem", perm("credit.manage"), h.RedeemGiftCard)
 	authd.GET("/gift-cards", perm("credit.manage"), h.ListGiftCards)
 
-	authd.POST("/orders/:id/notify", perm("orders.notify"), h.NotifyOrderReady)
+	// v1.6.2: contacting customers is orders.notify work, but tills running
+	// roles created before that key existed hold pos.sell — either opens the
+	// interface (the cyber-café machines were locked out before).
+	authd.POST("/orders/:id/notify", permAny("orders.notify", "pos.sell"), h.NotifyOrderReady)
+	// Host-side WhatsApp launcher: the desktop app's WebView2 shell swallows
+	// window.open and custom-protocol navigation, so the Go process (native,
+	// same machine) hands whatsapp:// to the OS itself. Same gate as notify.
+	authd.POST("/whatsapp-open", permAny("orders.notify", "pos.sell"), h.WhatsAppOpen)
 	// Quotations: view for the till floor, manage to edit the pipeline.
 	authd.GET("/quotes", perm("quotes.view"), h.ListQuotes)
 	authd.GET("/quotes/:id", perm("quotes.view"), h.GetQuote)
@@ -326,7 +334,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	qm.PUT("/quotes/:id", h.UpdateQuote)
 	qm.POST("/quotes/:id/status", h.SetQuoteStatus)
 	qm.POST("/quotes/:id/convert", h.ConvertQuote)
-	authd.POST("/design-jobs/:id/notify", perm("orders.notify"), h.NotifyJobReady)
+	authd.POST("/design-jobs/:id/notify", permAny("orders.notify", "pos.sell"), h.NotifyJobReady)
 	authd.GET("/orders/:id/events", perm("orders.view"), h.GetOrderEvents)
 	authd.POST("/orders/:id/notes", perm("orders.view"), h.AddOrderNote)
 	authd.POST("/orders/:id/jobs", perm("orders.assign"), h.CreateJobFromOrder)

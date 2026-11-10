@@ -37,3 +37,7 @@ supabase/.branches/
 frontend/tsconfig.tsbuildinfo
 downloads/ledgerpos-setup.nsi
 posapp-smoke
+
+# smoke-run artifacts (local serve in the repo root)
+secret.key
+shops.json

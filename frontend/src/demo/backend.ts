@@ -373,6 +373,12 @@ function requirePerm(perms: string[], key: string) {
   if (!perms.includes(key)) throw new ApiError(403, 'missing permission: ' + key)
 }
 
+// v1.6.2: mirror of the server's RequirePermissionAny — WhatsApp contact
+// endpoints accept orders.notify OR pos.sell.
+function requirePermAny(perms: string[], keys: string[]) {
+  if (!keys.some((k) => perms.includes(k))) throw new ApiError(403, 'missing permission: ' + keys.join(' or '))
+}
+
 function issueToken(u: DemoUser) {
   const t = `demo.${u.id}.${Math.random().toString(36).slice(2)}`
   tokenIssued.set(t, Date.now())
@@ -2512,7 +2518,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     throw new ApiError(501, 'Attachments live on a real till — try it there')
   }
   if (m === 'POST' && /^\/design-jobs\/\d+\/notify$/.test(p)) {
-    requirePerm(perms, 'orders.notify')
+    requirePermAny(perms, ['orders.notify', 'pos.sell'])
     throw new ApiError(501, 'WhatsApp notify needs the whapi gateway on a real till')
   }
   const designMatch = p.match(/^\/design\/(\d+)$/)

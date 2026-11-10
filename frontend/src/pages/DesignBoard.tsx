@@ -6,7 +6,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, backendMode, DesignFile, DesignJob, WhatsAppContact, token } from '../lib/api'
-import { useAuth } from '../stores/auth'
+import { useAuth, hasAny } from '../stores/auth'
+import { openWhatsAppChat } from '../lib/whatsapp'
 import { Button, Card, EmptyState, Field, Input, Modal, Spinner, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
 import { onWsEvent } from '../ws/client'
@@ -57,7 +58,9 @@ const COLUMNS: { key: DesignJob['status']; label: string }[] = [
 export function DesignBoard() {
   const canManage = useAuth((s) => !!s.user?.permissions.includes('design.manage'))
   const canDelegate = useAuth((s) => !!s.user?.permissions.includes('orders.assign'))
-  const canNotify = useAuth((s) => !!s.user?.permissions.includes('orders.notify'))
+  // v1.6.2: same any-of rule as the server — notify OR sell (till roles
+  // created before orders.notify existed were locked out of the button).
+  const canNotify = useAuth((s) => hasAny(s.user, 'orders.notify', 'pos.sell'))
   const [jobs, setJobs] = useState<DesignJob[] | null>(null)
   const [creating, setCreating] = useState(false)
   const [filesByJob, setFilesByJob] = useState<Record<number, DesignFile[]>>({})
@@ -509,7 +512,9 @@ function WhatsAppModal({ job, onClose }: { job: DesignJob; onClose: () => void }
             size="lg"
             className="w-full"
             onClick={() => {
-              window.open(contact.url, '_blank', 'noopener')
+              // v1.6.2: installed app first (contact preloaded) — same rule
+              // as the order-detail contact modal.
+              openWhatsAppChat(contact.phone, contact.message)
               toast.success('WhatsApp opened', 'Send the message from there, the attempt is on the order timeline.')
             }}
           >

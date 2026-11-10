@@ -1,7 +1,7 @@
 # Receipts, WhatsApp & Notifications — LedgerPOS
 
 What the till prints, what it sends to the customer's WhatsApp, and how
-to prove a receipt is genuine. Current as of v1.6.0.
+to prove a receipt is genuine. Current as of v1.6.2.
 
 ## The four receipt renderers (one content contract)
 
@@ -67,7 +67,7 @@ customer's number is taken from the checkout's phone field / CRM record,
 falling back to the **payer phone on the payment leg** — a walk-in STK
 sale still gets its receipt.
 
-### 2. Manual (v1.6.1): the Share-on-WhatsApp button
+### 2. Manual (v1.6.1 + v1.6.2): the Share-on-WhatsApp button
 
 The **Share on WhatsApp** button is the human path — built for the
 weeks the gateway sits in review, and for "I didn't get it" re-sends
@@ -84,14 +84,17 @@ tree (`lib/receipt-share.ts`), tried in order:
 2. **Native share sheet** (phones; Windows 11 with the Store WhatsApp
    app): the PNG + caption ride the device's share sheet straight into
    WhatsApp where the browser supports file sharing (HTTPS required).
-3. **Desktop app hop** (v1.6.1 — the desktop PC path): the PNG is put on
-   the **clipboard** and saved to **Downloads**, then a
-   `whatsapp://send?phone=2547…&text=…` deep link opens the **installed
-   WhatsApp desktop app** directly in the customer's chat with the
-   caption typed. The cashier presses **Ctrl+V, then Enter**. Windows
-   shows an "Open WhatsApp?" prompt the first time — tick **Always
-   allow**. Requires the WhatsApp desktop app (Microsoft Store or
-   whatsapp.com); the button's sub-line offers **Open WhatsApp Web
+3. **Desktop app, opened by the till itself** (v1.6.2): the page asks
+   the Go host (`POST /api/v1/whatsapp-open`) to hand
+   `whatsapp://send?phone=2547…&text=…` straight to the OS — the
+   **installed WhatsApp desktop app** opens directly in the customer's
+   chat with the caption typed: no "Open WhatsApp?" prompt, no WebView2
+   moodiness, and an honest message if WhatsApp is not installed.
+   Fallback (old server, browser-only): the v1.6.1 hop — the PNG on the
+   **clipboard** + saved to **Downloads**, then the anchor deep link
+   (Windows shows "Open WhatsApp?" once — tick **Always allow**). The
+   cashier presses **Ctrl+V, then Enter**. Requires the WhatsApp
+   desktop app; the button's sub-line offers **Open WhatsApp Web
    instead** for PCs without it.
 4. **WhatsApp Web** — the same `wa.me` chat link, one click away; the
    downloaded PNG drags into the chat.
@@ -99,6 +102,14 @@ tree (`lib/receipt-share.ts`), tried in order:
 The button label always tells the truth about what just happened
 ("Image queued to 2547…", "In WhatsApp — Ctrl+V, then Enter", "Receipt
 saved — drag it into WhatsApp").
+
+- **Who can use it:** any role that can sell — the contact gates are
+  `orders.notify` OR `pos.sell` (v1.6.2; before, the contact buttons on
+  Orders and the Design Board hid themselves from every till whose
+  roles predated the `orders.notify` key — the cyber PCs could not see
+  the interface at all). Migration v21 unions `orders.notify` into
+  legacy till roles and the Cashier preset carries it for new shops;
+  custom roles and admin edits are never touched.
 - **Format: PNG on purpose** — for a text receipt it is smaller than a
   JPEG at usable quality, lossless (the watermark's exact layer survives
   every lossless copy), and WhatsApp uploads it like any photo.
@@ -200,6 +211,6 @@ Upload the screenshot a customer sent "as proof" and read the verdict:
   the scoped public route + TTL design before implementation.
 - Payment-label vocabulary still differs slightly between the on-screen
   modal and the server renderers (cosmetic; one shared label map is
-  tracked for v1.6.1).
+  still pending).
 - Staff-level receipt verification (the fraud playbook currently ends
   with "call the owner").
