@@ -60,7 +60,8 @@ Work Log:
   persistence probe updated to expect schema v21; orders.query mock
   mirrors hasAny.
 - Gates: gofmt clean, go vet clean, go build OK, go test ./... all
-  packages, tsc clean, vitest 134/134 (was 126), vite build OK, live
+  packages, tsc clean, vitest 148/148 on the merged tree (126 pre-v1.6.1
+  + v1.6.1's suites + the host-leg cases), vite build OK, live
   smoke 84/84 (82 baseline + 2 new: cashier whatsapp-open 200 with the
   2547… normalized url, anonymous 401). Runner script now wipes pos.db
   per run and sets ALLOW_MOCK_PAYMENTS=true (the mock STK sweeper is
