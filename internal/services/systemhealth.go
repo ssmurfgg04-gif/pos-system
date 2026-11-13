@@ -25,6 +25,9 @@ var ExpectedIndexes = []string{
 	"idx_print_status", "idx_shifts_user", "idx_design_status", "idx_audit_created",
 	"idx_customers_name", "idx_customers_phone", "idx_ledger_customer", "idx_ledger_customer_order",
 	"idx_suppliers_name", "idx_stock_movements_kind",
+	// v27 foreign-key child indexes.
+	"idx_print_jobs_order", "idx_po_items_po", "idx_po_items_product", "idx_purchase_orders_supplier",
+	"idx_stock_take_items_take", "idx_stock_take_items_product", "idx_design_jobs_assignee",
 }
 
 // SystemHealth is the /system/health payload. Everything is read-only.

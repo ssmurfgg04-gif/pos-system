@@ -9,6 +9,7 @@ package handlers_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -77,11 +78,15 @@ func TestV170CostSnapshotAndMargin(t *testing.T) {
 		t.Fatalf("line cost snapshot: want 10000, got %v", it["costCents"])
 	}
 
-	day := order["createdAt"].(string)
-	if len(day) < 10 {
-		t.Fatalf("bad createdAt %q", day)
+	// createdAt is a UTC stamp but the daily report buckets by the shop's
+	// day (EAT, UTC+3). Taking the UTC date failed every night between
+	// 21:00 and 24:00 UTC, when Nairobi is already on the next day.
+	created, err := time.Parse(time.RFC3339, order["createdAt"].(string))
+	if err != nil {
+		t.Fatalf("bad createdAt %q: %v", order["createdAt"], err)
 	}
-	rep := dailyReport(t, engine, admin, day[:10])
+	day := created.In(time.FixedZone("EAT", 3*60*60)).Format("2006-01-02")
+	rep := dailyReport(t, engine, admin, day)
 	if got := int64(rep["cogsCents"].(float64)); got != 30000 {
 		t.Fatalf("cogs: want 30000, got %v", rep["cogsCents"])
 	}
@@ -315,8 +320,8 @@ func TestV170SystemHealthPage(t *testing.T) {
 		t.Fatalf("health: %d %s", w.Code, w.Body.String())
 	}
 	h := dataMap(t, w)
-	if int64(h["schemaVersion"].(float64)) != 26 {
-		t.Fatalf("schemaVersion: want 26, got %v", h["schemaVersion"])
+	if int64(h["schemaVersion"].(float64)) != 27 {
+		t.Fatalf("schemaVersion: want 27, got %v", h["schemaVersion"])
 	}
 	if h["indexesOk"] != true {
 		t.Fatalf("indexes should be complete, missing: %v", h["indexesMissing"])
