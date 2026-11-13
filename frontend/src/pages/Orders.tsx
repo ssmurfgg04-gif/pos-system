@@ -15,6 +15,7 @@ import { useBranding } from '../stores/branding'
 import { centsToAmount, formatMoney } from '../lib/money'
 import { toast } from '../stores/toasts'
 import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer, BookUser, CreditCard, Wallet, MessageCircle, Briefcase, History, Undo2 } from 'lucide-react'
+import { fmtDateTime, fmtTime } from '../lib/when'
 
 // Newer orders carry checkout extras the shared Order type doesn't declare
 // yet — optional locally so the shared type stays untouched.
@@ -209,7 +210,7 @@ export function Orders() {
               {returns.map((r) => (
                 <tr key={r.id}>
                   <td className="px-3 py-2.5 font-bold text-ink text-[13px] tabular">{r.number}</td>
-                  <td className="px-3 py-2.5 text-[11px] text-ink-subtle">{new Date(r.createdAt).toLocaleString()}</td>
+                  <td className="px-3 py-2.5 text-[11px] text-ink-subtle">{fmtDateTime(r.createdAt)}</td>
                   <td className="px-3 py-2.5 tabular text-[13px] text-ink">{r.orderNumber}</td>
                   <td className="px-3 py-2.5 font-bold tabular text-ink">{centsToAmount(r.totalCents)}</td>
                   <td className="px-3 py-2.5 text-[13px] text-ink-muted"><ReturnMethodLabel method={r.method} /></td>
@@ -231,7 +232,7 @@ export function Orders() {
                 <tr key={o.id} className={o.discrepancy ? 'bg-danger-bg' : ''}>
                   <td className="px-3 py-2.5">
                     <p className="font-bold text-ink text-[13px] tabular">{o.number}</p>
-                    <p className="text-[11px] text-ink-subtle">{new Date(o.createdAt).toLocaleString()}</p>
+                    <p className="text-[11px] text-ink-subtle">{fmtDateTime(o.createdAt)}</p>
                   </td>
                   <td className="px-3 py-2.5">
                     <StatusPill
@@ -448,7 +449,7 @@ function OrderDrawer({
       <div className="flex items-center gap-2 mb-3">
         <StatusPill status={live.status === 'PAID' ? 'paid' : live.status === 'PENDING' ? 'pending' : 'void'} />
         {live.discrepancy && <StatusPill status="danger" label="Amount discrepancy" />}
-        <span className="text-ink-subtle text-[12px] ml-auto">{new Date(live.createdAt).toLocaleString()}</span>
+        <span className="text-ink-subtle text-[12px] ml-auto">{fmtDateTime(live.createdAt)}</span>
       </div>
 
       <Table head={['Item', 'Qty', 'Unit', 'Total']}>
@@ -538,7 +539,7 @@ function OrderDrawer({
         <div className="mt-3 flex items-start gap-2 text-[13px] font-bold text-void-text bg-void-bg border-2 border-void-text/30 rounded-input p-3">
           <AlertTriangle size={15} strokeWidth={2.5} className="shrink-0 mt-0.5" aria-hidden />
           <span>
-            Voided{live.voidedAt ? ` ${new Date(live.voidedAt).toLocaleString()}` : ''}, reason: {live.voidReason}
+            Voided{live.voidedAt ? ` ${fmtDateTime(live.voidedAt)}` : ''}, reason: {live.voidReason}
           </span>
         </div>
       )}
@@ -602,7 +603,7 @@ function OrderDrawer({
           <ol className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
             {events.map((e) => (
               <li key={e.id} className="text-[12.5px] flex gap-2">
-                <span className="text-ink-subtle tabular shrink-0">{new Date(e.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <span className="text-ink-subtle tabular shrink-0">{fmtTime(e.createdAt)}</span>
                 <span className="text-ink-muted flex-1">
                   {e.kind === 'whatsapp' && <MessageCircle size={12} strokeWidth={2.5} className="inline mr-1 text-paid-text" aria-hidden />}
                   {e.message}

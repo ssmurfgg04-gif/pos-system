@@ -12,6 +12,7 @@ import { formatMoney } from '../lib/money'
 import { Button, Card, EmptyState, Field, Input, Modal, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
 import { Users as UsersIcon, LayoutDashboard, ChevronDown, ChevronUp } from 'lucide-react'
+import { fmtDateTime } from '../lib/when'
 
 // Landing-page keys accepted by PUT /roles/:id/dashboard ("" = follow the
 // permission cascade). Keep in sync with the SPA routes.
@@ -168,7 +169,7 @@ export function Users() {
                     )}
                   </td>
                   <td className="px-3 py-2.5 text-[12px] text-ink-muted tabular whitespace-nowrap">
-                    {u.lastOrderAt ? new Date(u.lastOrderAt).toLocaleString() : ', '}
+                    {u.lastOrderAt ? fmtDateTime(u.lastOrderAt) : ', '}
                   </td>
                   <td className="px-3 py-2.5">
                     <span className="inline-flex flex-wrap items-center gap-1">

@@ -12,6 +12,7 @@ import { Button, Card, EmptyState, Field, Input, Modal, Spinner, Textarea } from
 import { toast } from '../stores/toasts'
 import { onWsEvent } from '../ws/client'
 import { Palette, Paperclip, UploadCloud, Download, Trash2, MessageCircle, CalendarClock, Link2 } from 'lucide-react'
+import { fmtDate } from '../lib/when'
 
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024 // matches the server cap (5 MB)
 
@@ -138,7 +139,7 @@ export function DesignBoard() {
                       {j.deadline && (
                         <p className={`text-[11px] mt-0.5 font-semibold inline-flex items-center gap-1 ${isOverdue(j) ? 'text-danger-text' : 'text-ink-subtle'}`}>
                           <CalendarClock size={11} strokeWidth={2.25} aria-hidden />
-                          due {new Date(j.deadline).toLocaleDateString()}
+                          due {fmtDate(j.deadline)}
                         </p>
                       )}
                       {!!j.orderId && (
@@ -425,7 +426,7 @@ function AttachmentsModal({
                 <p className="font-semibold text-ink text-[13px] truncate" title={f.filename}>{f.filename}</p>
                 <p className="text-[11px] text-ink-subtle">
                   {(f.size / 1024).toFixed(0)} KB · {f.uploadedByName || `user #${f.uploadedBy}`} ·{' '}
-                  {new Date(f.createdAt).toLocaleDateString()}
+                  {fmtDate(f.createdAt)}
                 </p>
               </span>
               <span className="flex items-center gap-1 shrink-0">

@@ -9,6 +9,7 @@ import { formatMoney } from '../lib/money'
 import { Button, Card, EmptyState, Field, Input, Modal, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
 import { Truck, X } from 'lucide-react'
+import { fmtDate } from '../lib/when'
 
 export function Suppliers() {
   const manage = useAuth((s) => !!s.user?.permissions.includes('suppliers.manage'))
@@ -184,7 +185,7 @@ function POList({ manage }: { manage: boolean }) {
             <tr key={o.id}>
               <td className="px-3 py-2.5">
                 <p className="font-bold text-ink text-[13px] tabular">{o.number}</p>
-                <p className="text-[11px] text-ink-subtle">{o.supplierName} · {new Date(o.createdAt).toLocaleDateString()}</p>
+                <p className="text-[11px] text-ink-subtle">{o.supplierName} · {fmtDate(o.createdAt)}</p>
               </td>
               <td className="px-3 py-2.5">
                 <StatusPill status={o.status === 'RECEIVED' ? 'paid' : o.status === 'PENDING' ? 'pending' : 'void'} label={o.status} />
@@ -420,7 +421,7 @@ function TakeList({ manage }: { manage: boolean }) {
             <tr key={t.id}>
               <td className="px-3 py-2.5">
                 <p className="font-bold text-ink text-[13px] tabular">{t.number}</p>
-                <p className="text-[11px] text-ink-subtle">{new Date(t.createdAt).toLocaleDateString()}</p>
+                <p className="text-[11px] text-ink-subtle">{fmtDate(t.createdAt)}</p>
               </td>
               <td className="px-3 py-2.5">
                 <StatusPill status={t.status === 'APPLIED' ? 'paid' : t.status === 'OPEN' ? 'pending' : 'void'} label={t.status} />

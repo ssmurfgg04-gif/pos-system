@@ -10,6 +10,7 @@ import { centsToAmount, formatMoney } from '../lib/money'
 import { toast } from '../stores/toasts'
 import { onWsEvent } from '../ws/client'
 import { Coins, FileText } from 'lucide-react'
+import { fmtDate, fmtDateTime, fmtTime } from '../lib/when'
 
 export function Shifts() {
   const { user } = useAuth()
@@ -53,7 +54,7 @@ export function Shifts() {
     <div className="space-y-4">
       <Card
         title="Cash drawer shift"
-        sub={current ? `Opened ${new Date(current.openedAt).toLocaleTimeString()}` : 'No open shift'}
+        sub={current ? `Opened ${fmtTime(current.openedAt)}` : 'No open shift'}
         actions={
           <div className="flex items-center gap-2">
             {current && (
@@ -101,10 +102,10 @@ export function Shifts() {
             {(tab === 'mine' ? shown.filter((s) => s.userId === user?.id) : shown).map((s) => (
               <tr key={s.id}>
                 <td className="px-3 py-2.5 text-[13px] text-ink-muted">
-                  {new Date(s.openedAt).toLocaleDateString()}
+                  {fmtDate(s.openedAt)}
                   <span className="text-ink-subtle block text-[11px]">
-                    {new Date(s.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    {s.closedAt && ` → ${new Date(s.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                    {fmtTime(s.openedAt)}
+                    {s.closedAt && ` → ${fmtTime(s.closedAt)}`}
                   </span>
                 </td>
                 <td className="px-3 py-2.5 text-[13px] font-semibold text-ink">{s.userName}</td>
@@ -177,8 +178,8 @@ function ShiftReportModal({ report, loading, onClose }: { report: ShiftReport | 
           <div className="flex items-center justify-between text-ink-muted">
             <span className="font-semibold">{report.shift.userName}</span>
             <span className="text-[12px]">
-              {new Date(report.shift.openedAt).toLocaleString()}
-              {report.shift.closedAt && <> → {new Date(report.shift.closedAt).toLocaleTimeString()}</>}
+              {fmtDateTime(report.shift.openedAt)}
+              {report.shift.closedAt && <> → {fmtTime(report.shift.closedAt)}</>}
             </span>
           </div>
           <div className="grid grid-cols-3 gap-2">

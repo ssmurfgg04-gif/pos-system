@@ -20,6 +20,7 @@ import { useAuth } from '../stores/auth'
 import { usePosSearch } from '../stores/search'
 import { formatMoney, formatMoneyCompact } from '../lib/money'
 import { tierPriceCents } from '../lib/pricing'
+import { lowStockAt } from '../lib/stock'
 import { Button, EmptyState, Input, Modal, Spinner, ErrorBoundary } from '../components/ui'
 import { ProductPhoto } from '../components/ProductPhoto'
 import { CheckoutRail } from '../components/CheckoutRail'
@@ -397,7 +398,7 @@ export function Pos() {
       </div>
 
       {/* ── Checkout rail (desktop) ───────────────────────────────────── */}
-      <aside className="hidden lg:flex w-[430px] shrink-0 ml-4 min-h-0 bg-surface border border-line rounded-card shadow-brutal">
+      <aside className="hidden lg:flex lg:flex-col w-[430px] shrink-0 ml-4 min-h-0 bg-surface border border-line rounded-card shadow-brutal">
         {rail}
       </aside>
 
@@ -457,14 +458,15 @@ function CategoryChip({ active, onClick, children }: { active: boolean; onClick:
 function StockBadge({ p }: { p: Product }) {
   if (!p.trackStock) return null
   const out = p.stockQty <= 0
-  const low = !out && p.stockQty <= 5
+  const low = !out && p.stockQty <= lowStockAt(p)
   return (
     <span
+      title={out ? 'Out of stock' : `${p.stockQty} in stock`}
       className={`absolute top-1.5 right-1.5 z-10 px-1.5 py-0.5 rounded-pill text-[10px] font-bold tabular ${
         out ? 'bg-danger-bg text-danger-text' : low ? 'bg-pending-bg text-pending-text' : 'bg-surface-muted text-ink-subtle'
       }`}
     >
-      {out ? 'OUT' : low ? `${p.stockQty} low` : `${p.stockQty}`}
+      {out ? 'OUT' : low ? `${p.stockQty} left` : `${p.stockQty} in stock`}
     </span>
   )
 }
@@ -568,8 +570,8 @@ function ProductRow({ p, qty, onAdd, onInc, onDec }: {
         <p className="text-[11px] text-ink-subtle">{p.sku || p.categoryName}</p>
       </button>
       {p.trackStock && (
-        <span className={`text-[10px] font-bold tabular whitespace-nowrap px-1.5 py-0.5 rounded-pill ${out ? 'bg-danger-bg text-danger-text' : 'bg-surface-muted text-ink-subtle'}`}>
-          {out ? 'OUT' : `${p.stockQty}`}
+        <span className={`text-[10px] font-bold tabular whitespace-nowrap px-1.5 py-0.5 rounded-pill ${out ? 'bg-danger-bg text-danger-text' : p.stockQty <= lowStockAt(p) ? 'bg-pending-bg text-pending-text' : 'bg-surface-muted text-ink-subtle'}`}>
+          {out ? 'OUT' : `${p.stockQty} left`}
         </span>
       )}
       <span className={`font-bold text-[14px] tabular whitespace-nowrap ${inCart ? 'text-brand' : 'text-ink'}`}>{formatMoneyCompact(p.priceCents)}</span>

@@ -29,6 +29,7 @@ import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Ta
 import { toast } from '../stores/toasts'
 import { centsToAmount } from '../lib/money'
 import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck, Undo2, LifeBuoy, KeyRound, Smartphone } from 'lucide-react'
+import { fmtDate, fmtDateTime } from '../lib/when'
 
 type SettingsMap = Record<string, string>
 
@@ -527,7 +528,7 @@ export function Settings() {
                     <tr key={b.file}>
                       <td className="px-3 py-2 font-mono text-[12px] text-ink">{b.file}</td>
                       <td className="px-3 py-2 tabular text-ink-muted">{(b.bytes / 1024).toFixed(0)} KB</td>
-                      <td className="px-3 py-2 text-[12px] text-ink-subtle">{new Date(b.at).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-[12px] text-ink-subtle">{fmtDateTime(b.at)}</td>
                     </tr>
                   ))}
                 </Table>
@@ -683,7 +684,7 @@ export function Settings() {
               ) : (
                 <div className="text-[13px] space-y-1">
                   {offsite.pending > 0 && <p className="font-bold text-pending-text">{offsite.pending} upload(s) queued, retrying automatically.</p>}
-                  {offsite.lastOk && <p className="text-paid-text">Last upload: <span className="font-mono text-[12px]">{offsite.lastOk}</span> ({offsite.lastAt ? new Date(offsite.lastAt).toLocaleString() : ''})</p>}
+                  {offsite.lastOk && <p className="text-paid-text">Last upload: <span className="font-mono text-[12px]">{offsite.lastOk}</span> ({offsite.lastAt ? fmtDateTime(offsite.lastAt) : ''})</p>}
                   {offsite.lastError && <p className="text-danger-text font-semibold">Last error: {offsite.lastError}</p>}
                   {!offsite.lastOk && !offsite.lastError && offsite.pending === 0 && <p className="text-ink-muted">No uploads yet, take a backup above.</p>}
                   <Button size="sm" variant="ghost" onClick={() => api.get<OffsiteStatus>('/api/v1/system/offsite').then(setOffsite).catch(() => undefined)}>Refresh status</Button>
@@ -702,7 +703,7 @@ export function Settings() {
             <Table head={['When', 'Who', 'Action', 'Entity', 'Details']}>
               {audit.map((a) => (
                 <tr key={a.id}>
-                  <td className="px-3 py-2 text-[12px] text-ink-subtle whitespace-nowrap">{new Date(a.createdAt).toLocaleString()}</td>
+                  <td className="px-3 py-2 text-[12px] text-ink-subtle whitespace-nowrap">{fmtDateTime(a.createdAt)}</td>
                   <td className="px-3 py-2 text-[13px] font-semibold text-ink">{a.username || 'system'}</td>
                   <td className="px-3 py-2"><span className="font-mono text-[11px] bg-surface-muted border border-line rounded px-1.5 py-0.5">{a.action}</span></td>
                   <td className="px-3 py-2 text-[12px] text-ink-muted">{a.entity}{a.entityId ? ` #${a.entityId}` : ''}</td>
@@ -1455,8 +1456,8 @@ function TeamSyncPanel() {
               </div>
             )}
             <div className="grid sm:grid-cols-2 gap-x-4 gap-y-1 text-[12px] text-ink-muted">
-              <span>Last push: <span className="tabular text-ink">{status.lastPush ? new Date(status.lastPush).toLocaleString() : 'never'}</span></span>
-              <span>Last pull: <span className="tabular text-ink">{status.lastPull ? new Date(status.lastPull).toLocaleString() : 'never'}</span></span>
+              <span>Last push: <span className="tabular text-ink">{status.lastPush ? fmtDateTime(status.lastPush) : 'never'}</span></span>
+              <span>Last pull: <span className="tabular text-ink">{status.lastPull ? fmtDateTime(status.lastPull) : 'never'}</span></span>
             </div>
             {/* The awaiting-approval box above already explains this state calmly; showing
                 the raw sync error in red too read as "something is broken" (VLM round). */}
@@ -1497,7 +1498,7 @@ function TeamSyncPanel() {
                     </td>
                     <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || '-'}</td>
                     <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">
-                      {d.lastSeen ? new Date(d.lastSeen).toLocaleString() : 'never'}
+                      {d.lastSeen ? fmtDateTime(d.lastSeen) : 'never'}
                     </td>
                     <td className="px-3 py-2">
                       {d.revoked
@@ -1682,7 +1683,7 @@ function TeamSyncPanel() {
                           )}
                         </td>
                         <td className="px-3 py-2 text-[12px] text-ink-muted">{r.deviceName || r.deviceId.slice(0, 8)}</td>
-                        <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{new Date(r.createdAt).toLocaleString()}</td>
+                        <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{fmtDateTime(r.createdAt)}</td>
                         <td className="px-3 py-2">
                           <Input
                             value={resetPins[r.id] ?? ''}
@@ -1760,7 +1761,7 @@ function TeamSyncPanel() {
                           <tr key={inv.id}>
                             <td className="px-3 py-2 text-[13px] font-semibold text-ink">{inv.roleName}</td>
                             <td className="px-3 py-2 text-[12px] text-ink-muted">{inv.note || '-'}</td>
-                            <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{new Date(inv.createdAt).toLocaleDateString()}</td>
+                            <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{fmtDate(inv.createdAt)}</td>
                             <td className="px-3 py-2">
                               <StatusPill status={state === 'active' ? 'paid' : state === 'used' ? 'info' : 'pending'}
                                 label={state === 'active' ? 'Waiting' : state === 'used' ? 'Used' : state} />

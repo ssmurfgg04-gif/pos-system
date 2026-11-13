@@ -208,62 +208,77 @@ function Daily() {
             </div>
           )}
 
-          {/* Payment split */}
-          <div className="mt-4">
-            <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Payment split</p>
-            {data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents === 0 ? (
-              <p className="text-sm text-ink-muted bg-surface-muted border-2 border-line rounded-input px-3 py-2">
-                No completed payments yet today, the split appears with the first paid order.
-              </p>
-            ) : (
-              <div className="flex h-9 border-2 border-line-strong rounded-input overflow-hidden font-bold text-[13px]">
-                {data.cashCents > 0 && (
-                  <div className="bg-surface-muted flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.cashCents, data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents) }}>
-                    <Banknote size={13} strokeWidth={2.5} aria-hidden />
-                    {centsToAmount(data.cashCents)}
-                  </div>
-                )}
-                {data.mpesaCents > 0 && (
-                  <div className="bg-paid-bg text-paid-text flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.mpesaCents, data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents) }}>
-                    <Smartphone size={13} strokeWidth={2.5} aria-hidden />
-                    {centsToAmount(data.mpesaCents)}
-                  </div>
-                )}
-                {data.paystackCents > 0 && (
-                  <div className="bg-brand/30 text-ink flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.paystackCents, data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents) }}>
-                    <CreditCard size={13} strokeWidth={2.5} aria-hidden />
-                    {centsToAmount(data.paystackCents)}
-                  </div>
-                )}
-                {data.creditCents > 0 && (
-                  <div className="bg-pending-bg text-pending-text flex items-center justify-center tabular gap-1.5" style={{ width: pct(data.creditCents, data.cashCents + data.mpesaCents + data.paystackCents + data.creditCents) }}>
-                    <Wallet size={13} strokeWidth={2.5} aria-hidden />
-                    {centsToAmount(data.creditCents)}
-                  </div>
+          {/* Payment split. Fields are coerced with `|| 0`: one missing
+              tender field used to make the total NaN, every width invalid,
+              and the bar collapse to its text. Each leg carries its name —
+              an icon alone does not say "M-Pesa". */}
+          {(() => {
+            const legs = [
+              { key: 'cash', label: 'Cash', cents: data.cashCents || 0, Icon: Banknote, cls: 'bg-ink-subtle' },
+              { key: 'mpesa', label: 'M-Pesa', cents: data.mpesaCents || 0, Icon: Smartphone, cls: 'bg-paid-text' },
+              { key: 'card', label: 'Card', cents: data.paystackCents || 0, Icon: CreditCard, cls: 'bg-brand' },
+              { key: 'credit', label: 'Tab / credit', cents: data.creditCents || 0, Icon: Wallet, cls: 'bg-pending-text' },
+            ].filter((l) => l.cents > 0)
+            const total = legs.reduce((a, l) => a + l.cents, 0)
+            return (
+              <div className="mt-4">
+                <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Payment split</p>
+                {total === 0 ? (
+                  <p className="text-sm text-ink-muted bg-surface-muted border-2 border-line rounded-input px-3 py-2">
+                    No completed payments yet today, the split appears with the first paid order.
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex h-3 gap-0.5 rounded-pill overflow-hidden bg-surface-muted" aria-hidden>
+                      {legs.map((l) => (
+                        <div key={l.key} className={l.cls} style={{ width: pct(l.cents, total) }} title={`${l.label}: ${centsToAmount(l.cents)}`} />
+                      ))}
+                    </div>
+                    <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 text-[13px]">
+                      {legs.map((l) => (
+                        <li key={l.key} className="inline-flex items-center gap-1.5">
+                          <span className={`w-2.5 h-2.5 rounded-full ${l.cls}`} aria-hidden />
+                          <l.Icon size={13} strokeWidth={2.5} className="text-ink-muted" aria-hidden />
+                          <span className="text-ink-muted">{l.label}</span>
+                          <span className="font-bold tabular text-ink">{centsToAmount(l.cents)}</span>
+                          <span className="text-ink-subtle tabular">({Math.round((l.cents / total) * 100)}%)</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
                 )}
               </div>
-            )}
-          </div>
+            )
+          })()}
 
           {/* 7-day bar chart (pure CSS) */}
           <div className="mt-5">
             <p className="text-[12px] uppercase font-bold text-ink-muted mb-2">Last 7 days</p>
-            <div className="flex items-end gap-2 border-b-2 border-line pb-px" role="img" aria-label="Sales per day for the last 7 days">
-              {series.map((s) => (
-                <div key={s.date} className="flex-1 flex flex-col items-center gap-1 group h-32">
-                  <span className="text-[10px] font-bold text-ink-muted tabular opacity-0 group-hover:opacity-100 transition-opacity">
-                    {centsToAmount(s.salesCents)}
-                  </span>
-                  <div
-                    className={`w-full rounded-t-[4px] border-2 border-line-strong transition-[height] ${
-                      s.date === date ? 'bg-brand' : 'bg-surface-muted'
-                    }`}
-                    style={{ height: `${Math.max(3, (s.salesCents / max) * 100)}%` }}
-                    title={`${s.date}: ${centsToAmount(s.salesCents)} (${s.orders} orders)`}
-                  />
-                  <span className="text-[10px] text-ink-subtle">{s.date.slice(5)}</span>
-                </div>
-              ))}
+            {/* Each column: amount (always shown — tills are touchscreens, no
+                hover), a FIXED-height track the bar grows inside, then the
+                date. Sizing the bar against the whole column (labels
+                included) used to push the tallest day's date out of view. */}
+            <div className="flex gap-2" role="img" aria-label="Sales per day for the last 7 days">
+              {series.map((s) => {
+                const isSel = s.date === date
+                return (
+                  <div key={s.date} className="flex-1 min-w-0 flex flex-col items-center gap-1">
+                    <span className={`text-[10px] font-bold tabular truncate max-w-full ${isSel ? 'text-brand' : 'text-ink-muted'}`}>
+                      {compactKes(s.salesCents)}
+                    </span>
+                    <div className="w-full h-28 flex items-end border-b-2 border-line">
+                      <div
+                        className={`w-full rounded-t-[4px] transition-[height] ${
+                          isSel ? 'bg-brand' : s.salesCents > 0 ? 'bg-ink-subtle/40' : 'bg-line'
+                        }`}
+                        style={{ height: s.salesCents > 0 ? `${Math.max(4, (s.salesCents / max) * 100)}%` : '2px' }}
+                        title={`${s.date}: ${centsToAmount(s.salesCents)} (${s.orders} orders)`}
+                      />
+                    </div>
+                    <span className={`text-[10px] tabular ${isSel ? 'font-bold text-ink' : 'text-ink-subtle'}`}>{shortDay(s.date)}</span>
+                  </div>
+                )
+              })}
             </div>
           </div>
 
@@ -453,6 +468,24 @@ function Monthly() {
       )}
     </Card>
   )
+}
+
+// Chart labels must fit a ~40px column on a phone: 4,000 → "4k",
+// 16,050 → "16k", 1,250,000 → "1.3M", 0 → "–".
+export function compactKes(cents: number): string {
+  const v = cents / 100
+  if (v <= 0) return '–'
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(v >= 10_000_000 ? 0 : 1).replace(/\.0$/, '')}M`
+  if (v >= 1_000) return `${(v / 1_000).toFixed(v >= 10_000 ? 0 : 1).replace(/\.0$/, '')}k`
+  return String(Math.round(v))
+}
+
+// "2026-11-13" → "Fri 13" (the day name is what a shopkeeper scans for).
+export function shortDay(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  if (!y || !m || !d) return iso.slice(5)
+  const wd = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' })
+  return `${wd} ${d}`
 }
 
 function pct(part: number, whole: number) {
