@@ -2,7 +2,7 @@
 #
 # Two jobs on every push to main (site-affecting paths only):
 #   tests  — go vet + go test + frontend Vitest (the quality gate)
-#   deploy — builds the exact site (landing, /demo/, /downloads/) with
+#   deploy — runs only on main and only after tests pass; builds the exact site (landing, /demo/, /downloads/) with
 #            scripts/netlify_build.py, deploys to Netlify production via
 #            netlify-cli, then VERIFIES the live site serves this commit's
 #            installers. A green run means the public site really updated.
@@ -39,10 +39,16 @@ on:
       - "downloads/**"
       - "netlify.toml"
       - ".github/workflows/ci.yml"
+  # Pull requests get the test job only (deploy is gated to main below),
+  # so a branch is checked before it is merged instead of after.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
+# main runs share one group so deploys never overlap; PRs and branch
+# dispatches get their own group so they can never cancel a main deploy.
 concurrency:
-  group: netlify-deploy
+  group: ${{ github.ref == 'refs/heads/main' && 'netlify-deploy' || format('ci-{0}', github.ref) }}
   cancel-in-progress: true
 
 jobs:
@@ -106,6 +112,10 @@ jobs:
 
   deploy:
     name: build + deploy site + verify live
+    # Never ship a build whose tests failed, and never deploy a branch:
+    # a workflow_dispatch on a feature branch used to push it to --prod.
+    needs: tests
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
