@@ -1477,6 +1477,29 @@ CREATE INDEX IF NOT EXISTS idx_ledger_customer_order ON customer_ledger(customer
 CREATE INDEX IF NOT EXISTS idx_stock_movements_kind ON stock_movements(kind, created_at);
 `,
 	},
+	{
+		// v27 — index the child side of foreign keys that had none.
+		// Each was a full-table scan on a hot or growing path:
+		//   - print_jobs(order_id): ON DELETE CASCADE from orders (purge,
+		//     test resets) and the per-order reprint lookup.
+		//   - purchase_order_items(po_id), stock_take_items(take_id): every
+		//     open of a PO / stock take loads its lines; both cascade.
+		//   - purchase_order_items(product_id), stock_take_items(product_id),
+		//     purchase_orders(supplier_id), design_jobs(assignee_id): the
+		//     "history for this product / supplier / designer" lookups and
+		//     the FK check when a parent row is deleted.
+		// Pure additions, idempotent, same SQL on SQLite and Postgres.
+		Version: 27,
+		SQLite: `
+CREATE INDEX IF NOT EXISTS idx_print_jobs_order ON print_jobs(order_id);
+CREATE INDEX IF NOT EXISTS idx_po_items_po ON purchase_order_items(po_id);
+CREATE INDEX IF NOT EXISTS idx_po_items_product ON purchase_order_items(product_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_stock_take_items_take ON stock_take_items(take_id);
+CREATE INDEX IF NOT EXISTS idx_stock_take_items_product ON stock_take_items(product_id);
+CREATE INDEX IF NOT EXISTS idx_design_jobs_assignee ON design_jobs(assignee_id);
+`,
+	},
 }
 
 // backfillRolePermsV19 unions the v19 sales-oversight permission into the
