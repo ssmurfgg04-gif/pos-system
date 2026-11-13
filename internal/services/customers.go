@@ -197,24 +197,35 @@ func (s *Service) GetCustomerOrders(customerID int64, p *auth.Principal) ([]mode
 // (topup +, redeem −); loyalty_points moves on kind = loyalty.
 func recordLedgerTx(tx *sql.Tx, rebind func(string) string, customerID, orderID int64,
 	kind string, amountCents, pointsDelta int64, note string, by int64) error {
-	if _, err := tx.Exec(rebind(`
-                INSERT INTO customer_ledger (customer_id, order_id, kind, amount_cents, points_delta, note, created_by, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-		customerID, orderID, kind, amountCents, pointsDelta, note, by, nowStamp()); err != nil {
-		return err
-	}
+	// v1.7.0: apply the money first, THEN write the ledger row with the
+	// balance it produced (SmartPOS's customer_account_transactions
+	// balance_after pattern). The snapshot is what makes a drifted
+	// customers.balance_cents projection provable after the fact.
+	var balAfter int64
 	if kind == models.LedgerCreditTopup || kind == models.LedgerCreditRedeem || kind == models.LedgerRefund {
 		if _, err := tx.Exec(rebind(`
                         UPDATE customers SET store_credit_cents = store_credit_cents + ?, updated_at = ? WHERE id = ?`),
 			amountCents, nowStamp(), customerID); err != nil {
 			return err
 		}
-		return nil
-	}
-	if _, err := tx.Exec(rebind(`
+		if err := tx.QueryRow(rebind(`SELECT COALESCE(balance_cents,0) FROM customers WHERE id = ?`), customerID).Scan(&balAfter); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(rebind(`
                 UPDATE customers SET balance_cents = balance_cents + ?,
                         loyalty_points = loyalty_points + ?, updated_at = ? WHERE id = ?`),
-		amountCents, pointsDelta, nowStamp(), customerID); err != nil {
+			amountCents, pointsDelta, nowStamp(), customerID); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(rebind(`SELECT COALESCE(balance_cents,0) FROM customers WHERE id = ?`), customerID).Scan(&balAfter); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(rebind(`
+                INSERT INTO customer_ledger (customer_id, order_id, kind, amount_cents, points_delta, note, created_by, created_at, balance_after)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		customerID, orderID, kind, amountCents, pointsDelta, note, by, nowStamp(), balAfter); err != nil {
 		return err
 	}
 	return nil
@@ -225,10 +236,17 @@ func recordLedgerTx(tx *sql.Tx, rebind func(string) string, customerID, orderID 
 // limit check on tab charges) and must not be double-applied.
 func recordLedgerTxNoBalance(tx *sql.Tx, rebind func(string) string, customerID, orderID int64,
 	kind string, amountCents, pointsDelta int64, note string, by int64) error {
+	// v1.7.0: the caller already moved the balance with a guarded update
+	// (e.g. the atomic credit-limit check) — read the post-move balance
+	// and freeze it into the row.
+	var balAfter int64
+	if err := tx.QueryRow(rebind(`SELECT COALESCE(balance_cents,0) FROM customers WHERE id = ?`), customerID).Scan(&balAfter); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(rebind(`
-                INSERT INTO customer_ledger (customer_id, order_id, kind, amount_cents, points_delta, note, created_by, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-		customerID, orderID, kind, amountCents, pointsDelta, note, by, nowStamp()); err != nil {
+                INSERT INTO customer_ledger (customer_id, order_id, kind, amount_cents, points_delta, note, created_by, created_at, balance_after)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		customerID, orderID, kind, amountCents, pointsDelta, note, by, nowStamp(), balAfter); err != nil {
 		return err
 	}
 	return nil
@@ -241,7 +259,7 @@ func (s *Service) CustomerLedger(customerID int64) ([]models.LedgerEntry, error)
 	}
 	rows, err := s.db.Query(s.db.Rebind(`
                 SELECT id, customer_id, order_id, kind, amount_cents, points_delta,
-                        COALESCE(note,''), created_by, created_at
+                        COALESCE(note,''), created_by, created_at, balance_after, COALESCE(reversal_of,0)
                 FROM customer_ledger WHERE customer_id = ?
                 ORDER BY id DESC LIMIT 200`), customerID)
 	if err != nil {
@@ -251,9 +269,14 @@ func (s *Service) CustomerLedger(customerID int64) ([]models.LedgerEntry, error)
 	var out []models.LedgerEntry
 	for rows.Next() {
 		var e models.LedgerEntry
+		var bal sql.NullInt64
 		if err := rows.Scan(&e.ID, &e.CustomerID, &e.OrderID, &e.Kind,
-			&e.AmountCents, &e.PointsDelta, &e.Note, &e.CreatedBy, &e.CreatedAt); err != nil {
+			&e.AmountCents, &e.PointsDelta, &e.Note, &e.CreatedBy, &e.CreatedAt, &bal, &e.ReversalOf); err != nil {
 			return nil, err
+		}
+		if bal.Valid {
+			v := bal.Int64
+			e.BalanceAfter = &v
 		}
 		out = append(out, e)
 	}
@@ -261,6 +284,110 @@ func (s *Service) CustomerLedger(customerID int64) ([]models.LedgerEntry, error)
 		out = []models.LedgerEntry{}
 	}
 	return out, rows.Err()
+}
+
+// AddOpeningBalance (v1.7.0) records debt a customer carried in when the
+// shop joined LedgerPOS — the SmartPOS "opening balance as a real
+// document" lesson: debt that exists only as a bare number can never be
+// receipted, matched, or disputed; here it is a ledger row like any other.
+func (s *Service) AddOpeningBalance(customerID, amountCents int64, note string, p *auth.Principal) (*models.Customer, error) {
+	if amountCents == 0 {
+		return nil, fmt.Errorf("%w: opening balance must be non-zero", ErrInvalidInput)
+	}
+	c, err := s.GetCustomer(customerID)
+	if err != nil {
+		return nil, err
+	}
+	if !c.Active {
+		return nil, fmt.Errorf("%w: customer is inactive", ErrInvalidState)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if err := recordLedgerTx(tx, s.db.Rebind, customerID, 0, models.LedgerOpening,
+		amountCents, 0, truncStr(note, 200), p.ID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	s.EmitLedger(customerID, models.LedgerOpening, amountCents, 0, truncStr(note, 200))
+	s.Audit(p.ID, p.Username, "CUSTOMER_OPENING_BALANCE", "customer", fmt.Sprintf("%d", customerID), fmt.Sprintf("%d", amountCents))
+	return s.GetCustomer(customerID)
+}
+
+// ReverseLedgerEntry (v1.7.0) cancels one manual ledger entry with a
+// mirrored row (reversal_of). Money rows are immutable — nothing is
+// updated or deleted; the reversal is a new fact that points at the entry
+// it cancels (SmartPOS soft-reversal quartet, reduced to one foreign key).
+// Only entries NOT created by an order (order_id = 0: opening balances,
+// manual adjustments, standalone payments) can be reversed here; order
+// charges are corrected through the returns/void flows so stock and money
+// stay consistent.
+func (s *Service) ReverseLedgerEntry(customerID, entryID int64, reason string, p *auth.Principal) (*models.Customer, error) {
+	if reason == "" {
+		return nil, fmt.Errorf("%w: a reversal reason is required", ErrInvalidInput)
+	}
+	if _, err := s.GetCustomer(customerID); err != nil {
+		return nil, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var kind string
+	var amount, points, orderID, already int64
+	err = tx.QueryRow(s.db.Rebind(`
+                SELECT kind, amount_cents, points_delta, order_id,
+                       (SELECT COALESCE(MAX(reversal_of),0) FROM customer_ledger cl2 WHERE cl2.reversal_of = customer_ledger.id)
+                FROM customer_ledger WHERE id = ? AND customer_id = ?`), entryID, customerID).
+		Scan(&kind, &amount, &points, &orderID, &already)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("%w: ledger entry %d not found for customer %d", ErrNotFound, entryID, customerID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if orderID != 0 {
+		return nil, fmt.Errorf("%w: order-linked entries are corrected via returns or voids, not direct reversal", ErrInvalidState)
+	}
+	if already != 0 {
+		return nil, fmt.Errorf("%w: entry %d is already reversed", ErrInvalidState, entryID)
+	}
+	if kind == models.LedgerCreditTopup || kind == models.LedgerCreditRedeem || kind == models.LedgerRefund {
+		return nil, fmt.Errorf("%w: store-credit entries are corrected via refunds, not direct reversal", ErrInvalidState)
+	}
+	note := truncStr("reversal: "+reason, 200)
+	if _, err := tx.Exec(s.db.Rebind(`
+                INSERT INTO customer_ledger (customer_id, order_id, kind, amount_cents, points_delta, note, created_by, created_at, balance_after, reversal_of)
+                SELECT customer_id, 0, kind, -amount_cents, -points_delta, ?, ?, ?, NULL, id
+                FROM customer_ledger WHERE id = ?`), note, p.ID, nowStamp(), entryID); err != nil {
+		return nil, err
+	}
+	// Apply the mirror to the balance + capture the resulting snapshot on
+	// the reversal row (the original keeps the balance it created).
+	if _, err := tx.Exec(s.db.Rebind(`
+                UPDATE customers SET balance_cents = balance_cents - ?, loyalty_points = loyalty_points - ?, updated_at = ? WHERE id = ?`),
+		amount, points, nowStamp(), customerID); err != nil {
+		return nil, err
+	}
+	var balAfter int64
+	if err := tx.QueryRow(s.db.Rebind(`SELECT COALESCE(balance_cents,0) FROM customers WHERE id = ?`), customerID).Scan(&balAfter); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(s.db.Rebind(`UPDATE customer_ledger SET balance_after = ? WHERE customer_id = ? AND reversal_of = ?`),
+		balAfter, customerID, entryID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	s.EmitLedger(customerID, kind, -amount, -points, note)
+	s.Audit(p.ID, p.Username, "LEDGER_REVERSED", "customer", fmt.Sprintf("%d", customerID), fmt.Sprintf("entry %d: %s", entryID, reason))
+	return s.GetCustomer(customerID)
 }
 
 // RecordCustomerPayment takes cash against a tab outside any order
@@ -275,7 +402,7 @@ func (s *Service) RecordCustomerPayment(customerID, amountCents int64, note stri
 		return nil, err
 	}
 	if !c.Active {
-		return nil, fmt.Errorf("customer is inactive")
+		return nil, fmt.Errorf("%w: customer is inactive", ErrInvalidState)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {

@@ -1,3 +1,50 @@
+---
+Task ID: v1.7.0
+Agent: main (Super Z)
+Task: "my friend has granted us access to learn from his pos do deep
+  research go though it detailed even the images with a vlm improve our
+  pos study this deeply alright whatever missing features or important
+  functionality you can add also yeah find other pos kenyan ones
+  opensource on github study deeply improve ours especially database wise
+  but allround is good too when done as usual ota push etc"
+
+Work Log:
+- Research wave 1 (three parallel agents + direct VLM pass):
+  - Friend's SmartPOS: schema.sql (54 tables) + 37 MB production dump
+    forensics (AUTO_INCREMENT gaps expose deleted voids; INSERT batch
+    counts give per-table production volumes) + 4 hand-written
+    migrations + 26 captured live pages + 4 screenshots.
+  - Kenyan/African OSS: OSPOS (4.5k stars), Tuma M-Pesa POS, Store-POS,
+    go-pos, managiha (Supabase + book-debt), BizYangu OS, FloCafe
+    (85-migration SQLite schema), Flutter POS, python-offline-pos,
+    frappe-mpsa, Odoo/ERPNext/Dolibarr/uniCenta for the gold-standard
+    patterns. Full notes in /home/z/my-project/posresearch/REPORT.md.
+- v1.6.3 shipped mid-research (stock ledger, returns, expenses,
+  wholesale tiers) — see its entry below.
+- Research wave 2 + gap analysis chose v1.7.0 scope (DB-first):
+  1. order_items.cost_cents line snapshot + margin reporting
+  2. customer_ledger.balance_after + drift provability
+  3. opening balances as documents + soft reversals (reversal_of)
+  4. structured disposals (DISPOSAL ledger kind + loss-value report)
+  5. /system/health self-audit (index audit, sync queue, reconciliations)
+- Implemented: migration v26 (SQLite+PG), cost snapshot at checkout and
+  team-sync apply, recordLedgerTx/NoBalance now snapshot balance_after,
+  AddOpeningBalance/ReverseLedgerEntry services + routes
+  (customers.manage), DisposeProduct + /products/:id/dispose +
+  /reports/disposals, SystemHealth service + /system/health
+  (settings.manage), demo parity for all five routes, Settings → System
+  health panel, daily/monthly margin panels, top-product profit,
+  Customers statement (balance column + reverse + opening balance),
+  Inventory "Record loss" modal.
+- Tests: 5 new Go integration tests (cost/margin, opening+reversal,
+  tab snapshot, disposal flow, health page), smoke +31 checks (84 →
+  115), vitest untouched at 162 (types extended; demo ledger parity).
+- Gates: gofmt clean, go vet clean, go build ok, go test ./... ok
+  (handlers 181s), tsc clean, vitest 162/162, vite build ok, live
+  smoke 115/115 on a fresh seeded DB (ALLOW_MOCK_PAYMENTS=true).
+- Release: tag v1.7.0 → CI → OTA chain (fleet backup → manifest publish
+  → till-path signature check).
+
 # Worklog
 
 ---

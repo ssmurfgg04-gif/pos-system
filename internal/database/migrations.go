@@ -1430,6 +1430,53 @@ ALTER TABLE products ADD COLUMN wholesale_price_cents INTEGER NOT NULL DEFAULT 0
 ALTER TABLE customers ADD COLUMN price_tier TEXT NOT NULL DEFAULT 'retail';
 `,
 	},
+	{
+		// v1.7.0 (v26) — the shopkeeper's ledger, informed by studying
+		// the friend's SmartPOS schema (54 tables) and the OSPOS /
+		// FloCafe / managiha research:
+		//
+		//   1. order_items.cost_cents — line cost snapshot frozen at sale
+		//      time. Every mature POS does this (OSPOS sales_items
+		//      item_cost_price, SmartPOS batches, FloCafe order lines);
+		//      without it gross margin is only reconstructible while the
+		//      product's CURRENT cost happens to match the historic one.
+		//      Backfill: existing lines adopt the product's current cost
+		//      (best available approximation, clearly marked by being
+		//      identical to cost_cents today).
+		//   2. customer_ledger.balance_after — running balance snapshot
+		//      on every ledger row (SmartPOS customer_account_transactions
+		//      pattern). The customers.balance_cents projection can drift
+		//      (SmartPOS needed a whole customer_balance_drift watchdog);
+		//      the snapshot makes drift provable instead of invisible.
+		//      Nullable: rows before v26 have no recorded balance.
+		//   3. customer_ledger.reversal_of — soft reversals (SmartPOS
+		//      credit_receipts reversed_by/at/reason quartet, reduced to
+		//      the minimal foreign key: a reversal IS a new row that
+		//      points at the entry it cancels; money rows are never
+		//      updated or deleted).
+		//   4. Composite indexes for the two new report shapes: the
+		//      customer statement (one customer, in order) and the
+		//      disposal report (one movement kind, by date).
+		Version: 26,
+		SQLite: `
+ALTER TABLE order_items ADD COLUMN cost_cents INTEGER NOT NULL DEFAULT 0;
+UPDATE order_items SET cost_cents = (SELECT p.cost_cents FROM products p WHERE p.id = order_items.product_id)
+ WHERE cost_cents = 0 AND EXISTS (SELECT 1 FROM products p WHERE p.id = order_items.product_id AND p.cost_cents > 0);
+ALTER TABLE customer_ledger ADD COLUMN balance_after INTEGER;
+ALTER TABLE customer_ledger ADD COLUMN reversal_of INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_ledger_customer_order ON customer_ledger(customer_id, id);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_kind ON stock_movements(kind, created_at);
+`,
+		Pg: `
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS cost_cents BIGINT NOT NULL DEFAULT 0;
+UPDATE order_items SET cost_cents = (SELECT p.cost_cents FROM products p WHERE p.id = order_items.product_id)
+ WHERE cost_cents = 0 AND EXISTS (SELECT 1 FROM products p WHERE p.id = order_items.product_id AND p.cost_cents > 0);
+ALTER TABLE customer_ledger ADD COLUMN IF NOT EXISTS balance_after BIGINT;
+ALTER TABLE customer_ledger ADD COLUMN IF NOT EXISTS reversal_of BIGINT NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_ledger_customer_order ON customer_ledger(customer_id, id);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_kind ON stock_movements(kind, created_at);
+`,
+	},
 }
 
 // backfillRolePermsV19 unions the v19 sales-oversight permission into the

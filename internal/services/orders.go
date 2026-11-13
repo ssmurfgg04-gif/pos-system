@@ -58,6 +58,7 @@ type checkoutLine struct {
 	name, sku      string
 	qty            int
 	unitPriceCents int64
+	costCents      int64 // v1.7.0: unit cost snapshot frozen into order_items at sale time
 	trackStock     bool
 }
 
@@ -194,9 +195,9 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 		var l checkoutLine
 		var track, active int
 		err := s.db.QueryRow(s.db.Rebind(
-			`SELECT id, name, COALESCE(sku,''), price_cents, COALESCE(track_stock,1), COALESCE(is_active,1)
+			`SELECT id, name, COALESCE(sku,''), price_cents, COALESCE(track_stock,1), COALESCE(is_active,1), COALESCE(cost_cents,0)
                          FROM products WHERE id = ?`), it.ProductID).
-			Scan(&l.productID, &l.name, &l.sku, &l.unitPriceCents, &track, &active)
+			Scan(&l.productID, &l.name, &l.sku, &l.unitPriceCents, &track, &active, &l.costCents)
 		if err != nil {
 			return nil, fmt.Errorf("product %d: %w", it.ProductID, err)
 		}
@@ -437,9 +438,9 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 
 		for _, l := range lines {
 			if _, err := tx.Exec(s.db.Rebind(`
-                                INSERT INTO order_items (order_id, product_id, name, sku, qty, unit_price_cents, line_total_cents)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)`),
-				id, l.productID, l.name, l.sku, l.qty, l.unitPriceCents, l.unitPriceCents*int64(l.qty)); err != nil {
+                                INSERT INTO order_items (order_id, product_id, name, sku, qty, unit_price_cents, line_total_cents, cost_cents)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+				id, l.productID, l.name, l.sku, l.qty, l.unitPriceCents, l.unitPriceCents*int64(l.qty), l.costCents); err != nil {
 				tx.Rollback()
 				return nil, err
 			}

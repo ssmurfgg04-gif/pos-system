@@ -390,6 +390,8 @@ export interface OrderItem {
   qty: number
   unitPriceCents: number
   lineTotalCents: number
+  /** v1.7.0: unit cost frozen at sale time (0 = pre-v26 line). */
+  costCents?: number
 }
 
 export interface Payment {
@@ -601,7 +603,7 @@ export interface DailySummary {
   paystackCents: number
   creditCents: number
   discrepancies: number
-  topProducts: { productId: number; name: string; qty: number; salesCents: number }[]
+  topProducts: { productId: number; name: string; qty: number; salesCents: number; profitCents?: number }[]
   series: { date: string; salesCents: number; orders: number }[]
   /** P5: who sold what today + how many new customers were captured. */
   perStaff?: { userId: number; name: string; orders: number; salesCents: number }[]
@@ -616,6 +618,12 @@ export interface DailySummary {
   stockUnits?: number
   stockValueCents?: number
   lowStockCount?: number
+  /** v1.7.0 — the day over cost + write-offs. */
+  cogsCents?: number
+  grossProfitCents?: number
+  marginPct?: number
+  disposalCount?: number
+  disposalValueCents?: number
   /** P6 multi-store: present (with per-shop rows) on the ?shop=all consolidated view. */
   consolidated?: boolean
   shops?: { id: string; name: string; salesCents: number; ordersPaid: number; cashCents: number; mpesaCents: number; paystackCents: number; creditCents: number; ordersVoided?: number; discrepancies?: number }[]
@@ -637,16 +645,59 @@ export interface MonthlySummary {
   taxPercent: number
   taxIncluded: boolean
   series: { date: string; salesCents: number; orders: number }[]
-  topProducts: { productId: number; name: string; qty: number; salesCents: number }[]
+  topProducts: { productId: number; name: string; qty: number; salesCents: number; profitCents?: number }[]
   /** v1.6.3 — expenses booked in the month + refunds given out. */
   expensesCents?: number
   returnsCents?: number
+  /** v1.7.0 — the month over cost + write-offs. */
+  cogsCents?: number
+  grossProfitCents?: number
+  marginPct?: number
+  disposalCount?: number
+  disposalValueCents?: number
 }
 
 export interface BackupResult {
   file: string
   bytes: number
   at: string
+}
+
+/** v1.7.0 — one written-off stock event (disposal report). */
+export interface DisposalRow {
+  at: string
+  productName: string
+  sku: string
+  qty: number
+  reason: string
+  note: string
+  unitCostCents: number
+  lossCents: number
+  byUsername: string
+}
+
+/** v1.7.0 — the /system/health self-audit payload. */
+export interface SystemHealth {
+  schemaVersion: number
+  migrationsApplied: number
+  indexesOk: boolean
+  indexesFound: string[]
+  indexesMissing: string[]
+  dbSizeBytes: number
+  journalMode: string
+  outboxPending: number
+  outboxFailed: number
+  deadLetters: number
+  customersChecked: number
+  customerDriftCount: number
+  customerDrift?: string[]
+  stockChecked: number
+  stockDriftCount: number
+  stockDrift?: string[]
+  stockNoLedger: number
+  lastBackupFile: string
+  lastBackupAt: string
+  backupCount: number
 }
 
 export interface AuditEntry {
@@ -852,12 +903,16 @@ export interface LedgerEntry {
   id: number
   customerId: number
   orderId: number
-  kind: 'charge' | 'payment' | 'adjustment' | 'loyalty' | 'credit_topup' | 'credit_redeem'
+  kind: 'charge' | 'payment' | 'adjustment' | 'loyalty' | 'credit_topup' | 'credit_redeem' | 'opening'
   amountCents: number
   pointsDelta: number
   note: string
   createdBy: number
   createdAt: string
+  /** v1.7.0: what the customer owed right after this row (absent pre-v26). */
+  balanceAfter?: number
+  /** v1.7.0: non-zero = this row cancels that entry. */
+  reversalOf?: number
 }
 
 // ---- Retail expansion ----

@@ -349,6 +349,36 @@ func (h *H) AdjustStock(c *gin.Context) {
 	h.ok(c, gin.H{"adjusted": true, "applied": applied})
 }
 
+// DisposeStock (products.manage, v1.7.0) — structured loss recording: the
+// friend's SmartPOS disposal module (expired / spoilt / lost / damaged /
+// other) with the loss value computable from product cost at report time.
+// The deduction is guarded and lands in the stock ledger as DISPOSAL.
+func (h *H) DisposeStock(c *gin.Context) {
+	p := h.principal(c)
+	id, ok := h.pathID(c, "id")
+	if !ok {
+		return
+	}
+	var body struct {
+		Qty    int64  `json:"qty" binding:"required"`
+		Reason string `json:"reason" binding:"required"`
+		Note   string `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "qty and reason are required")
+		return
+	}
+	res, err := h.svc(c).DisposeProduct(int64(id), body.Qty, body.Reason, body.Note, p)
+	if err != nil {
+		h.fail(c, 400, err.Error())
+		return
+	}
+	var sku string
+	h.db(c).QueryRow(`SELECT COALESCE(sku,'') FROM products WHERE id = ?`, id).Scan(&sku)
+	h.svc(c).EmitStockDelta(sku, -int(body.Qty))
+	h.ok(c, res)
+}
+
 // DeactivateProduct soft-deletes (order history references products).
 func (h *H) DeactivateProduct(c *gin.Context) {
 	p := h.principal(c)

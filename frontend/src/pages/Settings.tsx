@@ -20,7 +20,7 @@ import {
   VerifyVerdict,
   VoidReason,
   WhatsappJob,
-  backendMode,
+  backendMode, SystemHealth,
 } from '../lib/api'
 import { resetDemo } from '../demo/backend'
 import { useBranding } from '../stores/branding'
@@ -106,6 +106,7 @@ export function Settings() {
   const [checkingPay, setCheckingPay] = useState(false)
   const [audit, setAudit] = useState<AuditEntry[] | null>(null)
   const [backups, setBackups] = useState<BackupResult[] | null>(null)
+  const [health, setHealth] = useState<SystemHealth | null>(null)
   const [backing, setBacking] = useState(false)
   const [offsite, setOffsite] = useState<OffsiteStatus | null>(null)
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
@@ -140,6 +141,9 @@ export function Settings() {
   useEffect(() => {
     if (tab === 'audit' && !audit) {
       api.get<AuditEntry[]>('/api/v1/audit').then(setAudit).catch(() => setAudit([]))
+    }
+    if (tab === 'system' && !health) {
+      api.get<SystemHealth>('/api/v1/system/health').then(setHealth).catch(() => setHealth(null))
     }
     if (tab === 'system' && !backups) {
       api.get<BackupResult[]>('/api/v1/system/backups').then(setBackups).catch(() => setBackups([]))
@@ -455,6 +459,60 @@ export function Settings() {
                   <RotateCcw size={15} strokeWidth={2.5} aria-hidden />
                   Reset demo data
                 </Button>
+              )}
+            </div>
+            {/* v1.7.0 — the self-audit: schema version, index audit, sync
+                queue, money/stock projection drift. The SmartPOS health
+                page idea, condensed into one read-only panel. */}
+            <div className="sm:col-span-2">
+              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">System health</p>
+              {!health ? (
+                <div className="py-4 flex justify-center"><Spinner /></div>
+              ) : (
+                <div className="border-2 border-line rounded-input overflow-hidden text-[13px]">
+                  <div className="flex items-center gap-3 px-3 py-2 bg-surface">
+                    <span className="text-ink-muted flex-1">Database schema</span>
+                    <span className="font-bold tabular text-ink">v{health.schemaVersion}</span>
+                    <StatusPill status="paid" label={`${health.migrationsApplied} migrations applied`} />
+                  </div>
+                  <div className="flex items-center gap-3 px-3 py-2 bg-surface-muted">
+                    <span className="text-ink-muted flex-1">Performance indexes</span>
+                    {health.indexesOk
+                      ? <StatusPill status="paid" label={`all ${health.indexesFound.length} built`} />
+                      : <StatusPill status="danger" label={`${health.indexesMissing.length} missing`} />}
+                  </div>
+                  <div className="flex items-center gap-3 px-3 py-2 bg-surface">
+                    <span className="text-ink-muted flex-1">Sync queue</span>
+                    <span className="tabular text-ink font-bold">{health.outboxPending}</span>
+                    <span className="text-[11px] text-ink-subtle">pending</span>
+                    {(health.outboxFailed > 0 || health.deadLetters > 0) && (
+                      <StatusPill status="danger" label={`${health.outboxFailed} failing · ${health.deadLetters} dead`} />
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 px-3 py-2 bg-surface-muted">
+                    <span className="text-ink-muted flex-1">Customer ledger</span>
+                    <span className="tabular text-ink-muted">{health.customersChecked} checked</span>
+                    {health.customerDriftCount > 0
+                      ? <StatusPill status="danger" label={`${health.customerDriftCount} drifted`} />
+                      : <StatusPill status="paid" label="reconciled" />}
+                  </div>
+                  <div className="flex items-center gap-3 px-3 py-2 bg-surface">
+                    <span className="text-ink-muted flex-1">Stock ledger</span>
+                    <span className="tabular text-ink-muted">{health.stockChecked} checked</span>
+                    {health.stockDriftCount > 0
+                      ? <StatusPill status="danger" label={`${health.stockDriftCount} drifted`} />
+                      : <StatusPill status="paid" label="reconciled" />}
+                  </div>
+                  <div className="flex items-center gap-3 px-3 py-2 bg-surface-muted">
+                    <span className="text-ink-muted flex-1">Latest snapshot</span>
+                    <span className="font-mono text-[11px] text-ink truncate max-w-48">{health.lastBackupFile || 'none yet'}</span>
+                  </div>
+                  {(health.customerDriftCount > 0 || health.stockDriftCount > 0) && (
+                    <div className="px-3 py-2 bg-danger-bg text-[11.5px] text-danger-text whitespace-pre-wrap">
+                      {[...(health.customerDrift ?? []), ...(health.stockDrift ?? [])].slice(0, 8).join('\n')}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
             <div className="sm:col-span-2">

@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"posapp/internal/models"
@@ -34,6 +35,13 @@ type DailySummary struct {
 	StockUnits      int64 `json:"stockUnits"`
 	StockValueCents int64 `json:"stockValueCents"`
 	LowStockCount   int   `json:"lowStockCount"`
+	// v1.7.0 — the shopkeeper's ledger: what the goods cost that day,
+	// what the day earned over that cost, and what was written off.
+	CogsCents          int64   `json:"cogsCents"`          // cost of goods on PAID sales (line cost snapshot, product-cost fallback)
+	GrossProfitCents   int64   `json:"grossProfitCents"`   // sales - cogs
+	MarginPct          float64 `json:"marginPct"`          // profit / sales * 100
+	DisposalCount      int     `json:"disposalCount"`      // DISPOSAL ledger rows today
+	DisposalValueCents int64   `json:"disposalValueCents"` // qty x product cost written off today
 }
 
 // TillSales is one originating till's slice of a reporting window (v19:
@@ -53,10 +61,11 @@ type StaffSales struct {
 }
 
 type TopProduct struct {
-	ProductID  int64  `json:"productId"`
-	Name       string `json:"name"`
-	Qty        int    `json:"qty"`
-	SalesCents int64  `json:"salesCents"`
+	ProductID   int64  `json:"productId"`
+	Name        string `json:"name"`
+	Qty         int    `json:"qty"`
+	SalesCents  int64  `json:"salesCents"`
+	ProfitCents int64  `json:"profitCents"` // v1.7.0: sales - line cost snapshot (product-cost fallback)
 }
 
 type DayPoint struct {
@@ -146,8 +155,9 @@ func (s *Service) GetDailySummary(date string) (*DailySummary, error) {
 
 	// Top products of the day.
 	rows, err := s.db.Query(s.db.Rebind(`
-                SELECT oi.product_id, COALESCE(oi.name,''), SUM(oi.qty), SUM(oi.line_total_cents)
-                FROM order_items oi JOIN orders o ON o.id = oi.order_id
+                SELECT oi.product_id, COALESCE(oi.name,''), SUM(oi.qty), SUM(oi.line_total_cents),
+                        SUM(oi.qty * CASE WHEN oi.cost_cents > 0 THEN oi.cost_cents ELSE COALESCE(p.cost_cents,0) END)
+                FROM order_items oi JOIN orders o ON o.id = oi.order_id LEFT JOIN products p ON p.id = oi.product_id
                 WHERE o.status = 'PAID' AND o.created_at >= ? AND o.created_at < ?
                 GROUP BY oi.product_id, oi.name ORDER BY SUM(oi.line_total_cents) DESC LIMIT 10`), from, to)
 	if err == nil {
@@ -155,9 +165,11 @@ func (s *Service) GetDailySummary(date string) (*DailySummary, error) {
 			var tp TopProduct
 			var qty any
 			var sales any
-			if err := rows.Scan(&tp.ProductID, &tp.Name, &qty, &sales); err == nil {
+			var cost any
+			if err := rows.Scan(&tp.ProductID, &tp.Name, &qty, &sales, &cost); err == nil {
 				tp.Qty = asInt(qty)
 				tp.SalesCents = asInt64(sales)
+				tp.ProfitCents = tp.SalesCents - asInt64(cost)
 				out.TopProducts = append(out.TopProducts, tp)
 			}
 		}
@@ -207,7 +219,71 @@ func (s *Service) GetDailySummary(date string) (*DailySummary, error) {
 		WHERE track_stock = 1 AND is_active = 1
 		  AND stock_qty <= (CASE WHEN COALESCE(low_stock_units,0) > 0 THEN low_stock_units ELSE ? END)`),
 		s.settings.GetInt("low_stock_threshold", 5)).Scan(&out.LowStockCount)
+	// v1.7.0 — gross margin on the day's paid sales + what was written off.
+	_ = s.db.QueryRow(s.db.Rebind(`
+		SELECT COALESCE(SUM(oi.qty * CASE WHEN oi.cost_cents > 0 THEN oi.cost_cents ELSE COALESCE(p.cost_cents,0) END),0)
+		FROM order_items oi JOIN orders o ON o.id = oi.order_id LEFT JOIN products p ON p.id = oi.product_id
+		WHERE o.status = 'PAID' AND o.created_at >= ? AND o.created_at < ?`), from, to).Scan(&out.CogsCents)
+	out.GrossProfitCents = out.SalesCents - out.CogsCents
+	if out.SalesCents > 0 {
+		out.MarginPct = math.Round(float64(out.GrossProfitCents)/float64(out.SalesCents)*1000) / 10
+	}
+	_ = s.db.QueryRow(s.db.Rebind(`
+		SELECT COUNT(*), COALESCE(SUM(-m.delta * COALESCE(p.cost_cents,0)),0)
+		FROM stock_movements m LEFT JOIN products p ON p.id = m.product_id
+		WHERE m.kind = 'DISPOSAL' AND m.created_at >= ? AND m.created_at < ?`), from, to).
+		Scan(&out.DisposalCount, &out.DisposalValueCents)
 	return out, nil
+}
+
+// DisposalRow is one written-off stock event (v1.7.0 disposal report).
+type DisposalRow struct {
+	At            string `json:"at"`
+	ProductName   string `json:"productName"`
+	SKU           string `json:"sku"`
+	Qty           int64  `json:"qty"`
+	Reason        string `json:"reason"`
+	Note          string `json:"note"`
+	UnitCostCents int64  `json:"unitCostCents"`
+	LossCents     int64  `json:"lossCents"`
+	ByUsername    string `json:"byUsername"`
+}
+
+// ListDisposals returns the disposal ledger for a date window, newest
+// first. Loss value uses the product's CURRENT cost (the same convention
+// as the stock-valuation report; batch-level costing is a later upgrade).
+func (s *Service) ListDisposals(from, to string, limit int) ([]DisposalRow, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	if from == "" {
+		from = "2000-01-01"
+	}
+	if to == "" {
+		to = eatStamp(time.Now().In(eastAfrica).AddDate(0, 0, 1))
+	}
+	rows, err := s.db.Query(s.db.Rebind(`
+		SELECT m.created_at, COALESCE(p.name,''), COALESCE(p.sku,''), -m.delta, COALESCE(m.reference,''),
+		       COALESCE(m.note,''), COALESCE(p.cost_cents,0), -m.delta * COALESCE(p.cost_cents,0), COALESCE(m.username,'')
+		FROM stock_movements m LEFT JOIN products p ON p.id = m.product_id
+		WHERE m.kind = 'DISPOSAL' AND m.created_at >= ? AND m.created_at < ?
+		ORDER BY m.id DESC LIMIT ?`), from, to, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DisposalRow
+	for rows.Next() {
+		var r DisposalRow
+		if err := rows.Scan(&r.At, &r.ProductName, &r.SKU, &r.Qty, &r.Reason, &r.Note, &r.UnitCostCents, &r.LossCents, &r.ByUsername); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if out == nil {
+		out = []DisposalRow{}
+	}
+	return out, rows.Err()
 }
 
 func mustDate(s string) time.Time {
@@ -240,6 +316,12 @@ type MonthlySummary struct {
 	// v1.6.3 — expenses booked in the month + refunds given out.
 	ExpensesCents int64 `json:"expensesCents"`
 	ReturnsCents  int64 `json:"returnsCents"`
+	// v1.7.0 — the month over cost, and what was written off.
+	CogsCents          int64   `json:"cogsCents"`
+	GrossProfitCents   int64   `json:"grossProfitCents"`
+	MarginPct          float64 `json:"marginPct"`
+	DisposalCount      int     `json:"disposalCount"`
+	DisposalValueCents int64   `json:"disposalValueCents"`
 }
 
 // monthBounds returns the UTC window [from, toExcl) covering one EAT
@@ -318,8 +400,9 @@ func (s *Service) GetMonthlySummary(month string) (*MonthlySummary, error) {
 
 	// Top products of the month.
 	rows, err := s.db.Query(s.db.Rebind(`
-                SELECT oi.product_id, COALESCE(oi.name,''), SUM(oi.qty), SUM(oi.line_total_cents)
-                FROM order_items oi JOIN orders o ON o.id = oi.order_id
+                SELECT oi.product_id, COALESCE(oi.name,''), SUM(oi.qty), SUM(oi.line_total_cents),
+                        SUM(oi.qty * CASE WHEN oi.cost_cents > 0 THEN oi.cost_cents ELSE COALESCE(p.cost_cents,0) END)
+                FROM order_items oi JOIN orders o ON o.id = oi.order_id LEFT JOIN products p ON p.id = oi.product_id
                 WHERE o.status = 'PAID' AND o.created_at >= ? AND o.created_at < ?
                 GROUP BY oi.product_id, oi.name ORDER BY SUM(oi.line_total_cents) DESC LIMIT 10`), from, to)
 	if err == nil {
@@ -327,9 +410,11 @@ func (s *Service) GetMonthlySummary(month string) (*MonthlySummary, error) {
 			var tp TopProduct
 			var qty any
 			var sales any
-			if err := rows.Scan(&tp.ProductID, &tp.Name, &qty, &sales); err == nil {
+			var cost any
+			if err := rows.Scan(&tp.ProductID, &tp.Name, &qty, &sales, &cost); err == nil {
 				tp.Qty = asInt(qty)
 				tp.SalesCents = asInt64(sales)
+				tp.ProfitCents = tp.SalesCents - asInt64(cost)
 				out.TopProducts = append(out.TopProducts, tp)
 			}
 		}
@@ -342,6 +427,20 @@ func (s *Service) GetMonthlySummary(month string) (*MonthlySummary, error) {
 		eatDayOfMonth(monthStart), eatDayOfMonth(monthEnd)).Scan(&out.ExpensesCents)
 	_ = s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(SUM(total_cents),0) FROM returns WHERE created_at >= ? AND created_at < ?`),
 		monthStart, monthEnd).Scan(&out.ReturnsCents)
+	// v1.7.0 — the month over cost + write-offs.
+	_ = s.db.QueryRow(s.db.Rebind(`
+		SELECT COALESCE(SUM(oi.qty * CASE WHEN oi.cost_cents > 0 THEN oi.cost_cents ELSE COALESCE(p.cost_cents,0) END),0)
+		FROM order_items oi JOIN orders o ON o.id = oi.order_id LEFT JOIN products p ON p.id = oi.product_id
+		WHERE o.status = 'PAID' AND o.created_at >= ? AND o.created_at < ?`), from, to).Scan(&out.CogsCents)
+	out.GrossProfitCents = out.GrossCents - out.CogsCents
+	if out.GrossCents > 0 {
+		out.MarginPct = math.Round(float64(out.GrossProfitCents)/float64(out.GrossCents)*1000) / 10
+	}
+	_ = s.db.QueryRow(s.db.Rebind(`
+		SELECT COUNT(*), COALESCE(SUM(-m.delta * COALESCE(p.cost_cents,0)),0)
+		FROM stock_movements m LEFT JOIN products p ON p.id = m.product_id
+		WHERE m.kind = 'DISPOSAL' AND m.created_at >= ? AND m.created_at < ?`), from, to).
+		Scan(&out.DisposalCount, &out.DisposalValueCents)
 	return out, nil
 }
 

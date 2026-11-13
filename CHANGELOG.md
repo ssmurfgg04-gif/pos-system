@@ -3,6 +3,47 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.7.0 — Shopkeeper's ledger: margin, opening balances, reversals, disposals
+
+The second wave of the deep research (the friend's SmartPOS schema — 54
+tables and a 37 MB production dump — plus OSPOS, FloCafe, managiha,
+BizYangu and the Tuma M-Pesa fork). Where v1.6.3 made the database an
+accountant, this one makes it an auditor that can prove its own numbers.
+
+- **Gross margin, finally true.** Every order line now freezes the
+  product's cost at sale time (`cost_cents` on the line — the OSPOS
+  pattern; without it margin is only right while costs stand still).
+  Daily and monthly reports gained **cost of goods, gross profit and
+  margin %**, and top products now show profit per product, not just
+  takings. Existing lines were backfilled with current costs as the best
+  available approximation.
+- **Opening balances are real documents.** A customer's carried-in debt
+  (the old notebook balance) is now a first-class ledger row — receipted,
+  disputable, reversible — instead of a bare number nobody can match a
+  payment against (SmartPOS learned this the hard way: KES 216,880 of
+  unallocated receipts).
+- **Soft reversals.** Manual ledger entries (opening balances, walk-in
+  payments, adjustments) can be reversed with a reason: the reversal is a
+  new mirrored row pointing at the original — money rows are never edited
+  or deleted. Double reversals are refused; order charges stay on the
+  returns/void path so stock and money move together.
+- **The ledger remembers where it stood.** Every customer ledger row now
+  snapshots the balance it produced (`balance_after`) — the SmartPOS
+  watchdog lesson. A drifted balance is now provable, not invisible.
+- **Structured losses.** Inventory gained **Record loss**: expired,
+  spoilt, lost, damaged, other — guarded deduction, DISPOSAL ledger rows,
+  and a disposal report (and daily/monthly write-off totals) with the
+  loss value computed from product cost.
+- **System health, self-audited.** Settings → System gained a health
+  panel: schema version, all declared indexes verified as present, sync
+  queue depth (pending / failing / dead), customer-ledger and stock
+  projection reconciliation with the drifted names listed, and the newest
+  backup snapshot. Before it breaks your day-end, the till tells you.
+- **Under the hood:** migration v26 (two new columns + two composite
+  indexes), team-sync carries the cost snapshots and balance snapshots,
+  demo parity for all four new surfaces, 5 new Go integration tests, and
+  the live smoke suite grew from 84 to 115 checks.
+
 ## v1.6.3 — Shop brain: stock ledger, returns, expenses, wholesale prices
 
 A deep study of a friend's Kenyan SmartPOS (its full 54-table MySQL dump,

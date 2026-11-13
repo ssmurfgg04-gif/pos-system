@@ -129,6 +129,58 @@ func (h *H) RecordCustomerAdjustment(c *gin.Context) {
 	h.ok(c, customer)
 }
 
+// AddOpeningBalance (customers.manage, v1.7.0) — record the debt a
+// customer carried in when the shop joined, as a first-class ledger row
+// (the SmartPOS opening-balance lesson: bare numbers can't be receipted).
+func (h *H) AddOpeningBalance(c *gin.Context) {
+	p := h.principal(c)
+	id, ok := h.pathID(c, "id")
+	if !ok {
+		return
+	}
+	var body struct {
+		AmountCents int64  `json:"amountCents"`
+		Note        string `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, err.Error())
+		return
+	}
+	customer, err := h.svc(c).AddOpeningBalance(id, body.AmountCents, body.Note, p)
+	if err != nil {
+		h.mapErr(c, err)
+		return
+	}
+	h.ok(c, customer)
+}
+
+// ReverseLedgerEntry (customers.manage, v1.7.0) — soft-reverse one manual
+// ledger entry with a mirrored row; the original is never touched.
+func (h *H) ReverseLedgerEntry(c *gin.Context) {
+	p := h.principal(c)
+	id, ok := h.pathID(c, "id")
+	if !ok {
+		return
+	}
+	entryID, ok := h.pathID(c, "entryId")
+	if !ok {
+		return
+	}
+	var body struct {
+		Reason string `json:"reason" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "reason is required")
+		return
+	}
+	customer, err := h.svc(c).ReverseLedgerEntry(id, entryID, body.Reason, p)
+	if err != nil {
+		h.mapErr(c, err)
+		return
+	}
+	h.ok(c, customer)
+}
+
 // SettleTab (pos.sell) — complete a tab order by cash or M-Pesa receipt.
 func (h *H) SettleTab(c *gin.Context) {
 	p := h.principal(c)

@@ -588,6 +588,7 @@ function postLedger(customerId: number, orderId: number, kind: DemoLedgerEntry['
   if (c) {
     c.balanceCents += amountCents
     c.loyaltyPoints += pointsDelta
+    e.balanceAfter = c.balanceCents // v1.7.0 parity: freeze the resulting balance
   }
   return e
 }
@@ -1083,6 +1084,27 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   if (m === 'GET' && p === '/stock-movements') {
     requirePerm(perms, 'products.view')
     return [] as T
+  }
+  // v1.7.0: structured disposal (loss recording) — guarded deduction with
+  // a reason; the demo ledger keeps no movement rows, so just apply it.
+  const disposeMatch = p.match(/^\/products\/(\d+)\/dispose$/)
+  if (m === 'POST' && disposeMatch) {
+    requirePerm(perms, 'products.manage')
+    const d = load()
+    const prod = d.products.find((x) => x.id === Number(disposeMatch[1]))
+    if (!prod) throw new ApiError(404, 'product not found')
+    const qty = Math.round(Number(body?.qty) || 0)
+    const reason = String(body?.reason || '')
+    if (!(qty > 0)) throw new ApiError(400, 'disposal quantity must be positive')
+    if (!['expired', 'spoilt', 'lost', 'damaged', 'other'].includes(reason)) throw new ApiError(400, `invalid disposal reason "${reason}"`)
+    if (prod.trackStock) {
+      if (prod.stockQty < qty) throw new ApiError(409, `not enough stock to dispose (requested ${qty})`)
+      prod.stockQty -= qty
+    }
+    prod.updatedAt = nowIso()
+    audit(user.id, user.username, 'STOCK_DISPOSAL', 'product', String(prod.id), `${qty} x ${reason}`)
+    persist()
+    return { id: prod.id, stockQty: prod.stockQty, disposed: qty, reason } as T
   }
   const movMatch = p.match(/^\/products\/(\d+)\/movements$/)
   if (m === 'GET' && movMatch) {
@@ -2082,6 +2104,40 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       return customerDTO(c) as T
     }
   }
+  // v1.7.0: opening balance — debt carried in as a first-class ledger row.
+  const openBalMatch = p.match(/^\/customers\/(\d+)\/opening-balance$/)
+  if (m === 'POST' && openBalMatch) {
+    requirePerm(perms, 'customers.manage')
+    const d = load()
+    const c = d.customers.find((x) => x.id === Number(openBalMatch[1]))
+    if (!c) throw new ApiError(404, 'customer not found')
+    if (!c.active) throw new ApiError(409, 'customer is inactive')
+    const cents = Math.round(Number(body?.amountCents) || 0)
+    if (cents === 0) throw new ApiError(400, 'opening balance must be non-zero')
+    postLedger(c.id, 0, 'opening', cents, 0, String(body?.note || 'opening balance'), user.id)
+    audit(user.id, user.username, 'CUSTOMER_OPENING_BALANCE', 'customer', String(c.id), String(cents))
+    persist()
+    return customerDTO(c) as T
+  }
+  // v1.7.0: soft reversal — a mirrored row pointing at the entry.
+  const revMatch = p.match(/^\/customers\/(\d+)\/ledger\/(\d+)\/reverse$/)
+  if (m === 'POST' && revMatch) {
+    requirePerm(perms, 'customers.manage')
+    const d = load()
+    const c = d.customers.find((x) => x.id === Number(revMatch[1]))
+    if (!c) throw new ApiError(404, 'customer not found')
+    const reason = String(body?.reason || '').trim()
+    if (!reason) throw new ApiError(400, 'a reversal reason is required')
+    const entry = d.ledger.find((x) => x.id === Number(revMatch[2]) && x.customerId === c.id)
+    if (!entry) throw new ApiError(404, 'ledger entry not found')
+    if (entry.orderId !== 0) throw new ApiError(409, 'order-linked entries are corrected via returns or voids, not direct reversal')
+    if (d.ledger.some((x) => (x as DemoLedgerEntry).reversalOf === entry.id)) throw new ApiError(409, 'entry is already reversed')
+    const e = postLedger(c.id, 0, entry.kind, -entry.amountCents, -entry.pointsDelta, `reversal: ${reason}`.slice(0, 200), user.id)
+    e.reversalOf = entry.id
+    audit(user.id, user.username, 'LEDGER_REVERSED', 'customer', String(c.id), `entry ${entry.id}: ${reason}`)
+    persist()
+    return customerDTO(c) as T
+  }
   // Store-credit top-up (credit.manage), prepaid money in, wallet grows,
   // ledger records it without touching the tab balance (server parity).
   const topupMatch = p.match(/^\/customers\/(\d+)\/credit-topup$/)
@@ -3010,6 +3066,23 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     return out as T
   }
 
+  if (m === 'GET' && p === '/system/health') {
+    requirePerm(perms, 'settings.manage')
+    // Demo parity: a healthy shop with an empty sync queue and no drift.
+    return {
+      schemaVersion: 26, migrationsApplied: 26,
+      indexesOk: true, indexesFound: ['idx_orders_status'], indexesMissing: [],
+      dbSizeBytes: 50000 + d.orders.length * 1200, journalMode: 'wal',
+      outboxPending: 0, outboxFailed: 0, deadLetters: 0,
+      customersChecked: d.customers.length, customerDriftCount: 0, customerDrift: [],
+      stockChecked: 0, stockDriftCount: 0, stockDrift: [], stockNoLedger: 0,
+      lastBackupFile: 'pos-backup-demo.db', lastBackupAt: nowIso(), backupCount: 3,
+    } as T
+  }
+  if (m === 'GET' && p === '/reports/disposals') {
+    requirePerm(perms, 'reports.view')
+    return [] as T
+  }
   throw new ApiError(404, 'not found: ' + m + ' ' + p)
 }
 

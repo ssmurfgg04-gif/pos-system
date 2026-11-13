@@ -15,6 +15,24 @@ import (
 	"posapp/internal/services"
 )
 
+// DisposalReport (reports.view, v1.7.0) — structured write-offs with loss
+// value. ?from=YYYY-MM-DD&to=YYYY-MM-DD (defaults: all time).
+func (h *H) DisposalReport(c *gin.Context) {
+	rows, err := h.svc(c).ListDisposals(c.Query("from"), c.Query("to"), 0)
+	if err != nil {
+		h.fail(c, 400, err.Error())
+		return
+	}
+	h.ok(c, rows)
+}
+
+// SystemHealth (settings.manage, v1.7.0) — the self-audit page: schema
+// version, index audit, sync queue depth, money/stock projection drift,
+// and the newest local backup. Read-only.
+func (h *H) SystemHealth(c *gin.Context) {
+	h.ok(c, h.svc(c).SystemHealth())
+}
+
 // ---- KRA monthly returns ----
 
 // MonthlyReport (reports.view) — one calendar month of VAT figures for the

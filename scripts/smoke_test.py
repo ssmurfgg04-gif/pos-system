@@ -4,7 +4,7 @@
 Usage: python3 scripts/smoke_test.py [base_url]
 Default base_url: http://127.0.0.1:3000
 
-84 checks against a running server seeded with demo data and
+115 checks against a running server seeded with demo data and
 mpesa_env=mock. The sweeper (5s interval) completes STK payments after the
 mock delay, exactly as it would against real Daraja stkpushquery.
 """
@@ -595,6 +595,71 @@ def main():
     st, body = req("POST", "/api/v1/customers", admin, body={
         "name": "Smoke Bulk Buyer", "phone": "0733999888", "priceTier": "wholesale"})
     check("customers: wholesale tier persists", st == 201 and data(body).get("priceTier") == "wholesale", f"{st} {body}")
+
+    # ---- v1.7.0 — the shopkeeper's ledger --------------------------------
+    # Line cost snapshot: a paid sale freezes cost, daily report shows margin.
+    st, body = req("POST", "/api/v1/products", admin, body={
+        "name": "Smoke Margin Item", "sku": "SMOKE-MARGIN", "priceCents": 25000,
+        "costCents": 10000, "stockQty": 50})
+    check("v1.7.0: product with cost created", st in (200, 201), f"{st} {body}")
+    margin_pid = data(body)["id"]
+    st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
+        "items": [{"productId": margin_pid, "qty": 3}], "paymentMethod": "cash"})
+    check("v1.7.0: checkout ok", st == 201, f"{st} {body}")
+    items = data(body).get("items") or []
+    check("v1.7.0: order line cost snapshot = 10000",
+          items and items[0].get("costCents") == 10000, f"{items[:1]}")
+    day = (data(body).get("createdAt") or "")[:10]
+    st, body = req("GET", f"/api/v1/reports/daily?date={day}", admin)
+    rep = data(body) if st == 200 else {}
+    check("v1.7.0: daily report cogs includes 30000",
+          rep.get("cogsCents", 0) >= 30000, f"cogs={rep.get('cogsCents')}")
+    check("v1.7.0: daily report grossProfit/margin present",
+          rep.get("grossProfitCents", 0) > 0 and rep.get("marginPct", 0) > 0,
+          f"profit={rep.get('grossProfitCents')} margin={rep.get('marginPct')}")
+
+    # Opening balance + soft reversal.
+    st, body = req("POST", "/api/v1/customers", admin, body={"name": "Smoke Opening"})
+    smoke_cust = data(body)["id"] if st in (200, 201) else 0
+    st, body = req("POST", f"/api/v1/customers/{smoke_cust}/opening-balance", admin,
+                   body={"amountCents": 5000, "note": "old book"})
+    check("v1.7.0: opening balance 200 + balance 5000",
+          st == 200 and data(body).get("balanceCents") == 5000, f"{st} {body}")
+    st, body = req("GET", f"/api/v1/customers/{smoke_cust}/ledger", admin)
+    rows = data(body) if st == 200 else []
+    opening = next((r for r in rows if r.get("kind") == "opening"), None)
+    check("v1.7.0: opening ledger row has balanceAfter=5000",
+          opening is not None and opening.get("balanceAfter") == 5000, f"{opening}")
+    st, body = req("POST", f"/api/v1/customers/{smoke_cust}/ledger/{opening['id']}/reverse", admin,
+                   body={"reason": "smoke test reversal"})
+    check("v1.7.0: reversal 200 + balance back to 0",
+          st == 200 and data(body).get("balanceCents") == 0, f"{st} {body}")
+    st, body = req("POST", f"/api/v1/customers/{smoke_cust}/ledger/{opening['id']}/reverse", admin,
+                   body={"reason": "double"})
+    check("v1.7.0: double reversal 4xx", st in (400, 409), f"{st}")
+
+    # Disposal: guarded deduction + report.
+    st, body = req("POST", f"/api/v1/products/{margin_pid}/dispose", admin,
+                   body={"qty": 4, "reason": "spoilt", "note": "smoke fridge died"})
+    check("v1.7.0: disposal 200 + stock 43",
+          st == 200 and data(body).get("stockQty") == 43, f"{st} {body}")
+    st, body = req("POST", f"/api/v1/products/{margin_pid}/dispose", admin,
+                   body={"qty": 999, "reason": "spoilt"})
+    check("v1.7.0: overstock disposal 4xx", st in (400, 409), f"{st}")
+    st, body = req("GET", "/api/v1/reports/disposals", admin)
+    dis = data(body) if st == 200 else []
+    row = next((r for r in dis if r.get("productName") == "Smoke Margin Item"), None)
+    check("v1.7.0: disposal report row loss=40000",
+          row is not None and row.get("lossCents") == 40000, f"{row}")
+
+    # System health self-audit.
+    st, body = req("GET", "/api/v1/system/health", admin)
+    h = data(body) if st == 200 else {}
+    check("v1.7.0: system health 200 schemaVersion=26 indexesOk",
+          st == 200 and h.get("schemaVersion") == 26 and h.get("indexesOk") is True,
+          f"{st} v={h.get('schemaVersion')} idx={h.get('indexesOk')}")
+    st, body = req("GET", "/api/v1/system/health", cashier)
+    check("v1.7.0: system health cashier 403", st == 403, f"{st}")
 
     # -- Summary ------------------------------------------------------------
     print(f"\n== {PASS} passed, {FAIL} failed ==")

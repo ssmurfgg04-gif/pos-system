@@ -149,6 +149,22 @@ function Daily() {
             </div>
           )}
 
+          {/* v1.7.0 — the day over cost: line cost snapshots turn the
+              takings into gross margin the shopkeeper can trust. */}
+          {data.cogsCents !== undefined && (
+            <div className="mt-4">
+              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Gross margin (paid sales)</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <Stat label="Cost of goods" value={formatMoney(data.cogsCents)} />
+                <Stat label="Gross profit" value={formatMoney(data.grossProfitCents ?? 0)} />
+                <Stat label="Margin" value={`${(data.marginPct ?? 0).toFixed(1)}%`} />
+                {(data.disposalCount ?? 0) > 0 && (
+                  <Stat label={`Write-offs (${data.disposalCount})`} value={formatMoney(data.disposalValueCents ?? 0)} warn />
+                )}
+              </div>
+            </div>
+          )}
+
           {/* v1.6.3 — shelf: what the stock room is worth + low-stock alerts. */}
           {(data.stockValueCents !== undefined || data.lowStockCount !== undefined) && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
@@ -278,6 +294,11 @@ function Daily() {
                     <span className="w-5 text-ink-subtle tabular font-bold">{i + 1}</span>
                     <span className="font-semibold text-ink flex-1 truncate">{tp.name}</span>
                     <span className="text-ink-muted tabular">{tp.qty} sold</span>
+                    {tp.profitCents !== undefined && (
+                      <span className={`tabular text-[12px] font-bold ${tp.profitCents >= 0 ? 'text-paid-text' : 'text-danger-text'}`} title="Sales − cost of goods">
+                        {tp.profitCents >= 0 ? '+' : ''}{centsToAmount(tp.profitCents)}
+                      </span>
+                    )}
                     <span className="font-bold tabular text-ink min-w-24 text-right">{centsToAmount(tp.salesCents)}</span>
                   </div>
                 ))}
@@ -387,6 +408,18 @@ function Monthly() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
               {data.returnsCents !== undefined && <Stat label="Returns" value={formatMoney(data.returnsCents)} />}
               {data.expensesCents !== undefined && <Stat label="Expenses" value={formatMoney(data.expensesCents)} warn={data.expensesCents > 0} />}
+            </div>
+          )}
+
+          {/* v1.7.0 — the month over cost: gross margin + write-offs. */}
+          {data.cogsCents !== undefined && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+              <Stat label="Cost of goods" value={formatMoney(data.cogsCents)} />
+              <Stat label="Gross profit" value={formatMoney(data.grossProfitCents ?? 0)} />
+              <Stat label="Margin" value={`${(data.marginPct ?? 0).toFixed(1)}%`} />
+              {data.disposalValueCents !== undefined && data.disposalValueCents > 0 && (
+                <Stat label={`Write-offs (${data.disposalCount})`} value={formatMoney(data.disposalValueCents)} warn />
+              )}
             </div>
           )}
 

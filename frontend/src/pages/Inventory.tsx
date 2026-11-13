@@ -69,6 +69,7 @@ export function Inventory() {
   const [catFilter, setCatFilter] = useState('all')
   const [editing, setEditing] = useState<Product | 'new' | null>(null)
   const [stockFor, setStockFor] = useState<Product | null>(null)
+  const [disposeFor, setDisposeFor] = useState<Product | null>(null)
   // v1.6.3 stock ledger — the per-product movement history (read-only).
   const [historyFor, setHistoryFor] = useState<Product | null>(null)
   const [movements, setMovements] = useState<StockMovement[] | null>(null)
@@ -393,6 +394,12 @@ export function Inventory() {
                             Stock
                           </Button>
                         )}
+                        {p.trackStock && p.active && (
+                          <Button size="sm" variant="ghost" onClick={() => setDisposeFor(p)} title="Record a loss — expired, spoilt, lost or damaged">
+                            <Trash2 size={14} strokeWidth={2.5} aria-hidden />
+                            Loss
+                          </Button>
+                        )}
                         <Button size="sm" variant="ghost" onClick={() => setEditing(p)} disabled={!p.active}>Edit</Button>
                         {p.active ? (
                           <Button
@@ -489,6 +496,7 @@ export function Inventory() {
       {editing && <ProductModal product={editing === 'new' ? null : editing} categories={categories} onClose={() => setEditing(null)} onSaved={load} />}
 
       {stockFor && <StockModal product={stockFor} onClose={() => setStockFor(null)} onSaved={load} />}
+      {disposeFor && <DisposeModal product={disposeFor} onClose={() => setDisposeFor(null)} onSaved={load} />}
 
       {/* v1.6.3 stock ledger — same shape as the Customers page's ledger
           modal: spinner → empty state → table. Rendered newest-first. */}
@@ -910,6 +918,79 @@ function ProductModal({
           </p>
         )}
         {error && <p role="alert" className="sm:col-span-2 text-danger-text text-sm font-semibold">{error}</p>}
+      </div>
+    </Modal>
+  )
+}
+
+
+// DisposeModal (v1.7.0) — structured loss recording, the friend's SmartPOS
+// disposal module: expired / spoilt / lost / damaged / other. The deduction
+// is guarded (never below zero) and lands in the stock ledger as DISPOSAL
+// with the loss value computable from product cost in the reports.
+const DISPOSE_REASONS = [
+  { value: 'expired', label: 'Expired' },
+  { value: 'spoilt', label: 'Spoilt / damaged goods' },
+  { value: 'lost', label: 'Lost / missing' },
+  { value: 'damaged', label: 'Physically damaged' },
+  { value: 'other', label: 'Other' },
+] as const
+
+function DisposeModal({ product, onClose, onSaved }: { product: Product; onClose: () => void; onSaved: () => void }) {
+  const [qty, setQty] = useState('')
+  const [reason, setReason] = useState('expired')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const n = parseInt(qty, 10)
+  const valid = !isNaN(n) && n > 0 && n <= product.stockQty
+
+  const save = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.post(`/api/v1/products/${product.id}/dispose`, {
+        qty: n, reason, note: note.trim() || undefined,
+      })
+      toast.success('Loss recorded', `${product.name}: ${n} units (${reason})`)
+      onSaved()
+      onClose()
+    } catch (e: any) {
+      setError(e?.message || 'Disposal failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Record loss, ${product.name}`} size="sm" footer={
+      <>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={save} disabled={busy || !valid}>
+          {busy ? <Spinner className="border-t-brand-ink" /> : 'Record loss'}
+        </Button>
+      </>
+    }>
+      <div className="space-y-3">
+        <p className="text-sm text-ink-muted">
+          Current stock: <strong className="text-ink tabular">{product.stockQty}</strong>
+          {(product.costCents ?? 0) > 0 && n > 0 && (
+            <> · loss value ≈ <strong className="text-danger-text tabular">{centsToAmount(n * product.costCents)}</strong></>
+          )}
+        </p>
+        <Field label="Quantity written off">
+          <Input value={qty} onChange={(e) => setQty(e.target.value.replace(/\D/g, ''))} inputMode="numeric" autoFocus placeholder="0" />
+        </Field>
+        <Field label="Reason" hint="Shows in the disposal report so losses can be explained, not guessed.">
+          <Select value={reason} onChange={(e) => setReason(e.target.value)}>
+            {DISPOSE_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </Select>
+        </Field>
+        <Field label="Note (optional)" hint="e.g. fridge died overnight, torn packaging, suspected theft.">
+          <Input value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
+        {error && <p className="text-[12px] font-bold text-danger-text">{error}</p>}
       </div>
     </Modal>
   )

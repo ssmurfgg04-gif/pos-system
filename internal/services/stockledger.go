@@ -118,3 +118,57 @@ func scanMovements(rows *sql.Rows) ([]models.StockMovement, error) {
 	}
 	return out, rows.Err()
 }
+
+// DisposeProduct (v1.7.0) writes stock off the shelf with a structured
+// reason — the friend's SmartPOS disposal module (expired / spoilt / lost /
+// damaged / other) with the loss value computable at report time from the
+// product's cost. The deduction is guarded (never below zero) and lands in
+// the ledger like every other stock move.
+func (s *Service) DisposeProduct(productID, qty int64, reason, note string, p *auth.Principal) (map[string]any, error) {
+	if qty <= 0 {
+		return nil, fmt.Errorf("%w: disposal quantity must be positive", ErrInvalidInput)
+	}
+	switch reason {
+	case "expired", "spoilt", "lost", "damaged", "other":
+	default:
+		return nil, fmt.Errorf("%w: invalid disposal reason %q (expired|spoilt|lost|damaged|other)", ErrInvalidInput, reason)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var track int
+	if err := tx.QueryRow(s.db.Rebind(`SELECT COALESCE(track_stock,1) FROM products WHERE id = ?`), productID).Scan(&track); err != nil {
+		return nil, fmt.Errorf("product %d: %w", productID, err)
+	}
+	if track == 1 {
+		gres, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty - ?, updated_at = ? WHERE id = ? AND stock_qty >= ?`),
+			qty, nowStamp(), productID, qty)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := gres.RowsAffected(); n != 1 {
+			return nil, fmt.Errorf("%w: not enough stock to dispose (requested %d)", ErrInsufficientStock, qty)
+		}
+		if err := recordStockMoveTx(s, tx, productID, -qty, models.MoveDisposal, reason, truncStr(note, 200), p.ID, p.Username); err != nil {
+			return nil, err
+		}
+	} else {
+		// Untracked product: nothing to deduct, still record the event so
+		// the report shows the loss claim.
+		if err := recordStockMoveTx(s, tx, productID, 0, models.MoveDisposal, reason, truncStr("untracked: "+note, 200), p.ID, p.Username); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	s.EmitProduct(productID, true)
+	s.Audit(p.ID, p.Username, "STOCK_DISPOSAL", "product", fmt.Sprintf("%d", productID), fmt.Sprintf("%d x %s: %s", qty, reason, note))
+	var stock int64
+	if err := s.db.QueryRow(s.db.Rebind(`SELECT stock_qty FROM products WHERE id = ?`), productID).Scan(&stock); err != nil {
+		return nil, err
+	}
+	return map[string]any{"id": productID, "stockQty": stock, "disposed": qty, "reason": reason}, nil
+}

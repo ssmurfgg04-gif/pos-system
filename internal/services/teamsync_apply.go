@@ -423,20 +423,25 @@ func (s *Service) applyLedger(payload json.RawMessage) error {
 	} else if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(s.db.Rebind(`
-                INSERT INTO customer_ledger (customer_id, order_id, kind, amount_cents, points_delta, note, created_by, created_at)
-                VALUES (?, 0, ?, ?, ?, ?, 0, ?)`),
-		custID, le.Kind, le.Amount, le.Points, le.Note, le.CreatedAt)
-	if err != nil {
-		return err
-	}
+	// v1.7.0: apply the money first, then freeze the resulting balance
+	// into the ledger row (balance_after), same as the local writers.
 	if le.Kind == models.LedgerCreditTopup || le.Kind == models.LedgerCreditRedeem || le.Kind == models.LedgerRefund {
-		_, err = s.db.Exec(s.db.Rebind(`UPDATE customers SET store_credit_cents = store_credit_cents + ?, updated_at = ? WHERE id = ?`),
-			le.Amount, nowStamp(), custID)
+		if _, err = s.db.Exec(s.db.Rebind(`UPDATE customers SET store_credit_cents = store_credit_cents + ?, updated_at = ? WHERE id = ?`),
+			le.Amount, nowStamp(), custID); err != nil {
+			return err
+		}
+	} else if _, err = s.db.Exec(s.db.Rebind(`UPDATE customers SET balance_cents = balance_cents + ?, loyalty_points = loyalty_points + ?, updated_at = ? WHERE id = ?`),
+		le.Amount, le.Points, nowStamp(), custID); err != nil {
 		return err
 	}
-	_, err = s.db.Exec(s.db.Rebind(`UPDATE customers SET balance_cents = balance_cents + ?, loyalty_points = loyalty_points + ?, updated_at = ? WHERE id = ?`),
-		le.Amount, le.Points, nowStamp(), custID)
+	var balAfter int64
+	if err = s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(balance_cents,0) FROM customers WHERE id = ?`), custID).Scan(&balAfter); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(s.db.Rebind(`
+                INSERT INTO customer_ledger (customer_id, order_id, kind, amount_cents, points_delta, note, created_by, created_at, balance_after)
+                VALUES (?, 0, ?, ?, ?, ?, 0, ?, ?)`),
+		custID, le.Kind, le.Amount, le.Points, le.Note, le.CreatedAt, balAfter)
 	return err
 }
 
@@ -469,6 +474,7 @@ type orderEvent struct {
 		Qty       int    `json:"qty"`
 		UnitPrice int64  `json:"unitPriceCents"`
 		LineTotal int64  `json:"lineTotalCents"`
+		CostCents int64  `json:"costCents"` // v1.7.0: unit cost snapshot at sale time
 	} `json:"items"`
 	Payments []struct {
 		Method      string `json:"method"`
@@ -569,9 +575,9 @@ func (s *Service) applyOrder(payload json.RawMessage) error {
 			s.db.QueryRow(s.db.Rebind(`SELECT id FROM products WHERE sku = ?`), it.SKU).Scan(&pid)
 		}
 		if _, err := tx.Exec(s.db.Rebind(`
-                        INSERT INTO order_items (order_id, product_id, name, sku, qty, unit_price_cents, line_total_cents)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)`),
-			orderID, pid, it.Name, it.SKU, it.Qty, it.UnitPrice, it.LineTotal); err != nil {
+                        INSERT INTO order_items (order_id, product_id, name, sku, qty, unit_price_cents, line_total_cents, cost_cents)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+			orderID, pid, it.Name, it.SKU, it.Qty, it.UnitPrice, it.LineTotal, it.CostCents); err != nil {
 			return err
 		}
 	}

@@ -24,6 +24,7 @@ const KIND_META: Record<LedgerEntry['kind'], { label: string; cls?: string }> = 
   charge: { label: 'Charge' },
   payment: { label: 'Payment' },
   adjustment: { label: 'Adjustment' },
+  opening: { label: 'Opening balance', cls: 'bg-pending-bg text-pending-text' },
   loyalty: { label: 'Loyalty' },
   credit_topup: { label: 'Credit top-up', cls: 'bg-paid-bg text-paid-text' },
   credit_redeem: { label: 'Credit redeemed', cls: 'bg-pending-bg text-pending-text' },
@@ -38,6 +39,8 @@ export function Customers() {
   const [editing, setEditing] = useState<CustomerRow | 'new' | null>(null)
   const [ledgerFor, setLedgerFor] = useState<CustomerRow | null>(null)
   const [ledger, setLedger] = useState<LedgerEntry[] | null>(null)
+  const [openingFor, setOpeningFor] = useState<CustomerRow | null>(null)
+  const [reverseFor, setReverseFor] = useState<LedgerEntry | null>(null)
   const [payFor, setPayFor] = useState<CustomerRow | null>(null)
   const [creditFor, setCreditFor] = useState<CustomerRow | null>(null)
   const [redeemFor, setRedeemFor] = useState<CustomerRow | null>(null)
@@ -66,6 +69,8 @@ export function Customers() {
       toast.error('History failed', e?.message)
     }
   }
+
+  const reversedIds = new Set((ledger ?? []).filter((e) => e.reversalOf).map((e) => e.reversalOf as number))
 
   const openLedger = async (c: Customer) => {
     setLedgerFor(c)
@@ -126,6 +131,7 @@ export function Customers() {
                     <Button size="sm" variant="ghost" onClick={() => openLedger(c)}>Ledger</Button>
                     {canCredit && <Button size="sm" variant="ghost" onClick={() => setCreditFor(c)}>Top up credit</Button>}
                     {canCredit && <Button size="sm" variant="ghost" onClick={() => setRedeemFor(c)}>Redeem gift card</Button>}
+                    {manage && <Button size="sm" variant="ghost" onClick={() => setOpeningFor(c)}>Opening balance</Button>}
                     {c.balanceCents > 0 && <Button size="sm" variant="ghost" onClick={() => setPayFor(c)}>Pay</Button>}
                     {manage && <Button size="sm" variant="ghost" onClick={() => setEditing(c)}>Edit</Button>}
                   </span>
@@ -167,12 +173,13 @@ export function Customers() {
         ) : ledger.length === 0 ? (
           <EmptyState icon={<BookUser size={24} strokeWidth={2.25} />} title="No entries yet" />
         ) : (
-          <Table head={['When', 'Kind', 'Amount', 'Points', 'Note']}>
+          <Table head={['When', 'Kind', 'Amount', 'Balance', 'Note', '']}>
             {ledger.map((e) => {
               const kind = KIND_META[e.kind] ?? { label: e.kind }
               const isCredit = e.kind === 'credit_topup' || e.kind === 'credit_redeem'
+              const cancelled = reversedIds.has(e.id)
               return (
-                <tr key={e.id}>
+                <tr key={e.id} className={cancelled ? 'opacity-50' : ''}>
                   <td className="px-3 py-2 text-[12px] text-ink-subtle">{e.createdAt}</td>
                   <td className="px-3 py-2">
                     {kind.cls ? (
@@ -182,16 +189,38 @@ export function Customers() {
                     ) : (
                       <span className="text-[12px] font-bold text-ink">{kind.label}</span>
                     )}
+                    {e.reversalOf ? <span className="ml-1 text-[10px] text-ink-subtle">reversal</span> : null}
                   </td>
                   <td className={`px-3 py-2 text-[12px] font-bold ${isCredit ? kind.cls : e.amountCents > 0 ? 'text-danger-text' : 'text-paid-text'}`}>
                     {e.amountCents > 0 ? '+' : ''}{formatMoney(e.amountCents)}
                   </td>
-                  <td className="px-3 py-2 text-[12px] text-ink-muted">{e.pointsDelta > 0 ? `+${e.pointsDelta}` : ', '}</td>
+                  <td className="px-3 py-2 text-[12px] font-bold text-ink-muted">
+                    {e.balanceAfter !== undefined ? formatMoney(e.balanceAfter) : '—'}
+                  </td>
                   <td className="px-3 py-2 text-[12px] text-ink-muted max-w-48 truncate">{e.note}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    {manage && e.orderId === 0 && !cancelled && !e.reversalOf && (
+                      <Button size="sm" variant="ghost" onClick={() => setReverseFor(e)}>Reverse</Button>
+                    )}
+                  </td>
                 </tr>
               )
             })}
           </Table>
+        )}
+      </Modal>
+
+      <Modal open={openingFor !== null} onClose={() => setOpeningFor(null)} title={openingFor ? `Opening balance, ${openingFor.name}` : 'Opening balance'} size="sm">
+        {openingFor && <OpeningBalanceForm customer={openingFor} onDone={() => { setOpeningFor(null); load() }} />}
+      </Modal>
+
+      <Modal open={reverseFor !== null} onClose={() => setReverseFor(null)} title="Reverse ledger entry" size="sm">
+        {reverseFor && ledgerFor && (
+          <ReverseForm
+            customer={ledgerFor}
+            entry={reverseFor}
+            onDone={() => { setReverseFor(null); openLedger(ledgerFor); load() }}
+          />
         )}
       </Modal>
 
@@ -502,6 +531,92 @@ function GiftCardRedeemForm({ initial, onDone }: { initial: CustomerRow; onDone:
       )}
       <Button variant="primary" size="lg" className="w-full" onClick={redeem} disabled={busy || !customer || !code.trim()}>
         {busy ? <Spinner /> : 'Redeem to store credit'}
+      </Button>
+    </div>
+  )
+}
+
+// v1.7.0 — opening balance: the debt a customer carried in when the shop
+// joined, recorded as a first-class ledger row (never a bare number —
+// bare numbers can't be receipted, matched, or disputed).
+function OpeningBalanceForm({ customer, onDone }: { customer: CustomerRow; onDone: () => void }) {
+  const [amount, setAmount] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const save = async () => {
+    const cents = Math.round(Number(amount || '0') * 100)
+    if (cents === 0) {
+      toast.error('Enter an amount (use a minus for money the customer overpaid)')
+      return
+    }
+    setBusy(true)
+    try {
+      await api.post<Customer>(`/api/v1/customers/${customer.id}/opening-balance`, { amountCents: cents, note: note.trim() || 'opening balance' })
+      toast.success('Opening balance recorded', `${customer.name}, ${formatMoney(cents)}`)
+      onDone()
+    } catch (e: any) {
+      toast.error('Opening balance failed', e?.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[13px] text-ink-muted">
+        Debt the customer already owes from before the shop started using LedgerPOS
+        (an old notebook balance). Positive = they owe the shop. It lands in the
+        ledger like any other charge and can be receipted and reversed.
+      </p>
+      <Field label="Amount owed (KES)">
+        <Input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.-]/g, ''))} inputMode="decimal" autoFocus placeholder="0.00" />
+      </Field>
+      <Field label="Note (optional)" hint="e.g. old book balance, carried from October.">
+        <Textarea value={note} onChange={(e) => setNote(e.target.value)} />
+      </Field>
+      <Button variant="primary" size="lg" className="w-full" onClick={save} disabled={busy}>
+        {busy ? <Spinner /> : 'Record opening balance'}
+      </Button>
+    </div>
+  )
+}
+
+// v1.7.0 — soft reversal: cancels one manual ledger entry with a mirrored
+// row; the original is never edited or deleted.
+function ReverseForm({ customer, entry, onDone }: { customer: CustomerRow; entry: LedgerEntry; onDone: () => void }) {
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const reverse = async () => {
+    if (!reason.trim()) {
+      toast.error('A reversal reason is required')
+      return
+    }
+    setBusy(true)
+    try {
+      await api.post<Customer>(`/api/v1/customers/${customer.id}/ledger/${entry.id}/reverse`, { reason: reason.trim() })
+      toast.success('Entry reversed', formatMoney(-entry.amountCents))
+      onDone()
+    } catch (e: any) {
+      toast.error('Reversal failed', e?.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[13px] text-ink-muted">
+        Cancels <strong className="text-ink">{entry.kind}</strong> of{' '}
+        <strong className="text-ink">{formatMoney(entry.amountCents)}</strong> with a mirrored
+        entry. The original row stays in the ledger for the audit trail.
+      </p>
+      <Field label="Reason (required)" hint="e.g. entered twice, wrong amount, customer paid the old book instead.">
+        <Textarea value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
+      </Field>
+      <Button variant="primary" size="lg" className="w-full" onClick={reverse} disabled={busy || !reason.trim()}>
+        {busy ? <Spinner /> : 'Reverse entry'}
       </Button>
     </div>
   )

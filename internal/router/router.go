@@ -136,6 +136,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	prod.PUT("/products/:id", h.UpdateProduct)
 	prod.DELETE("/products/:id", h.DeactivateProduct)
 	prod.POST("/products/:id/adjust-stock", h.AdjustStock)
+	prod.POST("/products/:id/dispose", h.DisposeStock)
 	prod.POST("/products/:id/image", h.UploadProductImage)
 	prod.DELETE("/products/:id/image", h.DeleteProductImage)
 	prod.POST("/products/import", h.ProductsImport)
@@ -185,6 +186,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	// consolidated summary (?shop=all sums every shop the user
 	// belongs to, with per-shop rows).
 	authd.GET("/reports/daily", perm("reports.view"), h.ConsolidatedDailyReport)
+	authd.GET("/reports/disposals", perm("reports.view"), h.DisposalReport)
 	authd.GET("/reports/monthly", perm("reports.view"), h.MonthlyReport)
 	authd.GET("/reports/monthly.csv", perm("reports.view"), h.MonthlyReportCSV)
 	authd.POST("/shifts/open", perm("shifts.manage"), h.OpenShift)
@@ -221,6 +223,8 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	custm.POST("/customers", h.CreateCustomer)
 	custm.PUT("/customers/:id", h.UpdateCustomer)
 	custm.POST("/customers/:id/adjustments", h.RecordCustomerAdjustment)
+	custm.POST("/customers/:id/opening-balance", h.AddOpeningBalance)
+	custm.POST("/customers/:id/ledger/:entryId/reverse", h.ReverseLedgerEntry)
 	custm.POST("/customers/:id/credit-topup", h.TopUpCredit)
 	// Walk-in till payments ride pos.sell: cashiers take them all day.
 	authd.POST("/customers/:id/payments", perm("pos.sell"), h.RecordCustomerPayment)
@@ -290,6 +294,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	authd.GET("/audit", perm("audit.view"), h.ListAudit)
 	authd.POST("/system/backup", perm("settings.manage"), h.RunBackup)
 	authd.GET("/system/backups", perm("settings.manage"), h.ListBackups)
+	authd.GET("/system/health", perm("settings.manage"), h.SystemHealth)
 	authd.GET("/system/offsite", perm("settings.manage"), h.OffsiteStatus)
 	authd.GET("/system/update", perm("settings.manage"), h.UpdateStatus)
 	authd.POST("/system/update/refresh", perm("settings.manage"), h.UpdateRefresh)

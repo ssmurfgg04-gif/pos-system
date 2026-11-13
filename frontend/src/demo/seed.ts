@@ -132,12 +132,16 @@ export interface DemoLedgerEntry {
   id: number
   customerId: number
   orderId: number
-  kind: 'charge' | 'payment' | 'adjustment' | 'loyalty'
+  kind: 'charge' | 'payment' | 'adjustment' | 'loyalty' | 'opening'
   amountCents: number
   pointsDelta: number
   note: string
   createdBy: number
   createdAt: string
+  /** v1.7.0: balance snapshot right after this row (server parity). */
+  balanceAfter?: number
+  /** v1.7.0: non-zero = this row cancels that entry. */
+  reversalOf?: number
 }
 
 export interface DemoPayment {

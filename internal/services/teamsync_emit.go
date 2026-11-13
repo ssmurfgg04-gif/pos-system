@@ -41,6 +41,7 @@ func (s *Service) EmitOrder(orderID int64) {
 			Qty       int    `json:"qty"`
 			UnitPrice int64  `json:"unitPriceCents"`
 			LineTotal int64  `json:"lineTotalCents"`
+			CostCents int64  `json:"costCents"` // v1.7.0: unit cost snapshot at sale time
 		}{},
 		Payments: []struct {
 			Method      string `json:"method"`
@@ -59,7 +60,8 @@ func (s *Service) EmitOrder(orderID int64) {
 			Qty       int    `json:"qty"`
 			UnitPrice int64  `json:"unitPriceCents"`
 			LineTotal int64  `json:"lineTotalCents"`
-		}{it.SKU, it.Name, it.Qty, it.UnitPriceCents, it.LineTotalCents})
+			CostCents int64  `json:"costCents"`
+		}{it.SKU, it.Name, it.Qty, it.UnitPriceCents, it.LineTotalCents, it.CostCents})
 	}
 	for _, pm := range order.Payments {
 		oe.Payments = append(oe.Payments, struct {

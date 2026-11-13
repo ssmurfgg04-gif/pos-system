@@ -188,6 +188,7 @@ type OrderItem struct {
 	Qty            int    `json:"qty"`
 	UnitPriceCents int64  `json:"unitPriceCents"`
 	LineTotalCents int64  `json:"lineTotalCents"`
+	CostCents      int64  `json:"costCents"` // v1.7.0: unit cost snapshot at sale time (0 = pre-v26 line)
 }
 
 type Payment struct {
@@ -303,6 +304,7 @@ const (
 	LedgerPayment = "payment"
 	LedgerAdjust  = "adjustment"
 	LedgerLoyalty = "loyalty"
+	LedgerOpening = "opening" // v1.7.0: debt carried in when the shop joins (SmartPOS opening-balance pattern)
 )
 
 type Customer struct {
@@ -322,15 +324,17 @@ type Customer struct {
 }
 
 type LedgerEntry struct {
-	ID          int64  `json:"id"`
-	CustomerID  int64  `json:"customerId"`
-	OrderID     int64  `json:"orderId"`
-	Kind        string `json:"kind"`
-	AmountCents int64  `json:"amountCents"` // signed: +charge, -payment
-	PointsDelta int64  `json:"pointsDelta"`
-	Note        string `json:"note"`
-	CreatedBy   int64  `json:"createdBy"`
-	CreatedAt   string `json:"createdAt"`
+	ID           int64  `json:"id"`
+	CustomerID   int64  `json:"customerId"`
+	OrderID      int64  `json:"orderId"`
+	Kind         string `json:"kind"`
+	AmountCents  int64  `json:"amountCents"` // signed: +charge, -payment
+	PointsDelta  int64  `json:"pointsDelta"`
+	Note         string `json:"note"`
+	CreatedBy    int64  `json:"createdBy"`
+	CreatedAt    string `json:"createdAt"`
+	BalanceAfter *int64 `json:"balanceAfter,omitempty"` // v1.7.0: what the customer owed right after this row (nil = pre-v26)
+	ReversalOf   int64  `json:"reversalOf,omitempty"`   // v1.7.0: non-zero = this row cancels that entry
 }
 
 // ---- Suppliers & stock-in ----
@@ -894,6 +898,7 @@ const (
 	MoveCount         = "COUNT"          // stock-take apply
 	MovePOReceive     = "PO_RECEIVE"     // supplier goods-in
 	MoveReturnRestock = "RETURN_RESTOCK" // customer return puts stock back
+	MoveDisposal      = "DISPOSAL"       // v1.7.0: written-off stock (expired/spoilt/lost/damaged)
 )
 
 // StockMovement is one audited stock change.
