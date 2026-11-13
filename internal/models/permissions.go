@@ -19,6 +19,7 @@ var PermissionCatalog = []PermissionDef{
 	{Key: "orders.assign", Group: "Selling", Label: "Assign and delegate jobs to staff"},
 	{Key: "orders.perform", Group: "Selling", Label: "Work on jobs assigned to you"},
 	{Key: "orders.notify", Group: "Selling", Label: "Contact customers (WhatsApp, ready pickups)"},
+	{Key: "returns.manage", Group: "Selling", Label: "Process returns and refunds"},
 	{Key: "customers.view", Group: "Selling", Label: "View customers and tabs"},
 	{Key: "customers.manage", Group: "Selling", Label: "Manage customers, credit and tabs"},
 	{Key: "payments.manual", Group: "Payments", Label: "Enter manual M-Pesa receipt codes"},
@@ -31,6 +32,8 @@ var PermissionCatalog = []PermissionDef{
 	{Key: "suppliers.view", Group: "Catalog", Label: "View suppliers and purchase orders"},
 	{Key: "suppliers.manage", Group: "Catalog", Label: "Manage suppliers, receive stock, stock takes"},
 	{Key: "reports.view", Group: "Insights", Label: "View sales reports"},
+	{Key: "expenses.view", Group: "Insights", Label: "View expenses"},
+	{Key: "expenses.manage", Group: "Insights", Label: "Record and manage expenses"},
 	{Key: "orders.view.all", Group: "Insights", Label: "Browse all individual sales (every till and cashier)"},
 	{Key: "shifts.manage", Group: "Shifts", Label: "Open and close shifts"},
 	{Key: "design.view", Group: "Production", Label: "View design board"},
@@ -92,6 +95,7 @@ var SeededRolePermissions = map[string][]string{
 		"customers.view", "customers.manage",
 		"payments.manual", "payments.apply_discount", "loyalty.redeem", "credit.manage",
 		"products.view", "reports.view", "shifts.manage",
+		"returns.manage", "expenses.view",
 		"design.view", "design.manage",
 	},
 	"Branding": {
@@ -118,7 +122,10 @@ var SeededRolePermissions = map[string][]string{
 		// v1.6.2: orders.notify joins the till — contacting a customer
 		// about their sale/receipt is cashier work (the cyber-café
 		// machines complained the WhatsApp interface was admin-only).
+		// v1.6.3: returns.manage + expenses.view — the counter serves a
+		// customer with a receipt and records the day's petty spend.
 		"pos.sell", "pos.void", "orders.view", "orders.notify", "payments.manual",
 		"shifts.manage", "customers.view", "quotes.view",
+		"returns.manage", "expenses.view",
 	},
 }

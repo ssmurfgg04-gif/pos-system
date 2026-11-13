@@ -3,6 +3,48 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.6.3 — Shop brain: stock ledger, returns, expenses, wholesale prices
+
+A deep study of a friend's Kenyan SmartPOS (its full 54-table MySQL dump,
+26 page snapshots, screenshots) plus the big open-source POS systems
+(OSPOS, Tuma's M-Pesa fork, Store-POS) fed this release. The theme: the
+database stops being a counter and becomes an accountant.
+
+- **Stock ledger (the headline).** Every stock change — sale, void
+  restore, manual adjust, PO goods-in, stock-take apply, customer
+  return — now writes an append-only `stock_movements` row: kind, signed
+  delta, balance after, who, which till, what referenced it. Inventory
+  got a **History** button per product (the full audit trail), and the
+  ledger starts from an OPENING anchor per product so day-one stock is
+  auditable. Wrong numbers can now be explained, not just corrected.
+- **Returns & refunds.** The Orders page gained a **Return** action on
+  paid sales: pick lines and quantities, choose refund by cash or store
+  credit (with the customer's account), give a reason, and the till
+  mints a `RET-` document, restocks the shelf, and records the refund.
+  Partial returns are fine — each line tracks what is still returnable,
+  over-returns are refused with a readable message.
+- **Expenses.** The money side of the day finally lives in the till:
+  seeded types (Rent, Electricity, Internet/Airtime, Transport,
+  Salaries, Supplies, Maintenance, Other), an `EXP-`-numbered log, a new
+  **Expenses** page, and the daily/monthly reports now show money out,
+  money back (returns), **net sales**, stock value on the shelf, and
+  low-stock alert counts.
+- **Wholesale prices.** Products can carry a wholesale price, customers
+  a price tier; pick a wholesale customer at the till and the cart
+  auto-prices (manual overrides still win). Inventory marks low stock
+  per product (its own threshold, or the shop default).
+- **Under the hood:** 11 hot-path indexes (orders, items, payments,
+  ledger, audit), returns/expenses/team-sync over the same encrypted
+  Supabase events as everything else (older tills skip unknown events
+  gracefully), new permissions (`returns.manage`, `expenses.view`,
+  `expenses.manage`) unioned into the seeded roles by migration, and the
+  smoke suite grew to 101 checks — the whole returns/expenses/ledger
+  surface is exercised against a live server on every release.
+
+Schema is at **v25** (v22 ledger + indexes, v23 returns, v24 expenses,
+v25 wholesale tiers). Migrations are additive and idempotent; a till can
+be updated one device at a time as always.
+
 ## v1.6.2 — WhatsApp opens WhatsApp: the app, the contact, every till
 
 Customer complaints on v1.6.1, fixed one by one:

@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import { api, Customer, LedgerEntry, OrderSummary } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { formatMoney } from '../lib/money'
-import { Button, Card, EmptyState, Field, Input, Modal, Spinner, StatusPill, Table, Textarea } from '../components/ui'
+import { Button, Card, EmptyState, Field, Input, Modal, Select, Spinner, StatusPill, Table, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
 import { BookUser, Ticket, ReceiptText } from 'lucide-react'
 
@@ -97,7 +97,14 @@ export function Customers() {
             {customers.map((c) => (
               <tr key={c.id} className={c.active ? '' : 'opacity-50'}>
                 <td className="px-3 py-2.5">
-                  <p className="font-bold text-ink text-[13px]">{c.name}</p>
+                  <p className="font-bold text-ink text-[13px]">
+                    {c.name}
+                    {c.priceTier === 'wholesale' && (
+                      <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-pill bg-pending-bg text-pending-text text-[10px] font-bold align-middle">
+                        WHOLESALE
+                      </span>
+                    )}
+                  </p>
                   <p className="text-[11px] text-ink-subtle">{c.phone || 'no phone'}</p>
                 </td>
                 <td className={`px-3 py-2.5 text-[13px] font-bold ${c.balanceCents > 0 ? 'text-danger-text' : 'text-ink-muted'}`}>
@@ -229,6 +236,9 @@ function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: (
   const [email, setEmail] = useState(initial?.email || '')
   const [notes, setNotes] = useState(initial?.notes || '')
   const [limit, setLimit] = useState(initial ? String(initial.creditLimitCents / 100) : '')
+  // v1.6.3: retail is the default tier — older backends that don't send
+  // priceTier come back undefined and stay retail.
+  const [tier, setTier] = useState<'retail' | 'wholesale'>(initial?.priceTier === 'wholesale' ? 'wholesale' : 'retail')
   const [active, setActive] = useState(initial?.active ?? true)
   const [busy, setBusy] = useState(false)
 
@@ -245,6 +255,7 @@ function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: (
         email: email.trim(),
         notes: notes.trim(),
         creditLimitCents: Math.max(0, Math.round(Number(limit || '0') * 100)),
+        priceTier: tier,
         ...(initial ? { active } : {}),
       }
       if (initial) {
@@ -278,6 +289,12 @@ function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: (
       </Field>
       <Field label="Credit limit (KES, advisory)" hint="Just a note for the counter — tab charges are allowed for every customer regardless of this number.">
         <Input value={limit} onChange={(e) => setLimit(e.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" placeholder="0" />
+      </Field>
+      <Field label="Price tier" hint="Wholesale customers auto-get each product's wholesale price at the till.">
+        <Select value={tier} onChange={(e) => setTier(e.target.value as 'retail' | 'wholesale')}>
+          <option value="retail">Retail prices</option>
+          <option value="wholesale">Wholesale prices</option>
+        </Select>
       </Field>
       {initial && (
         <label className="flex items-center gap-2 text-[13px] font-semibold text-ink">

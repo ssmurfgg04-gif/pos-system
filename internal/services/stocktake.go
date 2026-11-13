@@ -184,6 +184,14 @@ func (s *Service) CompleteStockCount(p *auth.Principal, countID int64, apply boo
 				tx.Rollback()
 				return nil, err
 			}
+			newBal := l.counted.Int64
+			if newBal < 0 {
+				newBal = 0
+			}
+			if err := recordStockMoveTx(s, tx, l.productID, newBal-int64(l.system), models.MoveCount, number, "", p.ID, p.Username); err != nil {
+				tx.Rollback()
+				return nil, err
+			}
 			adjusted = append(adjusted, l.productID)
 		}
 	}

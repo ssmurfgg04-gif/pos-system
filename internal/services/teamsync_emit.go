@@ -5,6 +5,10 @@
 
 package services
 
+import (
+	"posapp/internal/models"
+)
+
 // ---- Emit payload builders ----
 
 // EmitOrder builds and queues the full order event (checkout + completions).
@@ -89,22 +93,25 @@ func (s *Service) EmitVoid(orderID int64, reason string) {
 
 func (s *Service) EmitProduct(productID int64, stockSet bool) {
 	var pr struct {
-		SKU     string
-		Barcode string
-		Name    string
-		Slug    string
-		Price   int64
-		Cost    int64
-		Stock   int
-		Track   int
-		Active  int
-		Gift    int
+		SKU       string
+		Barcode   string
+		Name      string
+		Slug      string
+		Price     int64
+		Cost      int64
+		Stock     int
+		Track     int
+		Active    int
+		Gift      int
+		Wholesale int64
+		LowStock  int
 	}
 	err := s.db.QueryRow(s.db.Rebind(`
                 SELECT COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, COALESCE(c.slug,''),
-                        p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), COALESCE(p.is_gift_card,0)
+                        p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), COALESCE(p.is_gift_card,0),
+                        COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0)
                 FROM products p LEFT JOIN categories c ON c.id = p.category_id WHERE p.id = ?`), productID).
-		Scan(&pr.SKU, &pr.Barcode, &pr.Name, &pr.Slug, &pr.Price, &pr.Cost, &pr.Stock, &pr.Track, &pr.Active, &pr.Gift)
+		Scan(&pr.SKU, &pr.Barcode, &pr.Name, &pr.Slug, &pr.Price, &pr.Cost, &pr.Stock, &pr.Track, &pr.Active, &pr.Gift, &pr.Wholesale, &pr.LowStock)
 	if err != nil {
 		return
 	}
@@ -112,7 +119,8 @@ func (s *Service) EmitProduct(productID int64, stockSet bool) {
 		"sku": pr.SKU, "barcode": pr.Barcode, "name": pr.Name, "categorySlug": pr.Slug,
 		"priceCents": pr.Price, "costCents": pr.Cost, "stockQty": pr.Stock,
 		"stockSet": stockSet, "trackStock": pr.Track == 1, "active": pr.Active == 1,
-		"isGiftCard": pr.Gift == 1, "updatedAt": nowStamp(),
+		"isGiftCard": pr.Gift == 1, "wholesalePriceCents": pr.Wholesale,
+		"lowStockUnits": pr.LowStock, "updatedAt": nowStamp(),
 	})
 }
 
@@ -129,17 +137,17 @@ func (s *Service) EmitStockDelta(sku string, delta int) {
 // EmitCustomer queues the identity row (balances ride on ledger events).
 
 func (s *Service) EmitCustomer(customerID int64) {
-	var name, phone, email, notes string
+	var name, phone, email, notes, tier string
 	var limit int64
 	var active int
-	err := s.db.QueryRow(s.db.Rebind(`SELECT name, COALESCE(phone,''), COALESCE(email,''), COALESCE(notes,''), credit_limit_cents, COALESCE(is_active,1) FROM customers WHERE id = ?`), customerID).
-		Scan(&name, &phone, &email, &notes, &limit, &active)
+	err := s.db.QueryRow(s.db.Rebind(`SELECT name, COALESCE(phone,''), COALESCE(email,''), COALESCE(notes,''), credit_limit_cents, COALESCE(is_active,1), COALESCE(price_tier,'retail') FROM customers WHERE id = ?`), customerID).
+		Scan(&name, &phone, &email, &notes, &limit, &active, &tier)
 	if err != nil {
 		return
 	}
 	s.Emit("customer", "upsert", map[string]any{
 		"name": name, "phone": phone, "email": email, "notes": notes,
-		"creditLimitCents": limit, "active": active == 1, "updatedAt": nowStamp(),
+		"creditLimitCents": limit, "active": active == 1, "priceTier": tier, "updatedAt": nowStamp(),
 	})
 }
 
@@ -241,4 +249,44 @@ func (s *Service) EmitShift(shiftID int64) {
 	}
 	ev.DeviceID = s.deviceID()
 	s.Emit("shift", "upsert", ev)
+}
+
+// EmitReturn queues a completed return so the team sees refunds on every
+// till. The receiver re-keys the doc on clientUuid and does NOT restock or
+// move customer money: stock rides the product events, credit rides the
+// ledger event (double-applying here would double the money).
+
+func (s *Service) EmitReturn(doc *models.ReturnDoc) {
+	if doc == nil || doc.ClientUUID == "" {
+		return
+	}
+	items := []map[string]any{}
+	for _, it := range doc.Items {
+		items = append(items, map[string]any{
+			"orderItemId": it.OrderItemID, "sku": it.SKU, "name": it.Name,
+			"qty": it.Qty, "unitPriceCents": it.UnitPriceCents,
+			"lineTotalCents": it.LineTotalCents,
+		})
+	}
+	s.Emit("return", "upsert", map[string]any{
+		"clientUuid": doc.ClientUUID, "number": doc.Number,
+		"orderNumber": doc.OrderNumber, "orderClientUuid": doc.OrderClientUUID,
+		"totalCents": doc.TotalCents, "method": doc.Method, "reason": doc.Reason,
+		"createdByName": doc.CreatedByName, "createdAt": doc.CreatedAt,
+		"items": items,
+	})
+}
+
+// EmitExpense queues one recorded expense.
+
+func (s *Service) EmitExpense(e *models.Expense) {
+	if e == nil {
+		return
+	}
+	s.Emit("expense", "upsert", map[string]any{
+		"clientUuid": e.ClientUUID, "number": e.Number, "typeName": e.TypeName,
+		"amountCents": e.AmountCents, "method": e.Method, "reference": e.Reference,
+		"note": e.Note, "spentOn": e.SpentOn, "createdByName": e.CreatedByName,
+		"createdAt": e.CreatedAt,
+	})
 }

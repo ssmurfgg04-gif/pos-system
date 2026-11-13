@@ -9,12 +9,22 @@ import { Button, Card, EmptyState, Input, Spinner, StatusPill, Tabs } from '../c
 import { centsToAmount, formatMoney } from '../lib/money'
 import { todayLocal, thisMonthLocal } from '../lib/katime'
 import { toast } from '../stores/toasts'
-import { BarChart3, Banknote, Smartphone, CreditCard, Wallet, Download, FileSpreadsheet } from 'lucide-react'
+import { BarChart3, Banknote, Smartphone, CreditCard, Wallet, Download, FileSpreadsheet, Undo2, ReceiptText } from 'lucide-react'
 
 // Local (EAT) date strings — toISOString() is UTC and put Nairobi's
 // 00:00-03:00 sales on yesterday's report.
 const today = todayLocal
 const thisMonth = thisMonthLocal
+
+/**
+ * v1.6.3 net-of-returns sales for the "Money out / money back" card.
+ * The server sends netSalesCents; older backends omit it and the same
+ * figure derives client-side (sales − returns).
+ */
+export function netSalesOf(s: { salesCents: number; returnsCents?: number; netSalesCents?: number }): number {
+  if (s.netSalesCents !== undefined) return s.netSalesCents
+  return s.salesCents - (s.returnsCents ?? 0)
+}
 
 export function Reports() {
   const [view, setView] = useState<'daily' | 'monthly'>('daily')
@@ -104,6 +114,55 @@ function Daily() {
             <Stat label="Average order" value={formatMoney(data.avgOrderCents)} />
             <Stat label="Discrepancies" value={String(data.discrepancies)} warn={data.discrepancies > 0} />
           </div>
+
+          {/* v1.6.3 — money out / money back: refunds and booked expenses
+              between the takings and the shelf, so the day's true cash
+              position reads top to bottom. Optional fields: older backends
+              omit them, so every row renders only when present. */}
+          {(data.netSalesCents !== undefined || data.returnsCents !== undefined || data.expensesCents !== undefined) && (
+            <div className="mt-4">
+              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Money out / money back</p>
+              <div className="border-2 border-line rounded-input overflow-hidden text-[13px]">
+                {data.netSalesCents !== undefined && (
+                  <div className="flex items-center gap-3 px-3 py-2 bg-surface">
+                    <span className="text-ink-muted flex-1">Net sales (takings − refunds)</span>
+                    <span className="font-black tabular text-ink">{formatMoney(netSalesOf(data))}</span>
+                  </div>
+                )}
+                {data.returnsCents !== undefined && (
+                  <div className="flex items-center gap-3 px-3 py-2 bg-surface-muted">
+                    <Undo2 size={13} strokeWidth={2.5} className="text-ink-muted shrink-0" aria-hidden />
+                    <span className="text-ink-muted flex-1">Returns{data.returnsCount !== undefined ? ` (${data.returnsCount})` : ''}</span>
+                    <span className="font-bold tabular text-ink">{formatMoney(data.returnsCents)}</span>
+                  </div>
+                )}
+                {data.expensesCents !== undefined && (
+                  <div className="flex items-center gap-3 px-3 py-2 bg-surface">
+                    <ReceiptText size={13} strokeWidth={2.5} className="text-ink-muted shrink-0" aria-hidden />
+                    <span className="text-ink-muted flex-1">Expenses booked</span>
+                    <span className={`font-bold tabular ${data.expensesCents > 0 ? 'text-danger-text' : 'text-ink'}`}>
+                      {formatMoney(data.expensesCents)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* v1.6.3 — shelf: what the stock room is worth + low-stock alerts. */}
+          {(data.stockValueCents !== undefined || data.lowStockCount !== undefined) && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+              {data.stockValueCents !== undefined && (
+                <Stat
+                  label={`Stock value${data.stockUnits !== undefined ? ` · ${data.stockUnits} units` : ''}`}
+                  value={formatMoney(data.stockValueCents)}
+                />
+              )}
+              {data.lowStockCount !== undefined && (
+                <Stat label="Low stock alerts" value={String(data.lowStockCount)} warn={data.lowStockCount > 0} />
+              )}
+            </div>
+          )}
 
           {data.consolidated && data.shops && data.shops.length > 0 && (
             <div className="mt-4">
@@ -322,6 +381,14 @@ function Monthly() {
             <Stat label="M-Pesa takings" value={formatMoney(data.mpesaCents)} />
             <Stat label="Discrepancies" value={String(data.discrepancies)} warn={data.discrepancies > 0} />
           </div>
+
+          {/* v1.6.3 — money out of the month: booked expenses + refunds. */}
+          {(data.expensesCents !== undefined || data.returnsCents !== undefined) && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+              {data.returnsCents !== undefined && <Stat label="Returns" value={formatMoney(data.returnsCents)} />}
+              {data.expensesCents !== undefined && <Stat label="Expenses" value={formatMoney(data.expensesCents)} warn={data.expensesCents > 0} />}
+            </div>
+          )}
 
           {/* Per-day bars for the month */}
           <div className="mt-5">

@@ -25,6 +25,10 @@ type productBody struct {
 	TrackStock *bool  `json:"trackStock"`
 	Active     *bool  `json:"active"`
 	IsGiftCard *bool  `json:"isGiftCard"`
+	// v1.6.3: wholesale tier price (0 = same as retail) + per-product
+	// low-stock threshold (0 = use the global setting).
+	WholesalePriceCents int64 `json:"wholesalePriceCents"`
+	LowStockUnits       *int  `json:"lowStockUnits"`
 }
 
 // ensureProductCategory maps a missing category to the shared "Uncategorised"
@@ -61,7 +65,8 @@ func (h *H) scanProducts(rows *sql.Rows) []models.Product {
 		var track, active, gift int
 		var catName string
 		if err := rows.Scan(&pr.ID, &pr.SKU, &pr.Barcode, &pr.Name, &pr.CategoryID, &catName,
-			&pr.PriceCents, &pr.CostCents, &pr.StockQty, &track, &active, &pr.UpdatedAt, &gift); err != nil {
+			&pr.PriceCents, &pr.CostCents, &pr.StockQty, &track, &active, &pr.UpdatedAt, &gift,
+			&pr.WholesalePriceCents, &pr.LowStockUnits); err != nil {
 			break
 		}
 		pr.CategoryName = catName
@@ -75,7 +80,8 @@ func (h *H) scanProducts(rows *sql.Rows) []models.Product {
 
 const productSelect = `
         SELECT p.id, COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, p.category_id, COALESCE(c.name,''),
-                p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at, COALESCE(p.is_gift_card,0)
+                p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at, COALESCE(p.is_gift_card,0),
+                COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0)
         FROM products p LEFT JOIN categories c ON c.id = p.category_id`
 
 // ListProducts (authed — POS needs it). Filters: category, search, active.
@@ -112,14 +118,17 @@ func (h *H) ListProducts(c *gin.Context) {
 	h.ok(c, h.scanProducts(rows))
 }
 
-// ListLowStock (products.view) — restock list.
+// ListLowStock (products.view) — restock list. Per-product thresholds
+// (v1.6.3) win when set; the global setting is the fallback.
 func (h *H) ListLowStock(c *gin.Context) {
 	threshold := h.settings(c).GetInt("low_stock_threshold", 5)
 	rows, err := h.db(c).Query(h.db(c).Rebind(`
                 SELECT p.id, COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, p.category_id, COALESCE(c.name,''),
-                        p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at
+                        p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at, COALESCE(p.is_gift_card,0),
+                        COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0)
                 FROM products p LEFT JOIN categories c ON c.id = p.category_id
-                WHERE p.track_stock = 1 AND p.is_active = 1 AND p.stock_qty <= ?
+                WHERE p.track_stock = 1 AND p.is_active = 1
+                  AND p.stock_qty <= (CASE WHEN COALESCE(p.low_stock_units,0) > 0 THEN p.low_stock_units ELSE ? END)
                 ORDER BY p.stock_qty ASC`), threshold)
 	if err != nil {
 		h.fail(c, 500, err.Error())
@@ -170,9 +179,9 @@ func (h *H) CreateProduct(c *gin.Context) {
 	var err error
 	for attempt := 0; ; attempt++ {
 		res, err = h.db(c).Exec(h.db(c).Rebind(`
-            INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-			sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift)
+            INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card, wholesale_price_cents, low_stock_units)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift, body.WholesalePriceCents, lowStockUnits(body))
 		if err == nil {
 			break
 		}
@@ -223,6 +232,14 @@ func defaultStock(body productBody) (int, int) {
 	return stock, track
 }
 
+// lowStockUnits normalises the optional per-product threshold.
+func lowStockUnits(body productBody) int {
+	if body.LowStockUnits == nil || *body.LowStockUnits < 0 {
+		return 0
+	}
+	return *body.LowStockUnits
+}
+
 // UpdateProduct (products.manage).
 func (h *H) UpdateProduct(c *gin.Context) {
 	p := h.principal(c)
@@ -264,8 +281,8 @@ func (h *H) UpdateProduct(c *gin.Context) {
 	}
 	res, err := h.db(c).Exec(h.db(c).Rebind(`
                 UPDATE products SET sku = ?, barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
-                        stock_qty = ?, track_stock = ?, is_active = ?, is_gift_card = ?, updated_at = ?
-                WHERE id = ?`), sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift, services.NowStamp(), id)
+                        stock_qty = ?, track_stock = ?, is_active = ?, is_gift_card = ?, wholesale_price_cents = ?, low_stock_units = ?, updated_at = ?
+                WHERE id = ?`), sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift, body.WholesalePriceCents, lowStockUnits(body), services.NowStamp(), id)
 	if err != nil {
 		if isDuplicateSKUErr(err) {
 			h.fail(c, 409, "SKU already exists on another product")
@@ -283,7 +300,9 @@ func (h *H) UpdateProduct(c *gin.Context) {
 	h.ok(c, gin.H{"updated": true})
 }
 
-// AdjustStock (products.manage) — quick +/- without full edit.
+// AdjustStock (products.manage) — quick +/- without full edit. The change
+// lands in the stock ledger (ADJUSTMENT) with the real applied delta: the
+// clamp at zero means a big negative request may move less than asked.
 func (h *H) AdjustStock(c *gin.Context) {
 	p := h.principal(c)
 	id, ok := h.pathID(c, "id")
@@ -291,7 +310,8 @@ func (h *H) AdjustStock(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Delta int `json:"delta" binding:"required"`
+		Delta int    `json:"delta" binding:"required"`
+		Note  string `json:"note"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		h.fail(c, 400, "delta required")
@@ -301,6 +321,11 @@ func (h *H) AdjustStock(c *gin.Context) {
 		h.fail(c, 400, fmt.Sprintf("delta out of range (max %d)", models.MaxStockDelta))
 		return
 	}
+	var oldStock int
+	if err := h.db(c).QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, id).Scan(&oldStock); err != nil {
+		h.fail(c, 404, "product not found")
+		return
+	}
 	res, err := h.db(c).Exec(h.db(c).Rebind(
 		`UPDATE products SET stock_qty = MAX(0, stock_qty + ?) WHERE id = ?`),
 		body.Delta, id)
@@ -308,11 +333,20 @@ func (h *H) AdjustStock(c *gin.Context) {
 		h.fail(c, 404, "product not found")
 		return
 	}
-	h.svc(c).Audit(p.ID, p.Username, "STOCK_ADJUSTED", "product", itoa64(id), strconv.Itoa(body.Delta))
+	var newStock int
+	h.db(c).QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, id).Scan(&newStock)
+	applied := newStock - oldStock
+	if applied != 0 {
+		if err := h.svc(c).RecordStockMove(int64(id), int64(applied), models.MoveAdjustment, "", body.Note, p); err != nil {
+			h.fail(c, 500, err.Error())
+			return
+		}
+	}
+	h.svc(c).Audit(p.ID, p.Username, "STOCK_ADJUSTED", "product", itoa64(id), fmt.Sprintf("%d (requested %d)", applied, body.Delta))
 	var sku string
 	h.db(c).QueryRow(`SELECT COALESCE(sku,'') FROM products WHERE id = ?`, id).Scan(&sku)
-	h.svc(c).EmitStockDelta(sku, body.Delta)
-	h.ok(c, gin.H{"adjusted": true})
+	h.svc(c).EmitStockDelta(sku, applied)
+	h.ok(c, gin.H{"adjusted": true, "applied": applied})
 }
 
 // DeactivateProduct soft-deletes (order history references products).

@@ -301,8 +301,78 @@ export interface Product {
    *  backend forces trackStock off for these). Optional: older backends
    *  predate the flag. */
   isGiftCard?: boolean
+  /** v1.6.3 wholesale tier price — 0/absent = same as retail. */
+  wholesalePriceCents?: number
+  /** v1.6.3 per-product low-stock threshold — 0/absent = global setting. */
+  lowStockUnits?: number
   active: boolean
   updatedAt: string
+}
+
+/** One append-only stock-ledger row (v1.6.3): every audited stock change. */
+export interface StockMovement {
+  id: number
+  productId: number
+  productName: string
+  sku: string
+  delta: number
+  balanceAfter: number
+  kind: 'OPENING' | 'SALE' | 'VOID_RESTORE' | 'ADJUSTMENT' | 'COUNT' | 'PO_RECEIVE' | 'RETURN_RESTOCK' | string
+  reference: string
+  note: string
+  userId: number
+  username: string
+  deviceId: string
+  createdAt: string
+}
+
+/** A completed customer return (v1.6.3) with its line snapshots. */
+export interface ReturnItem {
+  id: number
+  returnId: number
+  orderItemId: number
+  productId: number
+  name: string
+  sku: string
+  qty: number
+  unitPriceCents: number
+  lineTotalCents: number
+}
+
+export interface ReturnDoc {
+  id: number
+  number: string
+  orderId: number
+  orderNumber: string
+  totalCents: number
+  method: 'CASH' | 'STORE_CREDIT' | string
+  reason: string
+  status: string
+  createdBy: number
+  createdByName: string
+  createdAt: string
+  items?: ReturnItem[]
+}
+
+export interface ExpenseType {
+  id: number
+  name: string
+  isActive: boolean
+}
+
+export interface Expense {
+  id: number
+  number: string
+  expenseTypeId: number
+  typeName: string
+  amountCents: number
+  method: 'CASH' | 'MPESA' | 'BANK' | string
+  reference: string
+  note: string
+  spentOn: string
+  createdBy: number
+  createdByName: string
+  createdAt: string
 }
 
 /** Photo URL for a product ('' when none) — public, cache-busted route. */
@@ -538,6 +608,14 @@ export interface DailySummary {
   /** v19: sales grouped by originating till (deviceId '' = pre-v19 rows). */
   byTill?: { deviceId: string; orders: number; salesCents: number }[]
   newCustomers?: number
+  /** v1.6.3 — money out (expenses), money back (returns), shelf value. */
+  expensesCents?: number
+  returnsCents?: number
+  returnsCount?: number
+  netSalesCents?: number
+  stockUnits?: number
+  stockValueCents?: number
+  lowStockCount?: number
   /** P6 multi-store: present (with per-shop rows) on the ?shop=all consolidated view. */
   consolidated?: boolean
   shops?: { id: string; name: string; salesCents: number; ordersPaid: number; cashCents: number; mpesaCents: number; paystackCents: number; creditCents: number; ordersVoided?: number; discrepancies?: number }[]
@@ -560,6 +638,9 @@ export interface MonthlySummary {
   taxIncluded: boolean
   series: { date: string; salesCents: number; orders: number }[]
   topProducts: { productId: number; name: string; qty: number; salesCents: number }[]
+  /** v1.6.3 — expenses booked in the month + refunds given out. */
+  expensesCents?: number
+  returnsCents?: number
 }
 
 export interface BackupResult {
@@ -599,6 +680,10 @@ export interface Customer {
   creditLimitCents: number
   loyaltyPoints: number
   balanceCents: number
+  /** v1.6.3: 'retail' (default) | 'wholesale' — the till auto-prices the
+   *  cart with the product's wholesale price when a wholesale customer is
+   *  on it. Optional: older backends predate the field. */
+  priceTier?: 'retail' | 'wholesale' | string
   active: boolean
   createdAt: string
   updatedAt: string

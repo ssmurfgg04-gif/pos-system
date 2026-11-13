@@ -375,5 +375,19 @@ func (d *DB) seedCatalog() error {
 			return err
 		}
 	}
-	return nil
+	return d.backfillStockOpenings()
+}
+
+// backfillStockOpenings anchors the v1.6.3 stock ledger at the current
+// quantity for every tracked product that has no ledger row yet. Idempotent:
+// runs after migration v22 AND after catalog seeding (a fresh demo database
+// seeds products AFTER migrations, so the migration backfill saw zero rows).
+func (d *DB) backfillStockOpenings() error {
+	_, err := d.Exec(d.Rebind(`INSERT INTO stock_movements
+                (product_id, delta, balance_after, kind, reference, note, user_id, username, device_id, client_uuid, created_at)
+                SELECT id, stock_qty, stock_qty, 'OPENING', '', 'ledger start', 0, '', '', '', ` + d.nowExpr() + `
+                FROM products
+                WHERE COALESCE(track_stock,1) = 1
+                  AND NOT EXISTS (SELECT 1 FROM stock_movements WHERE stock_movements.product_id = products.id)`))
+	return err
 }

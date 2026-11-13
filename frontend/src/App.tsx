@@ -22,6 +22,7 @@ import { Quotes } from './pages/Quotes'
 import { DesignBoard } from './pages/DesignBoard'
 import { Shifts } from './pages/Shifts'
 import { Reports } from './pages/Reports'
+import { Expenses } from './pages/Expenses'
 import { Users } from './pages/Users'
 import { Settings } from './pages/Settings'
 import { Help } from './pages/Help'
@@ -109,6 +110,8 @@ function GatedApp({ path, user }: { path: string; user: User }) {
         return user.permissions.includes('shifts.manage') ? <Shifts /> : <NoPerm perm="shifts.manage" />
       case path.startsWith('/reports'):
         return user.permissions.includes('reports.view') ? <Reports /> : <NoPerm perm="reports.view" />
+      case path.startsWith('/expenses'):
+        return user.permissions.includes('expenses.view') ? <Expenses /> : <NoPerm perm="expenses.view" />
       case path.startsWith('/users'):
         return user.permissions.includes('users.manage') ? <Users /> : <NoPerm perm="users.manage" />
       case path.startsWith('/settings'):

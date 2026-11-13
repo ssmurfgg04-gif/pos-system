@@ -89,6 +89,87 @@ type DemoDBX = DemoDB & {
   stockCounts?: DemoStockCount[]
   giftCards?: DemoGiftCard[]
   quotes?: DemoQuote[]
+  expenseTypes?: DemoExpenseType[]
+  expenses?: DemoExpense[]
+  returns?: DemoReturn[]
+}
+
+// ---- Expenses & returns (v1.6.3 server parity) ----
+
+interface DemoExpenseType {
+  id: number
+  name: string
+  isActive: boolean
+}
+
+interface DemoExpense {
+  id: number
+  number: string
+  expenseTypeId: number
+  typeName: string
+  amountCents: number
+  method: 'CASH' | 'MPESA' | 'BANK'
+  reference: string
+  note: string
+  spentOn: string
+  createdBy: number
+  createdAt: string
+}
+
+interface DemoReturnItem {
+  id: number
+  returnId: number
+  orderItemId: number
+  productId: number
+  name: string
+  sku: string
+  qty: number
+  unitPriceCents: number
+  lineTotalCents: number
+}
+
+interface DemoReturn {
+  id: number
+  number: string
+  orderId: number
+  orderNumber: string
+  totalCents: number
+  method: 'CASH' | 'STORE_CREDIT'
+  reason: string
+  status: string
+  customerId: number
+  createdBy: number
+  createdAt: string
+  items: DemoReturnItem[]
+}
+
+const DEFAULT_EXPENSE_TYPES = [
+  'Rent', 'Electricity', 'Internet / Airtime', 'Transport', 'Salaries', 'Supplies', 'Maintenance', 'Other',
+]
+
+/** A few plausible booked expenses so the Expenses page (and the daily
+ *  report's money-out figures) are alive on a fresh demo seed. */
+function seedExpenses(types: DemoExpenseType[]): DemoExpense[] {
+  const day = (back: number) => new Date(Date.now() - back * 864e5).toISOString().slice(0, 10)
+  const byName = (n: string) => types.find((t) => t.name === n) || types[0]
+  const rows: [string, number, DemoExpense['method'], string, string, number][] = [
+    // typeName, amountCents, method, reference, note, daysAgo
+    ['Rent', 4500000, 'BANK', 'RENT-SEP', 'Monthly shop rent, Moi Avenue', 2],
+    ['Electricity', 348000, 'MPESA', 'KPLC-88213', 'KPLC prepaid tokens', 5],
+    ['Internet / Airtime', 250000, 'MPESA', '', 'Fibre line + staff airtime', 1],
+    ['Transport', 80000, 'CASH', '', 'Boda delivery to Zawadi Ventures', 0],
+  ]
+  return rows.map((r, i) => {
+    const t = byName(r[0])
+    const spentOn = day(r[5])
+    return {
+      id: i + 1,
+      number: `EXP${spentOn.replace(/-/g, '')}${String(i + 1).padStart(4, '0')}`,
+      expenseTypeId: t.id, typeName: t.name,
+      amountCents: r[1], method: r[2], reference: r[3], note: r[4],
+      spentOn, createdBy: 1, createdAt: `${spentOn}T09:0${i}:00`,
+    }
+  })
 }
 
 // ---- Stocktake (count sessions) & gift cards (v10 server parity) ----
@@ -281,6 +362,32 @@ function migrateDemo(d: DemoDB) {
     ;(d.seq as any).giftCard = 1
     dirty = true
   }
+  // v1.6.3: expense catalog + a few booked expenses, and the returns ledger.
+  if (!Array.isArray(x.expenseTypes) || x.expenseTypes.length === 0) {
+    x.expenseTypes = DEFAULT_EXPENSE_TYPES.map((name, i) => ({ id: i + 1, name, isActive: true }))
+    dirty = true
+  }
+  if ((d.seq as any).expenseType === undefined) {
+    ;(d.seq as any).expenseType = x.expenseTypes!.length + 1
+    dirty = true
+  }
+  if (!Array.isArray(x.expenses)) {
+    x.expenses = seedExpenses(x.expenseTypes!)
+    dirty = true
+  }
+  if ((d.seq as any).expense === undefined) {
+    ;(d.seq as any).expense = x.expenses!.length + 1
+    dirty = true
+  }
+  if (!Array.isArray(x.returns)) {
+    x.returns = []
+    dirty = true
+  }
+  if ((d.seq as any).return === undefined) {
+    ;(d.seq as any).return = 1
+    ;(d.seq as any).returnItem = 1
+    dirty = true
+  }
   for (const p of d.products) {
     if (typeof (p as any).isGiftCard !== 'boolean') {
       ;(p as any).isGiftCard = false
@@ -445,6 +552,28 @@ function orderDTO(o: DemoOrder) {
 
 function customerDTO(c: DemoCustomer) {
   return { ...c }
+}
+
+function expenseDTO(e: DemoExpense) {
+  const u = db!.users.find((x) => x.id === e.createdBy)
+  return {
+    id: e.id, number: e.number, expenseTypeId: e.expenseTypeId, typeName: e.typeName,
+    amountCents: e.amountCents, method: e.method, reference: e.reference, note: e.note,
+    spentOn: e.spentOn, createdBy: e.createdBy,
+    createdByName: u ? (u.fullName || u.username) : '',
+    createdAt: e.createdAt,
+  }
+}
+
+function returnDTO(r: DemoReturn) {
+  const u = db!.users.find((x) => x.id === r.createdBy)
+  return {
+    id: r.id, number: r.number, orderId: r.orderId, orderNumber: r.orderNumber,
+    totalCents: r.totalCents, method: r.method, reason: r.reason, status: r.status,
+    createdBy: r.createdBy, createdByName: u ? (u.fullName || u.username) : '',
+    createdAt: r.createdAt,
+    items: r.items.map((i) => ({ ...i })),
+  }
 }
 
 /** Append one ledger row and apply it to the balance/points (server parity). */
@@ -724,6 +853,17 @@ function dailySummary(date: string) {
     const dayPaid = d.orders.filter((o) => o.status === 'PAID' && o.createdAt >= f && o.createdAt <= t)
     series.push({ date: dt, salesCents: dayPaid.reduce((s, o) => s + o.totalCents, 0), orders: dayPaid.length })
   }
+  // v1.6.3 — money out (expenses), money back (returns), shelf value.
+  const dx = d as DemoDBX
+  const dayExpenses = (dx.expenses || []).filter((e) => e.spentOn === day)
+  const expensesCents = dayExpenses.reduce((s, e) => s + e.amountCents, 0)
+  const dayReturns = (dx.returns || []).filter((r) => r.createdAt >= from && r.createdAt <= to)
+  const returnsCents = dayReturns.reduce((s, r) => s + r.totalCents, 0)
+  const shelveable = d.products.filter((p) => p.active && p.trackStock)
+  const stockUnits = shelveable.reduce((s, p) => s + Math.max(0, p.stockQty), 0)
+  const stockValueCents = shelveable.reduce((s, p) => s + Math.max(0, p.stockQty) * p.costCents, 0)
+  const th = Number(d.settings.low_stock_threshold) || 5
+  const lowStockCount = shelveable.filter((p) => p.stockQty <= th).length
   return {
     date: day, salesCents: sales, ordersPaid: paid.length,
     ordersOpen: inDay.filter((o) => o.status === 'PENDING').length,
@@ -732,6 +872,9 @@ function dailySummary(date: string) {
     cashCents: cash, mpesaCents: mpesa,
     discrepancies: paid.filter((o) => o.discrepancy).length,
     topProducts, series,
+    expensesCents, returnsCents, returnsCount: dayReturns.length,
+    netSalesCents: sales - returnsCents,
+    stockUnits, stockValueCents, lowStockCount,
   }
 }
 
@@ -775,6 +918,9 @@ function monthlySummary(month: string) {
     taxIncluded: (d.settings.tax_included ?? 'true') === 'true',
     series,
     topProducts: [...topMap.values()].sort((a, b) => b.salesCents - a.salesCents).slice(0, 10),
+    // v1.6.3 — expenses booked in the month + refunds given out.
+    expensesCents: ((d as DemoDBX).expenses || []).filter((e) => e.spentOn.slice(0, 7) === m).reduce((s, e) => s + e.amountCents, 0),
+    returnsCents: ((d as DemoDBX).returns || []).filter((r) => r.createdAt.slice(0, 7) === m).reduce((s, r) => s + r.totalCents, 0),
   }
 }
 
@@ -931,6 +1077,17 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     requirePerm(perms, 'products.view')
     const th = Number(d.settings.low_stock_threshold) || 5
     return d.products.filter((x) => x.active && x.trackStock && x.stockQty <= th).map(productDTO) as T
+  }
+  // Stock ledger (v1.6.3): the demo keeps no audited movement rows — an
+  // empty list renders the UI's empty state instead of an error.
+  if (m === 'GET' && p === '/stock-movements') {
+    requirePerm(perms, 'products.view')
+    return [] as T
+  }
+  const movMatch = p.match(/^\/products\/(\d+)\/movements$/)
+  if (m === 'GET' && movMatch) {
+    requirePerm(perms, 'products.view')
+    return [] as T
   }
   if (m === 'GET' && p === '/categories') {
     return d.categories.map((c) => ({ id: c.id, name: c.name, slug: c.slug, productCount: d.products.filter((x) => x.categoryId === c.id).length })) as T
@@ -2394,6 +2551,121 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   if (m === 'POST' && (p === '/system/update/refresh' || p === '/system/update/download' || p === '/system/update/install')) {
     requirePerm(perms, 'settings.manage')
     throw new ApiError(501, 'updates are not available in the demo')
+  }
+
+  // ---- expenses (v1.6.3 parity): money out of the till ----
+  if (m === 'GET' && p === '/expenses/types') {
+    requirePermAny(perms, ['expenses.view', 'expenses.manage'])
+    const dx = d as DemoDBX
+    return (dx.expenseTypes || []).map((t) => ({ id: t.id, name: t.name, isActive: t.isActive })) as T
+  }
+  if (m === 'GET' && p === '/expenses') {
+    requirePerm(perms, 'expenses.view')
+    const dx = d as DemoDBX
+    let list = [...(dx.expenses || [])].sort((a, b) => b.id - a.id)
+    const date = q.get('date')
+    if (date) list = list.filter((e) => e.spentOn === date)
+    return list.map(expenseDTO) as T
+  }
+  if (m === 'POST' && p === '/expenses') {
+    requirePerm(perms, 'expenses.manage')
+    const dx = d as DemoDBX
+    const t = (dx.expenseTypes || []).find((x) => x.id === Number(body?.expenseTypeId))
+    if (!t) throw new ApiError(400, 'expense type not found')
+    const cents = Math.round(Number(body?.amountCents) || 0)
+    if (!(cents > 0)) throw new ApiError(400, 'amount must be greater than zero')
+    const method = String(body?.method || '')
+    if (!['CASH', 'MPESA', 'BANK'].includes(method)) throw new ApiError(400, 'method must be CASH, MPESA or BANK')
+    const spentOn = String(body?.spentOn || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(spentOn)) throw new ApiError(400, 'spentOn must look like YYYY-MM-DD')
+    const e: DemoExpense = {
+      id: (d.seq as any).expense++,
+      number: nextDocNumber(d, 'EXP'),
+      expenseTypeId: t.id, typeName: t.name,
+      amountCents: cents, method: method as DemoExpense['method'],
+      reference: String(body?.reference || '').trim(),
+      note: String(body?.note || '').trim(),
+      spentOn,
+      createdBy: user.id, createdAt: nowIso(),
+    }
+    dx.expenses!.unshift(e)
+    audit(user.id, user.username, 'EXPENSE_RECORDED', 'expense', String(e.id), `${t.name} ${cents}`)
+    persist()
+    return expenseDTO(e) as T
+  }
+
+  // ---- returns (v1.6.3 parity): money back to the customer ----
+  if (m === 'GET' && p === '/returns') {
+    requirePermAny(perms, ['returns.manage', 'orders.view'])
+    const dx = d as DemoDBX
+    return [...(dx.returns || [])].sort((a, b) => b.id - a.id).map(returnDTO) as T
+  }
+  if (m === 'POST' && p === '/returns') {
+    requirePerm(perms, 'returns.manage')
+    const dx = d as DemoDBX
+    if (!dx.returns) dx.returns = []
+    const o = d.orders.find((x) => x.id === Number(body?.orderId))
+    if (!o) throw new ApiError(404, 'order not found')
+    if (o.status !== 'PAID') throw new ApiError(409, 'only a PAID order can be returned')
+    const method = String(body?.method || '')
+    if (method !== 'CASH' && method !== 'STORE_CREDIT') throw new ApiError(400, 'method must be CASH or STORE_CREDIT')
+    let customerId = 0
+    if (method === 'STORE_CREDIT') {
+      customerId = Number(body?.customerId) || 0
+      const c = d.customers.find((x) => x.id === customerId)
+      if (!c || !c.active) throw new ApiError(400, 'STORE_CREDIT refunds need an active customer to credit')
+    }
+    // Over-return guard against every prior return of this order (the
+    // server's 4xx is user-friendly — mirror the same clarity here).
+    const already = new Map<number, number>()
+    for (const r of dx.returns) {
+      if (r.orderId !== o.id) continue
+      for (const it of r.items) already.set(it.orderItemId, (already.get(it.orderItemId) || 0) + it.qty)
+    }
+    const lines = Array.isArray(body?.lines) ? body.lines : []
+    const items: DemoReturnItem[] = []
+    for (const l of lines) {
+      const qty = Math.floor(Number(l?.qty) || 0)
+      if (qty <= 0) continue
+      const oi = o.items.find((i) => i.id === Number(l?.orderItemId))
+      if (!oi) throw new ApiError(400, 'order item not found in this order')
+      const done = already.get(oi.id) || 0
+      if (qty + done > oi.qty) {
+        throw new ApiError(422, `cannot return ${qty} of ${oi.name}: only ${oi.qty - done} of the ${oi.qty} sold has not been returned yet`)
+      }
+      items.push({
+        id: (d.seq as any).returnItem++,
+        returnId: 0, // patched once the return doc exists
+        orderItemId: oi.id, productId: oi.productId, name: oi.name, sku: oi.sku,
+        qty, unitPriceCents: oi.unitPriceCents, lineTotalCents: oi.unitPriceCents * qty,
+      })
+    }
+    if (items.length === 0) throw new ApiError(400, 'pick at least one item and a quantity above zero to return')
+    const ret: DemoReturn = {
+      id: (d.seq as any).return++,
+      number: nextDocNumber(d, 'RET'),
+      orderId: o.id, orderNumber: o.number,
+      totalCents: items.reduce((s, i) => s + i.lineTotalCents, 0),
+      method: method as DemoReturn['method'],
+      reason: String(body?.reason || '').trim(),
+      status: 'COMPLETED',
+      customerId, createdBy: user.id, createdAt: nowIso(),
+      items,
+    }
+    for (const it of ret.items) it.returnId = ret.id
+    dx.returns.unshift(ret)
+    // STORE_CREDIT refunds land in the customer's wallet (server parity).
+    if (method === 'STORE_CREDIT' && customerId) {
+      const c = d.customers.find((x) => x.id === customerId)
+      if (c) {
+        ;(c as any).storeCreditCents = Math.round(Number((c as any).storeCreditCents) || 0) + ret.totalCents
+        c.updatedAt = nowIso()
+        postCreditLedger(d, customerId, 0, 'credit_topup', ret.totalCents, `Return ${ret.number} refunded as store credit`, user.id)
+      }
+    }
+    audit(user.id, user.username, 'ORDER_RETURNED', 'order', o.number, `${ret.number} ${ret.totalCents}`)
+    persist()
+    return returnDTO(ret) as T
   }
 
   // reports

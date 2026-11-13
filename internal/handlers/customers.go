@@ -23,12 +23,13 @@ func (h *H) CreateCustomer(c *gin.Context) {
 		Email      string `json:"email"`
 		Notes      string `json:"notes"`
 		LimitCents int64  `json:"creditLimitCents"`
+		PriceTier  string `json:"priceTier"` // 'retail' | 'wholesale' (v1.6.3)
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	customer, err := h.svc(c).CreateCustomer(body.Name, body.Phone, body.Email, body.Notes, body.LimitCents, p)
+	customer, err := h.svc(c).CreateCustomer(body.Name, body.Phone, body.Email, body.Notes, body.LimitCents, body.PriceTier, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return
@@ -49,6 +50,7 @@ func (h *H) UpdateCustomer(c *gin.Context) {
 		Email      string `json:"email"`
 		Notes      string `json:"notes"`
 		LimitCents int64  `json:"creditLimitCents"`
+		PriceTier  string `json:"priceTier"` // 'retail' | 'wholesale' (v1.6.3)
 		Active     *bool  `json:"active"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -59,7 +61,7 @@ func (h *H) UpdateCustomer(c *gin.Context) {
 	if body.Active != nil {
 		active = *body.Active
 	}
-	customer, err := h.svc(c).UpdateCustomer(id, body.Name, body.Phone, body.Email, body.Notes, body.LimitCents, active, p)
+	customer, err := h.svc(c).UpdateCustomer(id, body.Name, body.Phone, body.Email, body.Notes, body.LimitCents, body.PriceTier, active, p)
 	if err != nil {
 		h.mapErr(c, err)
 		return

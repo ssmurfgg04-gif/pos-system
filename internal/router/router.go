@@ -225,6 +225,21 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	// Walk-in till payments ride pos.sell: cashiers take them all day.
 	authd.POST("/customers/:id/payments", perm("pos.sell"), h.RecordCustomerPayment)
 
+	// Returns & refunds (v1.6.3): the counter serves a customer walking
+	// back with a receipt; browsing ride orders.view, posting needs
+	// returns.manage.
+	authd.GET("/returns", permAny("returns.manage", "orders.view"), h.ListReturns)
+	authd.GET("/returns/:id", perm("orders.view"), h.GetReturn)
+	authd.POST("/returns", perm("returns.manage"), h.CreateReturn)
+	// Stock ledger (v1.6.3): read-only audit trail of every stock change.
+	authd.GET("/stock-movements", perm("products.view"), h.ListStockMovements)
+	authd.GET("/products/:id/movements", perm("products.view"), h.ListProductMovements)
+
+	// Expenses (v1.6.3): the money side of the day.
+	authd.GET("/expenses", perm("expenses.view"), h.ListExpenses)
+	authd.GET("/expenses/types", perm("expenses.view"), h.ListExpenseTypes)
+	authd.POST("/expenses", perm("expenses.manage"), h.CreateExpense)
+
 	// Suppliers & stock-in.
 	supv := authd.Group("", perm("suppliers.view"))
 	supv.GET("/suppliers", h.ListSuppliers)

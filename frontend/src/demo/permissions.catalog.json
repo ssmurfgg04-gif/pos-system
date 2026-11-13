@@ -45,6 +45,11 @@
     "label": "Contact customers (WhatsApp, ready pickups)"
   },
   {
+    "key": "returns.manage",
+    "group": "Selling",
+    "label": "Process returns and refunds"
+  },
+  {
     "key": "customers.view",
     "group": "Selling",
     "label": "View customers and tabs"
@@ -103,6 +108,16 @@
     "key": "reports.view",
     "group": "Insights",
     "label": "View sales reports"
+  },
+  {
+    "key": "expenses.view",
+    "group": "Insights",
+    "label": "View expenses"
+  },
+  {
+    "key": "expenses.manage",
+    "group": "Insights",
+    "label": "Record and manage expenses"
   },
   {
     "key": "orders.view.all",

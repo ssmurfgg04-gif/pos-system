@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"posapp/internal/database"
 	"posapp/internal/models"
 	"posapp/internal/services"
 )
@@ -217,6 +218,10 @@ func (h *H) ProductsImport(c *gin.Context) {
 		}
 		if pid, err := res.LastInsertId(); err == nil {
 			touchedIDs = append(touchedIDs, pid)
+			if r.stock != 0 && r.track == 1 {
+				// Anchor the stock ledger at the imported quantity.
+				recordMovementNoTx(h.db(c), int64(pid), int64(r.stock), "initial import")
+			}
 		}
 		created++
 	}
@@ -374,4 +379,14 @@ func readCSV(r interface{ Read([]byte) (int, error) }, maxRows int) ([][]string,
 		flushRecord()
 	}
 	return records, nil
+}
+
+// recordMovementNoTx appends one stock-movement row on an open handle
+// (used inside the CSV import transaction wrapper).
+func recordMovementNoTx(db *database.DB, productID, delta int64, note string) {
+	var bal int64
+	db.QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, productID).Scan(&bal)
+	db.Exec(db.Rebind(`INSERT INTO stock_movements
+                (product_id, delta, balance_after, kind, reference, note, user_id, username, device_id, client_uuid)
+                VALUES (?, ?, ?, 'OPENING', '', ?, 0, '', '', '')`), productID, delta, bal, note)
 }

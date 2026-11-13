@@ -2,9 +2,11 @@
 // manual receipt completion for pending M-Pesa orders, receipt print link.
 // Voided orders surface their reason; discounts, redeemed points and
 // Paystack payments (card / M-Money via Paystack) render in the detail.
+// v1.6.3: paid orders can be partially returned (cash or store credit)
+// from a Return row action, and a Returns tab lists every ReturnDoc.
 
 import { useEffect, useMemo, useState } from 'react'
-import { api, DesignJob, GiftCard, Order, OrderEvent, WhatsAppContact } from '../lib/api'
+import { api, Customer, DesignJob, GiftCard, Order, OrderEvent, OrderItem, ReturnDoc, WhatsAppContact } from '../lib/api'
 import { useAuth, hasAny } from '../stores/auth'
 import { openWhatsAppChat } from '../lib/whatsapp'
 import { Button, Card, EmptyState, Input, Modal, Select, Spinner, StatusPill, Table, Tabs, Textarea, Field } from '../components/ui'
@@ -12,7 +14,7 @@ import { ReceiptModal } from '../components/Receipt'
 import { useBranding } from '../stores/branding'
 import { centsToAmount, formatMoney } from '../lib/money'
 import { toast } from '../stores/toasts'
-import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer, BookUser, CreditCard, Wallet, MessageCircle, Briefcase, History } from 'lucide-react'
+import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer, BookUser, CreditCard, Wallet, MessageCircle, Briefcase, History, Undo2 } from 'lucide-react'
 
 // Newer orders carry checkout extras the shared Order type doesn't declare
 // yet — optional locally so the shared type stays untouched.
@@ -47,6 +49,7 @@ export function Orders() {
   const canManual = useAuth((s) => !!s.user?.permissions.includes('payments.manual'))
   const canSell = useAuth((s) => !!s.user?.permissions.includes('pos.sell'))
   const canAssign = useAuth((s) => !!s.user?.permissions.includes('orders.assign'))
+  const canReturn = useAuth((s) => !!s.user?.permissions.includes('returns.manage'))
   // v1.6.2: contacting a customer is orders.notify work, but till roles
   // created before that key existed hold pos.sell — either may open the
   // interface (matches the server's RequirePermissionAny on /notify).
@@ -54,7 +57,7 @@ export function Orders() {
   const canViewAll = useAuth((s) => !!s.user?.permissions.includes('orders.view.all'))
   const [settleFor, setSettleFor] = useState<Order | null>(null)
   const [orders, setOrders] = useState<Order[] | null>(null)
-  const [status, setStatus] = useState<'all' | 'PAID' | 'PENDING' | 'VOIDED'>('all')
+  const [status, setStatus] = useState<'all' | 'PAID' | 'PENDING' | 'VOIDED' | 'RETURNS'>('all')
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Order | null>(null)
   const [voiding, setVoiding] = useState<Order | null>(null)
@@ -62,6 +65,9 @@ export function Orders() {
   const [discrepancyOnly, setDiscrepancyOnly] = useState(false)
   const [receiptFor, setReceiptFor] = useState<Order | null>(null)
   const [checkingId, setCheckingId] = useState<number | null>(null)
+  // v1.6.3: returns ledger + the return modal target.
+  const [returning, setReturning] = useState<Order | null>(null)
+  const [returns, setReturns] = useState<ReturnDoc[] | null>(null)
 
   // Query UI (v1.6.0): the server filters by date (EAT calendar days),
   // cashier (orders.view.all holders only) and serves pages of PAGE rows.
@@ -97,6 +103,8 @@ export function Orders() {
   }
 
   const load = async () => {
+    // The Returns tab does not query orders — its own effect fetches those.
+    if (status === 'RETURNS') return
     try {
       const q = new URLSearchParams({ limit: String(PAGE + 1), offset: String(offset) })
       if (status !== 'all') q.set('status', status)
@@ -112,6 +120,16 @@ export function Orders() {
     }
   }
   useEffect(() => { load() }, [status, from, to, cashier, offset])
+
+  // Returns ledger (v1.6.3): refetched whenever the tab is opened.
+  useEffect(() => {
+    if (status !== 'RETURNS') return
+    let alive = true
+    api.get<ReturnDoc[]>('/api/v1/returns')
+      .then((rows) => { if (alive) setReturns(rows) })
+      .catch((e: any) => { if (alive) { setReturns([]); toast.error('Load failed', e?.message) } })
+    return () => { alive = false }
+  }, [status])
 
   // Cashier dropdown options — only full-order viewers get the filter
   // (the endpoint 403s anyone else; their list is their own sales).
@@ -132,12 +150,16 @@ export function Orders() {
     <div className="space-y-4">
       <Card
         title="Orders"
-        sub={orders ? `${shown.length} shown` : 'Loading…'}
+        sub={status === 'RETURNS'
+          ? (returns ? `${returns.length} shown` : 'Loading…')
+          : (orders ? `${shown.length} shown` : 'Loading…')}
         actions={
-          <label className="flex items-center gap-2 text-[13px] font-semibold text-ink-muted cursor-pointer">
-            <input type="checkbox" checked={discrepancyOnly} onChange={(e) => setDiscrepancyOnly(e.target.checked)} className="w-4.5 h-4.5 accent-[#10B981]" />
-            Discrepancies only
-          </label>
+          status !== 'RETURNS' ? (
+            <label className="flex items-center gap-2 text-[13px] font-semibold text-ink-muted cursor-pointer">
+              <input type="checkbox" checked={discrepancyOnly} onChange={(e) => setDiscrepancyOnly(e.target.checked)} className="w-4.5 h-4.5 accent-[#10B981]" />
+              Discrepancies only
+            </label>
+          ) : undefined
         }
         pad={false}
       >
@@ -148,31 +170,56 @@ export function Orders() {
               { key: 'PAID' as const, label: 'Paid' },
               { key: 'PENDING' as const, label: 'Pending' },
               { key: 'VOIDED' as const, label: 'Voided' },
+              { key: 'RETURNS' as const, label: 'Returns', icon: <Undo2 size={15} strokeWidth={2.25} aria-hidden /> },
             ]}
             value={status}
             onChange={setStatus}
           />
-          <form className="flex-1 min-w-44" onSubmit={(e) => { e.preventDefault(); resetPage(); load() }}>
-            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Order #, customer, receipt code, phone…" />
-          </form>
-          <Button size="md" variant="secondary" onClick={() => { resetPage(); load() }}>Search</Button>
-          <div className="w-36"><Input type="date" value={from} onChange={(e) => { setFrom(e.target.value); resetPage() }} aria-label="From date" /></div>
-          <span className="text-[12px] font-bold text-ink-subtle">to</span>
-          <div className="w-36"><Input type="date" value={to} onChange={(e) => { setTo(e.target.value); resetPage() }} aria-label="To date" /></div>
-          {canViewAll && (
-            <div className="w-40"><Select value={cashier} onChange={(e) => { setCashier(e.target.value); resetPage() }} aria-label="Cashier">
-              <option value="all">All cashiers</option>
-              {cashiers.map((cs) => (
-                <option key={cs.id} value={String(cs.id)}>{cs.name}</option>
-              ))}
-            </Select></div>
-          )}
-          {(from || to || cashier !== 'all') && (
-            <Button size="md" variant="ghost" onClick={() => { setFrom(''); setTo(''); setCashier('all'); resetPage() }} title="Clear the date and cashier filters">Clear</Button>
+          {status !== 'RETURNS' && (
+            <>
+              <form className="flex-1 min-w-44" onSubmit={(e) => { e.preventDefault(); resetPage(); load() }}>
+                <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Order #, customer, receipt code, phone…" />
+              </form>
+              <Button size="md" variant="secondary" onClick={() => { resetPage(); load() }}>Search</Button>
+              <div className="w-36"><Input type="date" value={from} onChange={(e) => { setFrom(e.target.value); resetPage() }} aria-label="From date" /></div>
+              <span className="text-[12px] font-bold text-ink-subtle">to</span>
+              <div className="w-36"><Input type="date" value={to} onChange={(e) => { setTo(e.target.value); resetPage() }} aria-label="To date" /></div>
+              {canViewAll && (
+                <div className="w-40"><Select value={cashier} onChange={(e) => { setCashier(e.target.value); resetPage() }} aria-label="Cashier">
+                  <option value="all">All cashiers</option>
+                  {cashiers.map((cs) => (
+                    <option key={cs.id} value={String(cs.id)}>{cs.name}</option>
+                  ))}
+                </Select></div>
+              )}
+              {(from || to || cashier !== 'all') && (
+                <Button size="md" variant="ghost" onClick={() => { setFrom(''); setTo(''); setCashier('all'); resetPage() }} title="Clear the date and cashier filters">Clear</Button>
+              )}
+            </>
           )}
         </div>
 
-        {!orders ? (
+        {status === 'RETURNS' ? (
+          !returns ? (
+            <div className="py-12 flex justify-center"><Spinner /></div>
+          ) : returns.length === 0 ? (
+            <EmptyState icon={<Undo2 size={24} strokeWidth={2.25} />} title="No returns yet" body="Refunds processed from a paid order's Return action appear here." />
+          ) : (
+            <Table head={['Number', 'Created', 'Order', 'Total', 'Method', 'By', 'Reason']}>
+              {returns.map((r) => (
+                <tr key={r.id}>
+                  <td className="px-3 py-2.5 font-bold text-ink text-[13px] tabular">{r.number}</td>
+                  <td className="px-3 py-2.5 text-[11px] text-ink-subtle">{new Date(r.createdAt).toLocaleString()}</td>
+                  <td className="px-3 py-2.5 tabular text-[13px] text-ink">{r.orderNumber}</td>
+                  <td className="px-3 py-2.5 font-bold tabular text-ink">{centsToAmount(r.totalCents)}</td>
+                  <td className="px-3 py-2.5 text-[13px] text-ink-muted"><ReturnMethodLabel method={r.method} /></td>
+                  <td className="px-3 py-2.5 text-[13px] text-ink-muted">{r.createdByName}</td>
+                  <td className="px-3 py-2.5 text-[13px] text-ink-muted max-w-56 truncate" title={r.reason}>{r.reason || '—'}</td>
+                </tr>
+              ))}
+            </Table>
+          )
+        ) : !orders ? (
           <div className="py-12 flex justify-center"><Spinner /></div>
         ) : shown.length === 0 ? (
           <EmptyState icon={<ReceiptText size={24} strokeWidth={2.25} />} title="No orders" body={search || from || to || cashier !== 'all' ? 'Nothing matches these filters — clear one and try again.' : 'Sales will appear here.'} />
@@ -222,6 +269,17 @@ export function Orders() {
                           {checkingId === o.id ? <Spinner /> : 'Check payment'}
                         </Button>
                       )}
+                      {o.status === 'PAID' && canReturn && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setReturning(o)}
+                          title="Refund items from this sale"
+                        >
+                          <Undo2 size={14} strokeWidth={2.25} aria-hidden />
+                          Return
+                        </Button>
+                      )}
                       <Button size="sm" variant="ghost" onClick={() => setSelected(o)}>View</Button>
                     </div>
                   </td>
@@ -231,7 +289,7 @@ export function Orders() {
           </Table>
         )}
 
-        {(offset > 0 || hasMore) && (
+        {(status !== 'RETURNS' && (offset > 0 || hasMore)) && (
           <div className="flex items-center justify-between px-4 py-3 border-t-2 border-line">
             <Button size="sm" variant="secondary" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>← Newer</Button>
             <span className="text-[12px] font-semibold text-ink-muted tabular">
@@ -267,6 +325,14 @@ export function Orders() {
       )}
 
       {voiding && <VoidModal order={voiding} onClose={() => setVoiding(null)} onDone={() => { setVoiding(null); load() }} />}
+
+      {returning && (
+        <ReturnModal
+          order={returning}
+          onClose={() => setReturning(null)}
+          onDone={() => { setReturning(null); load() }}
+        />
+      )}
 
       {manualFor && (
         <ManualModal
@@ -804,6 +870,176 @@ function ManualModal({ order, onClose, onDone }: { order: Order; onClose: () => 
         autoFocus
       />
       {error && <p role="alert" className="text-danger-text text-sm font-semibold mt-2">{error}</p>}
+    </Modal>
+  )
+}
+
+// How the money goes back on a ReturnDoc — cash from the drawer or the
+// customer's store-credit wallet.
+function ReturnMethodLabel({ method }: { method: string }) {
+  return method === 'STORE_CREDIT' ? (
+    <span className="inline-flex items-center gap-1.5"><Wallet size={14} strokeWidth={2.25} aria-hidden />Store credit</span>
+  ) : (
+    <span className="inline-flex items-center gap-1.5"><Banknote size={14} strokeWidth={2.25} aria-hidden />Cash</span>
+  )
+}
+
+// ReturnModal (returns.manage): pick items + quantities off a paid sale,
+// choose how the money goes back — cash from the drawer, or store credit
+// to the customer's wallet — and record the reason. The server owns the
+// over-return math; its 4xx message is shown as-is (it reads like prose).
+function ReturnModal({ order, onClose, onDone }: { order: Order; onClose: () => void; onDone: () => void }) {
+  const [items, setItems] = useState<OrderItem[] | null>(null)
+  const [qtys, setQtys] = useState<Record<number, number>>({})
+  const [method, setMethod] = useState<'CASH' | 'STORE_CREDIT'>('CASH')
+  const [customers, setCustomers] = useState<Customer[] | null>(null)
+  const [custSearch, setCustSearch] = useState('')
+  const [customerId, setCustomerId] = useState(0)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  // Fresh copy of the order: the row's snapshot may be stale (a colleague
+  // could have already returned part of this sale).
+  useEffect(() => {
+    let alive = true
+    const fill = (o: Order) => {
+      setItems(o.items)
+      setQtys(Object.fromEntries(o.items.map((i) => [i.id, 0])))
+    }
+    api.get<Order>(`/api/v1/orders/${order.id}`)
+      .then((o) => { if (alive) fill(o) })
+      .catch(() => { if (alive) fill(order) })
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order.id])
+
+  // Customer picker loads only when a store-credit refund is chosen.
+  useEffect(() => {
+    if (method !== 'STORE_CREDIT') return
+    let alive = true
+    api.get<Customer[]>('/api/v1/customers')
+      .then((cs) => { if (alive) setCustomers(cs) })
+      .catch(() => { if (alive) setCustomers([]) })
+    return () => { alive = false }
+  }, [method])
+
+  const setQty = (id: number, qty: number, max: number) =>
+    setQtys((q) => ({ ...q, [id]: Math.max(0, Math.min(max, Math.floor(qty) || 0)) }))
+
+  const lines = (items ?? [])
+    .filter((i) => (qtys[i.id] || 0) > 0)
+    .map((i) => ({ orderItemId: i.id, qty: qtys[i.id] || 0 }))
+  const refundCents = (items ?? []).reduce((s, i) => s + (qtys[i.id] || 0) * i.unitPriceCents, 0)
+  const picked = (customers ?? []).find((c) => c.id === customerId)
+  const canSubmit = !!items && lines.length > 0 && (method === 'CASH' || customerId > 0)
+
+  const filteredCustomers = (customers ?? []).filter((c) => {
+    const n = custSearch.trim().toLowerCase()
+    if (!n) return true
+    return c.name.toLowerCase().includes(n) || (c.phone || '').includes(n)
+  })
+
+  const go = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.post<ReturnDoc>('/api/v1/returns', {
+        orderId: order.id,
+        lines,
+        method,
+        ...(method === 'STORE_CREDIT' ? { customerId } : {}),
+        reason: reason.trim(),
+      })
+      toast.success(
+        'Return recorded',
+        `${r.number}, refunding ${formatMoney(r.totalCents)}${method === 'STORE_CREDIT' && picked ? ` to ${picked.name}'s store credit` : ' in cash'}`,
+      )
+      onDone()
+    } catch (e: any) {
+      setError(e?.message || 'Could not record the return')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Return items from ${order.number}`} size="md" footer={
+      <>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={go} disabled={busy || !canSubmit}>
+          {busy ? <Spinner /> : `Refund ${formatMoney(refundCents)}`}
+        </Button>
+      </>
+    }>
+      {!items ? (
+        <div className="py-10 flex justify-center"><Spinner /></div>
+      ) : (
+        <div className="space-y-3">
+          <Table head={['Item', 'Sold', 'Price', 'Return qty', 'Refund']}>
+            {items.map((i) => (
+              <tr key={i.id}>
+                <td className="px-3 py-2">
+                  <p className="font-semibold text-ink text-[13px]">{i.name}</p>
+                  <p className="text-[11px] text-ink-subtle">{i.sku}</p>
+                </td>
+                <td className="px-3 py-2 tabular text-ink-muted">{i.qty}</td>
+                <td className="px-3 py-2 tabular text-ink-muted">{centsToAmount(i.unitPriceCents)}</td>
+                <td className="px-3 py-2">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={i.qty}
+                    value={qtys[i.id] ?? 0}
+                    onChange={(e) => setQty(i.id, Number(e.target.value), i.qty)}
+                    className="w-20"
+                    aria-label={`Return quantity for ${i.name}`}
+                  />
+                </td>
+                <td className="px-3 py-2 tabular font-semibold">{centsToAmount((qtys[i.id] || 0) * i.unitPriceCents)}</td>
+              </tr>
+            ))}
+          </Table>
+
+          <Field label="Refund method">
+            <Select value={method} onChange={(e) => setMethod(e.target.value as 'CASH' | 'STORE_CREDIT')}>
+              <option value="CASH">Refund in cash</option>
+              <option value="STORE_CREDIT">Add to customer's store credit</option>
+            </Select>
+          </Field>
+
+          {method === 'STORE_CREDIT' && (
+            <div className="space-y-2 border-2 border-line rounded-input p-3 bg-surface-muted">
+              <Field label="Customer">
+                <Input value={custSearch} onChange={(e) => setCustSearch(e.target.value)} placeholder="Filter by name or phone…" />
+              </Field>
+              <select
+                value={customerId}
+                onChange={(e) => setCustomerId(Number(e.target.value))}
+                className="w-full min-h-10 px-3 bg-surface border border-line-strong rounded-input text-ink text-[13px]"
+                aria-label="Customer to credit"
+              >
+                <option value={0}>{customers === null ? 'Loading customers…' : 'Pick a customer…'}</option>
+                {filteredCustomers.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}{c.phone ? ` · ${c.phone}` : ''}{c.active ? '' : ' (inactive)'}</option>
+                ))}
+              </select>
+              <p className="text-[11.5px] text-ink-subtle">Refund lands as store credit the customer can spend.</p>
+            </div>
+          )}
+
+          <Field label="Reason" hint="Recorded with the return for the audit trail.">
+            <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. wrong size, customer changed mind" />
+          </Field>
+
+          <div className="flex justify-between border-t-2 border-line pt-2 text-sm">
+            <span className="font-bold">Total refund</span>
+            <span className="font-black tabular text-lg">{formatMoney(refundCents)}</span>
+          </div>
+
+          {error && <p role="alert" className="text-danger-text text-sm font-semibold">{error}</p>}
+        </div>
+      )}
     </Modal>
   )
 }

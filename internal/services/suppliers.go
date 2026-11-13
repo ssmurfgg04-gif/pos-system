@@ -347,6 +347,9 @@ func (s *Service) ReceivePO(poID int64, p *auth.Principal) (*models.PurchaseOrde
 			newStock, newCost, it.ProductID); err != nil {
 			return nil, err
 		}
+		if err := recordStockMoveTx(s, tx, it.ProductID, int64(it.Qty), models.MovePOReceive, po.Number, "", p.ID, p.Username); err != nil {
+			return nil, err
+		}
 	}
 	res, err := tx.Exec(s.db.Rebind(`
                 UPDATE purchase_orders SET status = 'RECEIVED', received_at = ?
@@ -572,8 +575,17 @@ func (s *Service) ApplyTake(takeID int64, p *auth.Principal) (*models.StockTake,
 		return nil, err
 	}
 	for _, it := range items {
+		var current int
+		if err := tx.QueryRow(s.db.Rebind(`SELECT stock_qty FROM products WHERE id = ?`), it.ProductID).Scan(&current); err != nil {
+			return nil, err
+		}
 		if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = ? WHERE id = ?`), it.CountedQty, it.ProductID); err != nil {
 			return nil, err
+		}
+		if it.CountedQty != current {
+			if err := recordStockMoveTx(s, tx, it.ProductID, int64(it.CountedQty-current), models.MoveCount, number, "", p.ID, p.Username); err != nil {
+				return nil, err
+			}
 		}
 	}
 	res, err := tx.Exec(s.db.Rebind(`

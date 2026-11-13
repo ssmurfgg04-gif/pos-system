@@ -157,7 +157,7 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 					req.CustomerName = existing.Name
 				}
 			} else if name := strings.TrimSpace(req.CustomerName); name != "" {
-				if c, err := s.CreateCustomer(name, phone, "", "auto-captured at checkout", 0, p); err == nil {
+				if c, err := s.CreateCustomer(name, phone, "", "auto-captured at checkout", 0, "retail", p); err == nil {
 					req.CustomerID = c.ID
 				}
 			}
@@ -550,6 +550,10 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 							tx.Rollback()
 							return nil, fmt.Errorf("%w: %s", ErrInsufficientStock, l.name)
 						}
+						if err := recordStockMoveTx(s, tx, l.productID, -int64(l.qty), models.MoveSale, number, "", p.ID, p.Username); err != nil {
+							tx.Rollback()
+							return nil, err
+						}
 					}
 				}
 				if _, err := tx.Exec(`UPDATE orders SET status = 'PAID' WHERE id = ? AND status = 'PENDING'`, id); err != nil {
@@ -638,6 +642,10 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 					if n, _ := gres.RowsAffected(); n != 1 {
 						tx.Rollback()
 						return nil, fmt.Errorf("%w: %s", ErrInsufficientStock, l.name)
+					}
+					if err := recordStockMoveTx(s, tx, l.productID, -int64(l.qty), models.MoveSale, number, "", p.ID, p.Username); err != nil {
+						tx.Rollback()
+						return nil, err
 					}
 				}
 			}
@@ -1164,6 +1172,14 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
 		if err != nil {
 			return nil, err
 		}
+		var orderNumber string
+		tx.QueryRow(`SELECT COALESCE(number,'') FROM orders WHERE id = ?`, orderID).Scan(&orderNumber)
+		// Attribution: completePayment runs from the M-Pesa callback (no
+		// principal), so the ledger row is stamped with the sale's cashier.
+		var saleUserID int64
+		var saleUsername string
+		tx.QueryRow(`SELECT o.cashier_id, COALESCE(u.username,'') FROM orders o
+                        LEFT JOIN users u ON u.id = o.cashier_id WHERE o.id = ?`, orderID).Scan(&saleUserID, &saleUsername)
 		for _, it := range items {
 			var track int
 			if err := tx.QueryRow(`SELECT COALESCE(track_stock,1) FROM products WHERE id = ?`, it.ProductID).Scan(&track); err != nil {
@@ -1181,6 +1197,10 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
 				// Money received; stock can't cover. Flag for staff, keep paid.
 				discrepancy = 1
 				tx.Exec(`UPDATE orders SET discrepancy = 1 WHERE id = ?`, orderID)
+				continue
+			}
+			if err := recordStockMoveTx(s, tx, it.ProductID, -int64(it.Qty), models.MoveSale, orderNumber, "", saleUserID, saleUsername); err != nil {
+				return nil, err
 			}
 		}
 		// Loyalty earns on EVERY paid order tied to a customer —
@@ -1344,9 +1364,14 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
 	if err != nil {
 		return nil, err
 	}
+	var voidNumber string
+	tx.QueryRow(`SELECT COALESCE(number,'') FROM orders WHERE id = ?`, orderID).Scan(&voidNumber)
 	if status == models.OrderPaid {
 		for _, it := range items {
 			if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty + ? WHERE id = ?`), it.Qty, it.ProductID); err != nil {
+				return nil, err
+			}
+			if err := recordStockMoveTx(s, tx, it.ProductID, int64(it.Qty), models.MoveVoidRestore, voidNumber, truncStr(reason, 120), p.ID, p.Username); err != nil {
 				return nil, err
 			}
 		}

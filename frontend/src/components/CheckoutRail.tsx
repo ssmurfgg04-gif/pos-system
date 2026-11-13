@@ -23,7 +23,7 @@ import { shareReceiptWhatsapp } from '../lib/receipt-share'
 import { toast } from '../stores/toasts'
 import { enqueue, newClientUuid } from '../offline/queue'
 import { useNet } from '../offline/heartbeat'
-import { ShoppingCart, Smartphone, Banknote, BookUser, Wallet, X, Minus, Plus, Check, AlertTriangle, RotateCcw, Ban, Star, SplitSquareHorizontal, Pause, Archive, Trash2, Share2 } from 'lucide-react'
+import { ShoppingCart, Smartphone, Banknote, BookUser, Wallet, X, Minus, Plus, Check, AlertTriangle, RotateCcw, Ban, Star, SplitSquareHorizontal, Pause, Archive, Trash2, Share2, BadgePercent } from 'lucide-react'
 
 type Method = 'mpesa' | 'cash' | 'tab' | 'credit'
 type StkStage = 'sending' | 'sent' | 'waiting' | 'slow' | 'paid' | 'failed'
@@ -447,6 +447,18 @@ export function CheckoutRail({
     return m
   }, [products])
 
+  // v1.6.3 wholesale tier: the picked customer decides which catalog price
+  // the cart lines carry. A wholesale customer moves lines still priced at
+  // retail to the product's wholesale price; picking anyone else (or
+  // clearing) moves lines still priced at wholesale back down to retail.
+  // Manually overridden lines are never touched (the store only reprices
+  // lines still sitting at a catalog price). No customer is attached for
+  // cash/STK sales, so the wholesale pill + repricing only ever show here.
+  const pickCustomer = (c: Customer | null) => {
+    setTabCustomer(c)
+    cart.setPriceTier(c?.priceTier === 'wholesale' ? 'wholesale' : 'retail', productById)
+  }
+
   if (mode !== 'idle' && activeOrder) {
     return (
       <>
@@ -618,7 +630,7 @@ export function CheckoutRail({
               phone, setPhone, phoneOk, normalizedPhone, email, setEmail, customerName, setCustomerName,
               buyerPin, setBuyerPin,
               received, setReceived, quick, change, canCash,
-              tabQuery, setTabQuery, tabOptions, tabCustomer, setTabCustomer, tabSearchedFor,
+              tabQuery, setTabQuery, tabOptions, tabCustomer, setTabCustomer: pickCustomer, tabSearchedFor,
               discountCents, setDiscountCents, discountLabel, setDiscountLabel, redeem, setRedeem,
               splitMode, setSplitMode, splitLegs, setSplitLegs, splitValid, splitNeedsCustomer, splitAsyncLeg,
               canDiscount, canRedeem, loyaltyEnabled, tabCustomerLoyalty: tabCustomer,
@@ -911,6 +923,12 @@ function PaymentForm(props: {
               placeholder="Type a name or phone…"
             />
           </Field>
+          {tabCustomer?.priceTier === 'wholesale' && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-pill bg-pending-bg text-pending-text text-[11px] font-bold w-fit -mt-1">
+              <BadgePercent size={12} strokeWidth={2.5} aria-hidden />
+              Wholesale prices
+            </span>
+          )}
           {!tabCustomer && !tabQuery.trim() && (
             <p className="text-[12px] text-ink-muted -mt-1">
               Tap the customer to charge — anyone works. Type a name or phone to search if the list is long.

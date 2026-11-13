@@ -25,6 +25,15 @@ type DailySummary struct {
 	PerStaff      []StaffSales `json:"perStaff"` // who sold what today
 	ByTill        []TillSales  `json:"byTill"`   // sales grouped by originating till (v19)
 	NewCustomers  int          `json:"newCustomers"`
+	// v1.6.3 — the money side of the day (expenses), the returns that
+	// came back, and what the shelf is worth right now.
+	ExpensesCents   int64 `json:"expensesCents"`
+	ReturnsCents    int64 `json:"returnsCents"`
+	ReturnsCount    int   `json:"returnsCount"`
+	NetSalesCents   int64 `json:"netSalesCents"` // sales - returns
+	StockUnits      int64 `json:"stockUnits"`
+	StockValueCents int64 `json:"stockValueCents"`
+	LowStockCount   int   `json:"lowStockCount"`
 }
 
 // TillSales is one originating till's slice of a reporting window (v19:
@@ -183,6 +192,21 @@ func (s *Service) GetDailySummary(date string) (*DailySummary, error) {
 		rows.Close()
 	}
 	_ = s.db.QueryRow(s.db.Rebind(`SELECT COUNT(*) FROM customers WHERE created_at >= ? AND created_at < ?`), from, to).Scan(&out.NewCustomers)
+
+	// v1.6.3 — expenses booked today, returns issued today, and the
+	// point-in-time stock picture for the day-end board.
+	_ = s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(SUM(amount_cents),0) FROM expenses WHERE spent_on = ?`), date).Scan(&out.ExpensesCents)
+	_ = s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(SUM(total_cents),0), COUNT(*) FROM returns WHERE created_at >= ? AND created_at < ?`), from, to).
+		Scan(&out.ReturnsCents, &out.ReturnsCount)
+	out.NetSalesCents = out.SalesCents - out.ReturnsCents
+	_ = s.db.QueryRow(`
+		SELECT COALESCE(SUM(stock_qty),0), COALESCE(SUM(stock_qty * cost_cents),0)
+		FROM products WHERE track_stock = 1 AND is_active = 1`).Scan(&out.StockUnits, &out.StockValueCents)
+	_ = s.db.QueryRow(s.db.Rebind(`
+		SELECT COUNT(*) FROM products
+		WHERE track_stock = 1 AND is_active = 1
+		  AND stock_qty <= (CASE WHEN COALESCE(low_stock_units,0) > 0 THEN low_stock_units ELSE ? END)`),
+		s.settings.GetInt("low_stock_threshold", 5)).Scan(&out.LowStockCount)
 	return out, nil
 }
 
@@ -213,6 +237,9 @@ type MonthlySummary struct {
 	TaxIncluded   bool         `json:"taxIncluded"`
 	Series        []DayPoint   `json:"series"` // per-day sales in the month
 	TopProducts   []TopProduct `json:"topProducts"`
+	// v1.6.3 — expenses booked in the month + refunds given out.
+	ExpensesCents int64 `json:"expensesCents"`
+	ReturnsCents  int64 `json:"returnsCents"`
 }
 
 // monthBounds returns the UTC window [from, toExcl) covering one EAT
@@ -308,7 +335,23 @@ func (s *Service) GetMonthlySummary(month string) (*MonthlySummary, error) {
 		}
 		rows.Close()
 	}
+
+	// v1.6.3 — money out (expenses) and money back (returns) in the month.
+	monthStart, monthEnd := from, to
+	_ = s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(SUM(amount_cents),0) FROM expenses WHERE spent_on >= ? AND spent_on < ?`),
+		eatDayOfMonth(monthStart), eatDayOfMonth(monthEnd)).Scan(&out.ExpensesCents)
+	_ = s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(SUM(total_cents),0) FROM returns WHERE created_at >= ? AND created_at < ?`),
+		monthStart, monthEnd).Scan(&out.ReturnsCents)
 	return out, nil
+}
+
+// eatDayOfMonth converts an EAT timestamp to its YYYY-MM-DD calendar day.
+func eatDayOfMonth(stamp string) string {
+	t, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil {
+		return eatToday()
+	}
+	return t.In(eastAfrica).Format("2006-01-02")
 }
 
 func asInt(v any) int {

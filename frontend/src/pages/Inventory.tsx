@@ -5,7 +5,7 @@
 // images via the public /products/:id/image route, thumbnails in the list).
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, downloadFile, Category, Product } from '../lib/api'
+import { api, downloadFile, Category, Product, StockMovement } from '../lib/api'
 import { productPhotoCandidates } from '../lib/photos'
 import { ProductPhoto } from '../components/ProductPhoto'
 import { useAuth } from '../stores/auth'
@@ -16,7 +16,7 @@ import { printBarcodeLabels } from '../lib/labels'
 import { centsToAmount } from '../lib/money'
 import { normalizeProductImage, PHOTO_ACCEPT } from '../lib/photo'
 import { toast } from '../stores/toasts'
-import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2, Printer } from 'lucide-react'
+import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2, Printer, History } from 'lucide-react'
 
 /** Editor preview: the product's CURRENT best photo (uploaded first, then
  *  the demo's bundled fallback) — unlike the thumbnails this must NOT walk
@@ -35,6 +35,28 @@ function ProductThumb({ p }: { p: Product }) {
   )
 }
 
+// v1.6.3 per-product low-stock threshold: the product's own lowStockUnits
+// wins when set (>0), otherwise the shop default. The page previously
+// hardcoded 5 — that constant stays the fallback (the server's global
+// low_stock_threshold setting defaults to 5 too; the /products/low-stock
+// report computes this authoritatively server-side).
+function lowStockAt(p: Product): number {
+  return (p.lowStockUnits ?? 0) > 0 ? (p.lowStockUnits as number) : 5
+}
+
+// Stock-ledger kinds → badge colours (semantic tokens: gray = neutral,
+// red = stock out the door, green = stock back on the shelf, blue = manual
+// adjustment, amber = count session).
+const MOVEMENT_META: Record<string, { label: string; cls: string }> = {
+  OPENING: { label: 'Opening', cls: 'bg-void-bg text-void-text' },
+  SALE: { label: 'Sale', cls: 'bg-danger-bg text-danger-text' },
+  VOID_RESTORE: { label: 'Void restored', cls: 'bg-paid-bg text-paid-text' },
+  ADJUSTMENT: { label: 'Adjustment', cls: 'bg-info-bg text-info-text' },
+  COUNT: { label: 'Count', cls: 'bg-pending-bg text-pending-text' },
+  PO_RECEIVE: { label: 'PO received', cls: 'bg-paid-bg text-paid-text' },
+  RETURN_RESTOCK: { label: 'Return restock', cls: 'bg-paid-bg text-paid-text' },
+}
+
 export function Inventory() {
   const canManage = useAuth((s) => !!s.user?.permissions.includes('products.manage'))
   // Stock counts ride the same permission the Go route group uses
@@ -47,6 +69,9 @@ export function Inventory() {
   const [catFilter, setCatFilter] = useState('all')
   const [editing, setEditing] = useState<Product | 'new' | null>(null)
   const [stockFor, setStockFor] = useState<Product | null>(null)
+  // v1.6.3 stock ledger — the per-product movement history (read-only).
+  const [historyFor, setHistoryFor] = useState<Product | null>(null)
+  const [movements, setMovements] = useState<StockMovement[] | null>(null)
   const [newCat, setNewCat] = useState('')
   const [addingCat, setAddingCat] = useState(false)
   const [editCatId, setEditCatId] = useState<number | null>(null)
@@ -114,6 +139,9 @@ export function Inventory() {
         stockQty: p.stockQty,
         trackStock: p.trackStock,
         barcode: p.barcode || '',
+        // v1.6.3 fields — a full replace would silently reset them to 0.
+        wholesalePriceCents: p.wholesalePriceCents ?? 0,
+        lowStockUnits: p.lowStockUnits ?? 0,
         active: true,
       })
       toast.success('Product restored', p.name)
@@ -122,6 +150,16 @@ export function Inventory() {
       toast.error('Restore failed', e?.message)
     } finally {
       setRemoving(null)
+    }
+  }
+
+  const openHistory = async (p: Product) => {
+    setHistoryFor(p)
+    setMovements(null)
+    try {
+      setMovements(await api.get<StockMovement[]>(`/api/v1/products/${p.id}/movements?limit=100`))
+    } catch (e: any) {
+      toast.error('History failed', e?.message)
     }
   }
 
@@ -332,7 +370,10 @@ export function Inventory() {
                   <td className="px-3 py-2.5 font-semibold tabular text-ink">{centsToAmount(p.priceCents)}</td>
                   <td className="px-3 py-2.5">
                     {p.trackStock ? (
-                      <span className={`font-bold tabular text-[13px] ${p.stockQty <= 0 ? 'text-danger-text' : p.stockQty <= 5 ? 'text-pending-text' : 'text-ink'}`}>
+                      <span
+                        className={`font-bold tabular text-[13px] ${p.stockQty <= 0 ? 'text-danger-text' : p.stockQty <= lowStockAt(p) ? 'text-pending-text' : 'text-ink'}`}
+                        title={(p.lowStockUnits ?? 0) > 0 ? `Low-stock alert at ${lowStockAt(p)} units (product setting)` : undefined}
+                      >
                         {p.stockQty}
                       </span>
                     ) : (
@@ -342,6 +383,10 @@ export function Inventory() {
                   {canManage && (
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                       <span className="inline-flex items-center gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => openHistory(p)} title="Stock ledger — sales, adjustments, counts">
+                          <History size={14} strokeWidth={2.5} aria-hidden />
+                          History
+                        </Button>
                         {p.trackStock && p.active && (
                           <Button size="sm" variant="ghost" onClick={() => setStockFor(p)} title="Receive / adjust stock">
                             <PackagePlus size={14} strokeWidth={2.5} aria-hidden />
@@ -444,6 +489,46 @@ export function Inventory() {
       {editing && <ProductModal product={editing === 'new' ? null : editing} categories={categories} onClose={() => setEditing(null)} onSaved={load} />}
 
       {stockFor && <StockModal product={stockFor} onClose={() => setStockFor(null)} onSaved={load} />}
+
+      {/* v1.6.3 stock ledger — same shape as the Customers page's ledger
+          modal: spinner → empty state → table. Rendered newest-first. */}
+      <Modal
+        open={historyFor !== null}
+        onClose={() => { setHistoryFor(null); setMovements(null) }}
+        title={historyFor ? `Stock history, ${historyFor.name}` : 'Stock history'}
+        size="lg"
+      >
+        {!movements ? (
+          <div className="py-8 flex justify-center"><Spinner /></div>
+        ) : movements.length === 0 ? (
+          <EmptyState icon={<History size={24} strokeWidth={2.25} />} title="No stock movements yet" body="Sales, adjustments and count sessions for this product will appear here." />
+        ) : (
+          <Table head={['When', 'Kind', 'Change', 'Balance', 'Reference', 'Note', 'By']}>
+            {[...movements]
+              .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id)
+              .map((m) => {
+                const meta = MOVEMENT_META[m.kind] ?? { label: m.kind, cls: 'bg-void-bg text-void-text' }
+                return (
+                  <tr key={m.id}>
+                    <td className="px-3 py-2 text-[12px] text-ink-subtle whitespace-nowrap">{new Date(m.createdAt).toLocaleString()}</td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-pill text-[11px] font-bold whitespace-nowrap ${meta.cls}`}>
+                        {meta.label}
+                      </span>
+                    </td>
+                    <td className={`px-3 py-2 text-[12px] font-bold tabular ${m.delta > 0 ? 'text-paid-text' : m.delta < 0 ? 'text-danger-text' : 'text-ink-muted'}`}>
+                      {m.delta > 0 ? `+${m.delta}` : m.delta}
+                    </td>
+                    <td className="px-3 py-2 text-[12px] font-bold tabular text-ink">{m.balanceAfter}</td>
+                    <td className="px-3 py-2 text-[12px] text-ink-muted max-w-36 truncate">{m.reference || '—'}</td>
+                    <td className="px-3 py-2 text-[12px] text-ink-muted max-w-48 truncate">{m.note || '—'}</td>
+                    <td className="px-3 py-2 text-[12px] text-ink-muted whitespace-nowrap">{m.username}</td>
+                  </tr>
+                )
+              })}
+          </Table>
+        )}
+      </Modal>
     </div>
   )
 }
@@ -453,6 +538,9 @@ export function Inventory() {
 function StockModal({ product, onClose, onSaved }: { product: Product; onClose: () => void; onSaved: () => void }) {
   const [delta, setDelta] = useState('')
   const [reason, setReason] = useState('')
+  // v1.6.3: a free-text note rides the adjustment into the stock ledger
+  // (separate from the reason — the ledger prints both).
+  const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -463,7 +551,11 @@ function StockModal({ product, onClose, onSaved }: { product: Product; onClose: 
     setBusy(true)
     setError('')
     try {
-      await api.post(`/api/v1/products/${product.id}/adjust-stock`, { delta: n, reason: reason.trim() || undefined })
+      await api.post(`/api/v1/products/${product.id}/adjust-stock`, {
+        delta: n,
+        reason: reason.trim() || undefined,
+        note: note.trim() || undefined,
+      })
       toast.success('Stock updated', `${product.name}: ${product.stockQty} → ${Math.max(0, product.stockQty + n)}`)
       onSaved()
       onClose()
@@ -498,6 +590,9 @@ function StockModal({ product, onClose, onSaved }: { product: Product; onClose: 
         <Field label="Reason (optional)" hint="Recorded in the audit log, e.g. “received from supplier”">
           <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Received from supplier" />
         </Field>
+        <Field label="Note (optional)" hint="Printed in the stock ledger, e.g. “damaged in transit”">
+          <Input value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
         {valid && (
           <p className="text-[13px] text-ink-muted">
             New stock level: <strong className={`tabular ${n > 0 ? 'text-paid-text' : 'text-danger-text'}`}>{Math.max(0, product.stockQty + n)}</strong>
@@ -527,6 +622,10 @@ function ProductModal({
     categoryId: product?.categoryId ?? categories[0]?.id ?? 0,
     priceCents: product?.priceCents ?? 0,
     costCents: product?.costCents ?? 0,
+    // v1.6.3: wholesale tier price (0 = same as retail) and the per-product
+    // low-stock threshold (0 = shop default). Persisted on PUT/POST below.
+    wholesalePriceCents: product?.wholesalePriceCents ?? 0,
+    lowStockUnits: product?.lowStockUnits ?? 0,
     stockQty: product?.stockQty ?? 0,
     trackStock: product?.trackStock ?? true,
     isGiftCard: product?.isGiftCard ?? false,
@@ -769,6 +868,17 @@ function ProductModal({
         </Field>
         <Field label="Cost price" hint="Used for margin reports">
           <MoneyInput value={form.costCents} onCents={(c) => setForm({ ...form, costCents: c })} />
+        </Field>
+        <Field label="Wholesale price (KES)" hint="0 = same as retail; wholesale customers auto-get this price at the till">
+          <MoneyInput value={form.wholesalePriceCents} onCents={(c) => setForm({ ...form, wholesalePriceCents: c })} />
+        </Field>
+        <Field label="Low stock alert (units)" hint="0 = shop default">
+          <Input
+            type="number"
+            value={form.lowStockUnits}
+            onChange={(e) => setForm({ ...form, lowStockUnits: Number(e.target.value) })}
+            inputMode="numeric"
+          />
         </Field>
         <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink">
           <input

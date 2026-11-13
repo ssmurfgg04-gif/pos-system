@@ -16,13 +16,13 @@ const loyaltyPerCents = 10000
 // customerColumns is the shared SELECT list (email + notes joined CRM).
 const customerColumns = `
         id, name, COALESCE(phone,''), COALESCE(email,''), COALESCE(notes,''), credit_limit_cents, loyalty_points,
-        balance_cents, COALESCE(store_credit_cents,0), is_active, created_at, updated_at`
+        balance_cents, COALESCE(store_credit_cents,0), is_active, created_at, updated_at, COALESCE(price_tier,'retail')`
 
 func scanCustomer(scan func(...any) error) (models.Customer, error) {
 	var c models.Customer
 	var active int
 	err := scan(&c.ID, &c.Name, &c.Phone, &c.Email, &c.Notes, &c.CreditLimitCents, &c.LoyaltyPoints,
-		&c.BalanceCents, &c.StoreCreditCents, &active, &c.CreatedAt, &c.UpdatedAt)
+		&c.BalanceCents, &c.StoreCreditCents, &active, &c.CreatedAt, &c.UpdatedAt, &c.PriceTier)
 	c.Active = active == 1
 	return c, err
 }
@@ -88,7 +88,7 @@ func (s *Service) FindCustomerByPhone(phone string) *models.Customer {
 // CreateCustomer registers a customer. The phone is normalized (07… →
 // 2547…), and an exact-phone duplicate is refused — one customer, one
 // history. limitCents 0 = cash only (no tab).
-func (s *Service) CreateCustomer(name, phone, email, notes string, limitCents int64, p *auth.Principal) (*models.Customer, error) {
+func (s *Service) CreateCustomer(name, phone, email, notes string, limitCents int64, priceTier string, p *auth.Principal) (*models.Customer, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("customer name required")
@@ -105,9 +105,9 @@ func (s *Service) CreateCustomer(name, phone, email, notes string, limitCents in
 	}
 	now := nowStamp()
 	res, err := s.db.Exec(s.db.Rebind(`
-                INSERT INTO customers (name, phone, email, notes, credit_limit_cents, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)`),
-		name, norm, strings.TrimSpace(email), truncStr(strings.TrimSpace(notes), 500), limitCents, now, now)
+                INSERT INTO customers (name, phone, email, notes, credit_limit_cents, price_tier, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+		name, norm, strings.TrimSpace(email), truncStr(strings.TrimSpace(notes), 500), limitCents, tierOrRetail(priceTier), now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (s *Service) CreateCustomer(name, phone, email, notes string, limitCents in
 }
 
 // UpdateCustomer edits name/phone/email/notes/limit/active state.
-func (s *Service) UpdateCustomer(id int64, name, phone, email, notes string, limitCents int64, active bool, p *auth.Principal) (*models.Customer, error) {
+func (s *Service) UpdateCustomer(id int64, name, phone, email, notes string, limitCents int64, priceTier string, active bool, p *auth.Principal) (*models.Customer, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("customer name required")
@@ -139,8 +139,8 @@ func (s *Service) UpdateCustomer(id int64, name, phone, email, notes string, lim
 	}
 	res, err := s.db.Exec(s.db.Rebind(`
                 UPDATE customers SET name = ?, phone = ?, email = ?, notes = ?, credit_limit_cents = ?,
-                        is_active = ?, updated_at = ? WHERE id = ?`),
-		name, norm, strings.TrimSpace(email), truncStr(strings.TrimSpace(notes), 500), limitCents, activeInt, nowStamp(), id)
+                        is_active = ?, price_tier = ?, updated_at = ? WHERE id = ?`),
+		name, norm, strings.TrimSpace(email), truncStr(strings.TrimSpace(notes), 500), limitCents, activeInt, tierOrRetail(priceTier), nowStamp(), id)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +203,7 @@ func recordLedgerTx(tx *sql.Tx, rebind func(string) string, customerID, orderID 
 		customerID, orderID, kind, amountCents, pointsDelta, note, by, nowStamp()); err != nil {
 		return err
 	}
-	if kind == models.LedgerCreditTopup || kind == models.LedgerCreditRedeem {
+	if kind == models.LedgerCreditTopup || kind == models.LedgerCreditRedeem || kind == models.LedgerRefund {
 		if _, err := tx.Exec(rebind(`
                         UPDATE customers SET store_credit_cents = store_credit_cents + ?, updated_at = ? WHERE id = ?`),
 			amountCents, nowStamp(), customerID); err != nil {

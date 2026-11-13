@@ -1185,6 +1185,251 @@ CREATE INDEX IF NOT EXISTS idx_whatsapp_jobs_status ON whatsapp_jobs(status, id)
 			return unionRolePerms(d, tx, extra)
 		},
 	},
+	{
+		// v1.6.3 (v22) — the stock ledger. Until now stock_qty was a bare
+		// counter on products: a wrong number had no history, no who, no
+		// why. Every stock change now lands in an append-only
+		// stock_movements row (kind + signed delta + balance_after + who),
+		// the OSPOS/"quantity is a projection" pattern the whole industry
+		// runs on. Migration backfills one OPENING anchor per tracked
+		// product so day-one stock is auditable. Also: per-product
+		// low-stock thresholds and the hot-path indexes the reports and
+		// order lists were missing.
+		Version: 22,
+		SQLite: `
+CREATE TABLE IF NOT EXISTS stock_movements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        -- No FK on purpose: this is an append-only audit trail. It must
+        -- survive product deletion/deactivation and never block an
+        -- operational delete (the LEFT JOINs resolve names, dangling rows
+        -- just show "(deleted product)").
+        product_id INTEGER NOT NULL,
+        delta INTEGER NOT NULL,
+        balance_after INTEGER NOT NULL DEFAULT 0,
+        kind TEXT NOT NULL,
+        reference TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        user_id INTEGER NOT NULL DEFAULT 0,
+        username TEXT NOT NULL DEFAULT '',
+        device_id TEXT NOT NULL DEFAULT '',
+        client_uuid TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_product_created ON stock_movements(product_id, id);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_kind_created ON stock_movements(kind, created_at);
+ALTER TABLE products ADD COLUMN low_stock_units INTEGER NOT NULL DEFAULT 10;
+CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_product ON order_items(product_id);
+CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+CREATE INDEX IF NOT EXISTS idx_customer_ledger_cust_created ON customer_ledger(customer_id, id);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
+`,
+		Pg: `
+CREATE TABLE IF NOT EXISTS stock_movements (
+        id SERIAL PRIMARY KEY,
+        -- No FK on purpose: append-only audit trail (see SQLite comment).
+        product_id INTEGER NOT NULL,
+        delta INTEGER NOT NULL,
+        balance_after INTEGER NOT NULL DEFAULT 0,
+        kind TEXT NOT NULL,
+        reference TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        user_id INTEGER NOT NULL DEFAULT 0,
+        username TEXT NOT NULL DEFAULT '',
+        device_id TEXT NOT NULL DEFAULT '',
+        client_uuid TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_product_created ON stock_movements(product_id, id);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_kind_created ON stock_movements(kind, created_at);
+ALTER TABLE products ADD COLUMN low_stock_units INTEGER NOT NULL DEFAULT 10;
+CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_product ON order_items(product_id);
+CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+CREATE INDEX IF NOT EXISTS idx_customer_ledger_cust_created ON customer_ledger(customer_id, id);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
+`,
+		Go: func(d *DB, tx *sql.Tx) error {
+			// One OPENING anchor per product so the ledger starts at the
+			// quantity the till already trusts. delta = current stock.
+			_, err := tx.Exec(d.Rebind(`INSERT INTO stock_movements
+                                (product_id, delta, balance_after, kind, reference, note, user_id, username, device_id, client_uuid, created_at)
+                                SELECT id, stock_qty, stock_qty, 'OPENING', '', 'ledger start (migration v22)', 0, '', '', '', ` + d.nowExpr() + `
+                                FROM products
+                                WHERE NOT EXISTS (SELECT 1 FROM stock_movements WHERE stock_movements.product_id = products.id)`))
+			if err != nil {
+				return fmt.Errorf("backfill stock_movements openings: %w", err)
+			}
+			// Seeded roles pick up the new permissions (union-only).
+			return unionRolePerms(d, tx, map[string][]string{
+				"Admin":      models.SeededRolePermissions["Admin"],
+				"Owner":      models.SeededRolePermissions["Owner"],
+				"Front Desk": {"returns.manage", "expenses.view"},
+				"Cashier":    {"returns.manage", "expenses.view"},
+			})
+		},
+	},
+	{
+		// v1.6.3 (v23) — returns and refunds. Tills could only void whole
+		// orders before; a customer walking back with one wrong item had
+		// no path. returns/return_items mirror the sale (RET- numbering),
+		// restock lands in the v22 ledger, and store-credit refunds ride
+		// the existing customer ledger.
+		Version: 23,
+		SQLite: `
+CREATE TABLE IF NOT EXISTS returns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        number TEXT NOT NULL UNIQUE,
+        order_id INTEGER NOT NULL REFERENCES orders(id),
+        order_number TEXT NOT NULL DEFAULT '',
+        total_cents INTEGER NOT NULL DEFAULT 0,
+        method TEXT NOT NULL DEFAULT 'CASH',
+        reason TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'COMPLETED',
+        client_uuid TEXT NOT NULL DEFAULT '',
+        created_by INTEGER NOT NULL DEFAULT 0,
+        created_by_name TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS return_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_id INTEGER NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+        order_item_id INTEGER NOT NULL DEFAULT 0,
+        product_id INTEGER NOT NULL DEFAULT 0,
+        name TEXT NOT NULL DEFAULT '',
+        sku TEXT NOT NULL DEFAULT '',
+        qty INTEGER NOT NULL DEFAULT 0,
+        unit_price_cents INTEGER NOT NULL DEFAULT 0,
+        line_total_cents INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_returns_order ON returns(order_id);
+CREATE INDEX IF NOT EXISTS idx_returns_created ON returns(created_at);
+CREATE INDEX IF NOT EXISTS idx_return_items_return ON return_items(return_id);
+`,
+		Pg: `
+CREATE TABLE IF NOT EXISTS returns (
+        id SERIAL PRIMARY KEY,
+        number TEXT NOT NULL UNIQUE,
+        order_id INTEGER NOT NULL REFERENCES orders(id),
+        order_number TEXT NOT NULL DEFAULT '',
+        total_cents INTEGER NOT NULL DEFAULT 0,
+        method TEXT NOT NULL DEFAULT 'CASH',
+        reason TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'COMPLETED',
+        client_uuid TEXT NOT NULL DEFAULT '',
+        created_by INTEGER NOT NULL DEFAULT 0,
+        created_by_name TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS return_items (
+        id SERIAL PRIMARY KEY,
+        return_id INTEGER NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+        order_item_id INTEGER NOT NULL DEFAULT 0,
+        product_id INTEGER NOT NULL DEFAULT 0,
+        name TEXT NOT NULL DEFAULT '',
+        sku TEXT NOT NULL DEFAULT '',
+        qty INTEGER NOT NULL DEFAULT 0,
+        unit_price_cents INTEGER NOT NULL DEFAULT 0,
+        line_total_cents INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_returns_order ON returns(order_id);
+CREATE INDEX IF NOT EXISTS idx_returns_created ON returns(created_at);
+CREATE INDEX IF NOT EXISTS idx_return_items_return ON return_items(return_id);
+`,
+	},
+	{
+		// v1.6.3 (v24) — expenses. Day-end reports showed sales with no
+		// cost side: rent, power, airtime, transport all lived outside
+		// the till. expense_types is a small seeded catalog; expenses is
+		// the money log (EXP- numbering) that the daily/monthly reports
+		// now net against sales.
+		Version: 24,
+		SQLite: `
+CREATE TABLE IF NOT EXISTS expense_types (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        is_active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        number TEXT NOT NULL UNIQUE,
+        expense_type_id INTEGER NOT NULL REFERENCES expense_types(id),
+        amount_cents INTEGER NOT NULL,
+        method TEXT NOT NULL DEFAULT 'CASH',
+        reference TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        spent_on TEXT NOT NULL DEFAULT '',
+        client_uuid TEXT NOT NULL DEFAULT '',
+        created_by INTEGER NOT NULL DEFAULT 0,
+        created_by_name TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_expenses_spenton ON expenses(spent_on);
+CREATE INDEX IF NOT EXISTS idx_expenses_type ON expenses(expense_type_id);
+`,
+		Pg: `
+CREATE TABLE IF NOT EXISTS expense_types (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        is_active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS expenses (
+        id SERIAL PRIMARY KEY,
+        number TEXT NOT NULL UNIQUE,
+        expense_type_id INTEGER NOT NULL REFERENCES expense_types(id),
+        amount_cents INTEGER NOT NULL,
+        method TEXT NOT NULL DEFAULT 'CASH',
+        reference TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        spent_on TEXT NOT NULL DEFAULT '',
+        client_uuid TEXT NOT NULL DEFAULT '',
+        created_by INTEGER NOT NULL DEFAULT 0,
+        created_by_name TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_expenses_spenton ON expenses(spent_on);
+CREATE INDEX IF NOT EXISTS idx_expenses_type ON expenses(expense_type_id);
+`,
+		Go: func(d *DB, tx *sql.Tx) error {
+			for _, name := range []string{
+				"Rent", "Electricity", "Internet / Airtime", "Transport",
+				"Salaries", "Supplies", "Maintenance", "Other",
+			} {
+				if _, err := tx.Exec(d.Rebind(`INSERT INTO expense_types (name) VALUES (?) ON CONFLICT DO NOTHING`), name); err != nil {
+					return fmt.Errorf("seed expense type %s: %w", name, err)
+				}
+			}
+			return unionRolePerms(d, tx, map[string][]string{
+				"Admin": {"expenses.manage"},
+				"Owner": {"expenses.manage"},
+			})
+		},
+	},
+	{
+		// v1.6.3 (v25) — wholesale price tiers. The friend's SmartPOS
+		// keeps retail/wholesale per product and a per-customer price
+		// type; the POS page flips between them with one tap. We store
+		// wholesale_price_cents on the product (0 = same as retail) and
+		// price_tier on the customer ('retail' default), and the till
+		// auto-applies the tier price when a customer is on the cart.
+		Version: 25,
+		SQLite: `
+ALTER TABLE products ADD COLUMN wholesale_price_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE customers ADD COLUMN price_tier TEXT NOT NULL DEFAULT 'retail';
+`,
+		Pg: `
+ALTER TABLE products ADD COLUMN wholesale_price_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE customers ADD COLUMN price_tier TEXT NOT NULL DEFAULT 'retail';
+`,
+	},
 }
 
 // backfillRolePermsV19 unions the v19 sales-oversight permission into the

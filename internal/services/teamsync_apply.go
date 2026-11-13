@@ -54,6 +54,10 @@ func (s *Service) applyEvent(entity, op string, payload json.RawMessage) error {
 		return s.applyVoidReason(payload)
 	case "shift":
 		return s.applyShift(payload)
+	case "return":
+		return s.applyReturn(payload)
+	case "expense":
+		return s.applyExpense(payload)
 	default:
 		return nil // unknown entity types are skipped (forward compatibility)
 	}
@@ -244,6 +248,8 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
 		TrackStock   bool   `json:"trackStock"`
 		Active       bool   `json:"active"`
 		IsGiftCard   bool   `json:"isGiftCard"`
+		Wholesale    int64  `json:"wholesalePriceCents"`
+		LowStock     int    `json:"lowStockUnits"`
 		UpdatedAt    string `json:"updatedAt"`
 	}
 	if err := json.Unmarshal(payload, &pr); err != nil {
@@ -280,9 +286,9 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
 		}
 		if _, err := s.db.Exec(s.db.Rebind(`
                         UPDATE products SET barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
-                                track_stock = ?, is_active = ?, is_gift_card = ?, updated_at = ?
+                                track_stock = ?, is_active = ?, is_gift_card = ?, wholesale_price_cents = ?, low_stock_units = ?, updated_at = ?
                         WHERE id = ?`),
-			pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.UpdatedAt, localID); err != nil {
+			pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.Wholesale, pr.LowStock, pr.UpdatedAt, localID); err != nil {
 			return err
 		}
 		if pr.StockSet {
@@ -298,9 +304,9 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
 		sku = "SKU-SYNC-" + randToken(6) // 48-bit token: a collision here would dead-letter the event
 	}
 	_, err = s.db.Exec(s.db.Rebind(`
-                INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-		sku, pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, pr.StockQty, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.UpdatedAt)
+                INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card, wholesale_price_cents, low_stock_units, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		sku, pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, pr.StockQty, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.Wholesale, pr.LowStock, pr.UpdatedAt)
 	return err
 }
 
@@ -342,6 +348,7 @@ func (s *Service) applyCustomer(payload json.RawMessage) error {
 		Notes       string `json:"notes"`
 		CreditLimit int64  `json:"creditLimitCents"`
 		Active      bool   `json:"active"`
+		PriceTier   string `json:"priceTier"`
 		UpdatedAt   string `json:"updatedAt"`
 	}
 	if err := json.Unmarshal(payload, &cu); err != nil {
@@ -363,16 +370,16 @@ func (s *Service) applyCustomer(payload json.RawMessage) error {
 			return nil // stale
 		}
 		_, err = s.db.Exec(s.db.Rebind(`
-                        UPDATE customers SET name = ?, email = ?, notes = ?, credit_limit_cents = ?, is_active = ?, updated_at = ? WHERE id = ?`),
-			cu.Name, cu.Email, cu.Notes, cu.CreditLimit, btoi(cu.Active), cu.UpdatedAt, id)
+                        UPDATE customers SET name = ?, email = ?, notes = ?, credit_limit_cents = ?, is_active = ?, price_tier = ?, updated_at = ? WHERE id = ?`),
+			cu.Name, cu.Email, cu.Notes, cu.CreditLimit, btoi(cu.Active), tierOrRetail(cu.PriceTier), cu.UpdatedAt, id)
 		return err
 	}
 	if err != sql.ErrNoRows {
 		return err
 	}
 	_, err = s.db.Exec(s.db.Rebind(`
-                INSERT INTO customers (name, phone, email, notes, credit_limit_cents, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`),
-		cu.Name, cu.Phone, cu.Email, cu.Notes, cu.CreditLimit, btoi(cu.Active), cu.UpdatedAt)
+                INSERT INTO customers (name, phone, email, notes, credit_limit_cents, is_active, price_tier, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+		cu.Name, cu.Phone, cu.Email, cu.Notes, cu.CreditLimit, btoi(cu.Active), tierOrRetail(cu.PriceTier), cu.UpdatedAt)
 	return err
 }
 
@@ -423,7 +430,7 @@ func (s *Service) applyLedger(payload json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if le.Kind == models.LedgerCreditTopup || le.Kind == models.LedgerCreditRedeem {
+	if le.Kind == models.LedgerCreditTopup || le.Kind == models.LedgerCreditRedeem || le.Kind == models.LedgerRefund {
 		_, err = s.db.Exec(s.db.Rebind(`UPDATE customers SET store_credit_cents = store_credit_cents + ?, updated_at = ? WHERE id = ?`),
 			le.Amount, nowStamp(), custID)
 		return err
@@ -852,4 +859,149 @@ func (s *Service) applyShift(payload json.RawMessage) error {
 	}
 	s.broadcast(EventShiftUpdate, map[string]any{"synced": true, "userName": ev.UserName})
 	return nil
+}
+
+// applyReturn records a remote return. Deliberately money- and stock-silent:
+// the emitting till already restocked and (maybe) refunded — here we only
+// mirror the document so the Orders page shows the RET- against the sale.
+// Stock arrives via product events; store-credit via the ledger event.
+func (s *Service) applyReturn(payload json.RawMessage) error {
+	var ev struct {
+		ClientUUID      string           `json:"clientUuid"`
+		Number          string           `json:"number"`
+		OrderNumber     string           `json:"orderNumber"`
+		OrderClientUUID string           `json:"orderClientUuid"`
+		TotalCents      int64            `json:"totalCents"`
+		Method          string           `json:"method"`
+		Reason          string           `json:"reason"`
+		CreatedByName   string           `json:"createdByName"`
+		CreatedAt       string           `json:"createdAt"`
+		Items           []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(payload, &ev); err != nil {
+		return err
+	}
+	if ev.ClientUUID == "" {
+		return fmt.Errorf("return event missing clientUuid")
+	}
+	var existing int64
+	err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM returns WHERE client_uuid = ?`), ev.ClientUUID).Scan(&existing)
+	if err == nil {
+		return nil // replay
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	// Resolve the source order: client_uuid first (stable cross-till),
+	// number as fallback (single-till shops mint globally unique numbers).
+	var orderID int64
+	if ev.OrderClientUUID != "" {
+		s.db.QueryRow(s.db.Rebind(`SELECT id FROM orders WHERE client_uuid = ?`), ev.OrderClientUUID).Scan(&orderID)
+	}
+	if orderID == 0 && ev.OrderNumber != "" {
+		s.db.QueryRow(s.db.Rebind(`SELECT id FROM orders WHERE number = ?`), ev.OrderNumber).Scan(&orderID)
+	}
+	if orderID == 0 {
+		// The sale event hasn't landed yet — retry until it does.
+		return fmt.Errorf("return %s: source order %s not synced yet", ev.Number, ev.OrderNumber)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(s.db.Rebind(`INSERT INTO returns
+		(number, order_id, order_number, total_cents, method, reason, status, client_uuid, created_by, created_by_name, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, 'COMPLETED', ?, 0, ?, ?)`),
+		ev.Number, orderID, ev.OrderNumber, ev.TotalCents, ev.Method, truncStr(ev.Reason, 300),
+		ev.ClientUUID, ev.CreatedByName, ev.CreatedAt)
+	if err != nil {
+		return err
+	}
+	returnID, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	for _, it := range ev.Items {
+		qty := asInt(it["qty"])
+		if qty <= 0 {
+			continue
+		}
+		sku, _ := it["sku"].(string)
+		name, _ := it["name"].(string)
+		unit := asInt64(it["unitPriceCents"])
+		lineTotal := asInt64(it["lineTotalCents"])
+		orderItemID := asInt64(it["orderItemId"])
+		productID := int64(0)
+		if sku != "" {
+			s.db.QueryRow(s.db.Rebind(`SELECT id FROM products WHERE sku = ?`), sku).Scan(&productID)
+		}
+		if _, err := tx.Exec(s.db.Rebind(`INSERT INTO return_items
+			(return_id, order_item_id, product_id, name, sku, qty, unit_price_cents, line_total_cents)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+			returnID, orderItemID, productID, name, sku, qty, unit, lineTotal); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// applyExpense mirrors a remote expense. The type resolves by name
+// (find-or-create) because type ids are per-till.
+func (s *Service) applyExpense(payload json.RawMessage) error {
+	var ev struct {
+		ClientUUID    string `json:"clientUuid"`
+		Number        string `json:"number"`
+		TypeName      string `json:"typeName"`
+		AmountCents   int64  `json:"amountCents"`
+		Method        string `json:"method"`
+		Reference     string `json:"reference"`
+		Note          string `json:"note"`
+		SpentOn       string `json:"spentOn"`
+		CreatedByName string `json:"createdByName"`
+		CreatedAt     string `json:"createdAt"`
+	}
+	if err := json.Unmarshal(payload, &ev); err != nil {
+		return err
+	}
+	if ev.ClientUUID == "" {
+		return fmt.Errorf("expense event missing clientUuid")
+	}
+	var existing int64
+	err := s.db.QueryRow(s.db.Rebind(`SELECT id FROM expenses WHERE client_uuid = ?`), ev.ClientUUID).Scan(&existing)
+	if err == nil {
+		return nil // replay
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	typeName := ev.TypeName
+	if typeName == "" {
+		typeName = "Other"
+	}
+	var typeID int64
+	err = s.db.QueryRow(s.db.Rebind(`SELECT id FROM expense_types WHERE name = ?`), typeName).Scan(&typeID)
+	if err == sql.ErrNoRows {
+		ins, ierr := s.db.Exec(s.db.Rebind(`INSERT INTO expense_types (name) VALUES (?)`), typeName)
+		if ierr != nil {
+			return ierr
+		}
+		typeID, _ = ins.LastInsertId()
+	} else if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(s.db.Rebind(`INSERT INTO expenses
+		(number, expense_type_id, amount_cents, method, reference, note, spent_on, client_uuid, created_by, created_by_name, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`),
+		ev.Number, typeID, ev.AmountCents, ev.Method, ev.Reference, ev.Note, ev.SpentOn,
+		ev.ClientUUID, ev.CreatedByName, ev.CreatedAt)
+	return err
+}
+
+// tierOrRetail normalises a synced price tier (empty/unknown = retail).
+func tierOrRetail(t string) string {
+	if t == "wholesale" {
+		return "wholesale"
+	}
+	return "retail"
 }

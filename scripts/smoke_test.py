@@ -351,8 +351,13 @@ def main():
     check("custom role created", st == 201, f"{st} {body}")
     st, body = req("DELETE", "/api/v1/roles/1", admin)
     check("system role delete blocked 409", st == 409, f"{st}")
-    st, body = req("PUT", "/api/v1/roles/2", admin, body={
-        "name": "Cashier", "permissions": ["pos.sell", "pos.void", "orders.view", "payments.manual", "shifts.manage", "products.view"]})
+    # Role ids are seed-order dependent — always resolve Cashier by name.
+    st, body = req("GET", "/api/v1/roles", admin)
+    cashier_role_id = next((r["id"] for r in data(body) if r["name"] == "Cashier"), None)
+    st, body = req("PUT", f"/api/v1/roles/{cashier_role_id}", admin, body={
+        "name": "Cashier", "permissions": ["pos.sell", "pos.void", "orders.view", "orders.notify",
+                                            "payments.manual", "shifts.manage", "products.view",
+                                            "customers.view", "quotes.view", "returns.manage", "expenses.view"]})
     check("system role editable", st == 200, f"{st} {body}")
 
     # -- 14. Design board ------------------------------------------------------------
@@ -520,6 +525,76 @@ def main():
     st, body = req("POST", "/api/v1/whatsapp-open", None, body={
         "phone": "254711222333", "text": "x"})
     check("whatsapp-open: anonymous 401", st == 401, f"{st}")
+
+
+    # -- v1.6.3: retail expansion (stock ledger, returns, expenses,
+    # wholesale tiers). Drives the real endpoints end-to-end.
+    st, body = req("GET", "/api/v1/expenses/types", admin)
+    check("expense types seeded (>=8)", st == 200 and len(data(body)) >= 8, f"{st} {len(data(body)) if st==200 else body}")
+    exp_type_id = data(body)[0]["id"] if st == 200 else 0
+    st, body = req("POST", "/api/v1/expenses", cashier, body={
+        "expenseTypeId": exp_type_id, "amountCents": 3000, "method": "CASH", "note": "smoke airtime"})
+    check("expenses: cashier create 403", st == 403, f"{st}")
+    st, body = req("POST", "/api/v1/expenses", admin, body={
+        "expenseTypeId": exp_type_id, "amountCents": 12500, "method": "MPESA",
+        "reference": "SMK123", "note": "smoke internet"})
+    exp_number = str(data(body).get("number", ""))
+    check("expenses: admin create 201 EXP- number", st == 201 and exp_number.startswith("EXP-"), f"{st} {body}")
+    st, body = req("GET", "/api/v1/expenses", cashier)
+    check("expenses: cashier view 200", st == 200, f"{st}")
+    st, body = req("GET", "/api/v1/reports/daily", admin)
+    check("daily report books expensesCents >= 12500",
+          st == 200 and data(body).get("expensesCents", 0) >= 12500, f"{st} {data(body).get('expensesCents') if st==200 else body}")
+    check("daily report nets netSalesCents",
+          st == 200 and "netSalesCents" in data(body) and "stockValueCents" in data(body), f"{st}")
+
+    # Stock ledger: the cash checkouts earlier in this smoke left SALE rows.
+    st, body = req("GET", "/api/v1/stock-movements?limit=50", admin)
+    kinds = {m.get("kind") for m in data(body)} if st == 200 else set()
+    check("stock ledger has SALE rows from this smoke's checkouts", st == 200 and "SALE" in kinds, f"{st} kinds={kinds}")
+    st, body = req("GET", "/api/v1/returns", cashier)
+    check("returns: cashier lists (orders.view)", st == 200, f"{st}")
+    st, body = req("POST", "/api/v1/returns", designer, body={
+        "orderId": 1, "lines": [{"orderItemId": 1, "qty": 1}]})
+    check("returns: designer 403 (no returns.manage)", st == 403, f"{st}")
+
+    # Returns: fresh cash order, return one line, stock restocks, over-return 4xx.
+    st, body = req("GET", "/api/v1/products", admin)
+    prod1 = next(p for p in data(body) if p["id"] == 1)
+    stock_before = prod1["stockQty"]
+    st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
+        "items": [{"productId": 1, "qty": 3}], "paymentMethod": "cash"})
+    ret_order = data(body)
+    check("v163 return-flow checkout -> PAID", st == 201 and ret_order.get("status") == "PAID", f"{st} {body}")
+    item_id = ret_order["items"][0]["id"]
+    st, body = req("POST", "/api/v1/returns", cashier, body={
+        "orderId": ret_order["id"], "lines": [{"orderItemId": item_id, "qty": 1}],
+        "method": "CASH", "reason": "smoke return"})
+    ret_doc = data(body)
+    check("returns: cashier posts RET- (201)", st == 201 and str(ret_doc.get("number", "")).startswith("RET-"), f"{st} {body}")
+    st, body = req("GET", "/api/v1/products", admin)
+    prod1b = next(p for p in data(body) if p["id"] == 1)
+    check("returns: restock landed (stock +1)", prod1b["stockQty"] == stock_before - 3 + 1,
+          f"{prod1b['stockQty']} vs {stock_before}")
+    st, body = req("GET", "/api/v1/stock-movements?limit=20", admin)
+    kinds = {m.get("kind") for m in data(body)} if st == 200 else set()
+    check("stock ledger has RETURN_RESTOCK", "RETURN_RESTOCK" in kinds, f"kinds={kinds}")
+    st, body = req("POST", "/api/v1/returns", cashier, body={
+        "orderId": ret_order["id"], "lines": [{"orderItemId": item_id, "qty": 3}], "method": "CASH"})
+    check("returns: over-return rejected 4xx", st in (400, 409, 422), f"{st} {body}")
+
+    # Wholesale tier + per-product low-stock threshold persist.
+    st, body = req("PUT", "/api/v1/products/2", admin, body={
+        "name": "Smoke Wholesale Item", "priceCents": 20000, "costCents": 10000,
+        "wholesalePriceCents": 16000, "lowStockUnits": 7, "stockQty": 6})
+    check("products: wholesale + low-stock fields persist", st == 200, f"{st} {body}")
+    st, body = req("GET", "/api/v1/products", admin)
+    prod2 = next(p for p in data(body) if p["id"] == 2)
+    check("products: readback wholesalePriceCents=16000 lowStockUnits=7",
+          prod2.get("wholesalePriceCents") == 16000 and prod2.get("lowStockUnits") == 7, f"{prod2}")
+    st, body = req("POST", "/api/v1/customers", admin, body={
+        "name": "Smoke Bulk Buyer", "phone": "0733999888", "priceTier": "wholesale"})
+    check("customers: wholesale tier persists", st == 201 and data(body).get("priceTier") == "wholesale", f"{st} {body}")
 
     # -- Summary ------------------------------------------------------------
     print(f"\n== {PASS} passed, {FAIL} failed ==")

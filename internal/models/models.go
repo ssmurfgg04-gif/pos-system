@@ -37,6 +37,7 @@ const (
 	// tab balance. Top-up adds, redemption subtracts.
 	LedgerCreditTopup  = "credit_topup"
 	LedgerCreditRedeem = "credit_redeem"
+	LedgerRefund       = "refund" // store-credit refund of a returned sale
 
 	ModeAuto   = "auto"   // STK push first, manual fallback available
 	ModeSTK    = "stk"    // force STK push
@@ -138,7 +139,11 @@ type Product struct {
 	TrackStock   bool   `json:"trackStock"`
 	Active       bool   `json:"active"`
 	IsGiftCard   bool   `json:"isGiftCard"` // mints redeemable codes on paid sale
-	UpdatedAt    string `json:"updatedAt"`
+	// v1.6.3: wholesale tier pricing + per-product low-stock threshold
+	// (0 = fall back to the global low_stock_threshold setting).
+	WholesalePriceCents int64  `json:"wholesalePriceCents"`
+	LowStockUnits       int    `json:"lowStockUnits"`
+	UpdatedAt           string `json:"updatedAt"`
 }
 
 // ---- Orders ----
@@ -310,6 +315,7 @@ type Customer struct {
 	LoyaltyPoints    int64  `json:"loyaltyPoints"`
 	BalanceCents     int64  `json:"balanceCents"`     // >0 means the customer owes the shop
 	StoreCreditCents int64  `json:"storeCreditCents"` // >0 means the shop owes the customer (prepaid)
+	PriceTier        string `json:"priceTier"`        // 'retail' (default) | 'wholesale' — till auto-prices
 	Active           bool   `json:"active"`
 	CreatedAt        string `json:"createdAt"`
 	UpdatedAt        string `json:"updatedAt"`
@@ -874,4 +880,120 @@ type GiftCard struct {
 type RedeemGiftCardRequest struct {
 	Code       string `json:"code" binding:"required"`
 	CustomerID int64  `json:"customerId" binding:"required"`
+}
+
+// ---- Stock ledger (v1.6.3) ----
+
+// Stock-movement kinds. The ledger is append-only: products.stock_qty is
+// the fast projection, stock_movements is the audit trail (OSPOS pattern).
+const (
+	MoveOpening       = "OPENING"        // migration anchor / new tracked product
+	MoveSale          = "SALE"           // stock left the shelf through the till
+	MoveVoidRestore   = "VOID_RESTORE"   // voided paid order puts stock back
+	MoveAdjustment    = "ADJUSTMENT"     // manual +/- on Inventory
+	MoveCount         = "COUNT"          // stock-take apply
+	MovePOReceive     = "PO_RECEIVE"     // supplier goods-in
+	MoveReturnRestock = "RETURN_RESTOCK" // customer return puts stock back
+)
+
+// StockMovement is one audited stock change.
+type StockMovement struct {
+	ID           int64  `json:"id"`
+	ProductID    int64  `json:"productId"`
+	ProductName  string `json:"productName"`
+	SKU          string `json:"sku"`
+	Delta        int64  `json:"delta"`
+	BalanceAfter int64  `json:"balanceAfter"`
+	Kind         string `json:"kind"`
+	Reference    string `json:"reference"`
+	Note         string `json:"note"`
+	UserID       int64  `json:"userId"`
+	Username     string `json:"username"`
+	DeviceID     string `json:"deviceId"`
+	CreatedAt    string `json:"createdAt"`
+}
+
+// ---- Returns (v1.6.3) ----
+
+// Refund methods for a return.
+const (
+	RefundCash        = "CASH"
+	RefundStoreCredit = "STORE_CREDIT"
+)
+
+// ReturnDoc is a completed customer return against a paid order. Lines are
+// snapshots of the original sale lines (price does not drift).
+type ReturnDoc struct {
+	ID              int64        `json:"id"`
+	Number          string       `json:"number"`
+	OrderID         int64        `json:"orderId"`
+	OrderNumber     string       `json:"orderNumber"`
+	OrderClientUUID string       `json:"-"` // cross-till identity of the source sale
+	ClientUUID      string       `json:"-"` // this document's replay key
+	TotalCents      int64        `json:"totalCents"`
+	Method          string       `json:"method"`
+	Reason          string       `json:"reason"`
+	Status          string       `json:"status"`
+	CreatedBy       int64        `json:"createdBy"`
+	CreatedByName   string       `json:"createdByName"`
+	CreatedAt       string       `json:"createdAt"`
+	Items           []ReturnItem `json:"items"`
+}
+
+type ReturnItem struct {
+	ID             int64  `json:"id"`
+	ReturnID       int64  `json:"returnId"`
+	OrderItemID    int64  `json:"orderItemId"`
+	ProductID      int64  `json:"productId"`
+	Name           string `json:"name"`
+	SKU            string `json:"sku"`
+	Qty            int    `json:"qty"`
+	UnitPriceCents int64  `json:"unitPriceCents"`
+	LineTotalCents int64  `json:"lineTotalCents"`
+}
+
+type CreateReturnRequest struct {
+	OrderID    int64              `json:"orderId" binding:"required"`
+	CustomerID int64              `json:"customerId"` // required when Method = STORE_CREDIT
+	Method     string             `json:"method"`
+	Reason     string             `json:"reason"`
+	Lines      []CreateReturnLine `json:"lines" binding:"required,min=1"`
+}
+
+type CreateReturnLine struct {
+	OrderItemID int64 `json:"orderItemId" binding:"required"`
+	Qty         int   `json:"qty" binding:"required,min=1"`
+}
+
+// ---- Expenses (v1.6.3) ----
+
+type ExpenseType struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	IsActive bool   `json:"isActive"`
+}
+
+type Expense struct {
+	ID            int64  `json:"id"`
+	Number        string `json:"number"`
+	ExpenseTypeID int64  `json:"expenseTypeId"`
+	TypeName      string `json:"typeName"`
+	ClientUUID    string `json:"-"`
+	AmountCents   int64  `json:"amountCents"`
+	Method        string `json:"method"`
+	Reference     string `json:"reference"`
+	Note          string `json:"note"`
+	SpentOn       string `json:"spentOn"`
+	CreatedBy     int64  `json:"createdBy"`
+	CreatedByName string `json:"createdByName"`
+	CreatedAt     string `json:"createdAt"`
+}
+
+type CreateExpenseRequest struct {
+	ExpenseTypeID int64  `json:"expenseTypeId" binding:"required"`
+	AmountCents   int64  `json:"amountCents" binding:"required,min=1"`
+	Method        string `json:"method"`
+	Reference     string `json:"reference"`
+	Note          string `json:"note"`
+	SpentOn       string `json:"spentOn"` // YYYY-MM-DD; defaults to today (EAT)
 }

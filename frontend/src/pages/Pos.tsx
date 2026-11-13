@@ -19,6 +19,7 @@ import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { usePosSearch } from '../stores/search'
 import { formatMoney, formatMoneyCompact } from '../lib/money'
+import { tierPriceCents } from '../lib/pricing'
 import { Button, EmptyState, Input, Modal, Spinner, ErrorBoundary } from '../components/ui'
 import { ProductPhoto } from '../components/ProductPhoto'
 import { CheckoutRail } from '../components/CheckoutRail'
@@ -180,7 +181,7 @@ export function Pos() {
     if (!q || !products) return
     const hit = products.find((p) => p.barcode && p.barcode === q)
     if (hit) {
-      cart.add(hit)
+      addWithTier(hit)
       setSearch('')
       toast.success(hit.name, 'Added to cart')
     }
@@ -194,12 +195,25 @@ export function Pos() {
   const cartQty = (productId: number) =>
     cart.lines.find((l) => l.productId === productId)?.qty ?? 0
 
+  // v1.6.3 wholesale tier: every cart add goes through here so a wholesale
+  // customer on the sale starts new lines at the product's wholesale price
+  // (products without one stay at retail — tierPriceCents is the rule).
+  // Only a line still at the catalog retail price follows the tier; a
+  // manually overridden price is never touched.
+  const addWithTier = (p: Product, qty = 1) => {
+    cart.add(p, qty)
+    const target = tierPriceCents(p, useCart.getState().priceTier)
+    if (target === p.priceCents) return
+    const line = useCart.getState().lines.find((l) => l.productId === p.id)
+    if (line && line.unitPriceCents === p.priceCents) cart.setUnitPrice(p.id, target)
+  }
+
   const addToCart = (p: Product) => {
     if (p.trackStock && p.stockQty <= 0) {
       toast.error('Out of stock', p.name)
       return
     }
-    cart.add(p)
+    addWithTier(p)
     if (navigator.vibrate) navigator.vibrate(10)
   }
 
@@ -236,6 +250,9 @@ export function Pos() {
         missing++
         continue
       }
+      // Held items carry no prices — they come back at catalog retail
+      // (the tier was reset with the clear above; re-picking the customer
+      // re-applies it via the rail's picker).
       cart.add(p, it.qty)
     }
     if (sale.customerName) cart.setCustomerName(sale.customerName)

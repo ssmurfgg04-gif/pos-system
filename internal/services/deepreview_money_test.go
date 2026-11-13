@@ -35,7 +35,7 @@ func newMoneyTill(t *testing.T) *moneyFixture {
 	s.db.QueryRow(`SELECT id FROM products WHERE sku='SKU-M1'`).Scan(&prodID)
 	s.db.QueryRow(`SELECT id FROM users WHERE username='cash1'`).Scan(&userID)
 	s.db.QueryRow(`SELECT id FROM roles WHERE name='Cashier'`).Scan(&roleID)
-	cust, err := s.CreateCustomer("Money Test", "0711223344", "", "", 200000, &auth.Principal{ID: userID, Username: "cash1"})
+	cust, err := s.CreateCustomer("Money Test", "0711223344", "", "", 200000, "retail", &auth.Principal{ID: userID, Username: "cash1"})
 	if err != nil {
 		t.Fatalf("create customer: %v", err)
 	}
