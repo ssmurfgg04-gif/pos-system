@@ -375,7 +375,11 @@ func (s *Service) renderReceiptImage(o *models.Order) (image.Image, error) {
 	// ---- Meta ----
 	head := "RECEIPT"
 	if o.BuyerPIN != "" {
-		head = "TAX INVOICE" // eTIMS: a buyer PIN turns the receipt into one
+		// NOT "TAX INVOICE": only an invoice transmitted to KRA eTIMS
+		// (with its control-unit number + QR) is a tax invoice the buyer
+		// can claim input VAT against. LedgerPOS does not transmit yet,
+		// so a buyer-PIN receipt is a plain invoice and says so.
+		head = "INVOICE - NOT AN eTIMS TAX INVOICE"
 	}
 	drawText(canvas, faceFor(reg, 13), faint, receiptMargin, y, head)
 	drawText(canvas, fName, ink, receiptMargin, y+30, o.Number)

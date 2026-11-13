@@ -251,7 +251,7 @@ export function Settings() {
             <Field label="Receipt footer" hint="Printed at the bottom of every receipt">
               <Textarea value={values.receipt_footer ?? ''} onChange={(e) => set('receipt_footer', e.target.value)} />
             </Field>
-            <Field label="KRA PIN (eTIMS)" hint="Your business KRA PIN, when set, receipts print it and checkout offers a buyer PIN for tax invoices.">
+            <Field label="KRA PIN (eTIMS)" hint="Your business KRA PIN. Receipts print it and checkout can add the buyer's PIN. LedgerPOS does not send invoices to KRA eTIMS yet, so these are not eTIMS tax invoices.">
               <Input
                 value={values.kra_pin ?? ''}
                 onChange={(e) => set('kra_pin', e.target.value.toUpperCase())}

@@ -57,7 +57,7 @@ type ReceiptData struct {
 	StoreAddress  string
 	StorePhone    string
 	KraPin        string      // eTIMS: printed under the phone line when set
-	BuyerPin      string      // customer KRA PIN — turns the header into TAX INVOICE
+	BuyerPin      string      // customer KRA PIN — printed on a plain INVOICE (not eTIMS)
 	GiftCards     []string    // codes minted by this sale — the customer's value
 	Logo          image.Image // nil = skip; printed centered above the name
 	Footer        string
@@ -137,7 +137,10 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 		p.Write(truncate("KRA PIN: "+d.KraPin, widthCols) + "\n")
 	}
 	if d.BuyerPin != "" {
-		p.Write(padlr("TAX INVOICE", "Buyer PIN: "+d.BuyerPin, widthCols) + "\n")
+		// Not "TAX INVOICE": that title belongs to invoices transmitted to
+		// KRA eTIMS (control-unit number + QR). See receipt_image.go.
+		p.Write(padlr("INVOICE", "Buyer PIN: "+d.BuyerPin, widthCols) + "\n")
+		p.Write(truncate("Not an eTIMS tax invoice", widthCols) + "\n")
 	}
 	p.Write(strings.Repeat("-", widthCols) + "\n")
 
