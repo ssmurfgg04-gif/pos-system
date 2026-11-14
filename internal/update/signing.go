@@ -73,7 +73,17 @@ func VerifyManifestSignature(pub ed25519.PublicKey, tag, assetsJSON, sigB64 stri
 	if err != nil || len(sig) != ed25519.SignatureSize {
 		return false
 	}
-	return ed25519.Verify(pub, ManifestSigningPayload(tag, assetsJSON), sig)
+	if ed25519.Verify(pub, ManifestSigningPayload(tag, assetsJSON), sig) {
+		return true
+	}
+	// The release ships ota-assets.json with a trailing newline but the
+	// signer signs the trimmed bytes. A manifest pasted with the newline
+	// would otherwise be refused by the whole fleet. Same signed content,
+	// so accepting it is safe.
+	if t := strings.TrimRight(assetsJSON, "\r\n"); t != assetsJSON {
+		return ed25519.Verify(pub, ManifestSigningPayload(tag, t), sig)
+	}
+	return false
 }
 
 // ErrUnsignedManifest is returned when a manifest lacks a valid signature

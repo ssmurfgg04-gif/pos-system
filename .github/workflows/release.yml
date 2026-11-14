@@ -339,16 +339,30 @@ jobs:
             echo ""
             echo "### Publish to the fleet (Supabase SQL editor — run as one transaction)"
             echo ""
-            echo "Store \`ota-assets.json\` and \`ota-manifest.sig\` from the release VERBATIM —"
-            echo "the signature covers the exact bytes. Template:"
+            echo "Ready to run: generated from the exact signed bytes (trailing newline"
+            echo "stripped, dollar-quoted so quotes in the notes are safe)."
             echo ""
             echo '```sql'
-            echo "begin;"
-            echo "select public.upsert_app_config('update_manifest_tag', '$TAG', false);"
-            echo "select public.upsert_app_config('update_manifest_notes', '<release notes>', false);"
-            echo "select public.upsert_app_config('update_manifest_assets', '<contents of ota-assets.json>', false);"
-            echo "select public.upsert_app_config('update_manifest_sig', '<contents of ota-manifest.sig>', false);"
-            echo "commit;"
+            TAG="$TAG" VERSION="${{ steps.meta.outputs.version }}" python3 - <<'PY'
+          import os
+          tag, ver = os.environ["TAG"], os.environ["VERSION"]
+          assets = open("build/ota-assets.json").read().rstrip("\r\n")
+          sig = open("build/ota-manifest.sig").read().strip()
+          try:
+              notes = open("build/release-notes.md").read().rstrip("\n")
+          except FileNotFoundError:
+              notes = "LedgerPOS " + ver
+          for v in (assets, sig, notes):
+              assert "$ota$" not in v
+          q = lambda v: "$ota$" + v + "$ota$"
+          print("begin;")
+          print(f"select public.upsert_app_config('update_manifest_tag', '{tag}', false);")
+          print(f"select public.upsert_app_config('update_manifest_version', '{ver}', false);")
+          print(f"select public.upsert_app_config('update_manifest_notes', {q(notes)}, false);")
+          print(f"select public.upsert_app_config('update_manifest_assets', {q(assets)}, false);")
+          print(f"select public.upsert_app_config('update_manifest_sig', {q(sig)}, false);")
+          print("commit;")
+          PY
             echo '```'
             echo ""
             echo "Tills pick it up on their next update check; unsigned or re-serialized manifests are refused."

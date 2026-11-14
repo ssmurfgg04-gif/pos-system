@@ -1,4 +1,33 @@
 ---
+Task ID: v1.9.1
+Agent: main (Claude)
+Task: "do thorough testing and checking and review of your work also implement any pending work"
+
+Work Log:
+- Reviewed the v1.9.0 cloud functions, buni-stkpush v4, Go services and
+  handlers, onboarding and the payment panel.
+- Live cloud checks: payment and business tables have RLS with no anon or
+  authenticated access; internal helpers and stk_route_for_team are not
+  executable by anon; changing the short code or passkey resets
+  own_verified; old tills (1.2-1.6) fall back to the sync_bootstrap row
+  (KIAMBU-MAIN) after sync_stores was locked.
+- Found and fixed: (1) a founding-business store with no profile row
+  defaulted to manual, so its prompts would be refused (stk_route_for_team
+  and payment_profile_get now default platform stores to shared);
+  (2) stk_available only refreshed from Settings, so verification or a
+  one-off refusal never reached the till (TeamSyncLoop refresh on tick 1
+  and every ~30 min); (3) the OTA SQL template invited pasting
+  ota-assets.json with its trailing newline, which the till verifier
+  rejects (workflow prints generated SQL; verifier tolerates exactly a
+  trailing newline, with a test); (4) byte truncation of display names.
+- Live probe (rolled back): platform store without a row routes shared;
+  a new business registers, is manual, cannot take shared, is unavailable
+  until verified, loses verification on a short code swap, and lists only
+  its own store. Nothing left behind.
+- Workflow summary step dry-run against the real v1.9.0 files reproduces
+  the published SQL byte for byte.
+
+---
 Task ID: v1.9.0
 Agent: main (Claude)
 Task: "the team join link doesnt actually let you join a particular team,

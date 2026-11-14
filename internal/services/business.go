@@ -248,8 +248,8 @@ func (s *Service) PaymentProfileSet(u PaymentProfileUpdate) (PaymentProfile, err
 		return PaymentProfile{}, fmt.Errorf("enter the short code M-Pesa prompts should pay")
 	}
 	name := strings.TrimSpace(u.DisplayName)
-	if len(name) > 40 {
-		name = name[:40]
+	if r := []rune(name); len(r) > 40 {
+		name = string(r[:40])
 	}
 	_ = s.settings.Set("till_number", till)
 	_ = s.settings.Set("paybill_number", paybill)
