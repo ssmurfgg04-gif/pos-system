@@ -21,6 +21,7 @@ import { unitProfit } from '../lib/profit'
 import { lowStockAt } from '../lib/stock'
 import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2, Printer, History, PackageMinus, Layers, TriangleAlert } from 'lucide-react'
 import { fmtDateTime } from '../lib/when'
+import { ClassPicker, TAX_TYPES } from '../components/EtimsPanel'
 
 /** Editor preview: the product's CURRENT best photo (uploaded first, then
  *  the demo's bundled fallback) — unlike the thumbnails this must NOT walk
@@ -695,6 +696,9 @@ function ProductModal({
     unit: (product?.unit ?? 'pc') as string,
     allowFraction: product?.allowFraction ?? false,
     trackBatches: product?.trackBatches ?? false,
+    // v1.10 KRA eTIMS ('' = shop default from Settings → eTIMS)
+    etimsTaxType: product?.etimsTaxType ?? '',
+    etimsClsCd: product?.etimsClsCd ?? '',
     trackStock: product?.trackStock ?? true,
     isGiftCard: product?.isGiftCard ?? false,
     active: product?.active ?? true,
@@ -749,6 +753,8 @@ function ProductModal({
         trackStock: form.isGiftCard ? false : form.trackStock,
         isGiftCard: form.isGiftCard,
         active: form.active,
+        etimsTaxType: form.etimsTaxType,
+        etimsClsCd: form.etimsClsCd,
       }
       if (product) {
         await api.put(`/api/v1/products/${product.id}`, payload)
@@ -968,6 +974,11 @@ function ProductModal({
           <MoneyInput value={form.costCents} onCents={(c) => setForm({ ...form, costCents: c })} />
           <UnitProfitHint priceCents={form.priceCents} costCents={form.costCents} />
         </Field>
+        <EtimsProductFields
+          taxType={form.etimsTaxType}
+          clsCd={form.etimsClsCd}
+          onChange={(v) => setForm({ ...form, ...v })}
+        />
         <Field label="Wholesale price (KES)" hint="0 = same as retail; wholesale customers auto-get this price at the till">
           <MoneyInput value={form.wholesalePriceCents} onCents={(c) => setForm({ ...form, wholesalePriceCents: c })} />
         </Field>
@@ -1356,5 +1367,34 @@ function UnitProfitHint({ priceCents, costCents }: { priceCents: number; costCen
     <p className={`mt-1 text-[12px] font-semibold ${u.profitCents >= 0 ? 'text-paid-text' : 'text-danger-text'}`}>
       {u.profitCents >= 0 ? 'You make ' : 'You LOSE '}{formatMoney(Math.abs(u.profitCents))} on each ({u.marginPct.toFixed(1)}%){Number(b.tax_percent) > 0 && b.tax_included ? ', after VAT' : ''}
     </p>
+  )
+}
+
+// v1.10 — KRA eTIMS per product: blank = the shop default (Settings → eTIMS).
+function EtimsProductFields({ taxType, clsCd, onChange }: {
+  taxType: string; clsCd: string; onChange: (v: { etimsTaxType?: string; etimsClsCd?: string }) => void
+}) {
+  const [picking, setPicking] = useState(false)
+  return (
+    <div className="sm:col-span-2 rounded-input border border-line p-3 space-y-2">
+      <p className="text-[13px] font-bold text-ink">KRA eTIMS <span className="font-normal text-ink-subtle">(blank = shop default)</span></p>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Field label="Tax type">
+          <Select value={taxType} onChange={(e) => onChange({ etimsTaxType: e.target.value })}>
+            <option value="">Shop default</option>
+            {TAX_TYPES.map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}
+          </Select>
+        </Field>
+        <div>
+          <span className="block text-[13px] font-semibold text-ink-muted mb-1">Item class</span>
+          <div className="flex items-center gap-2 min-h-11">
+            <span className="font-mono text-[13px]">{clsCd || 'Shop default'}</span>
+            <Button size="sm" variant="ghost" onClick={() => setPicking((p) => !p)}>{picking ? 'Close' : 'Change'}</Button>
+            {clsCd && <Button size="sm" variant="ghost" onClick={() => onChange({ etimsClsCd: '' })}>Use default</Button>}
+          </div>
+        </div>
+      </div>
+      {picking && <ClassPicker onPick={(c) => { onChange({ etimsClsCd: c.code }); setPicking(false) }} />}
+    </div>
   )
 }

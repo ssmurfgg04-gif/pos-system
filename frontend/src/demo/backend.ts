@@ -1648,7 +1648,20 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     requirePerm(perms, 'orders.view')
     const o = d.orders.find((x) => x.id === Number(orderMatch[1]))
     if (!o) throw new ApiError(404, 'order not found')
-    return orderDTO(o) as T
+    const dto = orderDTO(o) as Record<string, unknown>
+    // v1.10 demo eTIMS: a paid sale made after "connecting" shows a TEST
+    // signature (nothing is sent anywhere in the demo).
+    if (d.settings.etims_enabled === 'true' && o.status === 'PAID' && o.createdAt >= (d.settings.etims_enabled_at || '~')) {
+      const n = o.id
+      const k = new Date(new Date(o.createdAt).getTime() + 3 * 3600_000).toISOString().replace(/\D/g, '').slice(0, 14)
+      const sign = `DEMO${String(n).padStart(4, '0')}TESTSIGN`.slice(0, 16)
+      dto.etims = {
+        status: 'signed', invcNo: n, curRcptNo: n, totRcptNo: n, intrlData: `DEMOINTERNAL${String(n).padStart(6, '0')}`,
+        rcptSign: sign, sdcDateTime: k, sdcId: 'KRACU0100000001', mrcNo: 'WIS01000001', attempts: 1,
+        qr: `https://etims-sbx.kra.go.ke/common/link/etims/receipt/indexEtimsReceiptData?Data=${encodeURIComponent((d.settings.kra_pin || '') + '00' + sign)}`,
+      }
+    }
+    return dto as T
   }
   // WhatsApp queue (demo): automatic-only since v1.5.0 — demo mode never
   // sends, so the admin list is empty and the test send fakes success.
@@ -2878,6 +2891,53 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   if (m === 'POST' && p === '/team-sync/register-business') {
     requirePerm(perms, 'settings.manage')
     throw new ApiError(422, 'this till is already connected to a business in LedgerPOS Cloud')
+  }
+  // v1.10 KRA eTIMS — the demo pretends to be a connected TEST device; no
+  // sale is ever sent anywhere.
+  if (p.startsWith('/etims/')) {
+    const st = () => {
+      const on = d.settings.etims_enabled === 'true'
+      return {
+        enabled: on, enabledAt: d.settings.etims_enabled_at || '', defaultTax: d.settings.etims_default_tax || 'B',
+        device: on ? {
+          connected: true, env: 'sandbox', tin: d.settings.kra_pin || 'P051234567X', bhfId: '00', dvcSrlNo: 'DEMO-OSCU-01',
+          tradeName: d.settings.store_name || 'Demo shop', branchName: 'Head office', sdcId: 'KRACU0100000001',
+          mrcNo: 'WIS01000001', defaultClsCd: d.settings.etims_cls || '', nextInvoiceNo: 1,
+        } : { connected: false },
+        signed: 0, pending: 0, failed: 0, lastError: '',
+      }
+    }
+    if (m === 'GET' && p === '/etims/classes') {
+      const all = [
+        { code: '5020230100', name: 'Clothing and apparel', level: 4, taxType: 'B' },
+        { code: '5020230200', name: 'Printed T-shirts', level: 4, taxType: 'B' },
+        { code: '5020230300', name: 'Mugs and drinkware', level: 4, taxType: 'B' },
+        { code: '8010180100', name: 'Printing and branding services', level: 4, taxType: 'B' },
+      ]
+      const q2 = (q.get('q') || '').toLowerCase()
+      return all.filter((c) => !q2 || c.name.toLowerCase().includes(q2) || c.code.startsWith(q2)) as T
+    }
+    requirePerm(perms, 'settings.manage')
+    if (m === 'GET' && p === '/etims/status') return st() as T
+    if (m === 'POST' && p === '/etims/connect') {
+      const req = body as { tin?: string; dvcSrlNo?: string }
+      if (!/^[A-Z]\d{9}[A-Z]$/.test((req.tin || '').toUpperCase())) throw new ApiError(422, 'KRA PIN looks wrong (e.g. P051234567X)')
+      if (!req.dvcSrlNo) throw new ApiError(422, 'enter the OSCU device serial number from the eTIMS portal')
+      d.settings.etims_enabled = 'true'
+      d.settings.etims_enabled_at = nowIso()
+      d.settings.kra_pin = (req.tin || '').toUpperCase()
+      persist()
+      return st().device as T
+    }
+    if (m === 'PUT' && p === '/etims/defaults') {
+      const req = body as { defaultTax?: string; defaultClsCd?: string }
+      if (req.defaultTax) d.settings.etims_default_tax = req.defaultTax
+      if (req.defaultClsCd) d.settings.etims_cls = req.defaultClsCd
+      persist()
+      return st() as T
+    }
+    if (m === 'POST' && p === '/etims/retry') return { requeued: 0 } as T
+    if (m === 'POST' && p === '/etims/disable') { d.settings.etims_enabled = 'false'; persist(); return st() as T }
   }
   if (m === 'GET' && p === '/payments/profile') {
     requirePerm(perms, 'settings.manage')

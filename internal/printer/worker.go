@@ -160,6 +160,7 @@ func (w *Worker) printJob(ctx context.Context, jobID int64) {
 		w.settings.Get("receipt_footer"),
 		w.settings.GetString("currency_symbol", "KES"))
 	data.KraPin = w.settings.Get("kra_pin") // eTIMS header on paper too
+	data.Etims = w.etimsStamp(order.ID)
 	// Loyalty redemption as MONEY — the printed rows must reconcile
 	// (Subtotal − Discount − Points ± VAT = TOTAL), like the branded
 	// image. Points are minted whole, so cents are exact.
@@ -396,4 +397,17 @@ func truncateErr(s string) string {
 		return s[:300]
 	}
 	return s
+}
+
+// etimsStamp reads the KRA eTIMS stamp of a sale (v1.10); nil when none.
+func (w *Worker) etimsStamp(orderID int64) *models.EtimsStamp {
+	var st models.EtimsStamp
+	err := w.db.QueryRow(w.db.Rebind(`SELECT status, invc_no, cur_rcpt_no, tot_rcpt_no, intrl_data, rcpt_sign,
+		sdc_date_time, sdc_id, mrc_no, qr FROM etims_receipts WHERE kind = 'S' AND ref_id = ?`), orderID).
+		Scan(&st.Status, &st.InvcNo, &st.CurRcptNo, &st.TotRcptNo, &st.IntrlData, &st.RcptSign,
+			&st.SdcDateTime, &st.SdcID, &st.MrcNo, &st.QR)
+	if err != nil {
+		return nil
+	}
+	return &st
 }

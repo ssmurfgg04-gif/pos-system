@@ -25,7 +25,7 @@ const apiPostMock = vi.fn(async () => { throw new Error('WhatsApp gateway not co
 
 vi.mock('../src/lib/api', () => ({
   blob: (p: string) => blobMock(p),
-  api: { post: (path: string, body?: unknown) => apiPostMock(path, body) },
+  api: { post: (path: string, body?: unknown) => apiPostMock(path, body), get: () => Promise.reject(new Error('offline in test')) },
   isDemoSync: () => false,
 }))
 

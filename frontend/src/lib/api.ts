@@ -310,6 +310,9 @@ export interface Product {
   wholesalePriceCents?: number
   /** v1.6.3 per-product low-stock threshold — 0/absent = global setting. */
   lowStockUnits?: number
+  /** v1.10 KRA eTIMS: tax type A-E and item class ("" = shop default) */
+  etimsTaxType?: string
+  etimsClsCd?: string
   active: boolean
   updatedAt: string
 }
@@ -495,7 +498,42 @@ export interface Order {
    *  number and can be reassigned by an eTIMS bridge. */
   buyerPin?: string
   invoiceNumber?: string
+  /** v1.10 KRA eTIMS stamp: present once the sale was queued for KRA. */
+  etims?: EtimsStamp
 }
+
+export interface EtimsStamp {
+  status: 'pending' | 'signed' | 'failed'
+  invcNo: number
+  curRcptNo: number
+  totRcptNo: number
+  intrlData: string
+  rcptSign: string
+  /** yyyyMMddHHmmss, Kenya time */
+  sdcDateTime: string
+  sdcId: string
+  mrcNo: string
+  qr: string
+  lastError?: string
+  attempts: number
+}
+
+export interface EtimsStatus {
+  enabled: boolean
+  enabledAt: string
+  defaultTax: string
+  device: {
+    connected?: boolean; env?: 'sandbox' | 'production'; tin?: string; bhfId?: string; dvcSrlNo?: string
+    tradeName?: string; branchName?: string; sdcId?: string; mrcNo?: string; defaultClsCd?: string; nextInvoiceNo?: number
+  } | null
+  signed: number
+  pending: number
+  failed: number
+  lastError: string
+  cloudError?: string
+}
+
+export interface EtimsClass { code: string; name: string; level: number; taxType: string }
 
 export interface Branding {
   app_name: string

@@ -191,3 +191,28 @@ func TestScaleToWidthKeepsAspect(t *testing.T) {
 		t.Fatal("empty image must yield nil")
 	}
 }
+
+// v1.10: a KRA-signed sale prints TAX INVOICE, the SCU block and a QR
+// (ESC/POS GS ( k); an unsigned one prints only a "sending" note.
+func TestRenderEtimsSignedReceipt(t *testing.T) {
+	d := ReceiptData{StoreName: "Shop", OrderNumber: "ORD1", When: "14/11/2026 14:30",
+		Items:         []models.OrderItem{{Name: "Tee", QtyMilli: 1000, UnitPriceCents: 55000, LineTotalCents: 55000}},
+		SubtotalCents: 55000, TotalCents: 55000,
+		Etims: &models.EtimsStamp{Status: "signed", CurRcptNo: 7, TotRcptNo: 7, SdcID: "KRACU0100000001",
+			IntrlData: "INTRLDATA", RcptSign: "SIGNATURE1", SdcDateTime: "20261114143005", QR: "https://etims.kra.go.ke/x?Data=1"}}
+	out, err := Render(d, 48)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, want := range []string{"TAX INVOICE", "SCU INFORMATION", "KRACU0100000001/7", "SIGNATURE1", "14/11/2026 14:30:05", "\x1d(k"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("signed receipt missing %q", want)
+		}
+	}
+	d.Etims = &models.EtimsStamp{Status: "pending"}
+	out, _ = Render(d, 48)
+	if s = string(out); strings.Contains(s, "TAX INVOICE") || !strings.Contains(s, "sending to KRA") {
+		t.Errorf("pending receipt must not claim TAX INVOICE")
+	}
+}
