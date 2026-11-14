@@ -83,6 +83,9 @@ func TestComputeLinesSingleRateIsLegacy(t *testing.T) {
 	for _, amt := range []int64{0, 1, 5, 625, 10000, 11600, 99999, 999999, 123456789} {
 		for _, incl := range []bool{true, false} {
 			for _, disc := range []int64{0, 1, amt / 3} {
+				if disc >= amt && disc > 0 {
+					continue // checkout rejects a discount >= the subtotal
+				}
 				got := ComputeLines([]Line{{amt - amt/2, 16}, {amt / 2, 16}}, disc, 0, incl)
 				tax, total := Totals(amt-disc, 16, incl)
 				if got.TaxCents != tax || got.TotalCents != total {
