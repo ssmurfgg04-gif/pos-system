@@ -1,4 +1,61 @@
 ---
+Task ID: v1.9.0
+Agent: main (Claude)
+Task: "the team join link doesnt actually let you join a particular team,
+  theres stock showing even when your shop is new ... lots of leaks from
+  shop 1 into any new shop ... no tracking of where money came from ...
+  some might not be comfortable as its not showig their till or shop name
+  in payments" + the UI/UX and database pass, then "all changes are
+  approved merge push to ota ... same shape as v1.7."
+
+Work Log:
+- Root cause: the cloud was single-tenant. One store (Main Store, 44
+  devices) and the rule "exactly one store, join it" sent every install
+  anywhere into it; SeedShop copied the demo catalog into every signup;
+  buni-stkpush always used BUNI_TILL with the platform name.
+- Owner's decisions: payments go straight to the shop's own till; a new
+  business gets its own separate cloud store.
+- Cloud (applied live, db/deploy-v190-multitenant.sql): businesses table
+  (existing stores = business 1, is_platform), sync_stores.business_id,
+  store_payment_profiles (shared | own | manual), sync_register_business,
+  sync_register no longer auto-joins, store list/create/pending/assign
+  scoped by business, anon select on sync_stores revoked,
+  portal_set_credentials needs a capability once an account exists and
+  usernames are unique, payment_profile_get/set (first set is open, then
+  owner capability), stk_route_for_team (service_role only). Verified
+  end to end in a rolled-back probe transaction.
+- buni-stkpush v4: shared mode only for platform businesses (request
+  unchanged); own mode only when own_verified and a 5-10 digit short code
+  (sharedShortCode false, org short code + passkey, shop's display name);
+  otherwise 409 stk_not_available; route lookup failure 503.
+- Till: TeamRegisterBusiness from onboarding; join link and owner sign-in
+  refuse a till that holds products/orders/customers, checked before the
+  RPC, and the public join route uses the named shop; an approved till
+  keeps its team and a cloud reassignment quarantines unsent events;
+  stk_available gates Buni STK (default true for existing tills); Settings
+  → Payments "Where customers pay" panel; SeedShop seeds one General
+  category only.
+- Also merged: PR #1 UX pass (phone shell, stock badges, reports chart,
+  day-first dates, inventory actions, v29 FK indexes, CI deploy gate,
+  COGS flake), PR #2 internal sign-in helpers revoked (db/deploy-v171.sql,
+  applied live), PR #3 INVOICE label for non-eTIMS receipts, PR #4
+  customer-facing display over BroadcastChannel, plus v1.8.0 (milli
+  quantities, batches/FEFO) from main, never released on its own.
+- Integration: PR #1's index migration renumbered v27 → v29 after main's
+  v27/v28; the customer display moved to qtyMilli (fmtQty +
+  lineTotalCents, the same rounding as the till) with a weighed-line test.
+- Research: a friend's SmartPOS studied for design only (no business
+  data used); lessons added to the POS research doc.
+- Gates: tsc -b clean, vitest 230 passed, Go CI green on every PR and on
+  the release branch.
+- Open: confirm with KCB that non-shared short code STK works before
+  setting own_verified for any other business; one real M-Pesa sale on
+  Main Store to confirm the v4 function on the shared till.
+- Release: tag v1.9.0 → release workflow (installers, signed OTA
+  manifest, GitHub release, downloads manifest sync) → OTA rows in
+  app_config.
+
+---
 Task ID: v1.7.0
 Agent: main (Super Z)
 Task: "my friend has granted us access to learn from his pos do deep

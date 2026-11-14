@@ -37,8 +37,8 @@ describe('customer display state', () => {
     const s = railDisplayState({
       ...base,
       lines: [
-        { name: 'Tee', qty: 2, unitPriceCents: 55000 },
-        { name: 'Mug', qty: 1, unitPriceCents: 40000 },
+        { name: 'Tee', qtyMilli: 2000, unitPriceCents: 55000 },
+        { name: 'Mug', qtyMilli: 1000, unitPriceCents: 40000 },
       ],
       dueCents: 140000,
       discountCents: 10000,
@@ -48,12 +48,12 @@ describe('customer display state', () => {
       itemCount: 3,
       total: 'KES 1,400',
       discount: 'KES 100',
-      lines: [{ name: 'Tee', qty: 2, total: 'KES 1,100' }, { name: 'Mug', qty: 1, total: 'KES 400' }],
+      lines: [{ name: 'Tee', qty: '2', total: 'KES 1,100' }, { name: 'Mug', qty: '1', total: 'KES 400' }],
     })
   })
 
   it('shows cash received and change only when enough was tendered', () => {
-    const lines = [{ name: 'Tee', qty: 1, unitPriceCents: 55000 }]
+    const lines = [{ name: 'Tee', qtyMilli: 1000, unitPriceCents: 55000 }]
     const short = railDisplayState({ ...base, lines, dueCents: 55000, receivedCents: 50000 }) as Extract<DisplayState, { kind: 'cart' }>
     expect(short.received).toBe('KES 500')
     expect(short.change).toBeUndefined()
@@ -64,7 +64,7 @@ describe('customer display state', () => {
   it('asks for the OUTSTANDING amount on M-Pesa (a split sale\'s cash leg is already in)', () => {
     const s = railDisplayState({
       ...base,
-      lines: [{ name: 'Hoodie', qty: 1, unitPriceCents: 200000 }],
+      lines: [{ name: 'Hoodie', qtyMilli: 1000, unitPriceCents: 200000 }],
       pending: {
         number: 'ORD1',
         totalCents: 200000,
@@ -92,6 +92,17 @@ describe('customer display state', () => {
   it('switches to thank-you once the payment lands', () => {
     const s = railDisplayState({ ...base, pending: { number: 'ORD1', totalCents: 90000, stkStage: 'paid', manualOnly: false } })
     expect(s).toEqual({ kind: 'paid', brand, total: 'KES 900' })
+  })
+
+  it('weighed lines show the fractional quantity and the till exact rounding', () => {
+    const s = railDisplayState({
+      ...base,
+      lines: [{ name: 'Sugar', qtyMilli: 250, unitPriceCents: 18050 }],
+      dueCents: 4513,
+    }) as Extract<DisplayState, { kind: 'cart' }>
+    expect(s.lines[0].qty).toBe('0.25')
+    expect(s.lines[0].total).toBe('KES 45.13') // round(18050 x 250 / 1000) = 4513 cents
+    expect(s.itemCount).toBe(0.25)
   })
 
   it('outstanding never goes negative and ignores failed legs', () => {

@@ -11,6 +11,8 @@
 // the wrong amount or to the wrong number. Showing "Pay KES 1,250 to Till
 // 123456" on a screen facing the customer stops it at the source.
 
+import { fmtQty, lineTotalCents } from './qty'
+
 export const DISPLAY_CHANNEL = 'ledgerpos-customer-display'
 
 /** How long the display keeps the "Asante" screen before the welcome. */
@@ -24,7 +26,8 @@ export interface DisplayBrand {
 
 export interface DisplayLine {
   name: string
-  qty: number
+  /** preformatted quantity: "2", "0.5" (v1.8 weighed lines) */
+  qty: string
   /** preformatted line total, e.g. "KES 1,100" */
   total: string
 }
@@ -35,6 +38,7 @@ export type DisplayState =
       kind: 'cart'
       brand: DisplayBrand
       lines: DisplayLine[]
+      /** units, can be fractional for weighed goods (cart header rule) */
       itemCount: number
       /** preformatted amounts */
       total: string
@@ -121,7 +125,8 @@ export function _resetDisplayForTests(): void {
 
 export interface RailSnapshot {
   brand: DisplayBrand
-  lines: { name: string; qty: number; unitPriceCents: number }[]
+  /** v1.8 cart lines: integer milli-units (1000 = one unit) */
+  lines: { name: string; qtyMilli: number; unitPriceCents: number }[]
   /** the amount the customer pays right now (after discount/redemption) */
   dueCents: number
   discountCents: number
@@ -172,8 +177,9 @@ export function railDisplayState(s: RailSnapshot): DisplayState | null {
   return {
     kind: 'cart',
     brand,
-    lines: s.lines.map((l) => ({ name: l.name, qty: l.qty, total: fmt(l.unitPriceCents * l.qty) })),
-    itemCount: s.lines.reduce((a, l) => a + l.qty, 0),
+    // the EXACT till/server line formula (half-up on milli-units)
+    lines: s.lines.map((l) => ({ name: l.name, qty: fmtQty(l.qtyMilli), total: fmt(lineTotalCents(l.unitPriceCents, l.qtyMilli)) })),
+    itemCount: s.lines.reduce((a, l) => a + l.qtyMilli, 0) / 1000,
     total: fmt(s.dueCents),
     discount: s.discountCents > 0 ? fmt(s.discountCents) : undefined,
     received: s.receivedCents !== null && s.receivedCents > 0 ? fmt(s.receivedCents) : undefined,
