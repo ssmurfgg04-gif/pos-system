@@ -3,6 +3,22 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.9.1 — Review fixes for the multi-business release
+
+- **Payment routes stay current.** Tills re-check where their M-Pesa money
+  goes when sync starts and every 30 minutes. A shop verified for its own
+  short code starts getting prompts without anyone opening Settings, and
+  a till that was refused once recovers on its own.
+- **New founding-business stores work out of the box.** A store our own
+  business creates later uses the shared KCB till by default (v1.9.0 only
+  set this up for Main Store, so a second store would have been refused
+  M-Pesa prompts). Cloud: `db/deploy-v191-platform-default.sql`, applied.
+- **Safer updates.** The release job now prints ready-to-run OTA SQL built
+  from the exact signed bytes, and tills accept a manifest stored with the
+  release file's trailing newline instead of refusing the update.
+- A long shop name with non-English letters is shortened without breaking
+  a character.
+
 ## v1.9.0 — One cloud, many businesses; weighed goods and expiry dates
 
 The first release where LedgerPOS can be sold to a second business. Until

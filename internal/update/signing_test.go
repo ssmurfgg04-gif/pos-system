@@ -38,6 +38,13 @@ func TestManifestSignatureRoundTrip(t *testing.T) {
 		t.Fatal("signature verified across a changed assets byte")
 	}
 	// Garbage / empty signatures never pass.
+	// a manifest stored with the release file's trailing newline still verifies
+	if !VerifyManifestSignature(pub, "v1.4.0", testAssets+"\n", base64.StdEncoding.EncodeToString(sig)) {
+		t.Fatal("trailing newline on the stored assets must still verify")
+	}
+	if VerifyManifestSignature(pub, "v1.4.0", testAssets+" \n", base64.StdEncoding.EncodeToString(sig)) {
+		t.Fatal("only a trailing newline is tolerated, not other edits")
+	}
 	if VerifyManifestSignature(pub, "v1.4.0", testAssets, "AAAA") {
 		t.Fatal("garbage signature accepted")
 	}

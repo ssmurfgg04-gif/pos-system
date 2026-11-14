@@ -773,6 +773,13 @@ func (s *Service) TeamSyncLoop(ctx context.Context, version string) {
 			// backfill is mid-flight) drain at a rate-limited pace.
 			s.backfillProductImages()
 			ticks++
+			// v1.9: keep stk_available in step with the cloud's payment
+			// profile (a shop verified for its own short code starts getting
+			// prompts, a refused one stops). First tick, then ~every 30 min;
+			// a failed lookup leaves the cached value alone.
+			if ticks == 1 || ticks%90 == 0 {
+				s.PaymentProfileGet()
+			}
 			if ticks%30 == 0 { // ~every 10 minutes
 				s.pruneSyncTables()
 			}
