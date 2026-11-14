@@ -132,6 +132,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	authd.GET("/categories", h.ListCategories)
 
 	prod := authd.Group("", perm("products.manage"))
+	prod.GET("/etims/classes", h.EtimsClasses)
 	prod.POST("/products", h.CreateProduct)
 	prod.PUT("/products/:id", h.UpdateProduct)
 	prod.DELETE("/products/:id", h.DeactivateProduct)
@@ -324,6 +325,12 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	// v1.9: where this store's M-Pesa money goes (own till / own STK).
 	ts.GET("/payments/profile", h.PaymentProfileGet)
 	ts.PUT("/payments/profile", h.PaymentProfileSet)
+	// v1.10: KRA eTIMS (OSCU) through LedgerPOS Cloud.
+	ts.GET("/etims/status", h.EtimsStatus)
+	ts.POST("/etims/connect", h.EtimsConnect)
+	ts.POST("/etims/disable", h.EtimsDisable)
+	ts.PUT("/etims/defaults", h.EtimsDefaults)
+	ts.POST("/etims/retry", h.EtimsRetry)
 	ts.POST("/team-sync/assign", h.TeamDeviceAssign)
 	ts.POST("/team-sync/remove", h.TeamDeviceRemove)
 	ts.POST("/team-sync/approve", h.TeamDeviceApprove)

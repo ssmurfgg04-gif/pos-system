@@ -374,7 +374,10 @@ func (s *Service) renderReceiptImage(o *models.Order) (image.Image, error) {
 	y += 34
 	// ---- Meta ----
 	head := "RECEIPT"
-	if o.BuyerPIN != "" {
+	etims := s.etimsStampFor("S", o.ID)
+	if etims != nil && etims.Status == "signed" {
+		head = "TAX INVOICE"
+	} else if o.BuyerPIN != "" {
 		// NOT "TAX INVOICE": only an invoice transmitted to KRA eTIMS
 		// (with its control-unit number + QR) is a tax invoice the buyer
 		// can claim input VAT against. LedgerPOS does not transmit yet,
@@ -498,6 +501,31 @@ func (s *Service) renderReceiptImage(o *models.Order) (image.Image, error) {
 	for _, code := range s.orderGiftCardCodes(o.ID) {
 		drawText(canvas, fSub, ink, receiptMargin, y, "Gift card: "+code)
 		y += 30
+	}
+	// v1.10 KRA eTIMS control-unit block (the QR is on paper and on screen;
+	// the CU invoice number + signature let anyone verify it on KRA's site).
+	if etims != nil && etims.Status == "signed" {
+		y += 6
+		hline(canvas, line, y)
+		y += 30
+		drawTextCenter(canvas, faceFor(bold, 15), ink, receiptMargin, right, y, "SCU INFORMATION")
+		y += 28
+		for _, kv := range [][2]string{
+			{"Date", printer.EtimsDate(etims.SdcDateTime)},
+			{"SCU ID", etims.SdcID},
+			{"CU invoice no.", fmt.Sprintf("%s/%d", etims.SdcID, etims.CurRcptNo)},
+			{"Receipt no.", fmt.Sprintf("%d/%d NS", etims.CurRcptNo, etims.TotRcptNo)},
+			{"Internal data", etims.IntrlData},
+			{"Receipt signature", etims.RcptSign},
+		} {
+			drawText(canvas, fSub, muted, receiptMargin, y, kv[0])
+			drawTextRight(canvas, fSub, ink, right, y, kv[1])
+			y += 26
+		}
+	} else if etims != nil {
+		y += 4
+		drawText(canvas, fSub, muted, receiptMargin, y, "KRA eTIMS: sending to KRA")
+		y += 26
 	}
 	y += 6
 	hline(canvas, line, y)

@@ -56,10 +56,11 @@ type ReceiptData struct {
 	StoreName     string
 	StoreAddress  string
 	StorePhone    string
-	KraPin        string      // eTIMS: printed under the phone line when set
-	BuyerPin      string      // customer KRA PIN — printed on a plain INVOICE (not eTIMS)
-	GiftCards     []string    // codes minted by this sale — the customer's value
-	Logo          image.Image // nil = skip; printed centered above the name
+	KraPin        string             // eTIMS: printed under the phone line when set
+	BuyerPin      string             // customer KRA PIN — printed on a plain INVOICE (not eTIMS)
+	Etims         *models.EtimsStamp // v1.10: KRA signature; "signed" makes this a TAX INVOICE
+	GiftCards     []string           // codes minted by this sale — the customer's value
+	Logo          image.Image        // nil = skip; printed centered above the name
 	Footer        string
 	OrderNumber   string
 	When          string
@@ -136,9 +137,16 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 	if d.KraPin != "" {
 		p.Write(truncate("KRA PIN: "+d.KraPin, widthCols) + "\n")
 	}
-	if d.BuyerPin != "" {
-		// Not "TAX INVOICE": that title belongs to invoices transmitted to
-		// KRA eTIMS (control-unit number + QR). See receipt_image.go.
+	if d.Etims != nil && d.Etims.Status == "signed" {
+		p.Bold(true)
+		p.Write("TAX INVOICE\n")
+		p.Bold(false)
+		if d.BuyerPin != "" {
+			p.Write(truncate("Buyer PIN: "+d.BuyerPin, widthCols) + "\n")
+		}
+	} else if d.BuyerPin != "" {
+		// Not "TAX INVOICE": that title belongs to invoices signed by KRA
+		// eTIMS (control-unit number + QR).
 		p.Write(padlr("INVOICE", "Buyer PIN: "+d.BuyerPin, widthCols) + "\n")
 		p.Write(truncate("Not an eTIMS tax invoice", widthCols) + "\n")
 	}
@@ -197,6 +205,9 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 		p.Write(truncate("Gift card: "+code, widthCols) + "\n")
 	}
 	p.Write("\n")
+	if d.Etims != nil {
+		writeEtimsBlock(p, d.Etims, widthCols)
+	}
 
 	if d.Footer != "" {
 		p.Justify(escpos.JustifyCenter)
@@ -289,4 +300,50 @@ func formatQtyMilli(m int64) string {
 	s = strings.TrimRight(s, "0")
 	s = strings.TrimRight(s, ".")
 	return s
+}
+
+// writeEtimsBlock prints the KRA control-unit block of a signed sale (or a
+// one-line note while it is still being sent).
+func writeEtimsBlock(p *escpos.Escpos, st *models.EtimsStamp, widthCols int) {
+	if st.Status != "signed" {
+		p.Justify(escpos.JustifyCenter)
+		p.Write(truncate("KRA eTIMS: sending to KRA", widthCols) + "\n\n")
+		p.Justify(escpos.JustifyLeft)
+		return
+	}
+	p.Write(strings.Repeat("-", widthCols) + "\n")
+	p.Justify(escpos.JustifyCenter)
+	p.Bold(true)
+	p.Write("SCU INFORMATION\n")
+	p.Bold(false)
+	p.Justify(escpos.JustifyLeft)
+	row := func(k, v string) { p.Write(padlr(k, truncate(v, widthCols-len(k)-1), widthCols) + "\n") }
+	row("Date:", EtimsDate(st.SdcDateTime))
+	row("SCU ID:", st.SdcID)
+	row("CU invoice:", fmt.Sprintf("%s/%d", st.SdcID, st.CurRcptNo))
+	row("Receipt no:", fmt.Sprintf("%d/%d NS", st.CurRcptNo, st.TotRcptNo))
+	row("Internal data:", st.IntrlData)
+	row("Signature:", st.RcptSign)
+	if st.MrcNo != "" {
+		row("MRC no:", st.MrcNo)
+	}
+	if st.QR != "" {
+		p.Justify(escpos.JustifyCenter)
+		size := uint8(5)
+		if widthCols < 40 {
+			size = 4
+		}
+		_, _ = p.QRCode(st.QR, true, size, 1)
+		p.Write("\n")
+		p.Justify(escpos.JustifyLeft)
+	}
+	p.Write(strings.Repeat("-", widthCols) + "\n")
+}
+
+// EtimsDate turns KRA's yyyyMMddHHmmss into 14/11/2026 14:30:05.
+func EtimsDate(s string) string {
+	if len(s) != 14 {
+		return s
+	}
+	return s[6:8] + "/" + s[4:6] + "/" + s[0:4] + " " + s[8:10] + ":" + s[10:12] + ":" + s[12:14]
 }

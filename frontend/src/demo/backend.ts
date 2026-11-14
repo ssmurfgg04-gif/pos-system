@@ -978,6 +978,26 @@ function dayBounds(date: string) {
   return [date + 'T00:00:00', date + 'T23:59:59'] as const
 }
 
+// v1.10 profit block — the same rule as services.profitBlock on the server.
+function demoProfit(d: ReturnType<typeof load>, paid: { totalCents: number; taxCents: number; items: { productId: number; qtyMilli: number; lineTotalCents: number; costCents?: number }[] }[], expensesCents: number) {
+  let cogs = 0, uncostedLines = 0, uncostedSalesCents = 0
+  const sales = paid.reduce((s, o) => s + o.totalCents, 0)
+  const vat = paid.reduce((s, o) => s + (o.taxCents || 0), 0)
+  for (const o of paid) for (const it of o.items) {
+    const unit = (it.costCents && it.costCents > 0) ? it.costCents : (d.products.find((p) => p.id === it.productId)?.costCents ?? 0)
+    if (unit <= 0) { uncostedLines++; uncostedSalesCents += it.lineTotalCents }
+    else cogs += Math.round(unit * it.qtyMilli / 1000)
+  }
+  const profit = sales - vat - cogs
+  return {
+    cogsCents: cogs, grossProfitCents: sales - cogs,
+    marginPct: sales > 0 ? Math.round(((sales - cogs) / sales) * 1000) / 10 : 0,
+    disposalCount: 0, disposalValueCents: 0,
+    salesVatCents: vat, profitCents: profit, netProfitCents: profit - expensesCents,
+    uncostedLines, uncostedSalesCents,
+  }
+}
+
 function dailySummary(date: string) {
   const d = load()
   const day = date || new Date().toISOString().slice(0, 10)
@@ -1028,6 +1048,7 @@ function dailySummary(date: string) {
     expensesCents, returnsCents, returnsCount: dayReturns.length,
     netSalesCents: sales - returnsCents,
     stockQtyMilli: Math.round(stockQtyMilli), stockValueCents, lowStockCount,
+    ...demoProfit(d, paid, expensesCents),
   }
 }
 
@@ -1059,6 +1080,7 @@ function monthlySummary(month: string) {
       topMap.set(it.productId, cur)
     }
   }
+  const monthExpenses = ((d as DemoDBX).expenses || []).filter((e) => e.spentOn.slice(0, 7) === m).reduce((s, e) => s + e.amountCents, 0)
   return {
     month: m, grossCents: gross, nettCents: gross - vat, vatCents: vat,
     ordersPaid: paid.length,
@@ -1072,8 +1094,9 @@ function monthlySummary(month: string) {
     series,
     topProducts: [...topMap.values()].sort((a, b) => b.salesCents - a.salesCents).slice(0, 10),
     // v1.6.3 — expenses booked in the month + refunds given out.
-    expensesCents: ((d as DemoDBX).expenses || []).filter((e) => e.spentOn.slice(0, 7) === m).reduce((s, e) => s + e.amountCents, 0),
+    expensesCents: monthExpenses,
     returnsCents: ((d as DemoDBX).returns || []).filter((r) => r.createdAt.slice(0, 7) === m).reduce((s, r) => s + r.totalCents, 0),
+    ...demoProfit(d, paid, monthExpenses),
   }
 }
 
@@ -1625,7 +1648,20 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     requirePerm(perms, 'orders.view')
     const o = d.orders.find((x) => x.id === Number(orderMatch[1]))
     if (!o) throw new ApiError(404, 'order not found')
-    return orderDTO(o) as T
+    const dto = orderDTO(o) as Record<string, unknown>
+    // v1.10 demo eTIMS: a paid sale made after "connecting" shows a TEST
+    // signature (nothing is sent anywhere in the demo).
+    if (d.settings.etims_enabled === 'true' && o.status === 'PAID' && o.createdAt >= (d.settings.etims_enabled_at || '~')) {
+      const n = o.id
+      const k = new Date(new Date(o.createdAt).getTime() + 3 * 3600_000).toISOString().replace(/\D/g, '').slice(0, 14)
+      const sign = `DEMO${String(n).padStart(4, '0')}TESTSIGN`.slice(0, 16)
+      dto.etims = {
+        status: 'signed', invcNo: n, curRcptNo: n, totRcptNo: n, intrlData: `DEMOINTERNAL${String(n).padStart(6, '0')}`,
+        rcptSign: sign, sdcDateTime: k, sdcId: 'KRACU0100000001', mrcNo: 'WIS01000001', attempts: 1,
+        qr: `https://etims-sbx.kra.go.ke/common/link/etims/receipt/indexEtimsReceiptData?Data=${encodeURIComponent((d.settings.kra_pin || '') + '00' + sign)}`,
+      }
+    }
+    return dto as T
   }
   // WhatsApp queue (demo): automatic-only since v1.5.0 — demo mode never
   // sends, so the admin list is empty and the test send fakes success.
@@ -1811,6 +1847,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
         id: d.seq.item++, productId: l.product.id, name: l.product.name, sku: l.product.sku,
         qtyMilli: l.qtyMilli, unitPriceCents: l.unitPriceCents,
         lineTotalCents: lineTotalCents(l.unitPriceCents, l.qtyMilli),
+        costCents: l.product.costCents || 0, // v1.7 cost snapshot, as the server does
       })),
       payments: [],
     }
@@ -2854,6 +2891,53 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   if (m === 'POST' && p === '/team-sync/register-business') {
     requirePerm(perms, 'settings.manage')
     throw new ApiError(422, 'this till is already connected to a business in LedgerPOS Cloud')
+  }
+  // v1.10 KRA eTIMS — the demo pretends to be a connected TEST device; no
+  // sale is ever sent anywhere.
+  if (p.startsWith('/etims/')) {
+    const st = () => {
+      const on = d.settings.etims_enabled === 'true'
+      return {
+        enabled: on, enabledAt: d.settings.etims_enabled_at || '', defaultTax: d.settings.etims_default_tax || 'B',
+        device: on ? {
+          connected: true, env: 'sandbox', tin: d.settings.kra_pin || 'P051234567X', bhfId: '00', dvcSrlNo: 'DEMO-OSCU-01',
+          tradeName: d.settings.store_name || 'Demo shop', branchName: 'Head office', sdcId: 'KRACU0100000001',
+          mrcNo: 'WIS01000001', defaultClsCd: d.settings.etims_cls || '', nextInvoiceNo: 1,
+        } : { connected: false },
+        signed: 0, pending: 0, failed: 0, lastError: '',
+      }
+    }
+    if (m === 'GET' && p === '/etims/classes') {
+      const all = [
+        { code: '5020230100', name: 'Clothing and apparel', level: 4, taxType: 'B' },
+        { code: '5020230200', name: 'Printed T-shirts', level: 4, taxType: 'B' },
+        { code: '5020230300', name: 'Mugs and drinkware', level: 4, taxType: 'B' },
+        { code: '8010180100', name: 'Printing and branding services', level: 4, taxType: 'B' },
+      ]
+      const q2 = (q.get('q') || '').toLowerCase()
+      return all.filter((c) => !q2 || c.name.toLowerCase().includes(q2) || c.code.startsWith(q2)) as T
+    }
+    requirePerm(perms, 'settings.manage')
+    if (m === 'GET' && p === '/etims/status') return st() as T
+    if (m === 'POST' && p === '/etims/connect') {
+      const req = body as { tin?: string; dvcSrlNo?: string }
+      if (!/^[A-Z]\d{9}[A-Z]$/.test((req.tin || '').toUpperCase())) throw new ApiError(422, 'KRA PIN looks wrong (e.g. P051234567X)')
+      if (!req.dvcSrlNo) throw new ApiError(422, 'enter the OSCU device serial number from the eTIMS portal')
+      d.settings.etims_enabled = 'true'
+      d.settings.etims_enabled_at = nowIso()
+      d.settings.kra_pin = (req.tin || '').toUpperCase()
+      persist()
+      return st().device as T
+    }
+    if (m === 'PUT' && p === '/etims/defaults') {
+      const req = body as { defaultTax?: string; defaultClsCd?: string }
+      if (req.defaultTax) d.settings.etims_default_tax = req.defaultTax
+      if (req.defaultClsCd) d.settings.etims_cls = req.defaultClsCd
+      persist()
+      return st() as T
+    }
+    if (m === 'POST' && p === '/etims/retry') return { requeued: 0 } as T
+    if (m === 'POST' && p === '/etims/disable') { d.settings.etims_enabled = 'false'; persist(); return st() as T }
   }
   if (m === 'GET' && p === '/payments/profile') {
     requirePerm(perms, 'settings.manage')

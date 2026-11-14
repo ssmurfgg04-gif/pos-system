@@ -22,10 +22,11 @@ import { fmtQty } from '../lib/qty'
 import { openWhatsAppChat } from '../lib/whatsapp'
 import { toast } from '../stores/toasts'
 import { Button, Modal } from './ui'
+import { EtimsReceiptBlock } from './EtimsReceiptBlock'
 import { Check, ImageDown, Printer, Share2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
-export function ReceiptModal({ order, branding, open, onClose }: {
+export function ReceiptModal({ order: given, branding, open, onClose }: {
   order: Order
   branding: Branding
   open: boolean
@@ -33,6 +34,29 @@ export function ReceiptModal({ order, branding, open, onClose }: {
 }) {
   const [shareState, setShareState] = useState<'idle' | 'working' | 'saved' | 'queued'>('idle')
   const [shareError, setShareError] = useState('')
+  // v1.10: the receipt always shows the LATEST copy of the sale, so a KRA
+  // eTIMS signature that arrived after the list loaded is printed too.
+  const [fresh, setFresh] = useState<Order | null>(null)
+  useEffect(() => {
+    if (!open || !given?.id) return
+    let live = true
+    let tries = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const load = () => {
+      api.get<Order>(`/api/v1/orders/${given.id}`)
+        .then((o) => {
+          if (!live) return
+          setFresh(o)
+          // KRA usually signs within seconds: keep looking briefly so the
+          // receipt turns into the tax invoice while it is on screen.
+          if (o.etims?.status === 'pending' && ++tries < 10) timer = setTimeout(load, 2000)
+        })
+        .catch(() => {})
+    }
+    load()
+    return () => { live = false; if (timer) clearTimeout(timer) }
+  }, [open, given?.id])
+  const order: Order = fresh && given && fresh.id === given.id ? { ...given, ...fresh } : given
   if (!open) return null
   // Older orders (or a partial payload) may omit items/payments — the
   // receipt must render, never crash the POS after money has moved.
@@ -215,7 +239,9 @@ export function ReceiptModal({ order, branding, open, onClose }: {
               (control-unit number + QR) lets the buyer claim input VAT, and
               LedgerPOS does not transmit yet. Saying "TAX INVOICE" here
               would mislead the buyer's accountant. */}
-          {order.buyerPin && (
+          {order.etims?.status === 'signed' ? (
+            <p className="font-bold text-[12px] tracking-widest uppercase mt-1">Tax invoice</p>
+          ) : order.buyerPin && (
             <>
               <p className="font-bold text-[12px] tracking-widest uppercase mt-1">Invoice</p>
               <p className="text-[10px] text-ink-muted">Not an eTIMS tax invoice</p>
@@ -292,6 +318,13 @@ export function ReceiptModal({ order, branding, open, onClose }: {
           <Row label="Served by" value={order.cashierName} />
           {order.status === 'VOIDED' && <p className="text-center font-bold mt-1">** VOIDED **</p>}
         </div>
+
+        {order.etims && (
+          <>
+            <div className="border-t-2 border-dashed border-line my-2.5" />
+            <EtimsReceiptBlock stamp={order.etims} />
+          </>
+        )}
 
         <div className="border-t-2 border-dashed border-line my-2.5" />
         <p className="text-center text-[10px] text-ink-muted leading-snug">

@@ -15,6 +15,7 @@ import { useBranding } from '../stores/branding'
 import { centsToAmount, formatMoney } from '../lib/money'
 import { fmtQty, lineTotalCents } from '../lib/qty'
 import { toast } from '../stores/toasts'
+import { saleProfit } from '../lib/profit'
 import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer, BookUser, CreditCard, Wallet, MessageCircle, Briefcase, History, Undo2 } from 'lucide-react'
 import { fmtDateTime, fmtTime } from '../lib/when'
 
@@ -380,6 +381,9 @@ function OrderDrawer({
   onChanged?: () => void
 }) {
   const [live, setLive] = useState<OrderDetail>(order)
+  // v1.10 profit on this sale: owners/managers only (reports.view), never
+  // cashiers (buying prices stay private).
+  const canSeeProfit = useAuth((s) => !!s.user?.permissions.includes('reports.view'))
   const [events, setEvents] = useState<OrderEvent[]>([])
   const [jobModal, setJobModal] = useState(false)
   const [contact, setContact] = useState<WhatsAppContact | null>(null)
@@ -486,6 +490,21 @@ function OrderDrawer({
           <span className="font-bold">Total</span>
           <span className="font-black tabular text-lg">{formatMoney(live.totalCents)}</span>
         </div>
+        {canSeeProfit && live.status === 'PAID' && (() => {
+          const p = saleProfit(live.totalCents, live.taxCents, live.items)
+          return (
+            <div className="flex justify-between pt-1 text-[13px]" title="Total minus VAT minus the buying price of each item at the time of sale">
+              <span className="text-ink-muted">Profit on this sale</span>
+              {p.profitCents === null ? (
+                <span className="font-semibold text-pending-text">unknown, {p.uncostedLines} item{p.uncostedLines === 1 ? '' : 's'} without a buying price</span>
+              ) : (
+                <span className={`tabular font-bold ${p.profitCents >= 0 ? 'text-paid-text' : 'text-danger-text'}`}>
+                  {formatMoney(p.profitCents)}{p.marginPct !== null ? ` (${p.marginPct.toFixed(1)}%)` : ''}
+                </span>
+              )}
+            </div>
+          )
+        })()}
       </div>
 
       {live.payments.map((p) => {

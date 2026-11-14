@@ -10,6 +10,7 @@ import { centsToAmount, formatMoney } from '../lib/money'
 import { fmtQty } from '../lib/qty'
 import { todayLocal, thisMonthLocal } from '../lib/katime'
 import { toast } from '../stores/toasts'
+import { ProfitPanel } from '../components/ProfitPanel'
 import { BarChart3, Banknote, Smartphone, CreditCard, Wallet, Download, FileSpreadsheet, Undo2, ReceiptText, CalendarClock } from 'lucide-react'
 
 // Local (EAT) date strings — toISOString() is UTC and put Nairobi's
@@ -165,19 +166,7 @@ function Daily() {
 
           {/* v1.7.0 — the day over cost: line cost snapshots turn the
               takings into gross margin the shopkeeper can trust. */}
-          {data.cogsCents !== undefined && (
-            <div className="mt-4">
-              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">Gross margin (paid sales)</p>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <Stat label="Cost of goods" value={formatMoney(data.cogsCents)} />
-                <Stat label="Gross profit" value={formatMoney(data.grossProfitCents ?? 0)} />
-                <Stat label="Margin" value={`${(data.marginPct ?? 0).toFixed(1)}%`} />
-                {(data.disposalCount ?? 0) > 0 && (
-                  <Stat label={`Write-offs (${data.disposalCount})`} value={formatMoney(data.disposalValueCents ?? 0)} warn />
-                )}
-              </div>
-            </div>
-          )}
+          <ProfitPanel f={data} period="day" />
 
           {/* v1.6.3 — shelf: what the stock room is worth + low-stock alerts. */}
           {(data.stockValueCents !== undefined || data.lowStockCount !== undefined) && (
@@ -564,16 +553,7 @@ function Monthly() {
           )}
 
           {/* v1.7.0 — the month over cost: gross margin + write-offs. */}
-          {data.cogsCents !== undefined && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-              <Stat label="Cost of goods" value={formatMoney(data.cogsCents)} />
-              <Stat label="Gross profit" value={formatMoney(data.grossProfitCents ?? 0)} />
-              <Stat label="Margin" value={`${(data.marginPct ?? 0).toFixed(1)}%`} />
-              {data.disposalValueCents !== undefined && data.disposalValueCents > 0 && (
-                <Stat label={`Write-offs (${data.disposalCount})`} value={formatMoney(data.disposalValueCents)} warn />
-              )}
-            </div>
-          )}
+          <ProfitPanel f={{ ...data, salesCents: data.grossCents, salesVatCents: data.salesVatCents ?? data.vatCents }} period="month" />
 
           {/* Per-day bars for the month */}
           <div className="mt-5">

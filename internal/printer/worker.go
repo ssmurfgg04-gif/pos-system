@@ -160,6 +160,26 @@ func (w *Worker) printJob(ctx context.Context, jobID int64) {
 		w.settings.Get("receipt_footer"),
 		w.settings.GetString("currency_symbol", "KES"))
 	data.KraPin = w.settings.Get("kra_pin") // eTIMS header on paper too
+	// v1.10: with eTIMS on, give KRA a few seconds to sign a just-paid
+	// sale so the PAPER receipt is the tax invoice. Only while the first
+	// attempt is still in flight; offline or refused prints at once.
+	if w.settings.GetBool("etims_enabled", false) && order.Status == models.OrderPaid {
+		for i := 0; i < 14; i++ {
+			st := w.etimsStamp(order.ID)
+			if st != nil && (st.Status != "pending" || st.Attempts > 0) {
+				break
+			}
+			if st == nil && !w.paidJustNow(order) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+	data.Etims = w.etimsStamp(order.ID)
 	// Loyalty redemption as MONEY — the printed rows must reconcile
 	// (Subtotal − Discount − Points ± VAT = TOTAL), like the branded
 	// image. Points are minted whole, so cents are exact.
@@ -396,4 +416,24 @@ func truncateErr(s string) string {
 		return s[:300]
 	}
 	return s
+}
+
+// etimsStamp reads the KRA eTIMS stamp of a sale (v1.10); nil when none.
+func (w *Worker) etimsStamp(orderID int64) *models.EtimsStamp {
+	var st models.EtimsStamp
+	err := w.db.QueryRow(w.db.Rebind(`SELECT status, invc_no, cur_rcpt_no, tot_rcpt_no, intrl_data, rcpt_sign,
+		sdc_date_time, sdc_id, mrc_no, qr, attempts FROM etims_receipts WHERE kind = 'S' AND ref_id = ?`), orderID).
+		Scan(&st.Status, &st.InvcNo, &st.CurRcptNo, &st.TotRcptNo, &st.IntrlData, &st.RcptSign,
+			&st.SdcDateTime, &st.SdcID, &st.MrcNo, &st.QR, &st.Attempts)
+	if err != nil {
+		return nil
+	}
+	return &st
+}
+
+// paidJustNow: the sale was paid in the last 20s (a reprint of an old
+// sale must not wait for a signature that will never come).
+func (w *Worker) paidJustNow(o *models.Order) bool {
+	t, err := time.Parse(time.RFC3339, o.PaidAtOrCreated())
+	return err == nil && time.Since(t) < 20*time.Second
 }

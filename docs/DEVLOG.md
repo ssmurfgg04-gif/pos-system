@@ -1,4 +1,67 @@
 ---
+Task ID: v1.10.0-review
+Agent: main (Claude)
+Task: "Do an ultra criticism of the pos ... fix what needs to be fixed ...
+  Merge also figure out a way how you can be able to run git tag ... on your own"
+
+Work Log:
+- Review findings fixed: (1) voiding a KRA-signed sale sent nothing to
+  KRA (now a credit note, kind V locally, less earlier returns; unsent
+  voided sales are skipped); (2) returns were not taken off profit;
+  (3) the eTIMS worker lock was process-wide, so one shop on a multi-shop
+  server blocked the others (now per Service); (4) sales reached KRA up to
+  a minute late, so the auto-printed receipt was never the tax invoice
+  (3s loop; printer waits up to 7s only while the first attempt is in
+  flight); (5) the cloud took an invoice number before registering items,
+  so a sale KRA could not accept yet left a gap (items first, number
+  second); (6) the on-screen receipt did not refresh when the signature
+  arrived; (7) return credit notes had a date filter that could miss.
+- Tagging: this environment cannot push tags, so .github/workflows/
+  tag-release.yml creates the tag on main on request (main only, new
+  x.y.z, CHANGELOG entry required, pushed with RELEASES_TOKEN so the
+  release workflow starts).
+- Open list: see the report to Jack (per-product VAT in POS totals, gift
+  card sales counted as revenue, KRA sandbox run, QR on WhatsApp image,
+  per-product eTIMS fields not synced, stock/purchase reporting to KRA,
+  ordering of invoice numbers under concurrency untested against KRA).
+
+---
+Task ID: v1.10.0
+Agent: main (Claude)
+Task: "Sort this out Integration of etims connect etims bro / Most ai vibecoded
+  pos can't do sell minus buying price therefore giving you your profit fix
+  this in ours / the right side when you keep past 2 items before sell it
+  starts going under the payment amount tab ... figure best way"
+
+Work Log:
+- Cart: reproduced at 1366x768 (5 items: payment form ~70% of the rail,
+  1.5 lines visible, Charge below the fold). Fixed with a two-step rail
+  (cart step: lines get the height + one Charge; pay step: items fold
+  into a summary with Edit). Payment inputs survive going back. Verified
+  at 1366x768 (8 items) and iPhone 13; regression tests drive Charge first.
+- Profit: costs were already snapshotted per sale line (v1.7) but only
+  shown inside Reports as gross margin incl. VAT. Added ProfitBlock
+  (sales - VAT - cost; net = - expenses - write-offs; uncosted lines) to
+  daily and monthly reports, ProfitPanel ladder, per-sale profit in the
+  order drawer (reports.view only), live per-item profit in the product
+  form, demo parity. Go + vitest tests.
+- eTIMS: researched KRA OSCU spec v2.0 (endpoints, field tables, code
+  lists 4.9-4.19). Architecture: cloud edge function `etims` holds the
+  cmcKey, numbers invoices per store under a row lock bound to the sale
+  (gapless across tills, retry-safe), registers items (/saveItem), signs
+  sales and credit notes (/saveTrnsSalesOsdc). Payload builder is pure TS
+  with exact-cent VAT-inclusive arithmetic (12 vitest cases). Till: v30
+  outbox scanned from PAID orders on this device since switch-on (covers
+  every payment path), worker on the sync loop with backoff, failed +
+  retry, stamp on orders/receipts (screen QR via qrcode, ESC/POS QR, SCU
+  block on the WhatsApp image). Cloud schema applied and probed (rolled
+  back): gapless numbers, retry reuse, anon locked out. Function deployed.
+- Blocked: Go QR library (fetching outside the module proxy was denied),
+  so the WhatsApp image has no QR yet; pg_net live test of functions.
+- Not verified live: no KRA sandbox credentials yet. Next: connect a
+  sandbox device and send one sale end to end.
+
+---
 Task ID: v1.9.1
 Agent: main (Claude)
 Task: "do thorough testing and checking and review of your work also implement any pending work"

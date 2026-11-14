@@ -228,6 +228,7 @@ func (s *Service) GetOrder(orderID int64) (*models.Order, error) {
 		return nil, ErrNotFound
 	}
 	o.TaxIncluded = taxIncluded == 1
+	o.Etims = s.etimsStampFor("S", orderID)
 	items, err := s.itemsForOrders([]string{fmt.Sprint(orderID)})
 	if err == nil {
 		o.Items = items[orderID]

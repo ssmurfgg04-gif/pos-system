@@ -27,6 +27,7 @@ import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
+import { EtimsPanel } from '../components/EtimsPanel'
 import { PaymentProfilePanel } from '../components/PaymentProfilePanel'
 import { centsToAmount } from '../lib/money'
 import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck, Undo2, LifeBuoy, KeyRound, Smartphone } from 'lucide-react'
@@ -94,7 +95,7 @@ function SecretField({
 
 export function Settings() {
   const reloadBranding = useBranding((s) => s.load)
-  const [tab, setTab] = useState<'store' | 'payments' | 'printer' | 'whatsapp' | 'team' | 'system' | 'audit'>('store')
+  const [tab, setTab] = useState<'store' | 'payments' | 'etims' | 'printer' | 'whatsapp' | 'team' | 'system' | 'audit'>('store')
   const [values, setValues] = useState<SettingsMap | null>(null)
   const [busy, setBusy] = useState(false)
   const [payConfig, setPayConfig] = useState<PaymentConfig | null>(null)
@@ -188,6 +189,7 @@ export function Settings() {
             tabs={[
               { key: 'store' as const, label: 'Store' },
               { key: 'payments' as const, label: 'Payments' },
+              { key: 'etims' as const, label: 'eTIMS' },
               { key: 'printer' as const, label: 'Printer' },
               { key: 'whatsapp' as const, label: 'WhatsApp' },
               { key: 'team' as const, label: 'Team' },
@@ -197,7 +199,7 @@ export function Settings() {
             value={tab}
             onChange={setTab}
           />
-          {tab !== 'audit' && tab !== 'team' && (
+          {tab !== 'audit' && tab !== 'team' && tab !== 'etims' && (
             <Button variant="primary" size="sm" onClick={save} disabled={busy}>
               {busy ? <Spinner className="border-t-brand-ink" /> : 'Save changes'}
             </Button>
@@ -253,7 +255,7 @@ export function Settings() {
             <Field label="Receipt footer" hint="Printed at the bottom of every receipt">
               <Textarea value={values.receipt_footer ?? ''} onChange={(e) => set('receipt_footer', e.target.value)} />
             </Field>
-            <Field label="KRA PIN (eTIMS)" hint="Your business KRA PIN. Receipts print it and checkout can add the buyer's PIN. LedgerPOS does not send invoices to KRA eTIMS yet, so these are not eTIMS tax invoices.">
+            <Field label="KRA PIN (eTIMS)" hint="Your business KRA PIN. Receipts print it and checkout can add the buyer's PIN. To send sales to KRA and print signed tax invoices, connect eTIMS in the eTIMS tab.">
               <Input
                 value={values.kra_pin ?? ''}
                 onChange={(e) => set('kra_pin', e.target.value.toUpperCase())}
@@ -374,6 +376,7 @@ export function Settings() {
         {tab === 'whatsapp' && <WhatsappPanel values={values} set={set} />}
 
         {tab === 'team' && <TeamSyncPanel />}
+        {tab === 'etims' && <div className="px-4 pb-5"><EtimsPanel kraPin={values.kra_pin} /></div>}
 
         {tab === 'system' && (
           <div className="px-4 pb-4 sm:px-5 grid sm:grid-cols-2 gap-3">

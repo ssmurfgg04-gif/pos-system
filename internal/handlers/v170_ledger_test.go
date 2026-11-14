@@ -330,8 +330,8 @@ func TestV170SystemHealthPage(t *testing.T) {
 		t.Fatalf("health: %d %s", w.Code, w.Body.String())
 	}
 	h := dataMap(t, w)
-	if int64(h["schemaVersion"].(float64)) != 29 {
-		t.Fatalf("schemaVersion: want 29, got %v", h["schemaVersion"])
+	if int64(h["schemaVersion"].(float64)) != 30 {
+		t.Fatalf("schemaVersion: want 30, got %v", h["schemaVersion"])
 	}
 	if h["indexesOk"] != true {
 		t.Fatalf("indexes should be complete, missing: %v", h["indexesMissing"])
@@ -343,5 +343,36 @@ func TestV170SystemHealthPage(t *testing.T) {
 	// this test's server booted fresh, so zero drift is expected).
 	if int64(h["customerDriftCount"].(float64)) != 0 {
 		t.Fatalf("customer drift on a fresh server: %v", h["customerDrift"])
+	}
+}
+
+// TestV110ProfitAfterVatAndUncosted — "sell minus buying price": profit is
+// sales minus the VAT inside them minus the buying price, net profit also
+// takes off expenses and write-offs, and a line sold with no buying price
+// is reported (it would otherwise count as 100% profit).
+func TestV110ProfitAfterVatAndUncosted(t *testing.T) {
+	engine, admin, cashier, _ := newTestServer(t)
+	costed := createCostedProduct(t, engine, admin, "ProfitCosted", 25000, 10000, 20)
+	free := createCostedProduct(t, engine, admin, "ProfitNoCost", 5000, 0, 20)
+	order := checkoutLines(t, engine, cashier, []map[string]any{
+		{"productId": costed, "qtyMilli": 2000},
+		{"productId": free, "qtyMilli": 1000},
+	}, nil)
+	rep := dailyReport(t, engine, admin, order["createdAt"].(string))
+	n := func(k string) int64 { return int64(rep[k].(float64)) }
+	if n("cogsCents") != 20000 {
+		t.Fatalf("cogs: want 20000, got %d", n("cogsCents"))
+	}
+	if want := n("salesCents") - n("salesVatCents") - n("cogsCents"); n("profitCents") != want {
+		t.Fatalf("profit: want %d (sales-vat-cost), got %d", want, n("profitCents"))
+	}
+	if n("salesVatCents") != int64(order["taxCents"].(float64)) {
+		t.Fatalf("salesVat %d != order tax %v", n("salesVatCents"), order["taxCents"])
+	}
+	if want := n("profitCents") - n("expensesCents") - n("disposalValueCents"); n("netProfitCents") != want {
+		t.Fatalf("net profit: want %d, got %d", want, n("netProfitCents"))
+	}
+	if n("uncostedLines") != 1 || n("uncostedSalesCents") != 5000 {
+		t.Fatalf("uncosted: want 1 line / 5000, got %d / %d", n("uncostedLines"), n("uncostedSalesCents"))
 	}
 }
