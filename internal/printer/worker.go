@@ -284,14 +284,16 @@ func (w *Worker) loadOrder(orderID int64) (*models.Order, error) {
 	}
 	o.PaidAt, o.VoidedAt = paidAt.String, voidedAt.String
 
-	itemRows, err := w.db.Query(w.db.Rebind(`SELECT id, product_id, name, COALESCE(sku,''), qty_milli, unit_price_cents, line_total_cents
+	itemRows, err := w.db.Query(w.db.Rebind(`SELECT id, product_id, name, COALESCE(sku,''), qty_milli, unit_price_cents, line_total_cents,
+                COALESCE(tax_type,''), COALESCE(tax_rate,0), COALESCE(tax_cents,0), COALESCE(paid_cents,0)
                 FROM order_items WHERE order_id = ? ORDER BY id`), orderID)
 	if err != nil {
 		return nil, err
 	}
 	for itemRows.Next() {
 		var it models.OrderItem
-		if err := itemRows.Scan(&it.ID, &it.ProductID, &it.Name, &it.SKU, &it.QtyMilli, &it.UnitPriceCents, &it.LineTotalCents); err != nil {
+		if err := itemRows.Scan(&it.ID, &it.ProductID, &it.Name, &it.SKU, &it.QtyMilli, &it.UnitPriceCents, &it.LineTotalCents,
+			&it.TaxType, &it.TaxRate, &it.TaxCents, &it.PaidCents); err != nil {
 			itemRows.Close()
 			return nil, err
 		}

@@ -17,6 +17,7 @@ export interface ProfitFigures {
   uncostedLines?: number
   uncostedSalesCents?: number
   returnsProfitCents?: number
+  giftCardSalesCents?: number
 }
 
 export function ProfitPanel({ f, period }: { f: ProfitFigures; period: 'day' | 'month' }) {
@@ -48,6 +49,7 @@ export function ProfitPanel({ f, period }: { f: ProfitFigures; period: 'day' | '
           {vat > 0 && row('VAT in those sales', vat, '−', "KRA's money")}
           {row('Buying price of what was sold', f.cogsCents ?? 0)}
           {(f.returnsProfitCents ?? 0) !== 0 && row('Profit given back on returns', f.returnsProfitCents ?? 0)}
+          {(f.giftCardSalesCents ?? 0) > 0 && row('Gift cards sold', f.giftCardSalesCents ?? 0, '−', 'income when spent')}
         </div>
         <div className="flex items-baseline justify-between gap-3 py-2">
           <span className="font-bold text-ink">Profit on goods</span>

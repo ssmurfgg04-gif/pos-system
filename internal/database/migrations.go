@@ -1720,6 +1720,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_etims_receipts_ref ON etims_receipts(kind,
 CREATE INDEX IF NOT EXISTS idx_etims_receipts_status ON etims_receipts(status, next_try_at);
 `,
 	},
+	{
+		// v31 (v1.11.0): per-line VAT. Each sale line freezes its KRA tax
+		// type, VAT rate, VAT share and the amount actually paid for it
+		// (after discount + points), so mixed-rate sales (exempt, 8%, gift
+		// cards) print, report and go to KRA with the same figures. Old
+		// lines keep 0 / '' and fall back to the order-level VAT.
+		Version: 31,
+		SQLite: `
+ALTER TABLE order_items ADD COLUMN tax_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE order_items ADD COLUMN tax_rate REAL NOT NULL DEFAULT 0;
+ALTER TABLE order_items ADD COLUMN tax_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE order_items ADD COLUMN paid_cents INTEGER NOT NULL DEFAULT 0;
+`,
+		Pg: `
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS tax_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS tax_rate DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS tax_cents BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS paid_cents BIGINT NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // backfillRolePermsV19 unions the v19 sales-oversight permission into the

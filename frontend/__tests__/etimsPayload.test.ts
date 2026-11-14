@@ -94,3 +94,25 @@ describe('eTIMS helpers', () => {
     expect(receiptQrUrl('production', 'P051234567X', '00', 'A B')).toContain('Data=P051234567X00A%20B')
   })
 })
+
+describe('eTIMS payload: v1.11 per-line figures from the till', () => {
+  test('per-line discount and VAT are used as given (receipt = KRA)', () => {
+    const p = buildSale(base({
+      lines: [
+        { itemCd: 'A1', itemClsCd: '1', name: 'Tee', qtyUnitCd: 'U', qtyMilli: 1000, lineTotalCents: 116000, taxTy: 'B', discountCents: 1000, taxCents: 15862 },
+        { itemCd: 'A2', itemClsCd: '1', name: 'Maize flour', qtyUnitCd: 'U', qtyMilli: 1000, lineTotalCents: 20000, taxTy: 'A', discountCents: 172, taxCents: 0 },
+      ],
+    }))
+    expect(p.itemList[0]).toMatchObject({ dcAmt: 10, taxblAmt: 1150, taxAmt: 158.62 })
+    expect(p.itemList[1]).toMatchObject({ dcAmt: 1.72, taxblAmt: 198.28, taxAmt: 0, taxTyCd: 'A' })
+    expect(p).toMatchObject({ taxAmtB: 158.62, taxAmtA: 0, totTaxAmt: 158.62, totAmt: 1348.28 })
+  })
+  test('a VAT figure more than a cent off the formula is not trusted', () => {
+    const p = buildSale(base({ lines: [{ itemCd: 'A1', itemClsCd: '1', name: 'Tee', qtyUnitCd: 'U', qtyMilli: 1000, lineTotalCents: 116000, taxTy: 'B', discountCents: 0, taxCents: 15000 }] }))
+    expect(p.itemList[0].taxAmt).toBe(160)
+  })
+  test('exempt line never carries VAT', () => {
+    const p = buildSale(base({ lines: [{ itemCd: 'A2', itemClsCd: '1', name: 'Milk', qtyUnitCd: 'U', qtyMilli: 1000, lineTotalCents: 6000, taxTy: 'A', discountCents: 0, taxCents: 1 }] }))
+    expect(p.itemList[0].taxAmt).toBe(0)
+  })
+})

@@ -186,11 +186,26 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 		p.Write(padlr(truncate(lbl, widthCols-14), "-"+formatMoneyFull(d.PointsCents, ""), widthCols) + "\n")
 	}
 	if d.TaxCents != 0 {
+		groups := models.VatBreakdown(d.Items)
 		lbl := fmt.Sprintf("VAT (%s%%)", trimPct(d.TaxPercent))
 		if d.TaxIncluded {
 			lbl = fmt.Sprintf("VAT (%s%%, incl.)", trimPct(d.TaxPercent))
 		}
+		if groups != nil {
+			lbl = "VAT"
+			if d.TaxIncluded {
+				lbl = "VAT (incl.)"
+			}
+		}
+		if !d.TaxIncluded && d.PointsCents > 0 {
+			lbl = "VAT in amount paid" // v1.11: points reduce VAT; doesn't add up row by row
+		}
 		p.Write(padlr(truncate(lbl, widthCols-14), formatMoneyFull(d.TaxCents, d.Currency), widthCols) + "\n")
+		// v1.11 mixed rates: VAT analysis per rate (KRA wants the split).
+		for _, g := range groups {
+			l := "  " + models.VatGroupLabel(g, trimPct) + " on " + formatMoneyFull(g.GrossCents, "")
+			p.Write(padlr(truncate(l, widthCols-12), formatMoneyFull(g.TaxCents, ""), widthCols) + "\n")
+		}
 	}
 	p.Bold(true)
 	p.Size(1, 1)

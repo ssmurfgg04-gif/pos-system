@@ -286,9 +286,23 @@ export function ReceiptModal({ order: given, branding, open, onClose }: {
               value={`-${centsToAmount(order.pointsRedeemed * (branding.loyalty_point_cents || 100))}`}
             />
           )}
-          {!!order.taxCents && (
-            <Row label={`VAT (${order.taxPercent || branding.tax_percent}%)`} value={centsToAmount(order.taxCents)} />
-          )}
+          {!!order.taxCents && (() => {
+            const groups = vatBreakdown(order.items)
+            return (
+              <>
+                <Row
+                  label={groups ? 'VAT' : `VAT (${order.taxPercent || branding.tax_percent}%)`}
+                  value={centsToAmount(order.taxCents)}
+                />
+                {groups?.map((g) => (
+                  <div key={g.rate} className="flex justify-between text-[10.5px] text-ink-muted pl-2">
+                    <span>{g.label} on {centsToAmount(g.grossCents)}</span>
+                    <span className="tabular">{centsToAmount(g.taxCents)}</span>
+                  </div>
+                ))}
+              </>
+            )
+          })()}
           <div className="flex justify-between font-bold text-[14px] border-t-2 border-line mt-1 pt-1">
             <span>TOTAL</span>
             <span className="tabular">{branding.currency_code} {centsToAmount(order.totalCents)}</span>
@@ -369,4 +383,24 @@ function Row({ label, value }: { label: string; value: string }) {
       <span className="tabular">{value}</span>
     </div>
   )
+}
+
+/** v1.11 VAT analysis per rate — null for single-rate (or older) sales.
+ *  Twin of models.VatBreakdown (Go). */
+export function vatBreakdown(items: Order['items']) {
+  const out: { rate: number; type: string; taxCents: number; grossCents: number; label: string }[] = []
+  for (const it of items || []) {
+    if (!it.taxType) return null
+    let g = out.find((x) => x.rate === (it.taxRate ?? 0))
+    if (!g) {
+      const rate = it.taxRate ?? 0
+      const t = it.taxType
+      const label = rate > 0 ? `VAT ${rate}%` : t === 'A' ? 'Exempt' : t === 'C' ? 'Zero-rated' : t === 'X' ? 'Gift cards (no VAT)' : 'No VAT'
+      g = { rate, type: t, taxCents: 0, grossCents: 0, label }
+      out.push(g)
+    }
+    g.taxCents += it.taxCents ?? 0
+    g.grossCents += it.paidCents ?? 0
+  }
+  return out.length > 1 ? out : null
 }

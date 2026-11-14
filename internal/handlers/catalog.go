@@ -91,6 +91,16 @@ func (h *H) ensureProductCategory(c *gin.Context, id int64) int64 {
 	return catID
 }
 
+// withVat stamps each product's effective VAT (v1.11): the till's cart
+// prices every line with the same rule checkout uses (services.vatFor).
+func (h *H) withVat(c *gin.Context, list []models.Product) []models.Product {
+	svc := h.svc(c)
+	for i := range list {
+		list[i].VatType, list[i].VatRate = svc.VatRateFor(list[i].EtimsTaxType, list[i].IsGiftCard)
+	}
+	return list
+}
+
 func (h *H) scanProducts(rows *sql.Rows) []models.Product {
 	out := []models.Product{}
 	for rows.Next() {
@@ -152,7 +162,7 @@ func (h *H) ListProducts(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
-	h.ok(c, h.scanProducts(rows))
+	h.ok(c, h.withVat(c, h.scanProducts(rows)))
 }
 
 // ListLowStock (products.view) — restock list. Per-product thresholds
@@ -173,7 +183,7 @@ func (h *H) ListLowStock(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
-	h.ok(c, h.scanProducts(rows))
+	h.ok(c, h.withVat(c, h.scanProducts(rows)))
 }
 
 // CreateProduct (products.manage).

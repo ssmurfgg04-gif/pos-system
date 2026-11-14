@@ -89,6 +89,40 @@ func (s *Service) etimsDefaultTax() string {
 
 func validTaxType(t string) bool { return len(t) == 1 && strings.Contains("ABCDE", t) }
 
+// vatFor (v1.11) is THE rule for what VAT a product sells at:
+//   - gift cards are outside VAT (type X, 0%): the VAT is charged when the
+//     card is spent on goods, not when it is sold;
+//   - a shop with no VAT (tax_percent 0) charges none on anything;
+//   - otherwise by KRA tax type (the product's, else the shop default):
+//     B = the shop's standard rate, E = 8%, A / C / D = 0%.
+func (s *Service) vatFor(productType string, isGiftCard bool, shopPct float64) (string, float64) {
+	if isGiftCard {
+		return "X", 0
+	}
+	t := strings.ToUpper(strings.TrimSpace(productType))
+	if !validTaxType(t) {
+		t = s.etimsDefaultTax()
+	}
+	if shopPct <= 0 {
+		if t == "B" || t == "E" {
+			t = "D"
+		}
+		return t, 0
+	}
+	switch t {
+	case "B":
+		return t, shopPct
+	case "E":
+		return t, 8
+	}
+	return t, 0
+}
+
+// VatRateFor is vatFor for display (product lists, the till's cart).
+func (s *Service) VatRateFor(productType string, isGiftCard bool) (string, float64) {
+	return s.vatFor(productType, isGiftCard, s.settings.GetFloat("tax_percent", 16))
+}
+
 func errOf(out map[string]any, status int, err error) error {
 	if err != nil {
 		return err
@@ -332,12 +366,13 @@ func (s *Service) etimsSendOne(r etimsRow) bool {
 		sale, err = s.etimsReturnBody(r.RefID)
 	case "V":
 		sale, err = s.etimsVoidBody(r.RefID)
-		if errors.Is(err, errEtimsNothingLeft) {
-			_, _ = s.db.Exec(s.db.Rebind(`UPDATE etims_receipts SET status = 'skipped', last_error = 'fully returned already', updated_at = ? WHERE id = ?`), nowStamp(), r.ID)
-			return false
-		}
 	default:
 		sale, err = s.etimsSaleBody(r.RefID)
+	}
+	if errors.Is(err, errEtimsNothingLeft) {
+		// gift cards only, or already fully credited: not a supply for KRA
+		_, _ = s.db.Exec(s.db.Rebind(`UPDATE etims_receipts SET status = 'skipped', last_error = 'nothing for KRA (gift cards / already credited)', updated_at = ? WHERE id = ?`), nowStamp(), r.ID)
+		return false
 	}
 	if err != nil {
 		s.etimsMark(r, "failed", err.Error(), false, nil)
@@ -403,13 +438,17 @@ func (s *Service) etimsMark(r etimsRow, status, msg string, retry bool, stamp ma
 }
 
 // etimsLine builds one wire line from an order/return line + its product.
-func (s *Service) etimsLine(productID int64, name, sku string, qtyMilli, unitPrice, lineTotal int64) map[string]any {
+// frozenType is the tax type frozen on the sale line (v1.11); ” = old
+// line, use the product's current type.
+func (s *Service) etimsLine(productID int64, name, sku, frozenType string, qtyMilli, unitPrice, lineTotal int64) map[string]any {
 	var barcode, unit, taxTy, cls string
 	trackStock := 1
 	_ = s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(barcode,''), COALESCE(unit,''), COALESCE(track_stock,1),
 		COALESCE(etims_tax_type,''), COALESCE(etims_cls_cd,'') FROM products WHERE id = ?`), productID).
 		Scan(&barcode, &unit, &trackStock, &taxTy, &cls)
-	if !validTaxType(taxTy) {
+	if validTaxType(frozenType) {
+		taxTy = frozenType
+	} else if !validTaxType(taxTy) {
 		taxTy = s.etimsDefaultTax()
 	}
 	key := "name:" + strings.ToLower(strings.TrimSpace(name))
@@ -427,44 +466,62 @@ func (s *Service) etimsSaleBody(orderID int64) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sale %d not found", orderID)
 	}
-	lines := []map[string]any{}
-	for _, it := range o.Items {
-		lines = append(lines, s.etimsLine(it.ProductID, it.Name, it.SKU, it.QtyMilli, it.UnitPriceCents, it.LineTotalCents))
-	}
-	if len(lines) == 0 {
+	if len(o.Items) == 0 {
 		return nil, fmt.Errorf("sale %s has no lines", o.Number)
 	}
-	// Order-level discount and redeemed points both come off what the
-	// customer paid; eTIMS spreads them over the lines.
-	var linesTotal int64
-	for _, it := range o.Items {
-		linesTotal += it.LineTotalCents
+	body := map[string]any{
+		"traderInvoiceNo": o.Number, "confirmedAt": kenyaStampOf(firstNonEmpty(o.PaidAt, o.CreatedAt)),
+		"customerPin": o.BuyerPIN, "customerName": o.CustomerName, "customerPhone": etimsPhoneOf(o),
+		"payment": etimsPaymentOf(o), "cashierId": fmt.Sprint(o.CashierID), "cashierName": o.CashierName,
 	}
-	gross := linesTotal
-	if !o.TaxIncluded && o.TaxPercent > 0 {
-		// tax-exclusive pricing: eTIMS amounts include VAT, so scale lines
-		// up to what was actually charged (the total carries the VAT).
-		for i, l := range lines {
-			lt := l["lineTotalCents"].(int64)
-			lines[i]["lineTotalCents"] = lt + (lt*int64(o.TaxPercent*100)+5000)/10000
+	lines := []map[string]any{}
+	if o.Items[0].TaxType != "" {
+		// v1.11 lines carry their frozen VAT: send exactly what the receipt
+		// shows. Per line: gross before discount (VAT incl.), its discount
+		// share and its VAT. Gift cards (X) are not a supply: left out.
+		for _, it := range o.Items {
+			if it.TaxType == "X" {
+				continue
+			}
+			l := s.etimsLine(it.ProductID, it.Name, it.SKU, it.TaxType, it.QtyMilli, it.UnitPriceCents, it.PaidCents)
+			if o.TaxIncluded && it.LineTotalCents >= it.PaidCents {
+				l["lineTotalCents"] = it.LineTotalCents
+				l["discountCents"] = it.LineTotalCents - it.PaidCents
+			} else {
+				l["discountCents"] = int64(0)
+			}
+			l["taxCents"] = it.TaxCents
+			lines = append(lines, l)
 		}
-		gross = 0
-		for _, l := range lines {
-			gross += l["lineTotalCents"].(int64)
+		if len(lines) == 0 {
+			return nil, errEtimsNothingLeft // gift cards only: nothing for KRA
 		}
+		body["lines"] = lines
+		body["discountCents"] = int64(0)
+		return body, nil
+	}
+	// Pre-v1.11 sale (no per-line VAT): one rate, discount and points
+	// spread by the builder.
+	for _, it := range o.Items {
+		lines = append(lines, s.etimsLine(it.ProductID, it.Name, it.SKU, "", it.QtyMilli, it.UnitPriceCents, it.LineTotalCents))
+	}
+	var gross int64
+	for i, l := range lines {
+		lt := l["lineTotalCents"].(int64)
+		if !o.TaxIncluded && o.TaxPercent > 0 {
+			lt = lt + (lt*int64(o.TaxPercent*100)+5000)/10000
+			lines[i]["lineTotalCents"] = lt
+		}
+		gross += lt
 	}
 	discount := gross - o.TotalCents
 	if discount < 0 {
-		// rounding of exclusive VAT can leave the lines a cent short: put it on the first line
 		lines[0]["lineTotalCents"] = lines[0]["lineTotalCents"].(int64) - discount
 		discount = 0
 	}
-	return map[string]any{
-		"traderInvoiceNo": o.Number, "confirmedAt": kenyaStampOf(firstNonEmpty(o.PaidAt, o.CreatedAt)),
-		"customerPin": o.BuyerPIN, "customerName": o.CustomerName, "customerPhone": etimsPhoneOf(o),
-		"payment": etimsPaymentOf(o), "discountCents": discount,
-		"cashierId": fmt.Sprint(o.CashierID), "cashierName": o.CashierName, "lines": lines,
-	}, nil
+	body["lines"] = lines
+	body["discountCents"] = discount
+	return body, nil
 }
 
 func (s *Service) etimsReturnBody(returnID int64) (map[string]any, error) {
@@ -475,8 +532,11 @@ func (s *Service) etimsReturnBody(returnID int64) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("return %d not found", returnID)
 	}
-	rows, err := s.db.Query(s.db.Rebind(`SELECT product_id, name, COALESCE(sku,''), qty_milli, unit_price_cents, line_total_cents
-		FROM return_items WHERE return_id = ? ORDER BY id`), returnID)
+	// The refund per line, with the tax type frozen on the original sale line.
+	rows, err := s.db.Query(s.db.Rebind(`SELECT ri.product_id, ri.name, COALESCE(ri.sku,''), ri.qty_milli, ri.unit_price_cents, ri.line_total_cents,
+		COALESCE(oi.tax_type,'')
+		FROM return_items ri LEFT JOIN order_items oi ON oi.id = ri.order_item_id
+		WHERE ri.return_id = ? ORDER BY ri.id`), returnID)
 	if err != nil {
 		return nil, err
 	}
@@ -484,13 +544,13 @@ func (s *Service) etimsReturnBody(returnID int64) (map[string]any, error) {
 	lines := []map[string]any{}
 	for rows.Next() {
 		var pid, qty, unit, total int64
-		var name, sku string
-		if rows.Scan(&pid, &name, &sku, &qty, &unit, &total) == nil && qty > 0 {
-			lines = append(lines, s.etimsLine(pid, name, sku, qty, unit, total))
+		var name, sku, tt string
+		if rows.Scan(&pid, &name, &sku, &qty, &unit, &total, &tt) == nil && qty > 0 && tt != "X" {
+			lines = append(lines, s.etimsLine(pid, name, sku, tt, qty, unit, total))
 		}
 	}
 	if len(lines) == 0 {
-		return nil, fmt.Errorf("return %s has no lines", number)
+		return nil, errEtimsNothingLeft
 	}
 	o, _ := s.GetOrder(orderID)
 	body := map[string]any{
@@ -505,7 +565,7 @@ func (s *Service) etimsReturnBody(returnID int64) (map[string]any, error) {
 	return body, nil
 }
 
-var errEtimsNothingLeft = errors.New("nothing left to credit")
+var errEtimsNothingLeft = errors.New("nothing to send to KRA")
 
 // etimsVoidBody: credit note for a voided, KRA-signed sale: every line,
 // less what earlier returns already credited.
@@ -529,17 +589,26 @@ func (s *Service) etimsVoidBody(orderID int64) (map[string]any, error) {
 	}
 	lines := body["lines"].([]map[string]any)
 	var left []map[string]any
-	for i, it := range o.Items {
-		if i >= len(lines) {
+	j := 0 // lines skip gift cards (X): walk them in step with the items
+	for _, it := range o.Items {
+		if it.TaxType == "X" {
+			continue
+		}
+		if j >= len(lines) {
 			break
 		}
+		l := lines[j]
+		j++
 		rest := it.QtyMilli - returned[it.ID]
 		if rest <= 0 {
 			continue
 		}
-		l := lines[i]
 		if rest < it.QtyMilli {
-			l["lineTotalCents"] = l["lineTotalCents"].(int64) * rest / it.QtyMilli
+			for _, k := range []string{"lineTotalCents", "discountCents", "taxCents"} {
+				if v, ok := l[k].(int64); ok {
+					l[k] = v * rest / it.QtyMilli
+				}
+			}
 			l["qtyMilli"] = rest
 		}
 		left = append(left, l)

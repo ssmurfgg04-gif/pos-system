@@ -469,11 +469,29 @@ func (s *Service) renderReceiptImage(o *models.Order) (image.Image, error) {
 		y += 32
 	}
 	if o.TaxCents != 0 {
+		groups := models.VatBreakdown(o.Items)
 		vatLbl := fmt.Sprintf("VAT (%s%%)", trimPercent(o.TaxPercent))
 		if o.TaxIncluded {
 			vatLbl = fmt.Sprintf("VAT (%s%%, included)", trimPercent(o.TaxPercent))
 		}
+		if groups != nil {
+			vatLbl = "VAT"
+			if o.TaxIncluded {
+				vatLbl = "VAT (included)"
+			}
+		}
+		if !o.TaxIncluded && o.PointsRedeemed > 0 {
+			// v1.11: VAT is the VAT inside what was paid (points reduce
+			// it), so it no longer adds up row by row: say so.
+			vatLbl = "VAT inside amount paid"
+		}
 		row(vatLbl, o.TaxCents, false, fTotalLbl, muted)
+		// v1.11 mixed rates: VAT analysis per rate
+		for _, g := range groups {
+			drawText(canvas, fSub, muted, receiptMargin+18, y-6, models.VatGroupLabel(g, trimPercent)+" on "+printer.FormatMoney(g.GrossCents, ""))
+			drawTextRight(canvas, fSub, muted, right, y-6, printer.FormatMoney(g.TaxCents, ""))
+			y += 26
+		}
 	}
 	drawText(canvas, fTotal, ink, receiptMargin, y+6, "TOTAL")
 	drawTextRight(canvas, fTotal, ink, right, y+6, printer.FormatMoney(o.TotalCents, symbol))
