@@ -12,6 +12,7 @@
 //   classes  { q }                       KRA item classification search
 //   defaults { defaultClsCd }
 //   sale     { kind: 'S'|'R', clientRef, orgClientRef?, sale: {...} }
+//   stock    { clientRef, sarTyCd, occurredAt, line: {...}, remainQtyMilli }
 //
 // Responses: { ok: true, ... } | { ok: false, error, retry? }
 import { buildSale, itemCode, kenyaStamp, qtyUnitFor, receiptQrUrl, TaxType } from "./payload.ts";
@@ -239,6 +240,64 @@ function stampOf(d: Device, inv: any) {
   };
 }
 
+// ---- strict order ---------------------------------------------------------
+// KRA expects invoice numbers in order. Every send holds the store's lease;
+// inside it, an earlier invoice still waiting (KRA was unreachable) goes
+// first. While that one can't get through, nothing newer is numbered.
+
+async function withLease<T>(team: string, fn: () => Promise<T>): Promise<T | null> {
+  const holder = crypto.randomUUID();
+  for (let i = 0; i < 6; i++) {
+    if (await rpc<boolean>("etims_lease", { p_team: team, p_holder: holder, p_seconds: 70 })) {
+      try {
+        return await fn();
+      } finally {
+        await rpc("etims_unlease", { p_team: team, p_holder: holder });
+      }
+    }
+    await new Promise((r) => setTimeout(r, 400 + Math.random() * 600));
+  }
+  return null; // another till is sending: the caller retries in a few seconds
+}
+
+async function patchInvoice(team: string, clientRef: string, kind: string, patch: Record<string, unknown>) {
+  await db(`etims_invoices?team_code=eq.${encodeURIComponent(team)}&client_ref=eq.${encodeURIComponent(clientRef)}&kind=eq.${kind}`, {
+    method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
+  });
+  await rpc("etims_bump_attempts", { p_team: team, p_client_ref: clientRef, p_kind: kind });
+}
+
+function signedPatch(r: any) {
+  return {
+    status: "signed", response: r.raw,
+    cur_rcpt_no: Number(r.data?.curRcptNo ?? 0), tot_rcpt_no: Number(r.data?.totRcptNo ?? 0),
+    intrl_data: String(r.data?.intrlData ?? ""), rcpt_sign: String(r.data?.rcptSign ?? ""),
+    sdc_date_time: String(r.data?.sdcDateTime ?? ""),
+  };
+}
+
+// Send the oldest invoice still waiting (other than `except`). Returns
+// false when it could not get through (queue blocked: retry later).
+async function drainHead(d: Device, except: string): Promise<boolean> {
+  const head = (await rows(`etims_invoices?team_code=eq.${encodeURIComponent(d.team_code)}&status=eq.pending&request=not.is.null` +
+    `&client_ref=neq.${encodeURIComponent(except)}&order=invc_no.asc&limit=1&select=client_ref,kind,request,invc_no`))[0];
+  if (!head) return true;
+  const r = await kra(d.env, "/saveTrnsSalesOsdc", head.request, d);
+  if (r.ok) {
+    await patchInvoice(d.team_code, head.client_ref, head.kind, signedPatch(r));
+    return true;
+  }
+  if (r.retry) {
+    await patchInvoice(d.team_code, head.client_ref, head.kind, { response: r.raw });
+    return false;
+  }
+  // KRA refused it for good: it is the newest number (nothing newer can be
+  // numbered while it waits), so hand the number back; its till re-sends.
+  await patchInvoice(d.team_code, head.client_ref, head.kind, { status: "rejected", response: r.raw });
+  await rpc("etims_release_invoice", { p_team: d.team_code, p_client_ref: head.client_ref, p_kind: head.kind });
+  return true;
+}
+
 async function sale(team: string, b: any) {
   const d = await deviceFor(team);
   if (!d?.cmc_key || !d.active) return json({ ok: false, error: "eTIMS is not connected for this shop", retry: false }, 409);
@@ -248,6 +307,10 @@ async function sale(team: string, b: any) {
   const lines = Array.isArray(s.lines) ? s.lines : [];
   if (!clientRef || lines.length === 0) return json({ ok: false, error: "nothing to send", retry: false }, 400);
 
+  // Already signed? Hand the stamp back without touching KRA (idempotent).
+  const done = (await rows(`etims_invoices?team_code=eq.${encodeURIComponent(team)}&client_ref=eq.${encodeURIComponent(clientRef)}&kind=eq.${kind}&status=eq.signed&select=*`))[0];
+  if (done) return json({ ok: true, stamp: stampOf(d, done) });
+
   let orgInvcNo = 0;
   if (kind === "R") {
     const org = (await rows(`etims_invoices?team_code=eq.${encodeURIComponent(team)}&client_ref=eq.${encodeURIComponent(String(b.orgClientRef ?? ""))}&kind=eq.S&status=eq.signed&select=invc_no`))[0];
@@ -256,62 +319,140 @@ async function sale(team: string, b: any) {
   }
   const cashier = { id: String(s.cashierId ?? "pos").slice(0, 20), name: String(s.cashierName ?? "POS").slice(0, 60) };
 
-  // Already signed? Hand the stamp back without touching KRA (idempotent).
-  const done = (await rows(`etims_invoices?team_code=eq.${encodeURIComponent(team)}&client_ref=eq.${encodeURIComponent(clientRef)}&kind=eq.${kind}&status=eq.signed&select=*`))[0];
-  if (done) return json({ ok: true, stamp: stampOf(d, done) });
-
-  // Items first, number second: a sale KRA can't accept yet (no item
-  // class...) must not hold an invoice number and leave a gap.
-  let items;
+  // Items first (outside the lease): a sale KRA can't accept yet never
+  // holds a number.
+  let items: Awaited<ReturnType<typeof ensureItems>>;
   try {
     items = await ensureItems(d, lines, cashier);
   } catch (e: any) {
     return json({ ok: false, error: e?.error ?? String(e), retry: !!e?.retry }, e?.retry ? 503 : 422);
   }
-  const res = await rpc<any>("etims_reserve_invoice", { p_team: team, p_client_ref: clientRef, p_kind: kind, p_org_invc_no: orgInvcNo });
-  if (!res?.ok) return json({ ok: false, error: res?.error ?? "could not number the invoice", retry: true }, 503);
-  if (res.status === "signed") return json({ ok: true, stamp: stampOf(d, res) });
-  const confirmedAt = /^\d{14}$/.test(String(s.confirmedAt ?? "")) ? String(s.confirmedAt) : kenyaStamp(new Date());
-  let payload;
-  try {
-    payload = buildSale({
-      kind, invcNo: Number(res.invc_no), orgInvcNo, tin: d.tin, bhfId: d.bhf_id,
-      traderInvoiceNo: String(s.traderInvoiceNo ?? clientRef), confirmedAt,
-      customerPin: s.customerPin, customerName: s.customerName, customerPhone: s.customerPhone,
-      payment: String(s.payment ?? "cash"), discountCents: Math.max(0, Math.round(Number(s.discountCents ?? 0))),
-      cashierId: cashier.id, cashierName: cashier.name, tradeName: d.trade_nm, refundReason: s.refundReason,
-      lines: lines.map((l: any) => {
-        const it = items[String(l.itemKey)];
-        return {
-          itemCd: it.itemCd, itemClsCd: it.clsCd, name: String(l.name ?? "Item"), barcode: l.barcode,
-          qtyUnitCd: it.qtyUnitCd, qtyMilli: Math.max(1, Math.round(Number(l.qtyMilli ?? 0))),
-          lineTotalCents: Math.max(0, Math.round(Number(l.lineTotalCents ?? 0))), taxTy: it.taxTy,
-        };
-      }),
-    });
-  } catch (e) {
-    return json({ ok: false, error: String(e), retry: false }, 400);
-  }
-  const r = await kra(d.env, "/saveTrnsSalesOsdc", payload, d);
-  const patch: Record<string, unknown> = {
-    request: payload, response: r.raw, updated_at: new Date().toISOString(),
-    status: r.ok ? "signed" : r.retry ? "pending" : "rejected",
-  };
-  if (r.ok && r.data) {
-    Object.assign(patch, {
-      cur_rcpt_no: Number(r.data.curRcptNo ?? 0), tot_rcpt_no: Number(r.data.totRcptNo ?? 0),
-      intrl_data: String(r.data.intrlData ?? ""), rcpt_sign: String(r.data.rcptSign ?? ""),
-      sdc_date_time: String(r.data.sdcDateTime ?? ""),
-    });
-  }
-  await db(`etims_invoices?team_code=eq.${encodeURIComponent(team)}&client_ref=eq.${encodeURIComponent(clientRef)}&kind=eq.${kind}`, {
-    method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(patch),
+
+  const out = await withLease(team, async () => {
+    if (!(await drainHead(d, clientRef))) {
+      return { status: 503, body: { ok: false, error: "KRA unreachable: an earlier invoice is waiting, sending in order", retry: true } };
+    }
+    const res = await rpc<any>("etims_reserve_invoice", { p_team: team, p_client_ref: clientRef, p_kind: kind, p_org_invc_no: orgInvcNo });
+    if (!res?.ok) return { status: 503, body: { ok: false, error: res?.error ?? "could not number the invoice", retry: true } };
+    if (res.status === "signed") return { status: 200, body: { ok: true, stamp: stampOf(d, res) } };
+    const confirmedAt = /^\d{14}$/.test(String(s.confirmedAt ?? "")) ? String(s.confirmedAt) : kenyaStamp(new Date());
+    let payload;
+    try {
+      payload = buildSale({
+        kind, invcNo: Number(res.invc_no), orgInvcNo, tin: d.tin, bhfId: d.bhf_id,
+        traderInvoiceNo: String(s.traderInvoiceNo ?? clientRef), confirmedAt,
+        customerPin: s.customerPin, customerName: s.customerName, customerPhone: s.customerPhone,
+        payment: String(s.payment ?? "cash"), discountCents: Math.max(0, Math.round(Number(s.discountCents ?? 0))),
+        cashierId: cashier.id, cashierName: cashier.name, tradeName: d.trade_nm, refundReason: s.refundReason,
+        lines: lines.map((l: any) => {
+          const it = items[String(l.itemKey)];
+          return {
+            itemCd: it.itemCd, itemClsCd: it.clsCd, name: String(l.name ?? "Item"), barcode: l.barcode,
+            qtyUnitCd: it.qtyUnitCd, qtyMilli: Math.max(1, Math.round(Number(l.qtyMilli ?? 0))),
+            lineTotalCents: Math.max(0, Math.round(Number(l.lineTotalCents ?? 0))), taxTy: it.taxTy,
+            discountCents: l.discountCents === undefined ? undefined : Math.max(0, Math.round(Number(l.discountCents))),
+            taxCents: l.taxCents === undefined ? undefined : Math.round(Number(l.taxCents)),
+          };
+        }),
+      });
+    } catch (e) {
+      await rpc("etims_release_invoice", { p_team: team, p_client_ref: clientRef, p_kind: kind });
+      return { status: 400, body: { ok: false, error: String(e), retry: false } };
+    }
+    // Saved BEFORE sending: if this run dies mid-call, the next send
+    // re-sends exactly this invoice first (same number, same content).
+    await patchInvoice(team, clientRef, kind, { request: payload, status: "pending" });
+    const r = await kra(d.env, "/saveTrnsSalesOsdc", payload, d);
+    if (r.ok && r.data) {
+      const patch = signedPatch(r);
+      await patchInvoice(team, clientRef, kind, patch);
+      return { status: 200, body: { ok: true, stamp: stampOf(d, { invc_no: res.invc_no, ...patch }) } };
+    }
+    if (r.retry) {
+      await patchInvoice(team, clientRef, kind, { response: r.raw });
+      return { status: 503, body: { ok: false, error: `KRA: ${r.msg || r.code}`, code: r.code, retry: true } };
+    }
+    await patchInvoice(team, clientRef, kind, { status: "rejected", response: r.raw });
+    await rpc("etims_release_invoice", { p_team: team, p_client_ref: clientRef, p_kind: kind });
+    return { status: 422, body: { ok: false, error: `KRA: ${r.msg || r.code}`, code: r.code, retry: false } };
   });
-  await rpc("etims_bump_attempts", { p_team: team, p_client_ref: clientRef, p_kind: kind });
-  if (!r.ok) {
-    return json({ ok: false, error: `KRA: ${r.msg || r.code}`, code: r.code, retry: r.retry, invcNo: Number(res.invc_no) }, r.retry ? 503 : 422);
+  if (!out) return json({ ok: false, error: "another till is sending to KRA, retrying", retry: true }, 503);
+  return json(out.body, out.status);
+}
+
+// ---- stock (stored and released) --------------------------------------------
+// One stock movement from the till's ledger → /insertStockIO, then the
+// item's remaining quantity → /saveStockMaster. Idempotent per clientRef;
+// sarNo gapless per store under the same lease as invoices.
+const SAR_TYPES = new Set(["01", "02", "03", "04", "05", "06", "11", "12", "13", "14", "15", "16"]);
+
+async function stock(team: string, b: any) {
+  const d = await deviceFor(team);
+  if (!d?.cmc_key || !d.active) return json({ ok: false, error: "eTIMS is not connected for this shop", retry: false }, 409);
+  const clientRef = String(b.clientRef ?? "").slice(0, 80);
+  const sarTy = String(b.sarTyCd ?? "");
+  const l = b.line ?? {};
+  if (!clientRef || !SAR_TYPES.has(sarTy) || !l.itemKey) return json({ ok: false, error: "bad stock movement", retry: false }, 400);
+  const have = (await rows(`etims_stock?team_code=eq.${encodeURIComponent(team)}&client_ref=eq.${encodeURIComponent(clientRef)}&select=status`))[0];
+  if (have?.status === "done") return json({ ok: true, status: "done" });
+  const cashier = { id: String(b.userId ?? "pos").slice(0, 20), name: String(b.userName ?? "POS").slice(0, 60) };
+  let items: Awaited<ReturnType<typeof ensureItems>>;
+  try {
+    items = await ensureItems(d, [l], cashier);
+  } catch (e: any) {
+    return json({ ok: false, error: e?.error ?? String(e), retry: !!e?.retry }, e?.retry ? 503 : 422);
   }
-  return json({ ok: true, stamp: stampOf(d, { invc_no: res.invc_no, ...patch }) });
+  const it = items[String(l.itemKey)];
+  const out = await withLease(team, async () => {
+    const res = await rpc<any>("etims_reserve_sar", { p_team: team, p_client_ref: clientRef, p_sar_ty: sarTy });
+    if (!res?.ok) return { status: 503, body: { ok: false, error: res?.error ?? "could not number the movement", retry: true } };
+    const qty = Math.round(Math.abs(Number(l.qtyMilli ?? 0)) / 10) / 100; // KRA: 2 decimals
+    const prc = Math.max(0, Math.round(Number(l.unitPriceCents ?? 0))) / 100;
+    const amt = Math.round(qty * prc * 100);
+    const rate = it.taxTy === "B" ? 16 : it.taxTy === "E" ? 8 : 0;
+    const tax = rate > 0 ? Math.floor((2 * amt * rate + 100 + rate) / (2 * (100 + rate))) : 0;
+    const patch = (p: Record<string, unknown>) => db(`etims_stock?team_code=eq.${encodeURIComponent(team)}&client_ref=eq.${encodeURIComponent(clientRef)}`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ ...p, item_cd: it.itemCd, updated_at: new Date().toISOString() }),
+    });
+    if (res.status === "pending") {
+      const ocrn = /^\d{8}/.test(String(b.occurredAt ?? "")) ? String(b.occurredAt).slice(0, 8) : kenyaStamp(new Date()).slice(0, 8);
+      const io = {
+        tin: d.tin, bhfId: d.bhf_id, sarNo: Number(res.sar_no), orgSarNo: 0, regTyCd: "M",
+        custTin: null, custNm: null, custBhfId: null, sarTyCd: sarTy, ocrnDt: ocrn, totItemCnt: 1,
+        totTaxblAmt: amt / 100, totTaxAmt: tax / 100, totAmt: amt / 100,
+        remark: String(b.remark ?? "").slice(0, 400) || null,
+        regrId: cashier.id, regrNm: cashier.name, modrId: cashier.id, modrNm: cashier.name,
+        itemList: [{
+          itemSeq: 1, itemCd: it.itemCd, itemClsCd: it.clsCd, itemNm: String(l.name ?? "Item").slice(0, 200),
+          bcd: l.barcode ? String(l.barcode).slice(0, 20) : null, pkgUnitCd: "NT", pkg: qty, qtyUnitCd: it.qtyUnitCd, qty,
+          itemExprDt: /^\d{8}$/.test(String(l.expiry ?? "")) ? String(l.expiry) : null,
+          prc, splyAmt: amt / 100, totDcAmt: 0, taxblAmt: amt / 100, taxTyCd: it.taxTy, taxAmt: tax / 100, totAmt: amt / 100,
+        }],
+      };
+      await patch({ request: io });
+      const r = await kra(d.env, "/insertStockIO", io, d);
+      if (!r.ok) {
+        if (r.retry) {
+          await patch({ response: r.raw });
+          return { status: 503, body: { ok: false, error: `KRA: ${r.msg || r.code}`, retry: true } };
+        }
+        await patch({ status: "rejected", response: r.raw });
+        await rpc("etims_release_sar", { p_team: team, p_client_ref: clientRef });
+        return { status: 422, body: { ok: false, error: `KRA: ${r.msg || r.code}`, retry: false } };
+      }
+      await patch({ status: "io_done", response: r.raw });
+    }
+    const rsd = Math.round(Math.max(0, Number(b.remainQtyMilli ?? 0)) / 10) / 100;
+    const m = await kra(d.env, "/saveStockMaster", {
+      tin: d.tin, bhfId: d.bhf_id, itemCd: it.itemCd, rsdQty: rsd,
+      regrId: cashier.id, regrNm: cashier.name, modrId: cashier.id, modrNm: cashier.name,
+    }, d);
+    if (!m.ok) return { status: m.retry ? 503 : 422, body: { ok: false, error: `KRA stock level: ${m.msg || m.code}`, retry: true } };
+    await patch({ status: "done" });
+    return { status: 200, body: { ok: true, status: "done", sarNo: Number(res.sar_no) } };
+  });
+  if (!out) return json({ ok: false, error: "another till is sending to KRA, retrying", retry: true }, 503);
+  return json(out.body, out.status);
 }
 
 Deno.serve(async (req) => {
@@ -330,6 +471,7 @@ Deno.serve(async (req) => {
     case "classes": return await classes(team, b);
     case "defaults": return await setDefaults(team, b);
     case "sale": return await sale(team, b);
+    case "stock": return await stock(team, b);
     default: return json({ ok: false, error: "unknown action" }, 400);
   }
 });

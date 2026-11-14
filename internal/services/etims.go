@@ -301,6 +301,7 @@ func (s *Service) etimsEnqueue() {
 	if err != nil {
 		log.Printf("[etims] enqueue voids: %v", err)
 	}
+	s.etimsEnqueueStock()
 	// A sale voided BEFORE KRA signed it is never sent.
 	_, _ = s.db.Exec(`UPDATE etims_receipts SET status = 'skipped', last_error = 'voided before sending', next_try_at = ''
 		WHERE kind = 'S' AND status IN ('pending','failed')
@@ -366,6 +367,8 @@ func (s *Service) etimsSendOne(r etimsRow) bool {
 		sale, err = s.etimsReturnBody(r.RefID)
 	case "V":
 		sale, err = s.etimsVoidBody(r.RefID)
+	case "M":
+		return s.etimsSendStock(r)
 	default:
 		sale, err = s.etimsSaleBody(r.RefID)
 	}
@@ -691,4 +694,176 @@ func (s *Service) etimsStampFor(kind string, refID int64) *models.EtimsStamp {
 		return nil
 	}
 	return &st
+}
+
+// ---- stock movements (v1.11) ------------------------------------------------
+// Every stock movement made on this till after eTIMS was switched on goes
+// to KRA as a "stored and released" record (insertStockIO) plus the
+// item's remaining stock (saveStockMaster). A movement tied to an invoice
+// (sale, void, return) waits until that invoice is signed; if the invoice
+// was never sent (voided first, gift cards), the movement is skipped too.
+
+var errEtimsWait = errors.New("waiting for the invoice")
+
+// sarTypeFor maps a ledger move to KRA's stock movement type (spec 4.15).
+func sarTypeFor(kind string, delta int64) string {
+	switch kind {
+	case models.MoveSale:
+		return "11"
+	case models.MoveReturnRestock, models.MoveVoidRestore:
+		return "03"
+	case models.MovePOReceive, models.MoveBatchIn:
+		return "02"
+	case models.MoveDisposal, models.MoveBatchRecall:
+		return "15"
+	case models.MoveAdjustment, models.MoveCount, models.MoveOpening:
+		if delta < 0 {
+			return "16"
+		}
+		return "06"
+	}
+	return ""
+}
+
+func (s *Service) etimsEnqueueStock() {
+	since := s.settings.Get("etims_stock_since_id")
+	if since == "" {
+		// first run after switching on: only movements from now on
+		var maxID int64
+		_ = s.db.QueryRow(`SELECT COALESCE(MAX(id),0) FROM stock_movements`).Scan(&maxID)
+		_ = s.settings.Set("etims_stock_since_id", fmt.Sprint(maxID))
+		return
+	}
+	dev := s.deviceID()
+	_, err := s.db.Exec(s.db.Rebind(`
+		INSERT INTO etims_receipts (kind, ref_id, client_ref, status)
+		SELECT 'M', m.id, 'mv:' || ? || ':' || CAST(m.id AS TEXT), 'pending'
+		FROM stock_movements m
+		WHERE m.id > ? AND COALESCE(m.device_id,'') = ? AND COALESCE(m.delta_milli,0) != 0
+		  AND m.kind IN ('SALE','RETURN_RESTOCK','VOID_RESTORE','PO_RECEIVE','BATCH_IN','DISPOSAL','BATCH_RECALL','ADJUSTMENT','COUNT','OPENING')
+		  AND NOT EXISTS (SELECT 1 FROM etims_receipts r WHERE r.kind = 'M' AND r.ref_id = m.id)`),
+		dev, since, dev)
+	if err != nil {
+		log.Printf("[etims] enqueue stock: %v", err)
+		return
+	}
+}
+
+// etimsInvoiceGate: the state of the invoice a movement depends on.
+// "go" = signed (send the movement), "skip" = never sent, "wait" = not yet.
+func (s *Service) etimsInvoiceGate(kind, reference string) string {
+	var status string
+	var err error
+	switch kind {
+	case models.MoveSale:
+		err = s.db.QueryRow(s.db.Rebind(`SELECT r.status FROM etims_receipts r JOIN orders o ON o.id = r.ref_id
+			WHERE r.kind = 'S' AND o.number = ?`), reference).Scan(&status)
+	case models.MoveVoidRestore:
+		err = s.db.QueryRow(s.db.Rebind(`SELECT r.status FROM etims_receipts r JOIN orders o ON o.id = r.ref_id
+			WHERE r.kind = 'V' AND o.number = ?`), reference).Scan(&status)
+		if err != nil {
+			// voided before it was ever signed: the sale was skipped, so is this
+			var st string
+			if s.db.QueryRow(s.db.Rebind(`SELECT r.status FROM etims_receipts r JOIN orders o ON o.id = r.ref_id
+				WHERE r.kind = 'S' AND o.number = ?`), reference).Scan(&st) == nil && st == "skipped" {
+				return "skip"
+			}
+		}
+	case models.MoveReturnRestock:
+		err = s.db.QueryRow(s.db.Rebind(`SELECT r.status FROM etims_receipts r JOIN returns rt ON rt.id = r.ref_id
+			WHERE r.kind = 'R' AND rt.number = ?`), reference).Scan(&status)
+	default:
+		return "go"
+	}
+	if err != nil {
+		// sale from before eTIMS (never queued) → nothing to tie it to: skip
+		if kind == models.MoveSale {
+			var n int
+			_ = s.db.QueryRow(s.db.Rebind(`SELECT COUNT(*) FROM orders WHERE number = ?`), reference).Scan(&n)
+			if n > 0 {
+				var queued int
+				_ = s.db.QueryRow(s.db.Rebind(`SELECT COUNT(*) FROM etims_receipts r JOIN orders o ON o.id = r.ref_id WHERE o.number = ?`), reference).Scan(&queued)
+				if queued == 0 {
+					return "wait" // the sale is about to be queued (same tick)
+				}
+			}
+		}
+		return "wait"
+	}
+	switch status {
+	case "signed":
+		return "go"
+	case "skipped":
+		return "skip"
+	}
+	return "wait"
+}
+
+func (s *Service) etimsSendStock(r etimsRow) bool {
+	var productID, delta, balance, userID int64
+	var kind, reference, note, username, createdAt string
+	err := s.db.QueryRow(s.db.Rebind(`SELECT product_id, COALESCE(delta_milli,0), COALESCE(balance_after_milli,0), kind,
+		COALESCE(reference,''), COALESCE(note,''), COALESCE(user_id,0), COALESCE(username,''), CAST(created_at AS TEXT)
+		FROM stock_movements WHERE id = ?`), r.RefID).
+		Scan(&productID, &delta, &balance, &kind, &reference, &note, &userID, &username, &createdAt)
+	if err != nil {
+		s.etimsMark(r, "failed", "stock movement not found", false, nil)
+		return false
+	}
+	sar := sarTypeFor(kind, delta)
+	if sar == "" {
+		s.etimsSkip(r, "not a stock movement KRA tracks")
+		return false
+	}
+	switch s.etimsInvoiceGate(kind, reference) {
+	case "skip":
+		s.etimsSkip(r, "its invoice was never sent to KRA")
+		return false
+	case "wait":
+		// not a failure: look again shortly, without burning attempts
+		_, _ = s.db.Exec(s.db.Rebind(`UPDATE etims_receipts SET next_try_at = ?, last_error = 'waiting for its invoice' WHERE id = ?`),
+			time.Now().UTC().Add(15*time.Second).Format(nowStampLayout), r.ID)
+		return false
+	}
+	var name, sku string
+	var price, cost int64
+	var gift, track int
+	_ = s.db.QueryRow(s.db.Rebind(`SELECT name, COALESCE(sku,''), price_cents, COALESCE(cost_cents,0), COALESCE(is_gift_card,0), COALESCE(track_stock,1)
+		FROM products WHERE id = ?`), productID).Scan(&name, &sku, &price, &cost, &gift, &track)
+	if name == "" || gift == 1 || track == 0 {
+		s.etimsSkip(r, "not a stocked good")
+		return false
+	}
+	unit := cost
+	if sar == "11" || unit <= 0 {
+		unit = price
+	}
+	line := s.etimsLine(productID, name, sku, "", absI64(delta), unit, 0)
+	body := map[string]any{
+		"clientRef": r.ClientRef, "sarTyCd": sar, "occurredAt": kenyaStampOf(createdAt), "line": line,
+		"remainQtyMilli": balance, "remark": truncStr(strings.TrimSpace(kind+" "+reference+" "+note), 400),
+		"userId": fmt.Sprint(userID), "userName": username,
+	}
+	out, code, err := etimsCall(s, "stock", body)
+	if e := errOf(out, code, err); e != nil {
+		retry := err != nil || code >= 500 || code == 0
+		if v, ok := out["retry"].(bool); ok {
+			retry = v
+		}
+		s.etimsMark(r, "", e.Error(), retry, nil)
+		return false
+	}
+	_, _ = s.db.Exec(s.db.Rebind(`UPDATE etims_receipts SET status = 'signed', last_error = '', attempts = attempts + 1, next_try_at = '', updated_at = ? WHERE id = ?`), nowStamp(), r.ID)
+	return true
+}
+
+func (s *Service) etimsSkip(r etimsRow, why string) {
+	_, _ = s.db.Exec(s.db.Rebind(`UPDATE etims_receipts SET status = 'skipped', last_error = ?, next_try_at = '', updated_at = ? WHERE id = ?`), why, nowStamp(), r.ID)
+}
+
+func absI64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
