@@ -47,8 +47,8 @@ func (s *Service) StartStockCount(p *auth.Principal, note string) (*models.Stock
 
 	// Snapshot every tracked product (gift cards never track stock).
 	_, err = tx.Exec(s.db.Rebind(`INSERT INTO stock_count_lines
-                (count_id, product_id, sku, name, expected_qty, system_qty, unit_cost_cents)
-                SELECT ?, p.id, COALESCE(p.sku,''), p.name, p.stock_qty, p.stock_qty, COALESCE(p.cost_cents,0)
+                (count_id, product_id, sku, name, expected_qty_milli, expected_qty, system_qty_milli, system_qty, unit_cost_cents)
+                SELECT ?, p.id, COALESCE(p.sku,''), p.name, p.stock_qty_milli, p.stock_qty_milli/1000, p.stock_qty_milli, p.stock_qty_milli/1000, COALESCE(p.cost_cents,0)
                 FROM products p WHERE COALESCE(p.track_stock,1) = 1 AND COALESCE(p.is_active,1) = 1
                 ORDER BY p.name`), countID)
 	if err != nil {
@@ -71,8 +71,9 @@ func (s *Service) StartStockCount(p *auth.Principal, note string) (*models.Stock
 	return s.GetStockCount(countID)
 }
 
-// SaveCountLine records (or clears) the counted quantity for one product.
-func (s *Service) SaveCountLine(p *auth.Principal, countID, productID int64, countedQty *int) error {
+// SaveCountLine records (or clears) the counted quantity (milli-units) for
+// one product.
+func (s *Service) SaveCountLine(p *auth.Principal, countID, productID int64, countedQty *int64) error {
 	var status string
 	var number string
 	if err := s.db.QueryRow(`SELECT status, number FROM stock_counts WHERE id = ?`, countID).Scan(&status, &number); err != nil {
@@ -81,16 +82,16 @@ func (s *Service) SaveCountLine(p *auth.Principal, countID, productID int64, cou
 	if status != "OPEN" {
 		return fmt.Errorf("count session %s is closed", number)
 	}
-	if countedQty != nil && (*countedQty < 0 || *countedQty > 1_000_000) {
+	if countedQty != nil && (*countedQty < 0 || *countedQty > models.MaxStockQtyMilli) {
 		return fmt.Errorf("counted quantity out of range")
 	}
 	var res sql.Result
 	var err error
 	if countedQty != nil {
-		res, err = s.db.Exec(s.db.Rebind(`UPDATE stock_count_lines SET counted_qty = ? WHERE count_id = ? AND product_id = ?`),
-			*countedQty, countID, productID)
+		res, err = s.db.Exec(s.db.Rebind(`UPDATE stock_count_lines SET counted_qty_milli = ?, counted_qty = ? / 1000 WHERE count_id = ? AND product_id = ?`),
+			*countedQty, *countedQty, countID, productID)
 	} else {
-		res, err = s.db.Exec(s.db.Rebind(`UPDATE stock_count_lines SET counted_qty = NULL WHERE count_id = ? AND product_id = ?`),
+		res, err = s.db.Exec(s.db.Rebind(`UPDATE stock_count_lines SET counted_qty_milli = NULL, counted_qty = NULL WHERE count_id = ? AND product_id = ?`),
 			countID, productID)
 	}
 	if err != nil {
@@ -106,7 +107,7 @@ func (s *Service) SaveCountLine(p *auth.Principal, countID, productID int64, cou
 	}
 	// Keep the progress counter fresh (cheap COUNT on the indexed child).
 	_, err = s.db.Exec(s.db.Rebind(`UPDATE stock_counts SET lines_counted =
-                (SELECT COUNT(*) FROM stock_count_lines WHERE count_id = ? AND counted_qty IS NOT NULL) WHERE id = ?`),
+                (SELECT COUNT(*) FROM stock_count_lines WHERE count_id = ? AND counted_qty_milli IS NOT NULL) WHERE id = ?`),
 		countID, countID)
 	return err
 }
@@ -132,8 +133,8 @@ func (s *Service) CompleteStockCount(p *auth.Principal, countID int64, apply boo
 
 	// Variance snapshot: system qty as of NOW (sales since opening count).
 	rows, err := tx.Query(s.db.Rebind(`
-                SELECT l.id, l.product_id, l.sku, l.counted_qty, l.unit_cost_cents,
-                       COALESCE((SELECT stock_qty FROM products WHERE id = l.product_id), l.expected_qty)
+                SELECT l.id, l.product_id, l.sku, l.counted_qty_milli, l.unit_cost_cents,
+                       COALESCE((SELECT stock_qty_milli FROM products WHERE id = l.product_id), l.expected_qty_milli)
                 FROM stock_count_lines l WHERE l.count_id = ?`), countID)
 	if err != nil {
 		tx.Rollback()
@@ -145,7 +146,7 @@ func (s *Service) CompleteStockCount(p *auth.Principal, countID int64, apply boo
 		sku       string
 		counted   sql.NullInt64
 		cost      int64
-		system    int
+		system    int64
 	}
 	var lines []line
 	for rows.Next() {
@@ -169,18 +170,18 @@ func (s *Service) CompleteStockCount(p *auth.Principal, countID int64, apply boo
 		if !l.counted.Valid {
 			continue
 		}
-		diff := l.counted.Int64 - int64(l.system)
+		diff := l.counted.Int64 - l.system
 		varianceUnits += diff
 		varianceValue += diff * l.cost
-		if _, err := tx.Exec(s.db.Rebind(`UPDATE stock_count_lines SET system_qty = ?, applied = ? WHERE id = ?`),
-			l.system, btoi(apply && diff != 0), l.id); err != nil {
+		if _, err := tx.Exec(s.db.Rebind(`UPDATE stock_count_lines SET system_qty_milli = ?, system_qty = ? / 1000, applied = ? WHERE id = ?`),
+			l.system, l.system, btoi(apply && diff != 0), l.id); err != nil {
 			tx.Rollback()
 			return nil, err
 		}
 		if apply && diff != 0 {
 			// Absolute set with a guard: never lower than zero.
-			if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = MAX(?, 0) WHERE id = ?`),
-				l.counted.Int64, l.productID); err != nil {
+			if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty_milli = MAX(?, 0), stock_qty = MAX(?, 0) / 1000 WHERE id = ?`),
+				l.counted.Int64, l.counted.Int64, l.productID); err != nil {
 				tx.Rollback()
 				return nil, err
 			}
@@ -188,9 +189,19 @@ func (s *Service) CompleteStockCount(p *auth.Principal, countID int64, apply boo
 			if newBal < 0 {
 				newBal = 0
 			}
-			if err := recordStockMoveTx(s, tx, l.productID, newBal-int64(l.system), models.MoveCount, number, "", p.ID, p.Username); err != nil {
+			if err := recordStockMoveTx(s, tx, l.productID, newBal-l.system, models.MoveCount, number, "", p.ID, p.Username); err != nil {
 				tx.Rollback()
 				return nil, err
+			}
+			// v1.8.0: the correction also lands inside the lots — negative
+			// deltas FEFO off ACTIVE batches, positive ones join OPENING.
+			var batches int
+			tx.QueryRow(s.db.Rebind(`SELECT COALESCE(track_batches,0) FROM products WHERE id = ?`), l.productID).Scan(&batches)
+			if batches == 1 {
+				if err := adjustBatchStockTx(s, tx, l.productID, newBal-l.system); err != nil {
+					tx.Rollback()
+					return nil, err
+				}
 			}
 			adjusted = append(adjusted, l.productID)
 		}
@@ -260,7 +271,7 @@ func (s *Service) ListStockCounts(limit int) ([]models.StockCount, error) {
 }
 
 func (s *Service) GetStockCountLines(countID int64) ([]models.StockCountLine, error) {
-	rows, err := s.db.Query(`SELECT id, count_id, product_id, sku, name, expected_qty, counted_qty, system_qty, unit_cost_cents, applied
+	rows, err := s.db.Query(`SELECT id, count_id, product_id, sku, name, expected_qty_milli, counted_qty_milli, system_qty_milli, unit_cost_cents, applied
                 FROM stock_count_lines WHERE count_id = ? ORDER BY name`, countID)
 	if err != nil {
 		return nil, err
@@ -271,12 +282,12 @@ func (s *Service) GetStockCountLines(countID int64) ([]models.StockCountLine, er
 		var l models.StockCountLine
 		var counted sql.NullInt64
 		var applied int
-		if err := rows.Scan(&l.ID, &l.CountID, &l.ProductID, &l.SKU, &l.Name, &l.ExpectedQty, &counted, &l.SystemQty, &l.UnitCostCents, &applied); err != nil {
+		if err := rows.Scan(&l.ID, &l.CountID, &l.ProductID, &l.SKU, &l.Name, &l.ExpectedQtyMilli, &counted, &l.SystemQtyMilli, &l.UnitCostCents, &applied); err != nil {
 			return nil, err
 		}
 		if counted.Valid {
-			v := int(counted.Int64)
-			l.CountedQty = &v
+			v := counted.Int64
+			l.CountedQtyMilli = &v
 		}
 		l.Applied = applied == 1
 		out = append(out, l)
@@ -291,20 +302,20 @@ func (s *Service) GetStockCountLines(countID int64) ([]models.StockCountLine, er
 // is the only side effect beyond the payment itself.
 func issueGiftCardsTx(tx *sql.Tx, rebind func(query string) string, orderID int64) error {
 	rows, err := tx.Query(rebind(`
-                SELECT oi.qty, oi.unit_price_cents FROM order_items oi
+                SELECT oi.qty_milli / 1000 AS units, oi.unit_price_cents FROM order_items oi
                 JOIN products p ON p.id = oi.product_id
                 WHERE oi.order_id = ? AND COALESCE(p.is_gift_card, 0) = 1`), orderID)
 	if err != nil {
 		return err
 	}
 	type mint struct {
-		qty    int
+		units  int
 		amount int64
 	}
 	var mints []mint
 	for rows.Next() {
 		var m mint
-		if err := rows.Scan(&m.qty, &m.amount); err != nil {
+		if err := rows.Scan(&m.units, &m.amount); err != nil {
 			rows.Close()
 			return err
 		}
@@ -316,7 +327,7 @@ func issueGiftCardsTx(tx *sql.Tx, rebind func(query string) string, orderID int6
 	}
 	now := nowStamp()
 	for _, m := range mints {
-		for i := 0; i < m.qty; i++ {
+		for i := 0; i < m.units; i++ {
 			// Codes mint uppercase; redemption matches case-insensitively
 			// (UPPER(code) = UPPER(?)) so hand-typed codes just work.
 			code := "GC-" + strings.ToUpper(randToken(4)) + "-" + strings.ToUpper(randToken(4))

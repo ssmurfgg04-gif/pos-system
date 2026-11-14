@@ -157,7 +157,7 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 		p.Bold(true)
 		p.Write(truncate(it.Name, widthCols) + "\n")
 		p.Bold(false)
-		line := fmt.Sprintf("%d x %s", it.Qty, formatMoneyFull(it.UnitPriceCents, d.Currency))
+		line := fmt.Sprintf("%s x %s", formatQtyMilli(it.QtyMilli), formatMoneyFull(it.UnitPriceCents, d.Currency))
 		p.Write(padlr("  "+line, formatMoneyFull(it.LineTotalCents, ""), widthCols) + "\n")
 	}
 
@@ -274,4 +274,16 @@ func BuildReceiptData(o *models.Order, storeName, storeAddr, storePhone, footer,
 		TotalCents:  o.TotalCents, Currency: currency, PayLines: payLines,
 		BuyerPin: o.BuyerPIN,
 	}
+}
+
+// formatQtyMilli renders a milli-unit quantity for the receipt: whole
+// numbers plain ("2"), fractional with up to three decimals ("0.5").
+func formatQtyMilli(m int64) string {
+	if m%1000 == 0 {
+		return fmt.Sprintf("%d", m/1000)
+	}
+	s := fmt.Sprintf("%.3f", float64(m)/1000.0)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	return s
 }

@@ -72,7 +72,7 @@ func (h *H) MonthlyReportCSV(c *gin.Context) {
 	if len(m.TopProducts) > 0 {
 		b.WriteString("\nTop products\nProduct,Qty,Sales (KES)\n")
 		for _, p := range m.TopProducts {
-			b.WriteString(fmt.Sprintf("%s,%d,%.2f\n", csvField(p.Name), p.Qty, float64(p.SalesCents)/100))
+			b.WriteString(fmt.Sprintf("%s,%d,%.2f\n", csvField(p.Name), p.QtyMilli, float64(p.SalesCents)/100))
 		}
 	}
 	c.Header("Content-Type", "text/csv; charset=utf-8")

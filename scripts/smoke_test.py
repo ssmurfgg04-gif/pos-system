@@ -11,6 +11,7 @@ mock delay, exactly as it would against real Daraja stkpushquery.
 import json
 import sys
 import time
+from datetime import datetime, timedelta
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -160,7 +161,7 @@ def main():
     check("RBAC: cashier cannot create products", st == 403, f"{st}")
 
     st, body = req("POST", "/api/v1/orders/checkout", designer,
-                   body={"items": [{"productId": 1, "qty": 1}], "paymentMethod": "cash"})
+                   body={"items": [{"productId": 1, "qtyMilli": 1000}], "paymentMethod": "cash"})
     check("RBAC: designer cannot sell", st == 403, f"{st}")
 
     st, body = req("GET", "/api/v1/audit", cashier)
@@ -180,9 +181,9 @@ def main():
     check("low-stock report (admin)", st == 200, f"{st}")
 
     # -- 4. Cash checkout ----------------------------------------------------
-    stock_before = p["stockQty"]
+    stock_before = p["stockQtyMilli"]
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": p["id"], "qty": 2}],
+        "items": [{"productId": p["id"], "qtyMilli": 2000}],
         "paymentMethod": "cash",
         "clientUuid": "smoke-cash-1",
     })
@@ -191,33 +192,33 @@ def main():
     check("total is 2 x 550 = 1100.00 (VAT incl.)", order.get("totalCents") == 110000, f"{order.get('totalCents')}")
 
     p2 = get_product(cashier, "Classic Cotton Tee, Black")
-    check("stock decremented 40 -> 38", p2["stockQty"] == stock_before - 2, f"{p2['stockQty']}")
+    check("stock decremented 40 -> 38", p2["stockQtyMilli"] == stock_before - 2000, f"{p2['stockQtyMilli']}")
 
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": p["id"], "qty": 2}],
+        "items": [{"productId": p["id"], "qtyMilli": 2000}],
         "paymentMethod": "cash",
         "clientUuid": "smoke-cash-1",
     })
     check("idempotent replay returns same order", st == 201 and data(body)["id"] == order["id"], f"{st}")
 
     p3 = get_product(cashier, "Classic Cotton Tee, Black")
-    check("replay did not double-deduct", p3["stockQty"] == stock_before - 2, f"{p3['stockQty']}")
+    check("replay did not double-deduct", p3["stockQtyMilli"] == stock_before - 2000, f"{p3['stockQtyMilli']}")
 
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": 4, "qty": 99999}], "paymentMethod": "cash"})
+        "items": [{"productId": 4, "qtyMilli": 99999000}], "paymentMethod": "cash"})
     check("insufficient stock rejected 409", st == 409, f"{st}")
 
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": p["id"], "qty": 1, "unitPriceCents": 100}], "paymentMethod": "cash"})
+        "items": [{"productId": p["id"], "qtyMilli": 1000, "unitPriceCents": 100}], "paymentMethod": "cash"})
     check("price override: cashier 403", st == 403, f"{st}")
 
     st, body = req("POST", "/api/v1/orders/checkout", admin, body={
-        "items": [{"productId": p["id"], "qty": 1, "unitPriceCents": 1000}], "paymentMethod": "cash"})
+        "items": [{"productId": p["id"], "qtyMilli": 1000, "unitPriceCents": 1000}], "paymentMethod": "cash"})
     check("price override: admin honored", st == 201 and data(body)["totalCents"] == 1000, f"{st}")
 
     # -- 5. M-Pesa STK (mock + sweeper) --------------------------------------
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": p["id"], "qty": 1}],
+        "items": [{"productId": p["id"], "qtyMilli": 1000}],
         "paymentMethod": "mpesa", "paymentMode": "stk",
         "customerPhone": "0722123456",
     })
@@ -238,7 +239,7 @@ def main():
 
     # -- 6. Callback: amount mismatch flags discrepancy ----------------------
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": 2, "qty": 1}],
+        "items": [{"productId": 2, "qtyMilli": 1000}],
         "paymentMethod": "mpesa", "paymentMode": "stk", "customerPhone": "0711222334",
     })
     mm_order = data(body)
@@ -259,7 +260,7 @@ def main():
 
     # -- 7. Manual receipt entry ---------------------------------------------
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": 5, "qty": 1}],
+        "items": [{"productId": 5, "qtyMilli": 1000}],
         "paymentMethod": "mpesa", "paymentMode": "manual",
         "clientUuid": "smoke-manual-1",
     })
@@ -275,7 +276,7 @@ def main():
     check("manual confirm -> PAID", st == 200 and data(body)["status"] == "PAID", f"{st} {body}")
 
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": 6, "qty": 1}], "paymentMethod": "mpesa", "paymentMode": "manual"})
+        "items": [{"productId": 6, "qtyMilli": 1000}], "paymentMethod": "mpesa", "paymentMode": "manual"})
     man2 = data(body)
     st, body = req("POST", f"/api/v1/orders/{man2['id']}/manual", cashier,
                    body={"receiptCode": "UC3HW8HDN2"})
@@ -285,8 +286,8 @@ def main():
 
     # -- 8. Offline sync ------------------------------------------------------
     sync_body = {"transactions": [
-        {"items": [{"productId": 9, "qty": 2}], "paymentMethod": "cash", "clientUuid": "smoke-sync-1"},
-        {"items": [{"productId": 10, "qty": 1}], "paymentMethod": "cash", "clientUuid": "smoke-sync-2"},
+        {"items": [{"productId": 9, "qtyMilli": 2000}], "paymentMethod": "cash", "clientUuid": "smoke-sync-1"},
+        {"items": [{"productId": 10, "qtyMilli": 1000}], "paymentMethod": "cash", "clientUuid": "smoke-sync-2"},
     ]}
     st, body = req("POST", "/api/v1/sync", cashier, body=sync_body)
     results = data(body)
@@ -299,15 +300,15 @@ def main():
 
     # -- 9. Void --------------------------------------------------------------
     wrist = get_product(cashier, "Canvas Tote Bag")
-    before_void = wrist["stockQty"]
+    before_void = wrist["stockQtyMilli"]
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": wrist["id"], "qty": 3}], "paymentMethod": "cash"})
+        "items": [{"productId": wrist["id"], "qtyMilli": 3000}], "paymentMethod": "cash"})
     void_order = data(body)
     st, body = req("POST", f"/api/v1/orders/{void_order['id']}/void", cashier,
                    body={"reason": "smoke void"})
     check("void succeeds", st == 200 and data(body)["status"] == "VOIDED", f"{st}")
     wrist_after = get_product(cashier, "Canvas Tote Bag")
-    check("void restores stock", wrist_after["stockQty"] == before_void, f"{wrist_after['stockQty']} vs {before_void}")
+    check("void restores stock", wrist_after["stockQtyMilli"] == before_void, f"{wrist_after['stockQtyMilli']} vs {before_void}")
     st, body = req("POST", f"/api/v1/orders/{void_order['id']}/void", cashier, body={"reason": "again"})
     check("double void rejected 409", st == 409, f"{st}")
 
@@ -321,7 +322,7 @@ def main():
     cur = data(body)
     # make one more cash sale to have deterministic expected
     req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": 8, "qty": 1}], "paymentMethod": "cash", "clientUuid": "smoke-shift-sale"})
+        "items": [{"productId": 8, "qtyMilli": 1000}], "paymentMethod": "cash", "clientUuid": "smoke-shift-sale"})
     st, body = req("POST", "/api/v1/shifts/close", cashier, body={"countedCents": cur["openingFloatCents"] + 15000})
     closed = data(body)
     check("shift close computes expected/variance",
@@ -401,7 +402,7 @@ def main():
     zero_cust = data(body)
     tab_prod = get_product(cashier, "Classic Cotton Tee, Black")
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": tab_prod["id"], "qty": 1}], "paymentMethod": "account",
+        "items": [{"productId": tab_prod["id"], "qtyMilli": 1000}], "paymentMethod": "account",
         "customerId": zero_cust["id"], "clientUuid": "smoke-tab-zero"})
     check("tab charge succeeds for a ZERO-limit customer (v1.5.0 policy)", st == 201, f"{st} {body}")
     tab_order = data(body)
@@ -488,7 +489,7 @@ def main():
     st, _ = req("PUT", "/api/v1/settings", admin, body={"values": {"whatsapp_api_key": "__CLEAR__"}})
     check("clear token for no-gateway test", st == 200, f"{st}")
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": p["id"], "qty": 1}],
+        "items": [{"productId": p["id"], "qtyMilli": 1000}],
         "paymentMethod": "cash",
         "clientUuid": "smoke-wa-send-1",
         "customerPhone": "0733444555",
@@ -555,38 +556,38 @@ def main():
     st, body = req("GET", "/api/v1/returns", cashier)
     check("returns: cashier lists (orders.view)", st == 200, f"{st}")
     st, body = req("POST", "/api/v1/returns", designer, body={
-        "orderId": 1, "lines": [{"orderItemId": 1, "qty": 1}]})
+        "orderId": 1, "lines": [{"orderItemId": 1, "qtyMilli": 1000}]})
     check("returns: designer 403 (no returns.manage)", st == 403, f"{st}")
 
     # Returns: fresh cash order, return one line, stock restocks, over-return 4xx.
     st, body = req("GET", "/api/v1/products", admin)
     prod1 = next(p for p in data(body) if p["id"] == 1)
-    stock_before = prod1["stockQty"]
+    stock_before = prod1["stockQtyMilli"]
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": 1, "qty": 3}], "paymentMethod": "cash"})
+        "items": [{"productId": 1, "qtyMilli": 3000}], "paymentMethod": "cash"})
     ret_order = data(body)
     check("v163 return-flow checkout -> PAID", st == 201 and ret_order.get("status") == "PAID", f"{st} {body}")
     item_id = ret_order["items"][0]["id"]
     st, body = req("POST", "/api/v1/returns", cashier, body={
-        "orderId": ret_order["id"], "lines": [{"orderItemId": item_id, "qty": 1}],
+        "orderId": ret_order["id"], "lines": [{"orderItemId": item_id, "qtyMilli": 1000}],
         "method": "CASH", "reason": "smoke return"})
     ret_doc = data(body)
     check("returns: cashier posts RET- (201)", st == 201 and str(ret_doc.get("number", "")).startswith("RET-"), f"{st} {body}")
     st, body = req("GET", "/api/v1/products", admin)
     prod1b = next(p for p in data(body) if p["id"] == 1)
-    check("returns: restock landed (stock +1)", prod1b["stockQty"] == stock_before - 3 + 1,
-          f"{prod1b['stockQty']} vs {stock_before}")
+    check("returns: restock landed (stock +1)", prod1b["stockQtyMilli"] == stock_before - 3000 + 1000,
+          f"{prod1b['stockQtyMilli']} vs {stock_before}")
     st, body = req("GET", "/api/v1/stock-movements?limit=20", admin)
     kinds = {m.get("kind") for m in data(body)} if st == 200 else set()
     check("stock ledger has RETURN_RESTOCK", "RETURN_RESTOCK" in kinds, f"kinds={kinds}")
     st, body = req("POST", "/api/v1/returns", cashier, body={
-        "orderId": ret_order["id"], "lines": [{"orderItemId": item_id, "qty": 3}], "method": "CASH"})
+        "orderId": ret_order["id"], "lines": [{"orderItemId": item_id, "qtyMilli": 3000}], "method": "CASH"})
     check("returns: over-return rejected 4xx", st in (400, 409, 422), f"{st} {body}")
 
     # Wholesale tier + per-product low-stock threshold persist.
     st, body = req("PUT", "/api/v1/products/2", admin, body={
         "name": "Smoke Wholesale Item", "priceCents": 20000, "costCents": 10000,
-        "wholesalePriceCents": 16000, "lowStockUnits": 7, "stockQty": 6})
+        "wholesalePriceCents": 16000, "lowStockUnits": 7, "stockQtyMilli": 6000})
     check("products: wholesale + low-stock fields persist", st == 200, f"{st} {body}")
     st, body = req("GET", "/api/v1/products", admin)
     prod2 = next(p for p in data(body) if p["id"] == 2)
@@ -600,16 +601,18 @@ def main():
     # Line cost snapshot: a paid sale freezes cost, daily report shows margin.
     st, body = req("POST", "/api/v1/products", admin, body={
         "name": "Smoke Margin Item", "sku": "SMOKE-MARGIN", "priceCents": 25000,
-        "costCents": 10000, "stockQty": 50})
+        "costCents": 10000, "stockQtyMilli": 50000})
     check("v1.7.0: product with cost created", st in (200, 201), f"{st} {body}")
     margin_pid = data(body)["id"]
     st, body = req("POST", "/api/v1/orders/checkout", cashier, body={
-        "items": [{"productId": margin_pid, "qty": 3}], "paymentMethod": "cash"})
+        "items": [{"productId": margin_pid, "qtyMilli": 3000}], "paymentMethod": "cash"})
     check("v1.7.0: checkout ok", st == 201, f"{st} {body}")
     items = data(body).get("items") or []
     check("v1.7.0: order line cost snapshot = 10000",
           items and items[0].get("costCents") == 10000, f"{items[:1]}")
-    day = (data(body).get("createdAt") or "")[:10]
+    # The report buckets by EAST-AFRICA calendar day (UTC+3): a sale at
+    # 21:xx UTC is already tomorrow in EAT — shift the stamp before slicing.
+    day = (datetime.fromisoformat((data(body).get("createdAt") or "").replace("Z", "+00:00")) + timedelta(hours=3)).strftime("%Y-%m-%d") if data(body).get("createdAt") else ""
     st, body = req("GET", f"/api/v1/reports/daily?date={day}", admin)
     rep = data(body) if st == 200 else {}
     check("v1.7.0: daily report cogs includes 30000",
@@ -638,13 +641,13 @@ def main():
                    body={"reason": "double"})
     check("v1.7.0: double reversal 4xx", st in (400, 409), f"{st}")
 
-    # Disposal: guarded deduction + report.
+    # Disposal: guarded deduction + report (v1.8.0 milli quantities).
     st, body = req("POST", f"/api/v1/products/{margin_pid}/dispose", admin,
-                   body={"qty": 4, "reason": "spoilt", "note": "smoke fridge died"})
-    check("v1.7.0: disposal 200 + stock 43",
-          st == 200 and data(body).get("stockQty") == 43, f"{st} {body}")
+                   body={"qtyMilli": 4000, "reason": "spoilt", "note": "smoke fridge died"})
+    check("v1.7.0: disposal 200 + stock 43000 milli",
+          st == 200 and data(body).get("stockQtyMilli") == 43000, f"{st} {body}")
     st, body = req("POST", f"/api/v1/products/{margin_pid}/dispose", admin,
-                   body={"qty": 999, "reason": "spoilt"})
+                   body={"qtyMilli": 999000, "reason": "spoilt"})
     check("v1.7.0: overstock disposal 4xx", st in (400, 409), f"{st}")
     st, body = req("GET", "/api/v1/reports/disposals", admin)
     dis = data(body) if st == 200 else []
@@ -652,11 +655,62 @@ def main():
     check("v1.7.0: disposal report row loss=40000",
           row is not None and row.get("lossCents") == 40000, f"{row}")
 
+    # ---- v1.8.0: fractional quantities + batch/expiry FEFO -----------------
+    st, body = req("POST", "/api/v1/products", admin, body={
+        "name": "Smoke Sugar", "sku": "SMOKE-SUGAR", "categoryId": 1,
+        "priceCents": 20000, "costCents": 14000, "stockQtyMilli": 10000,
+        "unit": "kg", "allowFraction": True})
+    sugar_pid = data(body)["id"] if st in (200, 201) else 0
+    check("v1.8.0: kg product created", st in (200, 201) and sugar_pid > 0, f"{st} {body}")
+    st, body = req("POST", "/api/v1/orders/checkout", admin, body={
+        "items": [{"productId": sugar_pid, "qtyMilli": 250}], "paymentMethod": "cash"})
+    check("v1.8.0: 0.25 kg sale 201 + line 5000",
+          st in (200, 201) and data(body)["items"][0]["lineTotalCents"] == 5000, f"{st} {body}")
+    st2, body2 = req("GET", "/api/v1/products", admin)
+    sugar2 = next((p for p in data(body2) if p.get("id") == sugar_pid), {})
+    check("v1.8.0: fractional sale deducts 250 milli (9750 left)",
+          sugar2.get("stockQtyMilli") == 9750, f"{sugar2.get('stockQtyMilli')}")
+    st, body = req("POST", "/api/v1/orders/checkout", admin, body={
+        "items": [{"productId": margin_pid, "qtyMilli": 1500}], "paymentMethod": "cash"})
+    check("v1.8.0: whole-unit product rejects fractional qty", st in (400, 422), f"{st} {body}")
+
+    # Batch/expiry FEFO.
+    st, body = req("POST", "/api/v1/products", admin, body={
+        "name": "Smoke Yoghurt", "sku": "SMOKE-YOG", "categoryId": 1,
+        "priceCents": 12000, "costCents": 8000, "stockQtyMilli": 0, "trackBatches": True})
+    yog_pid = data(body)["id"] if st in (200, 201) else 0
+    st, body = req("POST", f"/api/v1/products/{yog_pid}/batches", admin, body={
+        "batchNo": "SMK-FAR", "expiryDate": "2099-01-01", "qtyMilli": 10000, "costCents": 8000})
+    check("v1.8.0: goods-in far lot 201", st == 201, f"{st} {body}")
+    st, body = req("POST", f"/api/v1/products/{yog_pid}/batches", admin, body={
+        "batchNo": "SMK-NEAR", "expiryDate": "2098-06-01", "qtyMilli": 5000, "costCents": 8000})
+    check("v1.8.0: goods-in near lot 201", st == 201, f"{st} {body}")
+    st, body = req("POST", "/api/v1/orders/checkout", admin, body={
+        "items": [{"productId": yog_pid, "qtyMilli": 12000}], "paymentMethod": "cash"})
+    check("v1.8.0: 12-unit sale on lots 201", st in (200, 201), f"{st} {body}")
+    st, body = req("GET", f"/api/v1/products/{yog_pid}/batches", admin)
+    lots = {b.get("batchNo"): b for b in (data(body) if st == 200 else [])}
+    check("v1.8.0: FEFO drains NEAR lot first (0 left, EXHAUSTED)",
+          lots.get("SMK-NEAR", {}).get("qtyRemainingMilli") == 0 and lots.get("SMK-NEAR", {}).get("status") == "EXHAUSTED",
+          f"{lots.get('SMK-NEAR')}")
+    check("v1.8.0: FEFO leaves FAR lot 3000",
+          lots.get("SMK-FAR", {}).get("qtyRemainingMilli") == 3000, f"{lots.get('SMK-FAR')}")
+    st, body = req("GET", "/api/v1/reports/expiry?days=3650", admin)
+    exp = data(body) if st == 200 else {}
+    soon_all = (exp.get("expired") or []) + (exp.get("soon") or [])
+    smk = [r for r in soon_all if r.get("batchId") == lots.get("SMK-FAR", {}).get("id")]
+    check("v1.8.0: expiry report lists remaining lot with value 24000",
+          len(smk) == 1 and smk[0].get("valueCents") == 24000, f"{smk}")
+    st, body = req("GET", "/api/v1/system/health", admin)
+    h = data(body) if st == 200 else {}
+    check("v1.8.0: health batch invariant holds (drift 0)",
+          st == 200 and h.get("batchDriftCount") == 0, f"{h.get('batchDriftCount')} {h.get('batchDrift')}")
+
     # System health self-audit.
     st, body = req("GET", "/api/v1/system/health", admin)
     h = data(body) if st == 200 else {}
-    check("v1.7.0: system health 200 schemaVersion=26 indexesOk",
-          st == 200 and h.get("schemaVersion") == 26 and h.get("indexesOk") is True,
+    check("v1.7.0: system health 200 schemaVersion=28 indexesOk",
+          st == 200 and h.get("schemaVersion") == 28 and h.get("indexesOk") is True,
           f"{st} v={h.get('schemaVersion')} idx={h.get('indexesOk')}")
     st, body = req("GET", "/api/v1/system/health", cashier)
     check("v1.7.0: system health cashier 403", st == 403, f"{st}")

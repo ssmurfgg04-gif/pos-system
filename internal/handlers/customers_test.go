@@ -48,7 +48,7 @@ func TestCustomerTabLifecycle(t *testing.T) {
 	// Need a product to sell: use seed product 1.
 	tab := func(uuid string) (int, map[string]any) {
 		w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-			"items":         []map[string]any{{"productId": 1, "qty": 1}},
+			"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 			"paymentMethod": "account",
 			"customerId":    cid,
 			"clientUuid":    uuid,
@@ -82,7 +82,7 @@ func TestCustomerTabLifecycle(t *testing.T) {
 
 	// Over-limit tab rejected with 409.
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 100}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 100000}},
 		"paymentMethod": "account",
 		"customerId":    cid,
 		"clientUuid":    "tab-over",
@@ -127,7 +127,7 @@ func TestCustomerWalkInPaymentAndVoidReversal(t *testing.T) {
 	cid := int64(dataMap(t, w)["id"].(float64))
 
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "account",
 		"customerId":    cid,
 		"clientUuid":    "tab-void-1",
@@ -155,7 +155,7 @@ func TestCustomerWalkInPaymentAndVoidReversal(t *testing.T) {
 
 	// Second tab, then void it: balance must return to zero.
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "account",
 		"customerId":    cid,
 		"clientUuid":    "tab-void-2",
@@ -182,7 +182,7 @@ func TestCustomerTabInputCodes(t *testing.T) {
 	engine, admin, cashier, _ := newTestServer(t)
 
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "account",
 		"clientUuid":    "tab-nocust",
 	})
@@ -201,7 +201,7 @@ func TestCustomerTabInputCodes(t *testing.T) {
 		t.Fatalf("deactivate: %d %s", w.Code, w.Body.String())
 	}
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "account",
 		"customerId":    cid,
 		"clientUuid":    "tab-inactive",

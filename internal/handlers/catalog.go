@@ -15,16 +15,21 @@ import (
 // ---- Products ----
 
 type productBody struct {
-	SKU        string `json:"sku"`
-	Barcode    string `json:"barcode"`
-	Name       string `json:"name" binding:"required"`
-	CategoryID int64  `json:"categoryId"` // 0 = Uncategorised (resolved below)
-	PriceCents int64  `json:"priceCents" binding:"min=0"`
-	CostCents  int64  `json:"costCents" binding:"min=0"`
-	StockQty   *int   `json:"stockQty"`
-	TrackStock *bool  `json:"trackStock"`
-	Active     *bool  `json:"active"`
-	IsGiftCard *bool  `json:"isGiftCard"`
+	SKU           string `json:"sku"`
+	Barcode       string `json:"barcode"`
+	Name          string `json:"name" binding:"required"`
+	CategoryID    int64  `json:"categoryId"` // 0 = Uncategorised (resolved below)
+	PriceCents    int64  `json:"priceCents" binding:"min=0"`
+	CostCents     int64  `json:"costCents" binding:"min=0"`
+	StockQtyMilli *int64 `json:"stockQtyMilli"`
+	TrackStock    *bool  `json:"trackStock"`
+	Active        *bool  `json:"active"`
+	IsGiftCard    *bool  `json:"isGiftCard"`
+	// v1.8.0: sellable unit ('pc','kg',…), whether the till accepts
+	// fractional quantities, and batch/expiry tracking.
+	Unit          string `json:"unit"`
+	AllowFraction *bool  `json:"allowFraction"`
+	TrackBatches  *bool  `json:"trackBatches"`
 	// v1.6.3: wholesale tier price (0 = same as retail) + per-product
 	// low-stock threshold (0 = use the global setting).
 	WholesalePriceCents int64 `json:"wholesalePriceCents"`
@@ -62,17 +67,20 @@ func (h *H) scanProducts(rows *sql.Rows) []models.Product {
 	out := []models.Product{}
 	for rows.Next() {
 		var pr models.Product
-		var track, active, gift int
-		var catName string
+		var track, active, gift, fraction, batches int
+		var catName, unit string
 		if err := rows.Scan(&pr.ID, &pr.SKU, &pr.Barcode, &pr.Name, &pr.CategoryID, &catName,
-			&pr.PriceCents, &pr.CostCents, &pr.StockQty, &track, &active, &pr.UpdatedAt, &gift,
-			&pr.WholesalePriceCents, &pr.LowStockUnits); err != nil {
+			&pr.PriceCents, &pr.CostCents, &pr.StockQtyMilli, &track, &active, &pr.UpdatedAt, &gift,
+			&pr.WholesalePriceCents, &pr.LowStockUnits, &unit, &fraction, &batches); err != nil {
 			break
 		}
 		pr.CategoryName = catName
 		pr.TrackStock = track == 1
 		pr.Active = active == 1
 		pr.IsGiftCard = gift == 1
+		pr.Unit = unit
+		pr.AllowFraction = fraction == 1
+		pr.TrackBatches = batches == 1
 		out = append(out, pr)
 	}
 	return out
@@ -80,8 +88,8 @@ func (h *H) scanProducts(rows *sql.Rows) []models.Product {
 
 const productSelect = `
         SELECT p.id, COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, p.category_id, COALESCE(c.name,''),
-                p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at, COALESCE(p.is_gift_card,0),
-                COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0)
+                p.price_cents, p.cost_cents, p.stock_qty_milli, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at, COALESCE(p.is_gift_card,0),
+                COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0), COALESCE(p.unit,'pc'), COALESCE(p.allow_fraction,0), COALESCE(p.track_batches,0)
         FROM products p LEFT JOIN categories c ON c.id = p.category_id`
 
 // ListProducts (authed — POS needs it). Filters: category, search, active.
@@ -124,12 +132,12 @@ func (h *H) ListLowStock(c *gin.Context) {
 	threshold := h.settings(c).GetInt("low_stock_threshold", 5)
 	rows, err := h.db(c).Query(h.db(c).Rebind(`
                 SELECT p.id, COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, p.category_id, COALESCE(c.name,''),
-                        p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at, COALESCE(p.is_gift_card,0),
-                        COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0)
+                        p.price_cents, p.cost_cents, p.stock_qty_milli, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at, COALESCE(p.is_gift_card,0),
+                        COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0), COALESCE(p.unit,'pc'), COALESCE(p.allow_fraction,0), COALESCE(p.track_batches,0)
                 FROM products p LEFT JOIN categories c ON c.id = p.category_id
                 WHERE p.track_stock = 1 AND p.is_active = 1
-                  AND p.stock_qty <= (CASE WHEN COALESCE(p.low_stock_units,0) > 0 THEN p.low_stock_units ELSE ? END)
-                ORDER BY p.stock_qty ASC`), threshold)
+                  AND p.stock_qty_milli <= (CASE WHEN COALESCE(p.low_stock_units,0) > 0 THEN p.low_stock_units ELSE ? END) * 1000
+                ORDER BY p.stock_qty_milli ASC`), threshold)
 	if err != nil {
 		h.fail(c, 500, err.Error())
 		return
@@ -156,6 +164,11 @@ func (h *H) CreateProduct(c *gin.Context) {
 		gift = 1
 		track = 0 // gift cards are value, not shelf stock
 	}
+	batches := 0
+	if body.TrackBatches != nil && *body.TrackBatches {
+		batches = 1
+	}
+	unit, fraction := normalizedUnit(body)
 	sku := strings.TrimSpace(body.SKU)
 	auto := sku == ""
 	if auto {
@@ -179,9 +192,9 @@ func (h *H) CreateProduct(c *gin.Context) {
 	var err error
 	for attempt := 0; ; attempt++ {
 		res, err = h.db(c).Exec(h.db(c).Rebind(`
-            INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card, wholesale_price_cents, low_stock_units)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-			sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift, body.WholesalePriceCents, lowStockUnits(body))
+            INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty_milli, stock_qty, track_stock, is_active, is_gift_card, wholesale_price_cents, low_stock_units, unit, allow_fraction, track_batches)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, stock/1000, track, active, gift, body.WholesalePriceCents, lowStockUnits(body), unit, fraction, batches)
 		if err == nil {
 			break
 		}
@@ -201,6 +214,12 @@ func (h *H) CreateProduct(c *gin.Context) {
 	}
 	id, _ := res.LastInsertId()
 	h.svc(c).Audit(p.ID, p.Username, "PRODUCT_CREATED", "product", body.Name, "")
+	if batches == 1 {
+		if err := h.svc(c).EnableBatchesIfNeeded(id); err != nil {
+			h.fail(c, 500, err.Error())
+			return
+		}
+	}
 	h.svc(c).EmitProduct(id, true)
 	h.created(c, gin.H{"id": id, "sku": sku})
 }
@@ -220,16 +239,38 @@ func isDuplicateSKUErr(err error) bool {
 		strings.Contains(msg, "23505")
 }
 
-func defaultStock(body productBody) (int, int) {
-	stock := 0
-	if body.StockQty != nil {
-		stock = *body.StockQty
+func defaultStock(body productBody) (int64, int) {
+	stock := int64(0)
+	if body.StockQtyMilli != nil {
+		stock = *body.StockQtyMilli
 	}
 	track := 1
 	if body.TrackStock != nil && !*body.TrackStock {
 		track = 0
 	}
 	return stock, track
+}
+
+// normalizedUnit validates + normalises the unit / fraction pair: an empty
+// unit means 'pc'; a weigh unit defaults allow_fraction on unless the
+// client explicitly turned it off.
+func normalizedUnit(body productBody) (string, int) {
+	unit := strings.TrimSpace(body.Unit)
+	if !models.ValidUnit(unit) {
+		unit = "pc"
+	}
+	if unit == "" {
+		unit = "pc"
+	}
+	fraction := 0
+	if body.AllowFraction != nil {
+		if *body.AllowFraction {
+			fraction = 1
+		}
+	} else if models.UnitFractionDefault(unit) {
+		fraction = 1
+	}
+	return unit, fraction
 }
 
 // lowStockUnits normalises the optional per-product threshold.
@@ -262,6 +303,11 @@ func (h *H) UpdateProduct(c *gin.Context) {
 		gift = 1
 		track = 0
 	}
+	batches := 0
+	if body.TrackBatches != nil && *body.TrackBatches {
+		batches = 1
+	}
+	unit, fraction := normalizedUnit(body)
 	sku := strings.TrimSpace(body.SKU)
 	if sku == "" {
 		var existing string
@@ -281,8 +327,9 @@ func (h *H) UpdateProduct(c *gin.Context) {
 	}
 	res, err := h.db(c).Exec(h.db(c).Rebind(`
                 UPDATE products SET sku = ?, barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
-                        stock_qty = ?, track_stock = ?, is_active = ?, is_gift_card = ?, wholesale_price_cents = ?, low_stock_units = ?, updated_at = ?
-                WHERE id = ?`), sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, track, active, gift, body.WholesalePriceCents, lowStockUnits(body), services.NowStamp(), id)
+                        stock_qty_milli = ?, stock_qty = ? / 1000, track_stock = ?, is_active = ?, is_gift_card = ?, wholesale_price_cents = ?, low_stock_units = ?, updated_at = ?,
+                        unit = ?, allow_fraction = ?, track_batches = ?
+                WHERE id = ?`), sku, body.Barcode, body.Name, h.ensureProductCategory(c, body.CategoryID), body.PriceCents, body.CostCents, stock, stock/1000, track, active, gift, body.WholesalePriceCents, lowStockUnits(body), services.NowStamp(), unit, fraction, batches, id)
 	if err != nil {
 		if isDuplicateSKUErr(err) {
 			h.fail(c, 409, "SKU already exists on another product")
@@ -296,13 +343,21 @@ func (h *H) UpdateProduct(c *gin.Context) {
 		return
 	}
 	h.svc(c).Audit(p.ID, p.Username, "PRODUCT_UPDATED", "product", body.Name, "")
+	// v1.8.0: flipping batch tracking on wraps existing shelf stock into
+	// an OPENING lot so SUM(lots) can reconcile with the projection.
+	if batches == 1 {
+		if err := h.svc(c).EnableBatchesIfNeeded(int64(id)); err != nil {
+			h.fail(c, 500, err.Error())
+			return
+		}
+	}
 	h.svc(c).EmitProduct(id, true)
 	h.ok(c, gin.H{"updated": true})
 }
 
 // AdjustStock (products.manage) — quick +/- without full edit. The change
-// lands in the stock ledger (ADJUSTMENT) with the real applied delta: the
-// clamp at zero means a big negative request may move less than asked.
+// lands in the stock ledger (ADJUSTMENT) with the real applied delta; the
+// service path keeps batch-tracked lots in lockstep (FEFO on negative).
 func (h *H) AdjustStock(c *gin.Context) {
 	p := h.principal(c)
 	id, ok := h.pathID(c, "id")
@@ -310,42 +365,29 @@ func (h *H) AdjustStock(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Delta int    `json:"delta" binding:"required"`
-		Note  string `json:"note"`
+		DeltaMilli int64  `json:"deltaMilli" binding:"required"`
+		Note       string `json:"note"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		h.fail(c, 400, "delta required")
+		h.fail(c, 400, "deltaMilli required")
 		return
 	}
-	if body.Delta < -models.MaxStockDelta || body.Delta > models.MaxStockDelta {
-		h.fail(c, 400, fmt.Sprintf("delta out of range (max %d)", models.MaxStockDelta))
+	if body.DeltaMilli < -models.MaxStockDeltaMilli || body.DeltaMilli > models.MaxStockDeltaMilli {
+		h.fail(c, 400, fmt.Sprintf("delta out of range (max %d milli)", models.MaxStockDeltaMilli))
 		return
 	}
-	var oldStock int
-	if err := h.db(c).QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, id).Scan(&oldStock); err != nil {
-		h.fail(c, 404, "product not found")
-		return
-	}
-	res, err := h.db(c).Exec(h.db(c).Rebind(
-		`UPDATE products SET stock_qty = MAX(0, stock_qty + ?) WHERE id = ?`),
-		body.Delta, id)
-	if err != nil || n(res) != 1 {
-		h.fail(c, 404, "product not found")
-		return
-	}
-	var newStock int
-	h.db(c).QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, id).Scan(&newStock)
-	applied := newStock - oldStock
-	if applied != 0 {
-		if err := h.svc(c).RecordStockMove(int64(id), int64(applied), models.MoveAdjustment, "", body.Note, p); err != nil {
-			h.fail(c, 500, err.Error())
-			return
+	// The service path keeps every side in lockstep: the projection, the
+	// ledger row, batch lots (FEFO on negative deltas), the audit trail
+	// and the cross-till stock event.
+	applied, err := h.svc(c).AdjustProductStock(id, body.DeltaMilli, body.Note, p)
+	if err != nil {
+		if err == services.ErrNotFound {
+			h.fail(c, 404, "product not found")
+		} else {
+			h.fail(c, 400, err.Error())
 		}
+		return
 	}
-	h.svc(c).Audit(p.ID, p.Username, "STOCK_ADJUSTED", "product", itoa64(id), fmt.Sprintf("%d (requested %d)", applied, body.Delta))
-	var sku string
-	h.db(c).QueryRow(`SELECT COALESCE(sku,'') FROM products WHERE id = ?`, id).Scan(&sku)
-	h.svc(c).EmitStockDelta(sku, applied)
 	h.ok(c, gin.H{"adjusted": true, "applied": applied})
 }
 
@@ -360,22 +402,23 @@ func (h *H) DisposeStock(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Qty    int64  `json:"qty" binding:"required"`
-		Reason string `json:"reason" binding:"required"`
-		Note   string `json:"note"`
+		QtyMilli int64  `json:"qtyMilli" binding:"required"`
+		Reason   string `json:"reason" binding:"required"`
+		Note     string `json:"note"`
+		BatchID  int64  `json:"batchId"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		h.fail(c, 400, "qty and reason are required")
+		h.fail(c, 400, "qtyMilli and reason are required")
 		return
 	}
-	res, err := h.svc(c).DisposeProduct(int64(id), body.Qty, body.Reason, body.Note, p)
+	res, err := h.svc(c).DisposeProduct(int64(id), body.QtyMilli, body.Reason, body.Note, body.BatchID, p)
 	if err != nil {
 		h.fail(c, 400, err.Error())
 		return
 	}
 	var sku string
 	h.db(c).QueryRow(`SELECT COALESCE(sku,'') FROM products WHERE id = ?`, id).Scan(&sku)
-	h.svc(c).EmitStockDelta(sku, -int(body.Qty))
+	h.svc(c).EmitStockDelta(sku, -body.QtyMilli)
 	h.ok(c, res)
 }
 

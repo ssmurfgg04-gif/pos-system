@@ -5,6 +5,8 @@ package models
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -126,19 +128,24 @@ type Category struct {
 }
 
 type Product struct {
-	ID           int64  `json:"id"`
-	SKU          string `json:"sku"`
-	Barcode      string `json:"barcode"`
-	Name         string `json:"name"`
-	CategoryID   int64  `json:"categoryId"`
-	CategoryName string `json:"categoryName"`
-	ImageURL     string `json:"imageUrl"`
-	PriceCents   int64  `json:"priceCents"`
-	CostCents    int64  `json:"costCents"`
-	StockQty     int    `json:"stockQty"`
-	TrackStock   bool   `json:"trackStock"`
-	Active       bool   `json:"active"`
-	IsGiftCard   bool   `json:"isGiftCard"` // mints redeemable codes on paid sale
+	ID            int64  `json:"id"`
+	SKU           string `json:"sku"`
+	Barcode       string `json:"barcode"`
+	Name          string `json:"name"`
+	CategoryID    int64  `json:"categoryId"`
+	CategoryName  string `json:"categoryName"`
+	ImageURL      string `json:"imageUrl"`
+	PriceCents    int64  `json:"priceCents"`
+	CostCents     int64  `json:"costCents"`
+	StockQtyMilli int64  `json:"stockQtyMilli"`
+	TrackStock    bool   `json:"trackStock"`
+	Active        bool   `json:"active"`
+	IsGiftCard    bool   `json:"isGiftCard"` // mints redeemable codes on paid sale
+	// v1.8.0: sellable unit ('pc', 'kg', 'l', …) + whether the till accepts
+	// fractional quantities (0.5 kg of sugar) + batch/expiry tracking.
+	Unit          string `json:"unit"`
+	AllowFraction bool   `json:"allowFraction"`
+	TrackBatches  bool   `json:"trackBatches"`
 	// v1.6.3: wholesale tier pricing + per-product low-stock threshold
 	// (0 = fall back to the global low_stock_threshold setting).
 	WholesalePriceCents int64  `json:"wholesalePriceCents"`
@@ -149,8 +156,10 @@ type Product struct {
 // ---- Orders ----
 
 type CheckoutItem struct {
-	ProductID      int64 `json:"productId" binding:"required"`
-	Qty            int   `json:"qty" binding:"required,min=1"`
+	ProductID int64 `json:"productId" binding:"required"`
+	// v1.8.0: quantities are integer milli-units (1000 = one unit). A
+	// whole-unit line is qtyMilli=2000; 250 g of a kilo-sold product is 250.
+	QtyMilli       int64 `json:"qtyMilli" binding:"required,min=1"`
 	UnitPriceCents int64 `json:"unitPriceCents"` // optional override (permission-gated)
 }
 
@@ -185,10 +194,22 @@ type OrderItem struct {
 	ProductID      int64  `json:"productId"`
 	Name           string `json:"name"`
 	SKU            string `json:"sku"`
-	Qty            int    `json:"qty"`
+	QtyMilli       int64  `json:"qtyMilli"`
 	UnitPriceCents int64  `json:"unitPriceCents"`
 	LineTotalCents int64  `json:"lineTotalCents"`
 	CostCents      int64  `json:"costCents"` // v1.7.0: unit cost snapshot at sale time (0 = pre-v26 line)
+}
+
+// QtyDisplay renders a milli-unit quantity for receipts/documents: whole
+// numbers plain ("3"), fractional trimmed ("0.5", "0.25").
+func (it OrderItem) QtyDisplay() string {
+	if it.QtyMilli%MilliPerUnit == 0 {
+		return fmt.Sprintf("%d", it.QtyMilli/MilliPerUnit)
+	}
+	s := fmt.Sprintf("%.3f", float64(it.QtyMilli)/float64(MilliPerUnit))
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	return s
 }
 
 type Payment struct {
@@ -366,9 +387,13 @@ type POItem struct {
 	ProductID      int64  `json:"productId"`
 	Name           string `json:"name"`
 	SKU            string `json:"sku"`
-	Qty            int    `json:"qty"`
+	QtyMilli       int64  `json:"qtyMilli"`
 	CostCents      int64  `json:"costCents"`
 	LineTotalCents int64  `json:"lineTotalCents"`
+	// v1.8.0: batch metadata captured at goods-in for batch-tracked
+	// products (a received line BECOMES a lot).
+	ExpiryDate string `json:"expiryDate"`
+	BatchNo    string `json:"batchNo"`
 }
 
 type PurchaseOrder struct {
@@ -385,13 +410,13 @@ type PurchaseOrder struct {
 }
 
 type StockTakeItem struct {
-	ID          int64  `json:"id"`
-	TakeID      int64  `json:"takeId"`
-	ProductID   int64  `json:"productId"`
-	Name        string `json:"name"`
-	SKU         string `json:"sku"`
-	ExpectedQty int    `json:"expectedQty"`
-	CountedQty  int    `json:"countedQty"`
+	ID               int64  `json:"id"`
+	TakeID           int64  `json:"takeId"`
+	ProductID        int64  `json:"productId"`
+	Name             string `json:"name"`
+	SKU              string `json:"sku"`
+	ExpectedQtyMilli int64  `json:"expectedQtyMilli"`
+	CountedQtyMilli  int64  `json:"countedQtyMilli"`
 }
 
 type StockTake struct {
@@ -413,16 +438,23 @@ type StockTake struct {
 // while keeping every multiplication below ~1e17.
 
 const (
-	// MaxOrderQty caps one line's quantity (pre- and post-merge).
-	MaxOrderQty = 100000
+	// MilliPerUnit is the v1.8.0 quantity scale: every quantity column and
+	// wire field counts thousandths of a unit (1000 = one piece / one kg).
+	// Integer milli-units keep quantities exact the way integer cents keep
+	// money exact — SQLite has no decimal type, and float quantities drift.
+	MilliPerUnit = 1000
+	// MaxOrderQtyMilli caps one line's quantity (pre- and post-merge), in
+	// milli-units: 100,000,000 = 100,000 whole units (or 100 tonnes of a
+	// kilo-sold good — far above any real till line).
+	MaxOrderQtyMilli = 100000000
 	// MaxPriceCents caps any unit price or cost (10B KES).
 	MaxPriceCents = 1000000000000
 	// MaxOrderLines caps checkout/PO line counts (merge-bypass).
 	MaxOrderLines = 500
-	// MaxStockDelta caps single stock adjustments and take counts.
-	MaxStockDelta = 100000000
-	// MaxStockQty caps stored stock quantities.
-	MaxStockQty = 1000000000
+	// MaxStockDeltaMilli caps single stock adjustments and take counts.
+	MaxStockDeltaMilli = 100000000000
+	// MaxStockQtyMilli caps stored stock quantities.
+	MaxStockQtyMilli = 1000000000000
 	// MaxNameLen caps product/customer/supplier names (receipt/UI sanity).
 	MaxNameLen = 200
 	// MaxCodeLen caps SKUs, barcodes, phones.
@@ -431,8 +463,36 @@ const (
 	MaxTaxPercent = 100
 )
 
+// Sellable units (v1.8.0). 'pc' is the default piece-count unit; the rest
+// are weigh/measure units the till sells fractionally. The list is closed
+// so receipts and reports can format confidently.
+var Units = []string{"pc", "kg", "g", "l", "ml", "pack", "box", "dozen", "m"}
+
+// UnitFractionDefault reports whether a unit is normally sold fractionally.
+func UnitFractionDefault(unit string) bool {
+	switch unit {
+	case "kg", "g", "l", "ml", "m":
+		return true
+	}
+	return false
+}
+
+// ValidUnit checks a client-supplied unit string.
+func ValidUnit(unit string) bool {
+	if unit == "" {
+		return true // empty = 'pc'
+	}
+	for _, u := range Units {
+		if u == unit {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckProductInput validates catalog fields shared by API + CSV import.
-func CheckProductInput(name, sku, barcode string, priceCents, costCents int64, stock int) error {
+// stockMilli is the opening stock in milli-units (1000 = one unit).
+func CheckProductInput(name, sku, barcode string, priceCents, costCents int64, stockMilli int64) error {
 	if len(name) == 0 || len(name) > MaxNameLen {
 		return errInvalidProduct("name must be 1-200 characters")
 	}
@@ -445,7 +505,7 @@ func CheckProductInput(name, sku, barcode string, priceCents, costCents int64, s
 	if costCents < 0 || costCents > MaxPriceCents {
 		return errInvalidProduct("cost out of range")
 	}
-	if stock < 0 || stock > MaxStockQty {
+	if stockMilli < 0 || stockMilli > MaxStockQtyMilli {
 		return errInvalidProduct("stock out of range")
 	}
 	return nil
@@ -688,7 +748,7 @@ type QuoteItem struct {
 	ProductID      int64  `json:"productId"`
 	SKU            string `json:"sku"`
 	Name           string `json:"name"`
-	Qty            int    `json:"qty"`
+	QtyMilli       int64  `json:"qtyMilli"`
 	UnitPriceCents int64  `json:"unitPriceCents"`
 	LineTotalCents int64  `json:"lineTotalCents"`
 }
@@ -843,21 +903,21 @@ type StockCount struct {
 // StockCountLine is one product inside a counting session. CountedQty nil
 // means "not counted yet"; SystemQty is the live stock at close time.
 type StockCountLine struct {
-	ID            int64  `json:"id"`
-	CountID       int64  `json:"countId"`
-	ProductID     int64  `json:"productId"`
-	SKU           string `json:"sku"`
-	Name          string `json:"name"`
-	ExpectedQty   int    `json:"expectedQty"`
-	CountedQty    *int   `json:"countedQty"`
-	SystemQty     int    `json:"systemQty"`
-	UnitCostCents int64  `json:"unitCostCents"`
-	Applied       bool   `json:"applied"`
+	ID               int64  `json:"id"`
+	CountID          int64  `json:"countId"`
+	ProductID        int64  `json:"productId"`
+	SKU              string `json:"sku"`
+	Name             string `json:"name"`
+	ExpectedQtyMilli int64  `json:"expectedQtyMilli"`
+	CountedQtyMilli  *int64 `json:"countedQtyMilli"`
+	SystemQtyMilli   int64  `json:"systemQtyMilli"`
+	UnitCostCents    int64  `json:"unitCostCents"`
+	Applied          bool   `json:"applied"`
 }
 
 type SaveCountLineRequest struct {
-	ProductID  int64 `json:"productId" binding:"required"`
-	CountedQty *int  `json:"countedQty"` // nil clears the count
+	ProductID       int64  `json:"productId" binding:"required"`
+	CountedQtyMilli *int64 `json:"countedQtyMilli"` // nil clears the count
 }
 
 type CompleteCountRequest struct {
@@ -899,23 +959,72 @@ const (
 	MovePOReceive     = "PO_RECEIVE"     // supplier goods-in
 	MoveReturnRestock = "RETURN_RESTOCK" // customer return puts stock back
 	MoveDisposal      = "DISPOSAL"       // v1.7.0: written-off stock (expired/spoilt/lost/damaged)
+	MoveBatchIn       = "BATCH_IN"       // v1.8.0: manual goods-in recorded directly on a batch
+	MoveBatchRecall   = "BATCH_RECALL"   // v1.8.0: a lot pulled off the shelf (safety/quality)
 )
 
 // StockMovement is one audited stock change.
 type StockMovement struct {
-	ID           int64  `json:"id"`
-	ProductID    int64  `json:"productId"`
-	ProductName  string `json:"productName"`
-	SKU          string `json:"sku"`
-	Delta        int64  `json:"delta"`
-	BalanceAfter int64  `json:"balanceAfter"`
-	Kind         string `json:"kind"`
-	Reference    string `json:"reference"`
-	Note         string `json:"note"`
-	UserID       int64  `json:"userId"`
-	Username     string `json:"username"`
-	DeviceID     string `json:"deviceId"`
-	CreatedAt    string `json:"createdAt"`
+	ID                int64  `json:"id"`
+	ProductID         int64  `json:"productId"`
+	ProductName       string `json:"productName"`
+	SKU               string `json:"sku"`
+	DeltaMilli        int64  `json:"deltaMilli"`
+	BalanceAfterMilli int64  `json:"balanceAfterMilli"`
+	Kind              string `json:"kind"`
+	Reference         string `json:"reference"`
+	Note              string `json:"note"`
+	UserID            int64  `json:"userId"`
+	Username          string `json:"username"`
+	DeviceID          string `json:"deviceId"`
+	CreatedAt         string `json:"createdAt"`
+}
+
+// ---- Batches (v1.8.0) ----
+
+// Batch statuses. ACTIVE lots sell (FEFO); EXHAUSTED is bookkeeping for a
+// fully-sold lot; RECALLED lots are frozen — remaining quantity comes off
+// the shelf and can only be disposed.
+const (
+	BatchActive    = "ACTIVE"
+	BatchExhausted = "EXHAUSTED"
+	BatchRecalled  = "RECALLED"
+)
+
+// ProductBatch is one received lot of a batch-tracked product: a batch
+// number, an expiry date, what came in, what remains, and what it cost —
+// everything the FEFO allocator and the expiry report need.
+type ProductBatch struct {
+	ID                int64  `json:"id"`
+	ProductID         int64  `json:"productId"`
+	ProductName       string `json:"productName"`
+	SKU               string `json:"sku"`
+	BatchNo           string `json:"batchNo"`
+	ExpiryDate        string `json:"expiryDate"` // 'YYYY-MM-DD', '' = no expiry tracked
+	QtyReceivedMilli  int64  `json:"qtyReceivedMilli"`
+	QtyRemainingMilli int64  `json:"qtyRemainingMilli"`
+	CostCents         int64  `json:"costCents"` // per-unit cost at receipt
+	SupplierID        int64  `json:"supplierId"`
+	SupplierName      string `json:"supplierName"`
+	Reference         string `json:"reference"` // PO number / goods-in note
+	Status            string `json:"status"`
+	CreatedAt         string `json:"createdAt"`
+	UpdatedAt         string `json:"updatedAt"`
+}
+
+// ExpiryBatchRow is one lot in the expiry report: what remains, when it
+// dies, and the money at risk if it is written off.
+type ExpiryBatchRow struct {
+	BatchID           int64  `json:"batchId"`
+	ProductID         int64  `json:"productId"`
+	Name              string `json:"name"`
+	SKU               string `json:"sku"`
+	BatchNo           string `json:"batchNo"`
+	ExpiryDate        string `json:"expiryDate"`
+	QtyRemainingMilli int64  `json:"qtyRemainingMilli"`
+	CostCents         int64  `json:"costCents"`
+	ValueCents        int64  `json:"valueCents"` // remaining × cost
+	Status            string `json:"status"`
 }
 
 // ---- Returns (v1.6.3) ----
@@ -952,7 +1061,7 @@ type ReturnItem struct {
 	ProductID      int64  `json:"productId"`
 	Name           string `json:"name"`
 	SKU            string `json:"sku"`
-	Qty            int    `json:"qty"`
+	QtyMilli       int64  `json:"qtyMilli"`
 	UnitPriceCents int64  `json:"unitPriceCents"`
 	LineTotalCents int64  `json:"lineTotalCents"`
 }
@@ -967,7 +1076,7 @@ type CreateReturnRequest struct {
 
 type CreateReturnLine struct {
 	OrderItemID int64 `json:"orderItemId" binding:"required"`
-	Qty         int   `json:"qty" binding:"required,min=1"`
+	QtyMilli    int64 `json:"qtyMilli" binding:"required,min=1"`
 }
 
 // ---- Expenses (v1.6.3) ----

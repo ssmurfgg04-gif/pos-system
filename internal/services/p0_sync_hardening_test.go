@@ -41,8 +41,8 @@ func p0OpenTill(t *testing.T, dbPath string) *Service {
 		t.Fatalf("settings: %v", err)
 	}
 	db.Exec(`INSERT INTO categories (name, slug) VALUES ('C','c')`)
-	db.Exec(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty)
-                SELECT 'SKU-P0','P0', id, 500, 10 FROM categories LIMIT 1`)
+	db.Exec(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty_milli)
+                SELECT 'SKU-P0','P0', id, 500, 10000 FROM categories LIMIT 1`)
 	db.Exec(`INSERT INTO roles (name) VALUES ('Cashier')`)
 	db.Exec(`INSERT INTO users (username, role_id) SELECT 'cash1', id FROM roles LIMIT 1`)
 	return &Service{db: db, settings: st, appVersion: "p0-test", printer: printer.NewWorker(db, st)}
@@ -110,8 +110,8 @@ func TestP0OfflineOrderJourney(t *testing.T) {
 	tillB := p0OpenTill(t, filepath.Join(dir, "tillB.db"))
 	var catB int64
 	tillB.db.QueryRow(`SELECT id FROM categories LIMIT 1`).Scan(&catB)
-	tillB.db.Exec(tillB.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty)
-                VALUES ('SKU-P0','P0',?,500,10)`), catB)
+	tillB.db.Exec(tillB.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty_milli)
+                VALUES ('SKU-P0','P0',?,500,10000)`), catB)
 	cB, ok := tillB.syncConfig()
 	if !ok {
 		t.Fatal("till B could not resolve the cloud")
@@ -148,7 +148,7 @@ func p0Checkout(t *testing.T, f *p0Fixture, uuid string) *models.Order {
 	order, err := f.s.Checkout(context.Background(), &auth.Principal{
 		ID: f.userID, Username: "cash1", RoleID: f.roleID, RoleName: "Cashier", Active: true,
 	}, models.CheckoutRequest{
-		Items:         []models.CheckoutItem{{ProductID: f.prodID, Qty: 1}},
+		Items:         []models.CheckoutItem{{ProductID: f.prodID, QtyMilli: 1000}},
 		PaymentMethod: models.MethodCash,
 		ClientUUID:    uuid,
 	})

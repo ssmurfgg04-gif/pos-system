@@ -10,8 +10,8 @@ import (
 )
 
 type saveCountLineBody struct {
-	ProductID  int64 `json:"productId" binding:"required"`
-	CountedQty *int  `json:"countedQty"`
+	ProductID       int64  `json:"productId" binding:"required"`
+	CountedQtyMilli *int64 `json:"countedQtyMilli"`
 }
 
 type completeCountBody struct {
@@ -77,7 +77,7 @@ func (h *H) SaveCountLine(c *gin.Context) {
 		h.fail(c, 400, err.Error())
 		return
 	}
-	if err := h.svc(c).SaveCountLine(p, id, body.ProductID, body.CountedQty); err != nil {
+	if err := h.svc(c).SaveCountLine(p, id, body.ProductID, body.CountedQtyMilli); err != nil {
 		h.fail(c, 422, err.Error())
 		return
 	}

@@ -144,7 +144,7 @@ func persistenceInsertProduct(t *testing.T, db *database.DB, sku, name string, q
 			t.Fatalf("category id: %v", err)
 		}
 	}
-	res, err := db.Exec(db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, cost_cents, stock_qty)
+	res, err := db.Exec(db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, cost_cents, stock_qty_milli)
                 VALUES (?, ?, ?, 1000, 400, ?)`), sku, name, cat, qty)
 	if err != nil {
 		t.Fatalf("product %s: %v", name, err)
@@ -622,8 +622,8 @@ INSERT INTO order_items (order_id, product_id, name, qty, unit_price_cents, line
 	// Data survived — no rebuild.
 	var name string
 	var qty int64
-	if err := db.QueryRow(`SELECT name, stock_qty FROM products WHERE sku='OLD-1'`).Scan(&name, &qty); err != nil || name != "OldStock" || qty != 41 {
-		t.Fatalf("old inventory lost in migration (name=%q qty=%d err=%v)", name, qty, err)
+	if err := db.QueryRow(`SELECT name, stock_qty_milli FROM products WHERE sku='OLD-1'`).Scan(&name, &qty); err != nil || name != "OldStock" || qty != 41000 {
+		t.Fatalf("old inventory lost in migration (name=%q qty_milli=%d err=%v)", name, qty, err)
 	}
 	var pid, oid int64
 	if err := db.QueryRow(`SELECT id FROM products WHERE sku='OLD-1'`).Scan(&pid); err != nil || pid != 1 {
@@ -640,11 +640,10 @@ INSERT INTO order_items (order_id, product_id, name, qty, unit_price_cents, line
 	if err := db.QueryRow(`SELECT COUNT(*) FROM customers`).Scan(&customers); err != nil {
 		t.Errorf("v2 tables missing after migration: %v", err)
 	}
-	// Migration ran exactly once (current head: v21 — orders.notify
-	// union into legacy till roles, after the v20 shifts.client_uuid
-	// team sync + whatsapp_jobs delivery queue).
-	if v := persistenceSchemaVersion(t, path); v != 26 {
-		t.Errorf("schema version after migrate = %d, want 25", v)
+	// Migration ran exactly once (current head: v28 — v27 milli-unit
+	// quantities + v28 batch/expiry lots with FEFO allocation).
+	if v := persistenceSchemaVersion(t, path); v != 28 {
+		t.Errorf("schema version after migrate = %d, want 28", v)
 	}
 	if err := db.Migrate(); err != nil {
 		t.Errorf("re-migrate on old DB: %v", err)

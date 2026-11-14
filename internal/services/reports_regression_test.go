@@ -34,7 +34,7 @@ func TestDailySummarySurvivesSalesDay(t *testing.T) {
 			"ORD-R-000"+string(rune('1'+i)), total, total, now, now, "r-uuid-"+string(rune('1'+i)))
 		var oid int64
 		s.db.QueryRow(`SELECT id FROM orders WHERE client_uuid = ?`, "r-uuid-"+string(rune('1'+i))).Scan(&oid)
-		s.db.Exec(`INSERT INTO order_items (order_id, product_id, name, qty, unit_price_cents, line_total_cents)
+		s.db.Exec(`INSERT INTO order_items (order_id, product_id, name, qty_milli, unit_price_cents, line_total_cents)
                         VALUES (?, 1, 'R1', 1, ?, ?)`, oid, total, total)
 		s.db.Exec(`INSERT INTO payments (order_id, method, amount_cents, status, created_at)
                         VALUES (?, 'cash', ?, 'COMPLETED', ?)`, oid, total, now)

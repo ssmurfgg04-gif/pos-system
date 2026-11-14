@@ -20,7 +20,7 @@ var csvHeader = []string{"sku", "barcode", "name", "category", "price", "cost", 
 func (h *H) ProductsExport(c *gin.Context) {
 	rows, err := h.db(c).Query(h.db(c).Rebind(`
                 SELECT COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, COALESCE(c.name,''),
-                        p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1)
+                        p.price_cents, p.cost_cents, p.stock_qty_milli, COALESCE(p.track_stock,1), COALESCE(p.is_active,1)
                 FROM products p LEFT JOIN categories c ON c.id = p.category_id
                 ORDER BY p.id`))
 	if err != nil {
@@ -32,14 +32,14 @@ func (h *H) ProductsExport(c *gin.Context) {
 	b.WriteString(strings.Join(csvHeader, ",") + "\n")
 	for rows.Next() {
 		var sku, barcode, name, cat string
-		var price, cost int64
-		var stock, track, active int
+		var price, cost, stock int64
+		var track, active int
 		if err := rows.Scan(&sku, &barcode, &name, &cat, &price, &cost, &stock, &track, &active); err != nil {
 			break
 		}
-		b.WriteString(fmt.Sprintf("%s,%s,%s,%s,%.2f,%.2f,%d,%s,%s\n",
+		b.WriteString(fmt.Sprintf("%s,%s,%s,%s,%.2f,%.2f,%s,%s,%s\n",
 			csv(sku), csv(barcode), csv(name), csv(cat), float64(price)/100, float64(cost)/100,
-			stock, boolCSV(track == 1), boolCSV(active == 1)))
+			formatQtyMilli(stock), boolCSV(track == 1), boolCSV(active == 1)))
 	}
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition", `attachment; filename="products.csv"`)
@@ -109,7 +109,7 @@ func (h *H) ProductsImport(c *gin.Context) {
 	type row struct {
 		sku, barcode, name, category string
 		price, cost                  int64
-		stock                        int
+		stockMilli                   int64
 		track, active                int
 	}
 	var rows []row
@@ -136,15 +136,17 @@ func (h *H) ProductsImport(c *gin.Context) {
 			h.fail(c, 400, fmt.Sprintf("row %d: bad cost %q", i+2, get("cost")))
 			return
 		}
-		stock := 0
-		fmt.Sscanf(get("stock"), "%d", &stock)
-		if err := models.CheckProductInput(name, get("sku"), get("barcode"), price, cost, stock); err != nil {
+		// CSV stock is whole units (the human format); convert to milli.
+		units := int64(0)
+		fmt.Sscanf(get("stock"), "%d", &units)
+		stockMilli := units * 1000
+		if err := models.CheckProductInput(name, get("sku"), get("barcode"), price, cost, stockMilli); err != nil {
 			h.fail(c, 400, fmt.Sprintf("row %d: %s", i+2, err.Error()))
 			return
 		}
 		rows = append(rows, row{
 			sku: get("sku"), barcode: get("barcode"), name: name, category: get("category"),
-			price: price, cost: cost, stock: stock,
+			price: price, cost: cost, stockMilli: stockMilli,
 			track: parseBoolCSV(get("track_stock")), active: parseBoolCSV(get("active")),
 		})
 	}
@@ -193,8 +195,8 @@ func (h *H) ProductsImport(c *gin.Context) {
 			if err := tx.QueryRow(`SELECT COUNT(*) FROM products WHERE sku = ?`, r.sku).Scan(&exists); err == nil && exists > 0 {
 				if _, err := tx.Exec(h.db(c).Rebind(`
                                         UPDATE products SET barcode = ?, name = ?, category_id = ?, price_cents = ?, cost_cents = ?,
-                                                stock_qty = ?, track_stock = ?, is_active = ?, updated_at = ?
-                                        WHERE sku = ?`), r.barcode, r.name, cid, r.price, r.cost, r.stock, r.track, r.active, services.NowStamp(), r.sku); err != nil {
+                                                stock_qty_milli = ?, stock_qty = ? / 1000, track_stock = ?, is_active = ?, updated_at = ?
+                                        WHERE sku = ?`), r.barcode, r.name, cid, r.price, r.cost, r.stockMilli, r.stockMilli/1000, r.track, r.active, services.NowStamp(), r.sku); err != nil {
 					h.fail(c, 500, fmt.Sprintf("row sku %s: %v", r.sku, err))
 					return
 				}
@@ -210,17 +212,17 @@ func (h *H) ProductsImport(c *gin.Context) {
 			sku = uniqueSKUTx(tx, r.name)
 		}
 		res, err := tx.Exec(h.db(c).Rebind(`
-                        INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`), sku, r.barcode, r.name, cid, r.price, r.cost, r.stock, r.track, r.active)
+                        INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty_milli, stock_qty, track_stock, is_active)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), sku, r.barcode, r.name, cid, r.price, r.cost, r.stockMilli, r.stockMilli/1000, r.track, r.active)
 		if err != nil {
 			h.fail(c, 500, fmt.Sprintf("row %s: %v", r.name, err))
 			return
 		}
 		if pid, err := res.LastInsertId(); err == nil {
 			touchedIDs = append(touchedIDs, pid)
-			if r.stock != 0 && r.track == 1 {
+			if r.stockMilli != 0 && r.track == 1 {
 				// Anchor the stock ledger at the imported quantity.
-				recordMovementNoTx(h.db(c), int64(pid), int64(r.stock), "initial import")
+				recordMovementNoTx(h.db(c), pid, r.stockMilli, "initial import")
 			}
 		}
 		created++
@@ -385,8 +387,20 @@ func readCSV(r interface{ Read([]byte) (int, error) }, maxRows int) ([][]string,
 // (used inside the CSV import transaction wrapper).
 func recordMovementNoTx(db *database.DB, productID, delta int64, note string) {
 	var bal int64
-	db.QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, productID).Scan(&bal)
+	db.QueryRow(`SELECT stock_qty_milli FROM products WHERE id = ?`, productID).Scan(&bal)
 	db.Exec(db.Rebind(`INSERT INTO stock_movements
-                (product_id, delta, balance_after, kind, reference, note, user_id, username, device_id, client_uuid)
-                VALUES (?, ?, ?, 'OPENING', '', ?, 0, '', '', '')`), productID, delta, bal, note)
+                (product_id, delta_milli, balance_after_milli, delta, balance_after, kind, reference, note, user_id, username, device_id, client_uuid)
+                VALUES (?, ?, ?, ?, ?, 'OPENING', '', ?, 0, '', '', '')`), productID, delta, bal, delta/1000, bal/1000, note)
+}
+
+// formatQtyMilli renders a milli-unit quantity for CSV export: whole
+// numbers plain ("40"), fractional trimmed to three decimals ("0.5").
+func formatQtyMilli(m int64) string {
+	if m%1000 == 0 {
+		return fmt.Sprintf("%d", m/1000)
+	}
+	s := fmt.Sprintf("%.3f", float64(m)/1000.0)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	return s
 }

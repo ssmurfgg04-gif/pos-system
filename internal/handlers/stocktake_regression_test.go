@@ -30,7 +30,7 @@ func TestStocktakeCountApplyRegression(t *testing.T) {
 
 	w = do(t, engine, "POST", "/api/v1/products", admin, map[string]any{
 		"name": "Late Arrival SKU", "sku": "LATE-1", "priceCents": 10000,
-		"categoryId": 1, "stockQty": 25, "costCents": 4000,
+		"categoryId": 1, "stockQtyMilli": 25000, "costCents": 4000,
 	})
 	if w.Code != 201 {
 		t.Fatalf("create late product: %d %s", w.Code, w.Body.String())
@@ -46,7 +46,7 @@ func TestStocktakeCountApplyRegression(t *testing.T) {
 	}
 
 	w = do(t, engine, "PUT", fmt.Sprintf("/api/v1/stock-counts/%d/lines", id), admin,
-		map[string]any{"productId": created.Data.ID, "countedQty": 25})
+		map[string]any{"productId": created.Data.ID, "countedQtyMilli": 25000})
 	if w.Code != 422 {
 		t.Fatalf("late product count: got %d, want 422 (silent no-op is forbidden): %s",
 			w.Code, w.Body.String())
@@ -56,7 +56,7 @@ func TestStocktakeCountApplyRegression(t *testing.T) {
 	prods := productIDs(t, engine, admin, "Classic Cotton Tee, Black")
 	pid := int64(prods[0]["id"].(float64))
 	w = do(t, engine, "PUT", fmt.Sprintf("/api/v1/stock-counts/%d/lines", id), admin,
-		map[string]any{"productId": pid, "countedQty": 0})
+		map[string]any{"productId": pid, "countedQtyMilli": 0})
 	if w.Code != 200 {
 		t.Fatalf("zero count rejected: %d %s", w.Code, w.Body.String())
 	}
@@ -66,7 +66,7 @@ func TestStocktakeCountApplyRegression(t *testing.T) {
 		t.Fatalf("apply with zero count: %d %s", w.Code, w.Body.String())
 	}
 	prods = productIDs(t, engine, admin, "Classic Cotton Tee, Black")
-	if got := int(prods[0]["stockQty"].(float64)); got != 0 {
+	if got := int(prods[0]["stockQtyMilli"].(float64)); got != 0 {
 		t.Fatalf("stock after zero-count apply = %d, want 0", got)
 	}
 
@@ -111,7 +111,7 @@ func TestStocktakeCountApplyRegression(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &opened)
 	id2 = opened.Data.ID
 	w = do(t, engine, "PUT", fmt.Sprintf("/api/v1/stock-counts/%d/lines", id2), admin,
-		map[string]any{"productId": pid, "countedQty": 7})
+		map[string]any{"productId": pid, "countedQtyMilli": 7000})
 	if w.Code != 200 {
 		t.Fatalf("recount on fresh session: %d %s", w.Code, w.Body.String())
 	}
@@ -140,7 +140,7 @@ func TestStocktakeCountApplyRegression(t *testing.T) {
 		t.Fatalf("apply after clear: %d %s", w.Code, w.Body.String())
 	}
 	prods = productIDs(t, engine, admin, "Classic Cotton Tee, Black")
-	if got := int(prods[0]["stockQty"].(float64)); got != 0 {
+	if got := int(prods[0]["stockQtyMilli"].(float64)); got != 0 {
 		t.Fatalf("stock moved after clear+apply: %d, want 0 (previous apply's value)", got)
 	}
 }

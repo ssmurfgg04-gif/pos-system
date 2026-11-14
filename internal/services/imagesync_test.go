@@ -148,8 +148,8 @@ func TestImageSyncPhotoJourney(t *testing.T) {
 
 	// Till B (authorized, same team) pulls: the photo must be THERE.
 	tillB := imgSyncTill(t, filepath.Join(dir, "b.db"))
-	tillB.db.Exec(tillB.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty)
-                SELECT 'SKU-P0','P0', id, 500, 10 FROM categories LIMIT 1`))
+	tillB.db.Exec(tillB.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty_milli)
+                SELECT 'SKU-P0','P0', id, 500, 10000 FROM categories LIMIT 1`))
 	imgSyncDrain(t, tillB, fake)
 	got := imgSyncProductImage(t, tillB, "SKU-P0")
 	if got == "" {
@@ -174,8 +174,8 @@ func TestImageSyncPhotoJourney(t *testing.T) {
 
 	// Fresh till C joins later and replays the FULL history: photo included.
 	tillC := imgSyncTill(t, filepath.Join(dir, "c.db"))
-	tillC.db.Exec(tillC.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty)
-                SELECT 'SKU-P0','P0', id, 500, 10 FROM categories LIMIT 1`))
+	tillC.db.Exec(tillC.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty_milli)
+                SELECT 'SKU-P0','P0', id, 500, 10000 FROM categories LIMIT 1`))
 	imgSyncDrain(t, tillC, fake)
 	if imgSyncProductImage(t, tillC, "SKU-P0") == "" {
 		t.Fatal("fresh till C did not receive the photo from history replay")
@@ -193,8 +193,8 @@ func TestImageSyncBackfill(t *testing.T) {
 	// Three pre-existing photos (legacy rows: image_synced_at = '').
 	small := encodeDataURL("image/png", smallPNG(t))
 	for _, sku := range []string{"SKU-P0", "SKU-B2", "SKU-B3"} {
-		tillA.db.Exec(tillA.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty, image_url)
-                        SELECT ?, 'x', id, 100, 5, ? FROM categories LIMIT 1`), sku, small)
+		tillA.db.Exec(tillA.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty_milli, image_url)
+                        SELECT ?, 'x', id, 100, 5000, ? FROM categories LIMIT 1`), sku, small)
 	}
 	// One photo ALREADY synced — the backfill must not re-emit it.
 	tillA.db.Exec(tillA.db.Rebind(`UPDATE products SET image_synced_at = '2026-10-03T09:00:00.000Z' WHERE sku = 'SKU-P0'`))
@@ -206,7 +206,7 @@ func TestImageSyncBackfill(t *testing.T) {
 	}
 	// Rate-limited second run with MORE legacy rows: drains the new ones,
 	// never re-emits the first batch.
-	tillA.db.Exec(tillA.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty, image_url)
+	tillA.db.Exec(tillA.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty_milli, image_url)
                 SELECT 'SKU-B4', 'x', id, 100, 5, ? FROM categories LIMIT 1`), small)
 	tillA.backfillProductImages()
 	if evs2 := imgSyncOutboxPayloads(t, tillA, "product", "image"); len(evs2) != 3 {
@@ -246,7 +246,7 @@ func TestImageSyncClearAndStale(t *testing.T) {
 
 	// Till B applies: photo cleared there too.
 	tillB := imgSyncTill(t, filepath.Join(dir, "b.db"))
-	tillB.db.Exec(tillB.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty, image_url)
+	tillB.db.Exec(tillB.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty_milli, image_url)
                 SELECT 'SKU-P0','P0', id, 500, 10, 'x' FROM categories LIMIT 1`))
 	imgSyncDrain(t, tillB, fake)
 	if got := imgSyncProductImage(t, tillB, "SKU-P0"); got != "" {
@@ -266,7 +266,7 @@ func TestImageSyncClearAndStale(t *testing.T) {
 	}
 
 	// Catalog edits (applyProduct) must not wipe photos.
-	prodUpsert := []byte(`{"sku":"SKU-P0","barcode":"","name":"P0","categorySlug":"","priceCents":999,"costCents":0,"stockQty":10,"stockSet":false,"trackStock":true,"active":true,"updatedAt":"2026-10-03T13:00:00.000Z"}`)
+	prodUpsert := []byte(`{"sku":"SKU-P0","barcode":"","name":"P0","categorySlug":"","priceCents":999,"costCents":0,"stockQtyMilli": 10000,"stockSet":false,"trackStock":true,"active":true,"updatedAt":"2026-10-03T13:00:00.000Z"}`)
 	if err := tillB.applyProduct(prodUpsert); err != nil {
 		t.Fatalf("applyProduct: %v", err)
 	}

@@ -340,7 +340,7 @@ func TestRBACGates(t *testing.T) {
 func checkoutBody(extra map[string]any) map[string]any {
 	body := map[string]any{
 		"items": []map[string]any{
-			{"productId": 1, "qty": 2},
+			{"productId": 1, "qtyMilli": 2000},
 		},
 		"paymentMethod": "cash",
 	}
@@ -354,7 +354,7 @@ func TestCashCheckoutFlow(t *testing.T) {
 	engine, _, cashier, _ := newTestServer(t)
 	// Stock before.
 	prods := productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
-	before := int(prods[0]["stockQty"].(float64))
+	before := int(prods[0]["stockQtyMilli"].(float64))
 
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, checkoutBody(map[string]any{
 		"clientUuid": "e2e-cash-1",
@@ -371,11 +371,11 @@ func TestCashCheckoutFlow(t *testing.T) {
 		t.Fatalf("total: %v", total)
 	}
 
-	// Stock decremented.
+	// Stock decremented (milli scale: 2 units = 2000).
 	prods = productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
-	after := int(prods[0]["stockQty"].(float64))
-	if after != before-2 {
-		t.Fatalf("stock %d -> %d (want %d)", before, after, before-2)
+	after := int(prods[0]["stockQtyMilli"].(float64))
+	if after != before-2000 {
+		t.Fatalf("stock %d -> %d (want %d)", before, after, before-2000)
 	}
 
 	// Idempotent replay with the same clientUuid: same order, no double stock.
@@ -390,7 +390,7 @@ func TestCashCheckoutFlow(t *testing.T) {
 		t.Fatalf("replay created a new order: %v vs %v", replay["id"], order["id"])
 	}
 	prods = productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
-	if int(prods[0]["stockQty"].(float64)) != after {
+	if int(prods[0]["stockQtyMilli"].(float64)) != after {
 		t.Fatal("replay changed stock — idempotency broken")
 	}
 }
@@ -398,7 +398,7 @@ func TestCashCheckoutFlow(t *testing.T) {
 func TestInsufficientStockRejected(t *testing.T) {
 	engine, _, cashier, _ := newTestServer(t)
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 4, "qty": 9999}},
+		"items":         []map[string]any{{"productId": 4, "qtyMilli": 9999000}},
 		"paymentMethod": "cash",
 	})
 	if w.Code != 409 {
@@ -410,7 +410,7 @@ func TestPriceOverridePermissionGate(t *testing.T) {
 	engine, _, cashier, _ := newTestServer(t)
 	// Cashier tries to override price → 403 (server-side enforced).
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1, "unitPriceCents": 100}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000, "unitPriceCents": 100}},
 		"paymentMethod": "cash",
 	})
 	if w.Code != 403 {
@@ -420,7 +420,7 @@ func TestPriceOverridePermissionGate(t *testing.T) {
 	// password already rotated by newTestServer).
 	admin := login(t, engine, "admin", rotatedPassword)
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", admin, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1, "unitPriceCents": 1000}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000, "unitPriceCents": 1000}},
 		"paymentMethod": "cash",
 	})
 	if w.Code != 201 {
@@ -435,7 +435,7 @@ func TestPriceOverridePermissionGate(t *testing.T) {
 func TestMpesaSTKFlowCompletesViaSweeper(t *testing.T) {
 	engine, _, cashier, _ := newTestServer(t)
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "mpesa",
 		"paymentMode":   "stk",
 		"customerPhone": "0722123456",
@@ -508,13 +508,13 @@ func TestMpesaSTKFlowCompletesViaSweeper(t *testing.T) {
 	// Duplicate callback is idempotent — no error, order stays PAID,
 	// stock is not double-deducted.
 	prods := productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
-	stockAfterFirst := int(prods[0]["stockQty"].(float64))
+	stockAfterFirst := int(prods[0]["stockQtyMilli"].(float64))
 	w = do(t, engine, "POST", "/api/v1/payments/mpesa/callback", "", cb)
 	if w.Code != 200 {
 		t.Fatalf("duplicate callback: %d", w.Code)
 	}
 	prods = productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
-	if int(prods[0]["stockQty"].(float64)) != stockAfterFirst {
+	if int(prods[0]["stockQtyMilli"].(float64)) != stockAfterFirst {
 		t.Fatal("duplicate callback double-deducted stock")
 	}
 }
@@ -522,7 +522,7 @@ func TestMpesaSTKFlowCompletesViaSweeper(t *testing.T) {
 func TestCallbackAmountMismatchFlagsDiscrepancy(t *testing.T) {
 	engine, _, cashier, _ := newTestServer(t)
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 2, "qty": 1}},
+		"items":         []map[string]any{{"productId": 2, "qtyMilli": 1000}},
 		"paymentMethod": "mpesa", "paymentMode": "stk", "customerPhone": "0722123456",
 	})
 	order := dataMap(t, w)
@@ -568,7 +568,7 @@ func TestManualConfirmAndDedupe(t *testing.T) {
 	engine, _, cashier, _ := newTestServer(t)
 	// Manual-mode order.
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 5, "qty": 1}},
+		"items":         []map[string]any{{"productId": 5, "qtyMilli": 1000}},
 		"paymentMethod": "mpesa", "paymentMode": "manual", "clientUuid": "e2e-man-1",
 	})
 	if w.Code != 201 {
@@ -602,7 +602,7 @@ func TestManualConfirmAndDedupe(t *testing.T) {
 	}
 	// Same code on another order → duplicate rejection.
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 6, "qty": 1}},
+		"items":         []map[string]any{{"productId": 6, "qtyMilli": 1000}},
 		"paymentMethod": "mpesa", "paymentMode": "manual",
 	})
 	order2 := dataMap(t, w)
@@ -615,8 +615,8 @@ func TestManualConfirmAndDedupe(t *testing.T) {
 func TestSyncIdempotency(t *testing.T) {
 	engine, _, cashier, _ := newTestServer(t)
 	syncBody := map[string]any{"transactions": []map[string]any{
-		{"items": []map[string]any{{"productId": 1, "qty": 1}}, "paymentMethod": "cash", "clientUuid": "sync-1"},
-		{"items": []map[string]any{{"productId": 8, "qty": 3}}, "paymentMethod": "cash", "clientUuid": "sync-2"},
+		{"items": []map[string]any{{"productId": 1, "qtyMilli": 1000}}, "paymentMethod": "cash", "clientUuid": "sync-1"},
+		{"items": []map[string]any{{"productId": 8, "qtyMilli": 3000}}, "paymentMethod": "cash", "clientUuid": "sync-2"},
 	}}
 	w := do(t, engine, "POST", "/api/v1/sync", cashier, syncBody)
 	if w.Code != 200 {
@@ -649,7 +649,7 @@ func TestSyncIdempotency(t *testing.T) {
 func TestVoidRestoresStock(t *testing.T) {
 	engine, _, cashier, _ := newTestServer(t)
 	prods := productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
-	before := int(prods[0]["stockQty"].(float64))
+	before := int(prods[0]["stockQtyMilli"].(float64))
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, checkoutBody(nil))
 	order := dataMap(t, w)
 	orderID := int64(order["id"].(float64))
@@ -662,7 +662,7 @@ func TestVoidRestoresStock(t *testing.T) {
 		t.Fatalf("status: %v", order["status"])
 	}
 	prods = productIDs(t, engine, cashier, "Classic Cotton Tee, Black")
-	if int(prods[0]["stockQty"].(float64)) != before {
+	if int(prods[0]["stockQtyMilli"].(float64)) != before {
 		t.Fatal("void did not restore stock")
 	}
 	// Double void rejected.
@@ -750,7 +750,7 @@ func TestMonthlyReportKRA(t *testing.T) {
 	month := time.Now().Format("2006-01")
 	// A cash sale to have data.
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 2}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 2000}},
 		"paymentMethod": "cash",
 	})
 	if w.Code != 201 {
@@ -943,7 +943,7 @@ func TestShiftsFlow(t *testing.T) {
 		t.Fatalf("double open should 409, got %d", w.Code)
 	}
 	// Sell 550 in cash.
-	do(t, engine, "POST", "/api/v1/orders/checkout", cashier, checkoutBody(map[string]any{"items": []map[string]any{{"productId": 1, "qty": 1}}}))
+	do(t, engine, "POST", "/api/v1/orders/checkout", cashier, checkoutBody(map[string]any{"items": []map[string]any{{"productId": 1, "qtyMilli": 1000}}}))
 	// Close counting exactly expected (550 + 5000 float = wait, 55000 + 500000).
 	w = do(t, engine, "POST", "/api/v1/shifts/close", cashier, map[string]any{"countedCents": 555000})
 	if w.Code != 200 {
@@ -1068,7 +1068,7 @@ func TestOfflineSyncReplaySafety(t *testing.T) {
 	engine, _, cashier, _ := newTestServer(t)
 	// One offline checkout, replayed three times (double-network-glitch).
 	body := map[string]any{"transactions": []map[string]any{
-		{"items": []map[string]any{{"productId": 9, "qty": 2}}, "paymentMethod": "cash", "clientUuid": "offline-42"},
+		{"items": []map[string]any{{"productId": 9, "qtyMilli": 2000}}, "paymentMethod": "cash", "clientUuid": "offline-42"},
 	}}
 	var firstOrderID any
 	for i := 0; i < 3; i++ {
@@ -1089,8 +1089,8 @@ func TestOfflineSyncReplaySafety(t *testing.T) {
 	w := do(t, engine, "GET", "/api/v1/products?search=Fabric", cashier, nil)
 	out := decode(t, w)
 	list, _ := out["data"].([]any)
-	if list[0].(map[string]any)["stockQty"].(float64) != 148 {
-		t.Fatalf("stock after 3 replays: %v", list[0].(map[string]any)["stockQty"])
+	if list[0].(map[string]any)["stockQtyMilli"].(float64) != 148000 {
+		t.Fatalf("stock after 3 replays: %v", list[0].(map[string]any)["stockQtyMilli"])
 	}
 }
 

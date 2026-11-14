@@ -9,6 +9,7 @@ package handlers_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,10 +18,10 @@ import (
 // opening stock, returning its id.
 func createCostedProduct(t *testing.T, engine *gin.Engine, token, name string, priceCents, costCents, stockQty int64) int64 {
 	t.Helper()
-	qty := int(stockQty)
+	qty := int(stockQty) * 1000
 	w := do(t, engine, "POST", "/api/v1/products", token, map[string]any{
 		"name": name, "sku": "V170-" + name, "priceCents": priceCents,
-		"costCents": costCents, "stockQty": &qty,
+		"costCents": costCents, "stockQtyMilli": &qty,
 	})
 	if w.Code != 201 && w.Code != 200 {
 		t.Fatalf("create product: %d %s", w.Code, w.Body.String())
@@ -28,8 +29,22 @@ func createCostedProduct(t *testing.T, engine *gin.Engine, token, name string, p
 	return int64(dataMap(t, w)["id"].(float64))
 }
 
-// dailyReport fetches the daily summary for a date.
+// eatDay converts an API timestamp (UTC RFC3339) into the East-Africa
+// calendar day the daily report buckets it under (UTC+3) — tests must ask
+// for the same day the report does, whatever the wall clock says.
+func eatDay(ts string) string {
+	t0, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return ts[:10]
+	}
+	return t0.UTC().Add(3 * time.Hour).Format("2006-01-02")
+}
+
+// dailyReport fetches the daily summary for the EAT day of a timestamp.
 func dailyReport(t *testing.T, engine *gin.Engine, token, date string) map[string]any {
+	if len(date) > 10 {
+		date = eatDay(date)
+	}
 	t.Helper()
 	w := do(t, engine, "GET", "/api/v1/reports/daily?date="+date, token, nil)
 	if w.Code != 200 {
@@ -65,7 +80,7 @@ func TestV170CostSnapshotAndMargin(t *testing.T) {
 	// Cost 10000, price 25000: three units -> 30000 cost, 75000 sales.
 	pid := createCostedProduct(t, engine, admin, "MarginWidget", 25000, 10000, 50)
 	order := checkoutLines(t, engine, cashier, []map[string]any{
-		{"productId": pid, "qty": 3},
+		{"productId": pid, "qtyMilli": 3000},
 	}, nil)
 
 	items := order["items"].([]any)
@@ -81,7 +96,7 @@ func TestV170CostSnapshotAndMargin(t *testing.T) {
 	if len(day) < 10 {
 		t.Fatalf("bad createdAt %q", day)
 	}
-	rep := dailyReport(t, engine, admin, day[:10])
+	rep := dailyReport(t, engine, admin, day)
 	if got := int64(rep["cogsCents"].(float64)); got != 30000 {
 		t.Fatalf("cogs: want 30000, got %v", rep["cogsCents"])
 	}
@@ -212,7 +227,7 @@ func TestV170TabChargeHasBalanceSnapshot(t *testing.T) {
 	cid := int64(dataMap(t, w)["id"].(float64))
 
 	checkoutLines(t, engine, cashier, []map[string]any{
-		{"productId": 1, "qty": 2},
+		{"productId": 1, "qtyMilli": 2000},
 	}, map[string]any{"paymentMethod": "account", "customerId": cid})
 
 	rows := ledgerRows(t, engine, admin, cid)
@@ -240,24 +255,24 @@ func TestV170DisposalFlow(t *testing.T) {
 
 	// Invalid reason rejected.
 	w := do(t, engine, "POST", "/api/v1/products/"+itoa64(pid)+"/dispose", admin,
-		map[string]any{"qty": 1, "reason": "because"})
+		map[string]any{"qtyMilli": 1000, "reason": "because"})
 	if w.Code != 400 {
 		t.Fatalf("invalid reason should 400, got %d", w.Code)
 	}
 	// Over-stock disposal rejected.
 	w = do(t, engine, "POST", "/api/v1/products/"+itoa64(pid)+"/dispose", admin,
-		map[string]any{"qty": 99, "reason": "spoilt"})
+		map[string]any{"qtyMilli": 99000, "reason": "spoilt"})
 	if w.Code != 400 {
 		t.Fatalf("overstock disposal should 400, got %d", w.Code)
 	}
 	// The real thing.
 	w = do(t, engine, "POST", "/api/v1/products/"+itoa64(pid)+"/dispose", admin,
-		map[string]any{"qty": 4, "reason": "spoilt", "note": "fridge died"})
+		map[string]any{"qtyMilli": 4000, "reason": "spoilt", "note": "fridge died"})
 	if w.Code != 200 {
 		t.Fatalf("dispose: %d %s", w.Code, w.Body.String())
 	}
-	if got := int64(dataMap(t, w)["stockQty"].(float64)); got != 6 {
-		t.Fatalf("stock after disposal: want 6, got %v", dataMap(t, w)["stockQty"])
+	if got := int64(dataMap(t, w)["stockQtyMilli"].(float64)); got != 6000 {
+		t.Fatalf("stock after disposal: want 6000 milli, got %v", dataMap(t, w)["stockQtyMilli"])
 	}
 
 	// Ledger row audited.
@@ -269,7 +284,7 @@ func TestV170DisposalFlow(t *testing.T) {
 	okMove := false
 	for _, raw := range moves {
 		m := raw.(map[string]any)
-		if int64(m["productId"].(float64)) == pid && int64(m["delta"].(float64)) == -4 {
+		if int64(m["productId"].(float64)) == pid && int64(m["deltaMilli"].(float64)) == -4000 {
 			okMove = true
 		}
 	}
@@ -315,8 +330,8 @@ func TestV170SystemHealthPage(t *testing.T) {
 		t.Fatalf("health: %d %s", w.Code, w.Body.String())
 	}
 	h := dataMap(t, w)
-	if int64(h["schemaVersion"].(float64)) != 26 {
-		t.Fatalf("schemaVersion: want 26, got %v", h["schemaVersion"])
+	if int64(h["schemaVersion"].(float64)) != 28 {
+		t.Fatalf("schemaVersion: want 28, got %v", h["schemaVersion"])
 	}
 	if h["indexesOk"] != true {
 		t.Fatalf("indexes should be complete, missing: %v", h["indexesMissing"])

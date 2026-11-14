@@ -79,7 +79,7 @@ func TestTenantIsolation(t *testing.T) {
 	// Alice stocks a product, sells it, and opens a tab customer.
 	w := do(t, engine, "POST", "/api/v1/products", tokA, map[string]any{
 		"sku": "AL1", "name": "Alice Widget", "categoryId": 1,
-		"priceCents": 1000, "costCents": 400, "stockQty": 10, "trackStock": true,
+		"priceCents": 1000, "costCents": 400, "stockQtyMilli": 10000, "trackStock": true,
 	})
 	if w.Code != 201 {
 		t.Fatalf("alice product: %d %s", w.Code, w.Body.String())
@@ -135,7 +135,7 @@ func TestStaffLifecycle(t *testing.T) {
 	}
 	cashierTok := dataMap(t, w)["token"].(string)
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashierTok, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "clientUuid": "staff-1",
 	})
 	if w.Code != 201 {

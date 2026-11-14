@@ -19,7 +19,7 @@ func TestPaperReceiptPrintsEveryLeg(t *testing.T) {
 		CashierName: "Alex", CustomerName: "Jane",
 		CreatedAt: "2026-09-11T10:00:00Z", PaidAt: "",
 		Items: []models.OrderItem{
-			{ID: 1, ProductID: 1, Name: "Framing", SKU: "FR-1", Qty: 1, UnitPriceCents: 1200000, LineTotalCents: 1200000},
+			{ID: 1, ProductID: 1, Name: "Framing", SKU: "FR-1", QtyMilli: 1000, UnitPriceCents: 1200000, LineTotalCents: 1200000},
 		},
 		Payments: []models.Payment{
 			{ID: 1, Method: "account", AmountCents: 700000, Status: "COMPLETED"},
@@ -75,7 +75,7 @@ func TestPaperReceiptReconcilesPointsAndTaxLabel(t *testing.T) {
 		CashierName: "Alex", CustomerName: "Jane", PointsRedeemed: 120,
 		CreatedAt: "2026-11-04T10:00:00Z", PaidAt: "2026-11-04T10:05:00Z",
 		Items: []models.OrderItem{
-			{ID: 1, ProductID: 1, Name: "Framing", SKU: "FR-1", Qty: 1, UnitPriceCents: 130000, LineTotalCents: 130000},
+			{ID: 1, ProductID: 1, Name: "Framing", SKU: "FR-1", QtyMilli: 1000, UnitPriceCents: 130000, LineTotalCents: 130000},
 		},
 		Payments: []models.Payment{
 			{ID: 1, Method: "cash", AmountCents: 113000, Status: "COMPLETED"},

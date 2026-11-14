@@ -13,7 +13,8 @@ function isDefaultPassword(pw: string) {
 
 import { ApiError, token } from '../lib/api'
 import { cartTotals } from '../lib/money'
-import { buildSeed, receiptCode, DemoDB, DemoOrder, DemoUser, DemoCustomer, DemoLedgerEntry, DemoPayment, DemoSupplier, DemoPurchaseOrder, DemoStockTake, PERMISSION_CATALOG } from './seed'
+import { MAX_QTY_MILLI, fmtQty, lineTotalCents } from '../lib/qty'
+import { buildSeed, receiptCode, DemoDB, DemoOrder, DemoUser, DemoCustomer, DemoLedgerEntry, DemoPayment, DemoSupplier, DemoPurchaseOrder, DemoStockTake, DemoProductBatch, PERMISSION_CATALOG } from './seed'
 
 const KEY = 'pos-demo-db-v1'
 const MASK = '__SET__'
@@ -41,7 +42,7 @@ let demoInvites: DemoInvite[] = []
 interface DemoHeldSale {
   id: number
   refName: string
-  items: { productId: number; qty: number; unitPriceCents?: number }[]
+  items: { productId: number; qtyMilli: number; unitPriceCents?: number }[]
   customerId: number
   customerName: string
   note: string
@@ -59,7 +60,7 @@ interface DemoQuote {
   customerName: string
   customerPhone: string
   status: 'draft' | 'sent' | 'accepted' | 'declined' | 'converted'
-  items: { productId: number; sku: string; name: string; qty: number; unitPriceCents: number; lineTotalCents: number }[]
+  items: { productId: number; sku: string; name: string; qtyMilli: number; unitPriceCents: number; lineTotalCents: number }[]
   subtotalCents: number
   discountCents: number
   discountLabel: string
@@ -123,7 +124,7 @@ interface DemoReturnItem {
   productId: number
   name: string
   sku: string
-  qty: number
+  qtyMilli: number
   unitPriceCents: number
   lineTotalCents: number
 }
@@ -180,9 +181,9 @@ interface DemoStockCountLine {
   productId: number
   sku: string
   name: string
-  expectedQty: number
-  countedQty: number | null
-  systemQty: number
+  expectedQtyMilli: number
+  countedQtyMilli: number | null
+  systemQtyMilli: number
   unitCostCents: number
   applied: boolean
 }
@@ -236,7 +237,7 @@ function load(): DemoDB {
     const raw = localStorage.getItem(KEY)
     if (raw) {
       const parsed = JSON.parse(raw) as DemoDB
-      if (parsed && (parsed.v === 1 || parsed.v === 2 || parsed.v === 3)) {
+      if (parsed && parsed.v >= 1 && parsed.v <= 4) {
         db = parsed
         migrateDemo(db)
         return db
@@ -432,8 +433,68 @@ function migrateDemo(d: DemoDB) {
       }
     }
   }
-  if (d.v < 3) {
-    d.v = 3
+  // v1.8.0 — the milli upgrade: every legacy quantity is WHOLE units ×1000,
+  // and batch/expiry fields come up empty. Idempotent per row (guarded by
+  // the milli field's presence), so pre-v1.8 stored demos keep their state.
+  for (const p of d.products) {
+    const legacy = p as unknown as { stockQty?: number }
+    if (legacy.stockQty !== undefined && (p as any).stockQtyMilli === undefined) {
+      p.stockQtyMilli = Math.max(0, Math.round(legacy.stockQty * 1000))
+      delete legacy.stockQty
+      ;(p as any).unit = (p as any).unit ?? 'pc'
+      ;(p as any).allowFraction = !!(p as any).allowFraction
+      ;(p as any).trackBatches = !!(p as any).trackBatches
+      dirty = true
+    }
+  }
+  const upgradeLines = <T extends { qty?: number; qtyMilli?: number }>(rows: T[] | undefined) => {
+    for (const r of rows ?? []) {
+      const lr = r as { qty?: number; qtyMilli?: number }
+      if (lr.qty !== undefined && lr.qtyMilli === undefined) {
+        lr.qtyMilli = Math.max(0, Math.round(lr.qty * 1000))
+        delete lr.qty
+        dirty = true
+      }
+    }
+  }
+  for (const o of d.orders) upgradeLines(o.items as unknown as { qty?: number }[])
+  for (const po of d.purchaseOrders) upgradeLines(po.items as unknown as { qty?: number }[])
+  for (const t of d.stockTakes) {
+    for (const it of t.items as unknown as Record<string, unknown>[]) {
+      if (it.expectedQty !== undefined && it.expectedQtyMilli === undefined) {
+        it.expectedQtyMilli = Math.max(0, Math.round(Number(it.expectedQty) * 1000))
+        delete it.expectedQty
+        dirty = true
+      }
+      if (it.countedQty !== undefined && it.countedQtyMilli === undefined) {
+        it.countedQtyMilli = Math.max(0, Math.round(Number(it.countedQty) * 1000))
+        delete it.countedQty
+        dirty = true
+      }
+    }
+  }
+  for (const c of x.stockCounts ?? []) {
+    const legacyLines = (c.lines ?? []) as unknown as Record<string, unknown>[]
+    for (const l of legacyLines) {
+      for (const k of ['expectedQty', 'countedQty', 'systemQty'] as const) {
+        const milliKey = `${k}Milli`
+        if (l[k] !== undefined && l[milliKey] === undefined) {
+          l[milliKey] = l[k] === null ? null : Math.max(0, Math.round(Number(l[k]) * 1000))
+          delete l[k]
+          dirty = true
+        }
+      }
+    }
+  }
+  for (const r of x.returns ?? []) upgradeLines(r.items as unknown as { qty?: number }[])
+  for (const h of x.heldSales ?? []) upgradeLines(h.items as unknown as { qty?: number }[])
+  for (const qy of x.quotes ?? []) upgradeLines(qy.items as unknown as { qty?: number }[])
+  if (!Array.isArray(x.productBatches)) {
+    x.productBatches = []
+    dirty = true
+  }
+  if (d.v < 4) {
+    d.v = 4
     dirty = true
   }
   if (dirty) persist()
@@ -524,9 +585,26 @@ function productDTO(p: DemoDB['products'][number]) {
   return {
     id: p.id, sku: p.sku, barcode: p.barcode, name: p.name,
     categoryId: p.categoryId, categoryName: c ? c.name : '',
-    priceCents: p.priceCents, costCents: p.costCents, stockQty: p.stockQty,
+    priceCents: p.priceCents, costCents: p.costCents, stockQtyMilli: p.stockQtyMilli,
     trackStock: p.trackStock, isGiftCard: !!(p as { isGiftCard?: boolean }).isGiftCard,
+    // v1.8.0 — optional so older stored seeds (pre-milli) still serialize.
+    unit: p.unit ?? 'pc',
+    allowFraction: !!p.allowFraction,
+    trackBatches: !!p.trackBatches,
     active: p.active, updatedAt: p.updatedAt,
+  }
+}
+
+/** v1.8.0 lot DTO: names ride along like the Go GetBatch join. */
+function batchDTO(b: DemoProductBatch) {
+  const d = load()
+  const p = d.products.find((x) => x.id === b.productId)
+  const s = d.suppliers.find((x) => x.id === b.supplierId)
+  return {
+    ...b,
+    productName: p ? p.name : '',
+    sku: p ? p.sku : '',
+    supplierName: s ? s.name : '',
   }
 }
 
@@ -677,9 +755,82 @@ function takeDTO(t: DemoStockTake) {
   return { ...t, itemCount: t.items.length }
 }
 
-function adjustStock(productId: number, delta: number) {
-  const p = load().products.find((x) => x.id === productId)
-  if (p && p.trackStock) p.stockQty = Math.max(0, p.stockQty + delta)
+// ---- v1.8.0 batch helpers (mirror of internal/services/batches.go) ----
+
+function lotQueue(d: DemoDB, productId: number): DemoProductBatch[] {
+  const x = d as DemoDBX
+  return (x.productBatches || [])
+    .filter((b) => b.productId === productId && b.status === 'ACTIVE' && b.qtyRemainingMilli > 0)
+    // FEFO: dated lots by expiry (undated last), oldest receipt first.
+    .sort((a, b) =>
+      (a.expiryDate === '' ? 1 : 0) - (b.expiryDate === '' ? 1 : 0) ||
+      a.expiryDate.localeCompare(b.expiryDate) ||
+      a.id - b.id)
+}
+
+/** Take milli out of a batch-tracked product's lots FEFO-style. The
+ *  projection has ALREADY been decremented by the caller. */
+function deductBatches(d: DemoDB, productId: number, takeMilli: number) {
+  let need = takeMilli
+  for (const lot of lotQueue(d, productId)) {
+    if (need <= 0) break
+    const take = Math.min(lot.qtyRemainingMilli, need)
+    lot.qtyRemainingMilli -= take
+    if (lot.qtyRemainingMilli <= 0) {
+      lot.qtyRemainingMilli = 0
+      lot.status = 'EXHAUSTED'
+    }
+    lot.updatedAt = nowIso()
+    need -= take
+  }
+  if (need > 0) {
+    throw new ApiError(409, `batch-tracked product is short by ${need} milli across all lots (concurrent sale?)`)
+  }
+}
+
+/** Put positive milli back on a batch-tracked product: joins the OPENING
+ *  lot (creating it once), mirroring ensureOpeningBatchTx. */
+function restockBatches(d: DemoDB, productId: number, addMilli: number) {
+  const x = d as DemoDBX
+  x.productBatches = x.productBatches || []
+  let opening = x.productBatches.find((b) => b.productId === productId && b.batchNo === 'OPENING')
+  if (!opening) {
+    const prod = d.products.find((p) => p.id === productId)
+    opening = {
+      id: x.productBatches.reduce((m, b) => Math.max(m, b.id), 0) + 1,
+      productId,
+      batchNo: 'OPENING',
+      expiryDate: '',
+      qtyReceivedMilli: 0,
+      qtyRemainingMilli: 0,
+      costCents: prod ? prod.costCents : 0,
+      supplierId: 0,
+      reference: 'auto (returns/adjustments catch-all)',
+      status: 'ACTIVE',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }
+    x.productBatches.push(opening)
+  }
+  opening.qtyReceivedMilli += addMilli
+  opening.qtyRemainingMilli += addMilli
+  if (opening.status === 'EXHAUSTED') opening.status = 'ACTIVE'
+  opening.updatedAt = nowIso()
+}
+
+/** Milli-aware stock movement; batch-tracked products keep the lot sums
+ *  reconciled with the projection (every move touches BOTH sides). */
+function adjustStock(productId: number, deltaMilli: number) {
+  const d = load()
+  const p = d.products.find((x) => x.id === productId)
+  if (!p || !p.trackStock) return
+  const before = p.stockQtyMilli
+  p.stockQtyMilli = Math.max(0, before + deltaMilli)
+  const applied = p.stockQtyMilli - before // equals deltaMilli unless clamped at zero
+  if (p.trackBatches) {
+    if (applied > 0) restockBatches(d, productId, applied)
+    if (applied < 0) deductBatches(d, productId, -applied)
+  }
 }
 
 /** Store-credit ledger rows (kinds the seed type doesn't know about). */
@@ -707,13 +858,14 @@ function completeOrder(orderId: number, opts: { receipt?: string; method: 'cash'
     pay.amountCents = opts.amountCents
   }
   // Guarded stock decrement (never double-deduct: only PENDING→PAID passes).
-  for (const it of o.items) adjustStock(it.productId, -it.qty)
+  for (const it of o.items) adjustStock(it.productId, -it.qtyMilli)
   // Gift-card products mint one redeemable code per unit when the sale is
   // PAID (server parity — value products, stock is never deducted).
   for (const it of o.items) {
     const p = d.products.find((x) => x.id === it.productId)
     if (p && p.isGiftCard) {
-      for (let i = 0; i < it.qty; i++) mintGiftCard(d, o.id, it.unitPriceCents)
+      const units = Math.round(it.qtyMilli / 1000)
+      for (let i = 0; i < units; i++) mintGiftCard(d, o.id, it.unitPriceCents)
     }
   }
   // Loyalty earns on EVERY paid order tied to a customer (server parity).
@@ -836,11 +988,11 @@ function dailySummary(date: string) {
   const completedPays = d.orders.flatMap((o) => o.payments).filter((p) => p.status === 'COMPLETED' && p.completedAt >= from && p.completedAt <= to)
   const cash = completedPays.filter((p) => p.method === 'cash').reduce((s, p) => s + p.amountCents, 0)
   const mpesa = completedPays.filter((p) => p.method === 'mpesa').reduce((s, p) => s + p.amountCents, 0)
-  const topMap = new Map<number, { productId: number; name: string; qty: number; salesCents: number }>()
+  const topMap = new Map<number, { productId: number; name: string; qtyMilli: number; salesCents: number }>()
   for (const o of paid) {
     for (const it of o.items) {
-      const cur = topMap.get(it.productId) || { productId: it.productId, name: it.name, qty: 0, salesCents: 0 }
-      cur.qty += it.qty
+      const cur = topMap.get(it.productId) || { productId: it.productId, name: it.name, qtyMilli: 0, salesCents: 0 }
+      cur.qtyMilli += it.qtyMilli
       cur.salesCents += it.lineTotalCents
       topMap.set(it.productId, cur)
     }
@@ -861,10 +1013,10 @@ function dailySummary(date: string) {
   const dayReturns = (dx.returns || []).filter((r) => r.createdAt >= from && r.createdAt <= to)
   const returnsCents = dayReturns.reduce((s, r) => s + r.totalCents, 0)
   const shelveable = d.products.filter((p) => p.active && p.trackStock)
-  const stockUnits = shelveable.reduce((s, p) => s + Math.max(0, p.stockQty), 0)
-  const stockValueCents = shelveable.reduce((s, p) => s + Math.max(0, p.stockQty) * p.costCents, 0)
+  const stockQtyMilli = shelveable.reduce((s, p) => s + Math.max(0, p.stockQtyMilli), 0)
+  const stockValueCents = shelveable.reduce((s, p) => s + Math.max(0, p.stockQtyMilli) * p.costCents / 1000, 0)
   const th = Number(d.settings.low_stock_threshold) || 5
-  const lowStockCount = shelveable.filter((p) => p.stockQty <= th).length
+  const lowStockCount = shelveable.filter((p) => p.stockQtyMilli <= th * 1000).length
   return {
     date: day, salesCents: sales, ordersPaid: paid.length,
     ordersOpen: inDay.filter((o) => o.status === 'PENDING').length,
@@ -875,7 +1027,7 @@ function dailySummary(date: string) {
     topProducts, series,
     expensesCents, returnsCents, returnsCount: dayReturns.length,
     netSalesCents: sales - returnsCents,
-    stockUnits, stockValueCents, lowStockCount,
+    stockQtyMilli: Math.round(stockQtyMilli), stockValueCents, lowStockCount,
   }
 }
 
@@ -898,11 +1050,11 @@ function monthlySummary(month: string) {
     const dayPaid = d.orders.filter((o) => o.status === 'PAID' && o.createdAt >= f && o.createdAt <= t)
     series.push({ date: dt, salesCents: dayPaid.reduce((s, o) => s + o.totalCents, 0), orders: dayPaid.length })
   }
-  const topMap = new Map<number, { productId: number; name: string; qty: number; salesCents: number }>()
+  const topMap = new Map<number, { productId: number; name: string; qtyMilli: number; salesCents: number }>()
   for (const o of paid) {
     for (const it of o.items) {
-      const cur = topMap.get(it.productId) || { productId: it.productId, name: it.name, qty: 0, salesCents: 0 }
-      cur.qty += it.qty
+      const cur = topMap.get(it.productId) || { productId: it.productId, name: it.name, qtyMilli: 0, salesCents: 0 }
+      cur.qtyMilli += it.qtyMilli
       cur.salesCents += it.lineTotalCents
       topMap.set(it.productId, cur)
     }
@@ -936,7 +1088,8 @@ function productsCSV() {
   const rows = ['sku,barcode,name,category,price,cost,stock,track_stock,active']
   for (const p of d.products) {
     const c = d.categories.find((x) => x.id === p.categoryId)
-    rows.push(`${csvField(p.sku)},${csvField(p.barcode)},${csvField(p.name)},${csvField(c ? c.name : '')},${(p.priceCents / 100).toFixed(2)},${(p.costCents / 100).toFixed(2)},${p.stockQty},${p.trackStock},${p.active}`)
+    // CSV keeps the human UNITS column (the import side parses units too).
+    rows.push(`${csvField(p.sku)},${csvField(p.barcode)},${csvField(p.name)},${csvField(c ? c.name : '')},${(p.priceCents / 100).toFixed(2)},${(p.costCents / 100).toFixed(2)},${p.stockQtyMilli / 1000},${p.trackStock},${p.active}`)
   }
   return rows.join('\n') + '\n'
 }
@@ -1077,7 +1230,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   if (m === 'GET' && p === '/products/low-stock') {
     requirePerm(perms, 'products.view')
     const th = Number(d.settings.low_stock_threshold) || 5
-    return d.products.filter((x) => x.active && x.trackStock && x.stockQty <= th).map(productDTO) as T
+    return d.products.filter((x) => x.active && x.trackStock && x.stockQtyMilli <= th * 1000).map(productDTO) as T
   }
   // Stock ledger (v1.6.3): the demo keeps no audited movement rows — an
   // empty list renders the UI's empty state instead of an error.
@@ -1087,24 +1240,48 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   }
   // v1.7.0: structured disposal (loss recording) — guarded deduction with
   // a reason; the demo ledger keeps no movement rows, so just apply it.
+  // v1.8.0: the wire takes qtyMilli (an optional batchId names the lot).
   const disposeMatch = p.match(/^\/products\/(\d+)\/dispose$/)
   if (m === 'POST' && disposeMatch) {
     requirePerm(perms, 'products.manage')
     const d = load()
     const prod = d.products.find((x) => x.id === Number(disposeMatch[1]))
     if (!prod) throw new ApiError(404, 'product not found')
-    const qty = Math.round(Number(body?.qty) || 0)
+    const qtyMilli = Math.round(Number(body?.qtyMilli) || 0)
     const reason = String(body?.reason || '')
-    if (!(qty > 0)) throw new ApiError(400, 'disposal quantity must be positive')
+    if (!(qtyMilli > 0)) throw new ApiError(400, 'disposal quantity must be positive')
     if (!['expired', 'spoilt', 'lost', 'damaged', 'other'].includes(reason)) throw new ApiError(400, `invalid disposal reason "${reason}"`)
     if (prod.trackStock) {
-      if (prod.stockQty < qty) throw new ApiError(409, `not enough stock to dispose (requested ${qty})`)
-      prod.stockQty -= qty
+      if (prod.stockQtyMilli < qtyMilli) throw new ApiError(409, `not enough stock to dispose (requested ${fmtQty(qtyMilli)}, ${fmtQty(prod.stockQtyMilli)} left)`)
+      const batchId = Math.round(Number(body?.batchId) || 0)
+      if (batchId > 0) {
+        if (!prod.trackBatches) throw new ApiError(400, 'product does not track batches')
+        const x = d as DemoDBX
+        const lot = (x.productBatches || []).find((b) => b.id === batchId && b.productId === prod.id)
+        if (!lot) throw new ApiError(404, 'batch not found for this product')
+        if (lot.status !== 'ACTIVE' || lot.qtyRemainingMilli <= 0) throw new ApiError(409, 'that lot is not sellable')
+        if (lot.qtyRemainingMilli < qtyMilli) throw new ApiError(409, `lot ${lot.batchNo || batchId} only has ${fmtQty(lot.qtyRemainingMilli)} left`)
+      }
+      prod.stockQtyMilli -= qtyMilli
+      if (prod.trackBatches) {
+        if (batchId > 0) {
+          const x = d as DemoDBX
+          const lot = (x.productBatches || []).find((b) => b.id === batchId)!
+          lot.qtyRemainingMilli -= qtyMilli
+          if (lot.qtyRemainingMilli <= 0) {
+            lot.qtyRemainingMilli = 0
+            lot.status = 'EXHAUSTED'
+          }
+          lot.updatedAt = nowIso()
+        } else {
+          deductBatches(d, prod.id, qtyMilli)
+        }
+      }
     }
     prod.updatedAt = nowIso()
-    audit(user.id, user.username, 'STOCK_DISPOSAL', 'product', String(prod.id), `${qty} x ${reason}`)
+    audit(user.id, user.username, 'STOCK_DISPOSAL', 'product', String(prod.id), `${fmtQty(qtyMilli)} x ${reason}`)
     persist()
-    return { id: prod.id, stockQty: prod.stockQty, disposed: qty, reason } as T
+    return { id: prod.id, stockQtyMilli: prod.stockQtyMilli, disposed: qtyMilli, reason } as T
   }
   const movMatch = p.match(/^\/products\/(\d+)\/movements$/)
   if (m === 'GET' && movMatch) {
@@ -1123,9 +1300,12 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const prod = {
       id: d.seq.product++, sku, barcode: String(body?.barcode || ''), name: String(body?.name || ''),
       categoryId: cat.id, priceCents: Math.max(0, Number(body?.priceCents) || 0),
-      costCents: Math.max(0, Number(body?.costCents) || 0), stockQty: Math.max(0, Number(body?.stockQty) || 0),
+      costCents: Math.max(0, Number(body?.costCents) || 0), stockQtyMilli: Math.max(0, Math.round(Number(body?.stockQtyMilli) || 0)),
       trackStock: isGiftCard ? false : body?.trackStock !== false, // gift cards sell value, not shelf stock
       isGiftCard, active: body?.active !== false, updatedAt: nowIso(),
+      unit: String(body?.unit || 'pc'),
+      allowFraction: !!body?.allowFraction,
+      trackBatches: !!body?.trackBatches,
     }
     d.products.push(prod)
     audit(user.id, user.username, 'PRODUCT_CREATED', 'product', String(prod.id), prod.name)
@@ -1144,8 +1324,11 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       if (body?.categoryId !== undefined) prod.categoryId = Number(body.categoryId)
       if (body?.priceCents !== undefined) prod.priceCents = Math.max(0, Number(body.priceCents))
       if (body?.costCents !== undefined) prod.costCents = Math.max(0, Number(body.costCents))
-      if (body?.stockQty !== undefined) prod.stockQty = Math.max(0, Number(body.stockQty))
+      if (body?.stockQtyMilli !== undefined) prod.stockQtyMilli = Math.max(0, Math.round(Number(body.stockQtyMilli)))
       if (body?.trackStock !== undefined) prod.trackStock = !!body.trackStock
+      if (body?.unit !== undefined) prod.unit = String(body.unit) || 'pc'
+      if (body?.allowFraction !== undefined) prod.allowFraction = !!body.allowFraction
+      if (body?.trackBatches !== undefined) prod.trackBatches = !!body.trackBatches
       if (body?.isGiftCard !== undefined) {
         prod.isGiftCard = !!body.isGiftCard
         if (prod.isGiftCard) prod.trackStock = false // server parity: value, not shelf stock
@@ -1169,13 +1352,123 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     requirePerm(perms, 'products.manage')
     const prod = d.products.find((x) => x.id === Number(adjMatch[1]))
     if (!prod) throw new ApiError(404, 'product not found')
-    const delta = Number(body?.delta) || 0
-    if (!delta) throw new ApiError(400, 'delta must be non-zero')
-    prod.stockQty = Math.max(0, prod.stockQty + delta)
+    const deltaMilli = Math.round(Number(body?.deltaMilli) || 0)
+    if (!deltaMilli) throw new ApiError(400, 'deltaMilli must be non-zero')
+    adjustStock(prod.id, deltaMilli)
     prod.updatedAt = nowIso()
-    audit(user.id, user.username, 'STOCK_ADJUSTED', 'product', String(prod.id), `${delta > 0 ? '+' : ''}${delta} ${body?.reason || ''}`.trim())
+    audit(user.id, user.username, 'STOCK_ADJUSTED', 'product', String(prod.id), `${deltaMilli > 0 ? '+' : ''}${fmtQty(deltaMilli)} ${body?.reason || ''}`.trim())
     persist()
     return productDTO(prod) as T
+  }
+
+  // ---- v1.8.0 batch/expiry lots (mirror of internal/handlers/batches.go) ----
+  const batchListMatch = p.match(/^\/products\/(\d+)\/batches$/)
+  if (m === 'GET' && batchListMatch) {
+    requirePerm(perms, 'products.manage')
+    const prod = d.products.find((x) => x.id === Number(batchListMatch[1]))
+    if (!prod) throw new ApiError(404, 'product not found')
+    const x = d as DemoDBX
+    const lots = (x.productBatches || []).filter((b) => b.productId === prod.id)
+      // ACTIVE first, then RECALLED, then exhausted — inside each group
+      // dated lots by expiry (undated last), oldest receipt first (FEFO).
+      .sort((a, b) => {
+        const rank = (s: string) => (s === 'ACTIVE' ? 0 : s === 'RECALLED' ? 1 : 2)
+        return rank(a.status) - rank(b.status) ||
+          (a.expiryDate === '' ? 1 : 0) - (b.expiryDate === '' ? 1 : 0) ||
+          a.expiryDate.localeCompare(b.expiryDate) ||
+          a.id - b.id
+      })
+      .map(batchDTO)
+    return lots as T
+  }
+  if (m === 'POST' && batchListMatch) {
+    requirePerm(perms, 'products.manage')
+    const prod = d.products.find((x) => x.id === Number(batchListMatch[1]))
+    if (!prod) throw new ApiError(404, 'product not found')
+    if (!prod.trackBatches) throw new ApiError(400, 'product does not track batches')
+    const qtyMilli = Math.round(Number(body?.qtyMilli) || 0)
+    if (qtyMilli <= 0 || qtyMilli > MAX_QTY_MILLI) throw new ApiError(400, 'quantity out of range')
+    if (qtyMilli % 1000 !== 0) throw new ApiError(400, 'goods-in quantity must be whole units')
+    const costCents = Math.max(0, Math.round(Number(body?.costCents) || 0))
+    const expiryDate = String(body?.expiryDate || '')
+    if (expiryDate !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) throw new ApiError(400, 'expiry date must be YYYY-MM-DD (or empty)')
+    const batchNo = String(body?.batchNo || '').trim()
+    if (batchNo.length > 80) throw new ApiError(400, 'batch number too long (max 80)')
+    const x = d as DemoDBX
+    x.productBatches = x.productBatches || []
+    const lot: DemoProductBatch = {
+      id: x.productBatches.reduce((m2, b) => Math.max(m2, b.id), 0) + 1,
+      productId: prod.id,
+      batchNo,
+      expiryDate,
+      qtyReceivedMilli: qtyMilli,
+      qtyRemainingMilli: qtyMilli,
+      costCents: costCents || prod.costCents, // 0 = use the product's cost (server parity)
+      supplierId: Math.max(0, Math.round(Number(body?.supplierId) || 0)),
+      reference: String(body?.note || '').slice(0, 80),
+      status: 'ACTIVE',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }
+    x.productBatches.push(lot)
+    // Goods-in moves BOTH sides (lot + projection), like CreateBatchGoodsIn.
+    prod.stockQtyMilli += qtyMilli
+    prod.updatedAt = nowIso()
+    audit(user.id, user.username, 'BATCH_GOODS_IN', 'product', String(prod.id), `batch "${batchNo}" expiry ${expiryDate} qty ${qtyMilli}`)
+    persist()
+    return batchDTO(lot) as T
+  }
+  const recallMatch = p.match(/^\/batches\/(\d+)\/recall$/)
+  if (m === 'POST' && recallMatch) {
+    requirePerm(perms, 'products.manage')
+    const x = d as DemoDBX
+    const lot = (x.productBatches || []).find((b) => b.id === Number(recallMatch[1]))
+    if (!lot) throw new ApiError(404, 'batch not found')
+    if (lot.status === 'RECALLED') throw new ApiError(409, 'batch already recalled')
+    const reason = String(body?.reason || '').trim()
+    if (!reason) throw new ApiError(400, 'a recall reason is required')
+    const prod = d.products.find((pp) => pp.id === lot.productId)
+    if (prod && lot.qtyRemainingMilli > 0) {
+      // The goods physically leave: projection loses the remaining stock.
+      prod.stockQtyMilli = Math.max(0, prod.stockQtyMilli - lot.qtyRemainingMilli)
+      prod.updatedAt = nowIso()
+    }
+    lot.status = 'RECALLED'
+    lot.qtyRemainingMilli = 0
+    lot.updatedAt = nowIso()
+    audit(user.id, user.username, 'BATCH_RECALLED', 'product', String(lot.productId), `batch ${lot.id}: ${reason.slice(0, 200)}`)
+    persist()
+    return batchDTO(lot) as T
+  }
+  if (m === 'GET' && p === '/reports/expiry') {
+    requirePerm(perms, 'reports.view')
+    const days = q.get('days') !== null ? Number(q.get('days')) : 30
+    if (Number.isNaN(days)) throw new ApiError(400, 'days must be a number (-1 = all)')
+    const x = d as DemoDBX
+    const todayStr = new Date().toISOString().slice(0, 10)
+    const horizon = days >= 0 ? new Date(Date.now() + days * 864e5).toISOString().slice(0, 10) : ''
+    const rows = (x.productBatches || [])
+      .filter((b) => b.expiryDate !== '' && b.qtyRemainingMilli > 0 && b.status !== 'RECALLED' && (days < 0 || b.expiryDate <= horizon))
+      .sort((a, b) => a.expiryDate.localeCompare(b.expiryDate) || a.id - b.id)
+      .map((b) => {
+        const prod = d.products.find((pp) => pp.id === b.productId)
+        return {
+          batchId: b.id,
+          productId: b.productId,
+          name: prod ? prod.name : '',
+          sku: prod ? prod.sku : '',
+          batchNo: b.batchNo,
+          expiryDate: b.expiryDate,
+          qtyRemainingMilli: b.qtyRemainingMilli,
+          costCents: b.costCents,
+          valueCents: lineTotalCents(b.costCents, b.qtyRemainingMilli),
+          status: b.status,
+        }
+      })
+    const expired = rows.filter((r) => r.expiryDate < todayStr)
+    const soon = rows.filter((r) => r.expiryDate >= todayStr)
+    const valueCents = rows.reduce((s, r) => s + r.valueCents, 0)
+    return { days, expired, soon, valueCents } as T
   }
   // Product photo upload (multipart 'file', ≤2 MB, raster images only, 
   // stored as a data URL, served public from the GET image route).
@@ -1244,7 +1537,8 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       const fields = {
         barcode: get('barcode'), name, categoryId: cat.id,
         priceCents: cents(get('price')), costCents: cents(get('cost')),
-        stockQty: parseInt(get('stock')) || 0,
+        // CSV stock is typed in UNITS; the store keeps milli.
+        stockQtyMilli: Math.round((parseFloat(get('stock')) || 0) * 1000),
         trackStock: ['true', '1', 'yes'].includes(get('track_stock').toLowerCase()),
         active: ['true', '1', 'yes'].includes(get('active').toLowerCase()),
       }
@@ -1372,18 +1666,24 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const items = Array.isArray(body?.items) ? body.items : []
     if (items.length === 0) throw new ApiError(400, 'cart is empty')
     // resolve lines (override price only with permission)
-    const lines: { product: DemoDB['products'][number]; qty: number; unitPriceCents: number }[] = []
+    const lines: { product: DemoDB['products'][number]; qtyMilli: number; unitPriceCents: number }[] = []
     for (const it of items) {
       const prod = d.products.find((x) => x.id === Number(it.productId))
       if (!prod || !prod.active) throw new ApiError(400, 'product not found or inactive')
-      const qty = Math.max(1, Number(it.qty) || 1)
-      if (prod.trackStock && qty > prod.stockQty) throw new ApiError(400, `insufficient stock for ${prod.name} (${prod.stockQty} left)`)
+      // v1.8.0: integer milli-units — 1000 = one unit, min 1 milli.
+      const qtyMilli = Math.round(Number(it.qtyMilli) || 0)
+      if (qtyMilli < 1 || qtyMilli > MAX_QTY_MILLI) throw new ApiError(400, 'quantity out of range (1 milli to 100k units)')
+      // Whole-unit products reject sub-unit lines (the server does too).
+      if (!prod.allowFraction && qtyMilli % 1000 !== 0) {
+        throw new ApiError(400, `${prod.name} sells whole units only (${prod.unit || 'pc'}), ask for a whole amount`)
+      }
+      if (prod.trackStock && qtyMilli > prod.stockQtyMilli) throw new ApiError(400, `insufficient stock for ${prod.name} (${fmtQty(prod.stockQtyMilli)} left)`)
       let unit = prod.priceCents
       if (it.unitPriceCents !== undefined && Number(it.unitPriceCents) !== prod.priceCents) {
         if (!perms.includes('payments.override_price')) throw new ApiError(403, 'price override needs permission')
         unit = Math.max(0, Number(it.unitPriceCents))
       }
-      lines.push({ product: prod, qty, unitPriceCents: unit })
+      lines.push({ product: prod, qtyMilli, unitPriceCents: unit })
     }
     // idempotent replay (offline sync)
     if (body?.clientUuid) {
@@ -1392,7 +1692,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     }
     const taxPercent = Number(d.settings.tax_percent) || 16
     const taxIncluded = (d.settings.tax_included ?? 'true') === 'true'
-    const t = cartTotals(lines.map((l) => ({ qty: l.qty, unitPriceCents: l.unitPriceCents })), taxPercent, taxIncluded)
+    const t = cartTotals(lines.map((l) => ({ qtyMilli: l.qtyMilli, unitPriceCents: l.unitPriceCents })), taxPercent, taxIncluded)
     const rawMethod = body?.paymentMethod
     const method =
       rawMethod === 'mpesa' ? 'mpesa'
@@ -1509,7 +1809,8 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       createdAt: nowIso(), paidAt: '', voidedAt: '', voidReason: '',
       items: lines.map((l) => ({
         id: d.seq.item++, productId: l.product.id, name: l.product.name, sku: l.product.sku,
-        qty: l.qty, unitPriceCents: l.unitPriceCents, lineTotalCents: l.unitPriceCents * l.qty,
+        qtyMilli: l.qtyMilli, unitPriceCents: l.unitPriceCents,
+        lineTotalCents: lineTotalCents(l.unitPriceCents, l.qtyMilli),
       })),
       payments: [],
     }
@@ -1646,7 +1947,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (!o) throw new ApiError(404, 'order not found')
     if (o.status === 'VOIDED') throw new ApiError(409, 'order already voided')
     if (o.status === 'PAID') {
-      for (const it of o.items) adjustStock(it.productId, it.qty) // restore
+      for (const it of o.items) adjustStock(it.productId, it.qtyMilli) // restore
     }
     // Tab void: reverse the ledger charge so a cancelled sale leaves no
     // debt on the balance (server parity, applies to PENDING and PAID).
@@ -1780,7 +2081,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const items = rawItems
       .map((it: any) => ({
         productId: Math.round(Number(it?.productId) || 0),
-        qty: Math.max(1, Math.round(Number(it?.qty) || 1)),
+        qtyMilli: Math.max(1, Math.round(Number(it?.qtyMilli) || 0)),
         unitPriceCents: it?.unitPriceCents === undefined ? undefined : Math.max(0, Math.round(Number(it.unitPriceCents)) || 0),
       }))
       .filter((it: any) => it.productId > 0)
@@ -1860,16 +2161,16 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
   const demoQuoteInput = () => {
     const inItems = Array.isArray(body?.items) ? body.items : []
     const items: DemoQuote['items'] = inItems.map((it: any) => {
-      const qty = Math.max(1, Math.round(Number(it?.qty) || 1))
+      const qtyMilli = Math.max(1, Math.round(Number(it?.qtyMilli) || 0))
       const unitPriceCents = Math.max(0, Math.round(Number(it?.unitPriceCents) || 0))
       return {
         productId: Math.round(Number(it?.productId) || 0),
         sku: String(it?.sku || ''),
         name: String(it?.name || 'Item'),
-        qty, unitPriceCents,
-        lineTotalCents: qty * unitPriceCents,
+        qtyMilli, unitPriceCents,
+        lineTotalCents: lineTotalCents(unitPriceCents, qtyMilli),
       }
-    }).filter((it: any) => it.qty > 0)
+    }).filter((it: any) => it.qtyMilli > 0)
     if (items.length === 0) throw new ApiError(422, 'add at least one line item')
     const customerId = Math.round(Number(body?.customerId) || 0)
     const customerName = String(body?.customerName || '').trim()
@@ -1961,7 +2262,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const sale: DemoHeldSale = {
       id: heldId,
       refName: `Quote ${qy.quoteNo}, ${qy.customerName}`,
-      items: lines.map((it) => ({ productId: it.productId, qty: it.qty, unitPriceCents: it.unitPriceCents })),
+      items: lines.map((it) => ({ productId: it.productId, qtyMilli: it.qtyMilli, unitPriceCents: it.unitPriceCents })),
       customerId: qy.customerId, customerName: qy.customerName,
       note: `From quote ${qy.quoteNo}`,
       deviceId: 'demo-device',
@@ -2218,12 +2519,17 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     for (const it of items) {
       const prod = d.products.find((x) => x.id === Number(it.productId))
       if (!prod || !prod.active) throw new ApiError(400, `product ${it.productId} not found or inactive`)
-      const qty = Math.max(1, Math.round(Number(it.qty)) || 0)
-      if (!(qty > 0)) throw new ApiError(400, 'quantity must be positive')
+      // v1.8.0: milli quantities — any positive amount up to the cap.
+      const qtyMilli = Math.round(Number(it.qtyMilli) || 0)
+      if (!(qtyMilli > 0) || qtyMilli > MAX_QTY_MILLI) throw new ApiError(400, 'quantity must be positive (max 100k units)')
       const cost = Math.max(0, Math.round(Number(it.costCents)) || 0)
+      const expiryDate = String(it?.expiryDate || '')
+      if (expiryDate !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) throw new ApiError(400, 'expiry date must be YYYY-MM-DD (or empty)')
       o.items.push({
         id: d.seq.poItem++, poId: o.id, productId: prod.id, name: prod.name, sku: prod.sku,
-        qty, costCents: cost, lineTotalCents: qty * cost,
+        qtyMilli, costCents: cost, lineTotalCents: lineTotalCents(cost, qtyMilli),
+        expiryDate: expiryDate || undefined,
+        batchNo: String(it?.batchNo || '').trim().slice(0, 80) || undefined,
       })
     }
     o.subtotalCents = o.items.reduce((s, i) => s + i.lineTotalCents, 0)
@@ -2248,8 +2554,30 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
         const prod = d.products.find((x) => x.id === it.productId)
         if (!prod) throw new ApiError(400, `product ${it.productId} not found`)
         if (prod.trackStock) {
-          prod.stockQty += it.qty
-          prod.costCents = avgCost(prod.stockQty - it.qty, prod.costCents, it.qty, it.costCents)
+          prod.stockQtyMilli += it.qtyMilli
+          // Weighted-average unit cost over MILLI stock (server parity).
+          prod.costCents = avgCost(prod.stockQtyMilli - it.qtyMilli, prod.costCents, it.qtyMilli, it.costCents)
+          // v1.8.0: a received line of a batch-tracked product BECOMES a
+          // lot (batchNo defaults to the PO number, per the Go receive).
+          if (prod.trackBatches) {
+            const x = d as DemoDBX
+            x.productBatches = x.productBatches || []
+            const batchNo = String(it.batchNo || '').trim() || o.number
+            x.productBatches.push({
+              id: x.productBatches.reduce((m2, b) => Math.max(m2, b.id), 0) + 1,
+              productId: prod.id,
+              batchNo,
+              expiryDate: String(it.expiryDate || ''),
+              qtyReceivedMilli: it.qtyMilli,
+              qtyRemainingMilli: it.qtyMilli,
+              costCents: it.costCents || prod.costCents,
+              supplierId: o.supplierId,
+              reference: o.number,
+              status: 'ACTIVE',
+              createdAt: nowIso(),
+              updatedAt: nowIso(),
+            })
+          }
         }
       }
       o.status = 'RECEIVED'
@@ -2290,7 +2618,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     for (const prod of prods) {
       t.items.push({
         id: d.seq.takeItem++, takeId: t.id, productId: prod.id, name: prod.name, sku: prod.sku,
-        expectedQty: prod.stockQty, countedQty: prod.stockQty,
+        expectedQtyMilli: prod.stockQtyMilli, countedQtyMilli: prod.stockQtyMilli,
       })
     }
     t.itemCount = t.items.length
@@ -2311,13 +2639,15 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (m === 'POST' && op === 'count') {
       requirePerm(perms, 'suppliers.manage')
       if (t.status !== 'OPEN') throw new ApiError(409, 'only open takes take counts')
+      // v1.8.0: the counts map is MILLI (1000 = one unit).
       const counts = body?.counts || {}
       for (const [pid, qty] of Object.entries(counts)) {
         const line = t.items.find((i) => i.productId === Number(pid))
         if (!line) throw new ApiError(400, `product ${pid} is not on this take`)
         const q = Math.round(Number(qty))
         if (!(q >= 0)) throw new ApiError(400, 'count cannot be negative')
-        line.countedQty = q
+        if (q > 1_000_000_000) throw new ApiError(422, 'count out of range (max 1M units)')
+        line.countedQtyMilli = q
       }
       audit(user.id, user.username, 'TAKE_COUNTED', 'stock_take', String(t.id), `${Object.keys(counts).length} lines`)
       persist()
@@ -2328,7 +2658,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       if (t.status !== 'OPEN') throw new ApiError(409, 'only open takes apply')
       for (const line of t.items) {
         const prod = d.products.find((x) => x.id === line.productId)
-        if (prod && prod.trackStock) prod.stockQty = line.countedQty
+        if (prod && prod.trackStock) prod.stockQtyMilli = Math.max(0, line.countedQtyMilli)
       }
       t.status = 'APPLIED'
       t.appliedAt = nowIso()
@@ -2372,8 +2702,8 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       linesTotal: snap.length, linesCounted: 0, varianceUnits: 0, varianceValueCents: 0,
       lines: snap.map((prod) => ({
         id: (d.seq as any).stockCountLine++, countId: cid, productId: prod.id,
-        sku: prod.sku, name: prod.name, expectedQty: prod.stockQty, countedQty: null,
-        systemQty: prod.stockQty, unitCostCents: prod.costCents, applied: false,
+        sku: prod.sku, name: prod.name, expectedQtyMilli: prod.stockQtyMilli, countedQtyMilli: null,
+        systemQtyMilli: prod.stockQtyMilli, unitCostCents: prod.costCents, applied: false,
       })),
     }
     x.stockCounts = [...(x.stockCounts || []), c]
@@ -2396,15 +2726,16 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       const pid = Math.round(Number(body?.productId) || 0)
       const line = c.lines.find((l) => l.productId === pid)
       if (!line) throw new ApiError(400, 'product is not on this count')
-      if (body?.countedQty === null || body?.countedQty === undefined || body?.countedQty === '') {
-        line.countedQty = null // clears the count
+      // v1.8.0: countedQtyMilli — null clears the count.
+      if (body?.countedQtyMilli === null || body?.countedQtyMilli === undefined || body?.countedQtyMilli === '') {
+        line.countedQtyMilli = null // clears the count
       } else {
-        const qty = Math.round(Number(body.countedQty))
-        if (!(qty >= 0) || qty > 1_000_000) throw new ApiError(422, 'counted quantity out of range')
-        line.countedQty = qty
+        const qty = Math.round(Number(body.countedQtyMilli))
+        if (!(qty >= 0) || qty > 1_000_000_000) throw new ApiError(422, 'counted quantity out of range')
+        line.countedQtyMilli = qty
       }
-      c.linesCounted = c.lines.filter((l) => l.countedQty !== null).length
-      audit(user.id, user.username, 'STOCKCOUNT_LINE_SAVED', 'stocktake', c.number, `${line.sku} = ${line.countedQty ?? ', '}`)
+      c.linesCounted = c.lines.filter((l) => l.countedQtyMilli !== null).length
+      audit(user.id, user.username, 'STOCKCOUNT_LINE_SAVED', 'stocktake', c.number, `${line.sku} = ${line.countedQtyMilli ?? ', '}`)
       persist()
       return { saved: true } as T
     }
@@ -2412,28 +2743,30 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       if (c.status !== 'OPEN') throw new ApiError(422, `count session ${c.number} is already closed`)
       const apply = !!body?.apply
       // Variance vs LIVE stock at close time (sales may have moved since open).
+      // v1.8.0: the variance sums MILLI diffs (the Go service stores milli
+      // in variance_units too), so the UI formats it with fmtQty.
       let varianceUnits = 0
       let varianceValue = 0
       for (const l of c.lines) {
-        if (l.countedQty === null) continue
+        if (l.countedQtyMilli === null) continue
         const prod = d.products.find((pp) => pp.id === l.productId)
-        const system = prod ? prod.stockQty : l.expectedQty
-        l.systemQty = system
-        const diff = l.countedQty - system
+        const system = prod ? prod.stockQtyMilli : l.expectedQtyMilli
+        l.systemQtyMilli = system
+        const diff = l.countedQtyMilli - system
         varianceUnits += diff
-        varianceValue += diff * l.unitCostCents
+        varianceValue += diff * l.unitCostCents / 1000
         l.applied = apply && diff !== 0
         if (apply && diff !== 0 && prod) {
-          prod.stockQty = Math.max(0, l.countedQty)
+          prod.stockQtyMilli = Math.max(0, l.countedQtyMilli)
           prod.updatedAt = nowIso()
         }
       }
       c.status = 'DONE'
       c.closedAt = nowIso()
       c.varianceUnits = varianceUnits
-      c.varianceValueCents = varianceValue
+      c.varianceValueCents = Math.round(varianceValue)
       audit(user.id, user.username, apply ? 'STOCKCOUNT_APPLIED' : 'STOCKCOUNT_CLOSED', 'stocktake', c.number,
-        `variance ${varianceUnits} units, value ${varianceValue}${apply ? ' (applied)' : ''}`)
+        `variance ${varianceUnits} milli, value ${Math.round(varianceValue)}${apply ? ' (applied)' : ''}`)
       persist()
       return countDTO(c) as T
     }
@@ -2676,24 +3009,25 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const already = new Map<number, number>()
     for (const r of dx.returns) {
       if (r.orderId !== o.id) continue
-      for (const it of r.items) already.set(it.orderItemId, (already.get(it.orderItemId) || 0) + it.qty)
+      for (const it of r.items) already.set(it.orderItemId, (already.get(it.orderItemId) || 0) + it.qtyMilli)
     }
     const lines = Array.isArray(body?.lines) ? body.lines : []
     const items: DemoReturnItem[] = []
     for (const l of lines) {
-      const qty = Math.floor(Number(l?.qty) || 0)
-      if (qty <= 0) continue
+      // v1.8.0: qtyMilli on the wire (integer milli-units, min 1).
+      const qtyMilli = Math.round(Number(l?.qtyMilli) || 0)
+      if (qtyMilli <= 0) continue
       const oi = o.items.find((i) => i.id === Number(l?.orderItemId))
       if (!oi) throw new ApiError(400, 'order item not found in this order')
       const done = already.get(oi.id) || 0
-      if (qty + done > oi.qty) {
-        throw new ApiError(422, `cannot return ${qty} of ${oi.name}: only ${oi.qty - done} of the ${oi.qty} sold has not been returned yet`)
+      if (qtyMilli + done > oi.qtyMilli) {
+        throw new ApiError(422, `cannot return ${fmtQty(qtyMilli)} of ${oi.name}: only ${fmtQty(oi.qtyMilli - done)} of the ${fmtQty(oi.qtyMilli)} sold has not been returned yet`)
       }
       items.push({
         id: (d.seq as any).returnItem++,
         returnId: 0, // patched once the return doc exists
         orderItemId: oi.id, productId: oi.productId, name: oi.name, sku: oi.sku,
-        qty, unitPriceCents: oi.unitPriceCents, lineTotalCents: oi.unitPriceCents * qty,
+        qtyMilli, unitPriceCents: oi.unitPriceCents, lineTotalCents: lineTotalCents(oi.unitPriceCents, qtyMilli),
       })
     }
     if (items.length === 0) throw new ApiError(400, 'pick at least one item and a quantity above zero to return')
@@ -3121,7 +3455,7 @@ export async function demoRaw(path: string): Promise<string> {
       '',
       'Top products',
       'Product,Qty,Sales (KES)',
-      ...m.topProducts.map((tp) => `${csvField(tp.name)},${tp.qty},${(tp.salesCents / 100).toFixed(2)}`),
+      ...m.topProducts.map((tp) => `${csvField(tp.name)},${tp.qtyMilli / 1000},${(tp.salesCents / 100).toFixed(2)}`),
     ]
     return rows.join('\n') + '\n'
   }

@@ -5,7 +5,7 @@ import type { Product } from '../src/lib/api'
 
 const p = (id: number, price: number, opts: Partial<Product> = {}): Product => ({
   id, sku: `SKU-${id}`, barcode: '', name: `Product ${id}`, categoryId: 1, categoryName: 'Cat',
-  priceCents: price, costCents: 0, stockQty: 100, trackStock: true, active: true, updatedAt: '',
+  priceCents: price, costCents: 0, stockQtyMilli: 100_000, trackStock: true, active: true, updatedAt: '',
   ...opts,
 })
 
@@ -22,14 +22,14 @@ beforeEach(() => {
 })
 
 describe('cart store', () => {
-  it('adds products and merges duplicates', () => {
+  it('adds products and merges duplicates (milli quantities)', () => {
     const { add } = useCart.getState()
-    add(p(1, 55000))
+    add(p(1, 55000)) // default add = 1000 milli = one unit
     add(p(1, 55000))
     add(p(2, 45000))
     const lines = useCart.getState().lines
     expect(lines).toHaveLength(2)
-    expect(lines[0].qty).toBe(2)
+    expect(lines[0].qtyMilli).toBe(2000)
     expect(useCart.getState().totals().count).toBe(3)
   })
 
@@ -43,11 +43,18 @@ describe('cart store', () => {
     expect(t.total).toBe(100000)
   })
 
-  it('setQty removes at zero and caps absurd quantities upstream', () => {
+  it('prices a fractional (weighed) line with the server formula', () => {
+    const { add } = useCart.getState()
+    // 0.5 kg of a KES 333/kg product: 333 × 1500? no — 333c × 0.5 = 166.5 → 167
+    add(p(1, 333), 500)
+    expect(useCart.getState().totals().subtotal).toBe(167)
+  })
+
+  it('setQty takes milli, removes at zero and keeps absurd quantities capped', () => {
     const { add, setQty } = useCart.getState()
     add(p(1, 1000))
-    setQty(1, 5)
-    expect(useCart.getState().lines[0].qty).toBe(5)
+    setQty(1, 5000)
+    expect(useCart.getState().lines[0].qtyMilli).toBe(5000)
     setQty(1, 0)
     expect(useCart.getState().lines).toHaveLength(0)
   })

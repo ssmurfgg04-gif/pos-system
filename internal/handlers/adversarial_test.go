@@ -86,7 +86,7 @@ func TestCrossShopSweep(t *testing.T) {
 	var aliceProd, aliceCust, aliceSup, alicePO, aliceTake int64
 	w := do(t, engine, "POST", "/api/v1/products", tokA, map[string]any{
 		"sku": "SW1", "name": "Sweep Widget", "categoryId": 1,
-		"priceCents": 1000, "costCents": 400, "stockQty": 5, "trackStock": true,
+		"priceCents": 1000, "costCents": 400, "stockQtyMilli": 5000, "trackStock": true,
 	})
 	if w.Code != 201 {
 		t.Fatalf("seed product: %d", w.Code)
@@ -98,13 +98,13 @@ func TestCrossShopSweep(t *testing.T) {
 	aliceSup = int64(dataMap(t, w)["id"].(float64))
 	w = do(t, engine, "POST", "/api/v1/purchase-orders", tokA, map[string]any{
 		"supplierId": aliceSup,
-		"items":      []map[string]any{{"productId": aliceProd, "qty": 1, "costCents": 100}},
+		"items":      []map[string]any{{"productId": aliceProd, "qtyMilli": 1000, "costCents": 100}},
 	})
 	alicePO = int64(dataMap(t, w)["id"].(float64))
 	w = do(t, engine, "POST", "/api/v1/stock-takes", tokA, map[string]any{"productIds": []int64{aliceProd}})
 	aliceTake = int64(dataMap(t, w)["id"].(float64))
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", tokA, map[string]any{
-		"items":         []map[string]any{{"productId": aliceProd, "qty": 1}},
+		"items":         []map[string]any{{"productId": aliceProd, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "clientUuid": "sweep-1",
 	})
 	aliceOrder := int64(dataMap(t, w)["id"].(float64))
@@ -147,9 +147,9 @@ func TestCrossShopSweep(t *testing.T) {
 func TestMalformedMoneyNumbers(t *testing.T) {
 	engine, _, cashier, _ := newTestServer(t)
 	for _, body := range []map[string]any{
-		{"items": []map[string]any{{"productId": 1, "qty": 0}}, "paymentMethod": "cash", "clientUuid": "m0"},
-		{"items": []map[string]any{{"productId": 1, "qty": -5}}, "paymentMethod": "cash", "clientUuid": "mneg"},
-		{"items": []map[string]any{{"productId": 999999, "qty": 1}}, "paymentMethod": "cash", "clientUuid": "midx"},
+		{"items": []map[string]any{{"productId": 1, "qtyMilli": 0}}, "paymentMethod": "cash", "clientUuid": "m0"},
+		{"items": []map[string]any{{"productId": 1, "qtyMilli": -5000}}, "paymentMethod": "cash", "clientUuid": "mneg"},
+		{"items": []map[string]any{{"productId": 999999, "qtyMilli": 1000}}, "paymentMethod": "cash", "clientUuid": "midx"},
 	} {
 		w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, body)
 		if w.Code < 400 || w.Code >= 500 {
@@ -163,8 +163,8 @@ func TestMalformedMoneyNumbers(t *testing.T) {
 func TestMoneyBoundsOverflow(t *testing.T) {
 	engine, admin, cashier, _ := newTestServer(t)
 	huge := []map[string]any{
-		{"items": []map[string]any{{"productId": 1, "qty": 100001}}, "paymentMethod": "cash", "clientUuid": "o1"},
-		{"items": []map[string]any{{"productId": 1, "qty": 9007199254740993}}, "paymentMethod": "cash", "clientUuid": "o2"},
+		{"items": []map[string]any{{"productId": 1, "qtyMilli": 100001000}}, "paymentMethod": "cash", "clientUuid": "o1"},
+		{"items": []map[string]any{{"productId": 1, "qtyMilli": 9007199254740993000}}, "paymentMethod": "cash", "clientUuid": "o2"},
 	}
 	for i, body := range huge {
 		w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, body)
@@ -176,7 +176,7 @@ func TestMoneyBoundsOverflow(t *testing.T) {
 	for _, body := range []map[string]any{
 		{"sku": "BIG1", "name": "Big", "categoryId": 1, "priceCents": 1000000000001},
 		{"sku": "BIGN", "name": "Big Neg", "categoryId": 1, "priceCents": -5},
-		{"sku": "BIGS", "name": "Big Stock", "categoryId": 1, "priceCents": 100, "stockQty": 1000000001},
+		{"sku": "BIGS", "name": "Big Stock", "categoryId": 1, "priceCents": 100, "stockQtyMilli": 1000000001000},
 	} {
 		w := do(t, engine, "POST", "/api/v1/products", admin, body)
 		if w.Code != 400 {
@@ -185,14 +185,14 @@ func TestMoneyBoundsOverflow(t *testing.T) {
 	}
 	// Absurd override rejected even with the permission.
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", admin, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1, "unitPriceCents": 1000000000001}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000, "unitPriceCents": 1000000000001}},
 		"paymentMethod": "cash", "clientUuid": "o3",
 	})
 	if w.Code != 400 && w.Code != 422 {
 		t.Fatalf("oversize override should 400/422, got %d", w.Code)
 	}
 	// Absurd stock adjustment rejected.
-	w = do(t, engine, "POST", "/api/v1/products/1/adjust-stock", admin, map[string]any{"delta": 100000001})
+	w = do(t, engine, "POST", "/api/v1/products/1/adjust-stock", admin, map[string]any{"deltaMilli": 100000001000})
 	if w.Code != 400 {
 		t.Fatalf("oversize adjust should 400, got %d", w.Code)
 	}
@@ -200,14 +200,14 @@ func TestMoneyBoundsOverflow(t *testing.T) {
 	// stock a product deep, then buy exactly the max line quantity.
 	w = do(t, engine, "POST", "/api/v1/products", admin, map[string]any{
 		"sku": "BULK1", "name": "Bulk Grain", "categoryId": 1,
-		"priceCents": 100, "costCents": 50, "stockQty": 200000, "trackStock": true,
+		"priceCents": 100, "costCents": 50, "stockQtyMilli": 200000000, "trackStock": true,
 	})
 	if w.Code != 201 {
 		t.Fatalf("bulk product: %d %s", w.Code, w.Body.String())
 	}
 	bulkID := int64(dataMap(t, w)["id"].(float64))
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": bulkID, "qty": 100000}},
+		"items":         []map[string]any{{"productId": bulkID, "qtyMilli": 100000000}},
 		"paymentMethod": "cash", "clientUuid": "o4",
 	})
 	if w.Code != 201 {
@@ -248,14 +248,14 @@ func TestXSSPayloadRoundTrip(t *testing.T) {
 	payload := `<script>alert(1)</script><img src=x onerror=alert(2)>`
 	w := do(t, engine, "POST", "/api/v1/products", tok, map[string]any{
 		"sku": "XS1", "name": payload, "categoryId": 1,
-		"priceCents": 100, "costCents": 10, "stockQty": 5, "trackStock": true,
+		"priceCents": 100, "costCents": 10, "stockQtyMilli": 5000, "trackStock": true,
 	})
 	if w.Code != 201 {
 		t.Fatalf("payload product: %d", w.Code)
 	}
 	pid := int64(dataMap(t, w)["id"].(float64))
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", tok, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 1}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "clientUuid": "xss-1",
 	})
 	oid := int64(dataMap(t, w)["id"].(float64))

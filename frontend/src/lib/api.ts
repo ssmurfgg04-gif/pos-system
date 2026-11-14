@@ -295,8 +295,13 @@ export interface Product {
   categoryName: string
   priceCents: number
   costCents: number
-  stockQty: number
+  stockQtyMilli: number
   trackStock: boolean
+  /** v1.8.0: sellable unit ('pc','kg','l',…) + fractional till input +
+   *  batch/expiry tracking. Optional: backends predate v1.8. */
+  unit?: string
+  allowFraction?: boolean
+  trackBatches?: boolean
   /** Mints a redeemable gift-card code per unit on every paid sale (the
    *  backend forces trackStock off for these). Optional: older backends
    *  predate the flag. */
@@ -309,14 +314,54 @@ export interface Product {
   updatedAt: string
 }
 
+/** v1.8.0 — one received lot of a batch-tracked product. */
+export interface ProductBatch {
+  id: number
+  productId: number
+  productName: string
+  sku: string
+  batchNo: string
+  expiryDate: string
+  qtyReceivedMilli: number
+  qtyRemainingMilli: number
+  costCents: number
+  supplierId: number
+  supplierName: string
+  reference: string
+  status: 'ACTIVE' | 'EXHAUSTED' | 'RECALLED' | string
+  createdAt: string
+  updatedAt: string
+}
+
+/** v1.8.0 — one lot in the expiry report. */
+export interface ExpiryBatchRow {
+  batchId: number
+  productId: number
+  name: string
+  sku: string
+  batchNo: string
+  expiryDate: string
+  qtyRemainingMilli: number
+  costCents: number
+  valueCents: number
+  status: string
+}
+
+export interface ExpiryReport {
+  days: number
+  expired: ExpiryBatchRow[]
+  soon: ExpiryBatchRow[]
+  valueCents: number
+}
+
 /** One append-only stock-ledger row (v1.6.3): every audited stock change. */
 export interface StockMovement {
   id: number
   productId: number
   productName: string
   sku: string
-  delta: number
-  balanceAfter: number
+  deltaMilli: number
+  balanceAfterMilli: number
   kind: 'OPENING' | 'SALE' | 'VOID_RESTORE' | 'ADJUSTMENT' | 'COUNT' | 'PO_RECEIVE' | 'RETURN_RESTOCK' | string
   reference: string
   note: string
@@ -334,7 +379,7 @@ export interface ReturnItem {
   productId: number
   name: string
   sku: string
-  qty: number
+  qtyMilli: number
   unitPriceCents: number
   lineTotalCents: number
 }
@@ -387,7 +432,7 @@ export interface OrderItem {
   productId: number
   name: string
   sku: string
-  qty: number
+  qtyMilli: number
   unitPriceCents: number
   lineTotalCents: number
   /** v1.7.0: unit cost frozen at sale time (0 = pre-v26 line). */
@@ -485,7 +530,7 @@ export interface SplitLeg {
 }
 
 export interface CheckoutRequest {
-  items: { productId: number; qty: number; unitPriceCents?: number }[]
+  items: { productId: number; qtyMilli: number; unitPriceCents?: number }[]
   paymentMethod: 'cash' | 'mpesa' | 'account' | 'credit'
   paymentMode?: 'auto' | 'stk' | 'manual'
   customerPhone?: string
@@ -603,7 +648,7 @@ export interface DailySummary {
   paystackCents: number
   creditCents: number
   discrepancies: number
-  topProducts: { productId: number; name: string; qty: number; salesCents: number; profitCents?: number }[]
+  topProducts: { productId: number; name: string; qtyMilli: number; salesCents: number; profitCents?: number }[]
   series: { date: string; salesCents: number; orders: number }[]
   /** P5: who sold what today + how many new customers were captured. */
   perStaff?: { userId: number; name: string; orders: number; salesCents: number }[]
@@ -645,7 +690,7 @@ export interface MonthlySummary {
   taxPercent: number
   taxIncluded: boolean
   series: { date: string; salesCents: number; orders: number }[]
-  topProducts: { productId: number; name: string; qty: number; salesCents: number; profitCents?: number }[]
+  topProducts: { productId: number; name: string; qtyMilli: number; salesCents: number; profitCents?: number }[]
   /** v1.6.3 — expenses booked in the month + refunds given out. */
   expensesCents?: number
   returnsCents?: number
@@ -668,7 +713,7 @@ export interface DisposalRow {
   at: string
   productName: string
   sku: string
-  qty: number
+  qtyMilli: number
   reason: string
   note: string
   unitCostCents: number
@@ -816,9 +861,12 @@ export interface POItem {
   productId: number
   name: string
   sku: string
-  qty: number
+  qtyMilli: number
   costCents: number
   lineTotalCents: number
+  /** v1.8.0: goods-in lot metadata for batch-tracked products. */
+  expiryDate?: string
+  batchNo?: string
 }
 
 export interface PurchaseOrder {
@@ -840,8 +888,8 @@ export interface StockTakeItem {
   productId: number
   name: string
   sku: string
-  expectedQty: number
-  countedQty: number
+  expectedQtyMilli: number
+  countedQtyMilli: number
 }
 
 export interface StockTake {
@@ -863,10 +911,10 @@ export interface StockCountLine {
   productId: number
   sku: string
   name: string
-  expectedQty: number
+  expectedQtyMilli: number
   /** null = not counted yet. */
-  countedQty: number | null
-  systemQty: number
+  countedQtyMilli: number | null
+  systemQtyMilli: number
   unitCostCents: number
   applied: boolean
 }
@@ -920,7 +968,7 @@ export interface LedgerEntry {
 export interface HeldSale {
   id: number
   refName: string
-  items: { productId: number; qty: number; unitPriceCents?: number }[]
+  items: { productId: number; qtyMilli: number; unitPriceCents?: number }[]
   customerId: number
   customerName: string
   note: string
@@ -1034,7 +1082,7 @@ export interface QuoteItem {
   productId: number
   sku: string
   name: string
-  qty: number
+  qtyMilli: number
   unitPriceCents: number
   lineTotalCents: number
 }

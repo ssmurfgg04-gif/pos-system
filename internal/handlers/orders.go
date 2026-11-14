@@ -416,7 +416,7 @@ const receiptTemplate = `<!doctype html>
         <hr>
         {{range .Items}}
         <div class="bold">{{.Name}}</div>
-        <div class="line"><span class="muted">{{.Qty}} x {{call $.FM .UnitPriceCents}}</span><span>{{call $.FM .LineTotalCents}}</span></div>
+        <div class="line"><span class="muted">{{.QtyDisplay}} x {{call $.FM .UnitPriceCents}}</span><span>{{call $.FM .LineTotalCents}}</span></div>
         {{end}}
         <hr>
         <div class="row"><span>Subtotal</span><span>{{.Subtotal}}</span></div>

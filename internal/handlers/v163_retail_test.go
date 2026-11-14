@@ -33,7 +33,7 @@ func productStock(t *testing.T, engine *gin.Engine, token string, id int64) int 
 	for _, it := range decode(t, w)["data"].([]any) {
 		m := it.(map[string]any)
 		if int64(m["id"].(float64)) == id {
-			return int(m["stockQty"].(float64))
+			return int(m["stockQtyMilli"].(float64)) / 1000
 		}
 	}
 	t.Fatalf("product %d not found", id)
@@ -64,7 +64,7 @@ func TestV163StockLedgerEveryMoveAudited(t *testing.T) {
 
 	before := productStock(t, engine, admin, 1)
 	order := checkoutLines(t, engine, cashier, []map[string]any{
-		{"productId": 1, "qty": 3},
+		{"productId": 1, "qtyMilli": 3000},
 	}, nil)
 	oid := itoa64(order["id"])
 
@@ -87,11 +87,11 @@ func TestV163StockLedgerEveryMoveAudited(t *testing.T) {
 	if sale["kind"] != "SALE" {
 		t.Fatalf("newest movement kind = %v, want SALE", sale["kind"])
 	}
-	if int64(sale["delta"].(float64)) != -3 {
-		t.Fatalf("sale delta = %v, want -3", sale["delta"])
+	if int64(sale["deltaMilli"].(float64)) != -3000 {
+		t.Fatalf("sale delta = %v, want -3000", sale["deltaMilli"])
 	}
-	if int64(sale["balanceAfter"].(float64)) != int64(afterSale) {
-		t.Fatalf("balanceAfter = %v, want %d", sale["balanceAfter"], afterSale)
+	if int64(sale["balanceAfterMilli"].(float64)) != int64(afterSale)*1000 {
+		t.Fatalf("balanceAfterMilli = %v, want %d", sale["balanceAfterMilli"], afterSale*1000)
 	}
 	ref, _ := sale["reference"].(string)
 	if ref == "" {
@@ -100,12 +100,12 @@ func TestV163StockLedgerEveryMoveAudited(t *testing.T) {
 
 	// Adjust: +5 with a note lands as ADJUSTMENT.
 	w = do(t, engine, "POST", "/api/v1/products/1/adjust-stock", admin, map[string]any{
-		"delta": 5, "note": "restock box",
+		"deltaMilli": 5000, "note": "restock box",
 	})
 	if w.Code != 200 {
 		t.Fatalf("adjust: %d %s", w.Code, w.Body.String())
 	}
-	if dataMap(t, w)["applied"].(float64) != 5 {
+	if dataMap(t, w)["applied"].(float64) != 5000 {
 		t.Fatalf("adjust applied = %v", dataMap(t, w)["applied"])
 	}
 
@@ -151,7 +151,7 @@ func TestV163ReturnFlowRestocksAndRefunds(t *testing.T) {
 
 	before := productStock(t, engine, admin, 1)
 	order := checkoutLines(t, engine, cashier, []map[string]any{
-		{"productId": 1, "qty": 4},
+		{"productId": 1, "qtyMilli": 4000},
 	}, nil)
 
 	items := order["items"].([]any)
@@ -161,7 +161,7 @@ func TestV163ReturnFlowRestocksAndRefunds(t *testing.T) {
 	// check by returning the PAID order normally first.
 	w := do(t, engine, "POST", "/api/v1/returns", cashier, map[string]any{
 		"orderId": order["id"].(float64),
-		"lines":   []map[string]any{{"orderItemId": itemID, "qty": 2}},
+		"lines":   []map[string]any{{"orderItemId": itemID, "qtyMilli": 2000}},
 		"method":  "CASH",
 		"reason":  "customer brought one back",
 	})
@@ -187,7 +187,7 @@ func TestV163ReturnFlowRestocksAndRefunds(t *testing.T) {
 	found := false
 	for _, m := range movs {
 		mm := m.(map[string]any)
-		if mm["kind"] == "RETURN_RESTOCK" && int64(mm["delta"].(float64)) == 2 {
+		if mm["kind"] == "RETURN_RESTOCK" && int64(mm["deltaMilli"].(float64)) == 2000 {
 			found = true
 		}
 	}
@@ -198,7 +198,7 @@ func TestV163ReturnFlowRestocksAndRefunds(t *testing.T) {
 	// Over-return: only 2 remain returnable on that line.
 	w = do(t, engine, "POST", "/api/v1/returns", cashier, map[string]any{
 		"orderId": order["id"].(float64),
-		"lines":   []map[string]any{{"orderItemId": itemID, "qty": 3}},
+		"lines":   []map[string]any{{"orderItemId": itemID, "qtyMilli": 3000}},
 		"method":  "CASH",
 	})
 	if w.Code != 400 && w.Code != 409 && w.Code != 422 {
@@ -235,7 +235,7 @@ func TestV163ReturnStoreCreditRequiresCustomer(t *testing.T) {
 	custIDNum := dataMap(t, w)["id"].(float64)
 
 	order := checkoutLines(t, engine, cashier, []map[string]any{
-		{"productId": 1, "qty": 1},
+		{"productId": 1, "qtyMilli": 1000},
 	}, map[string]any{"customerId": custIDNum, "customerName": "Return Tester"})
 
 	items := order["items"].([]any)
@@ -244,7 +244,7 @@ func TestV163ReturnStoreCreditRequiresCustomer(t *testing.T) {
 	// Missing customer for STORE_CREDIT → 400.
 	w = do(t, engine, "POST", "/api/v1/returns", cashier, map[string]any{
 		"orderId": order["id"].(float64),
-		"lines":   []map[string]any{{"orderItemId": itemID, "qty": 1}},
+		"lines":   []map[string]any{{"orderItemId": itemID, "qtyMilli": 1000}},
 		"method":  "STORE_CREDIT",
 	})
 	if w.Code != 400 {
@@ -254,7 +254,7 @@ func TestV163ReturnStoreCreditRequiresCustomer(t *testing.T) {
 	// With the customer: credit balance grows.
 	w = do(t, engine, "POST", "/api/v1/returns", cashier, map[string]any{
 		"orderId":    order["id"].(float64),
-		"lines":      []map[string]any{{"orderItemId": itemID, "qty": 1}},
+		"lines":      []map[string]any{{"orderItemId": itemID, "qtyMilli": 1000}},
 		"method":     "STORE_CREDIT",
 		"customerId": custIDNum,
 		"reason":     "wrong colour",
@@ -351,7 +351,7 @@ func TestV163WholesaleTierAndLowStock(t *testing.T) {
 		"costCents":           10000,
 		"wholesalePriceCents": 16000,
 		"lowStockUnits":       7,
-		"stockQty":            5,
+		"stockQtyMilli":       5000,
 	})
 	if w.Code != 200 {
 		t.Fatalf("product update: %d %s", w.Code, w.Body.String())
@@ -408,7 +408,7 @@ func TestV163ReturnsPermissionGate(t *testing.T) {
 	engine, _, _, designer := newTestServer(t)
 	w := do(t, engine, "POST", "/api/v1/returns", designer, map[string]any{
 		"orderId": 1,
-		"lines":   []map[string]any{{"orderItemId": 1, "qty": 1}},
+		"lines":   []map[string]any{{"orderItemId": 1, "qtyMilli": 1000}},
 	})
 	if w.Code != 403 {
 		t.Fatalf("designer return: %d, want 403", w.Code)

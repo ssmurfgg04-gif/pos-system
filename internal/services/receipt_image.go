@@ -415,8 +415,8 @@ func (s *Service) renderReceiptImage(o *models.Order) (image.Image, error) {
 			lineY += 26
 		}
 		drawTextRight(canvas, fItem, ink, right, y, printer.FormatMoney(it.LineTotalCents, symbol))
-		sub := fmt.Sprintf("%d x %s", it.Qty, printer.FormatMoney(it.UnitPriceCents, symbol))
-		if it.LineTotalCents != it.UnitPriceCents*int64(it.Qty) {
+		sub := fmt.Sprintf("%s x %s", formatQtyMilli(it.QtyMilli), printer.FormatMoney(it.UnitPriceCents, symbol))
+		if it.LineTotalCents != milliLineTotal(it.UnitPriceCents, it.QtyMilli) {
 			sub += " · discount applied"
 		}
 		drawText(canvas, fSub, muted, nameX, lineY-8, sub)
@@ -566,4 +566,16 @@ func nonEmpty(in []string) []string {
 		}
 	}
 	return out
+}
+
+// formatQtyMilli renders a milli-unit quantity for receipt images: whole
+// numbers plain ("2"), fractional trimmed to three decimals ("0.5").
+func formatQtyMilli(m int64) string {
+	if m%1000 == 0 {
+		return fmt.Sprintf("%d", m/1000)
+	}
+	s := fmt.Sprintf("%.3f", float64(m)/1000.0)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	return s
 }

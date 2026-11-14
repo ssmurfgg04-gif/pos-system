@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -1477,6 +1478,160 @@ CREATE INDEX IF NOT EXISTS idx_ledger_customer_order ON customer_ledger(customer
 CREATE INDEX IF NOT EXISTS idx_stock_movements_kind ON stock_movements(kind, created_at);
 `,
 	},
+	{
+		// v1.8.0 (v27) — fractional (weighable) quantities. Until now
+		// every quantity was a whole number: sugar came in 1-kg bags
+		// even when the customer asked for 250 g. All quantity columns
+		// gain an integer MILLI-UNIT twin (thousandths) — the same
+		// minor-unit pattern as money cents, exact and float-free
+		// (OSPOS carries decimal(15,3) columns; SQLite has no decimal,
+		// so integers are the honest equivalent). The migration converts
+		// stored data ×1000 while the whole-unit columns stay frozen
+		// in place (additive-only: the no-destructive-DDL guardrail,
+		// and a pre-1.8 binary can still roll back and read its own
+		// columns). v1.8+ code reads only the _milli columns — one
+		// source of truth in practice. Also: products.unit
+		// ('pc', 'kg', …) and products.allow_fraction for the till UX.
+		// JSON payloads that carry quantities (held carts, quotes,
+		// pending sync events) are rewritten by the Go hook so nothing
+		// crosses the upgrade boundary with unit semantics.
+		Version: 27,
+		SQLite: `
+ALTER TABLE products ADD COLUMN stock_qty_milli INTEGER NOT NULL DEFAULT 0;
+UPDATE products SET stock_qty_milli = stock_qty * 1000;
+ALTER TABLE products ADD COLUMN unit TEXT NOT NULL DEFAULT 'pc';
+ALTER TABLE products ADD COLUMN allow_fraction INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE order_items ADD COLUMN qty_milli INTEGER NOT NULL DEFAULT 0;
+UPDATE order_items SET qty_milli = qty * 1000;
+ALTER TABLE return_items ADD COLUMN qty_milli INTEGER NOT NULL DEFAULT 0;
+UPDATE return_items SET qty_milli = qty * 1000;
+ALTER TABLE purchase_order_items ADD COLUMN qty_milli INTEGER NOT NULL DEFAULT 0;
+UPDATE purchase_order_items SET qty_milli = qty * 1000;
+ALTER TABLE stock_take_items ADD COLUMN expected_qty_milli INTEGER NOT NULL DEFAULT 0;
+UPDATE stock_take_items SET expected_qty_milli = expected_qty * 1000;
+ALTER TABLE stock_take_items ADD COLUMN counted_qty_milli INTEGER NOT NULL DEFAULT 0;
+UPDATE stock_take_items SET counted_qty_milli = counted_qty * 1000;
+ALTER TABLE stock_count_lines ADD COLUMN expected_qty_milli INTEGER NOT NULL DEFAULT 0;
+UPDATE stock_count_lines SET expected_qty_milli = expected_qty * 1000;
+-- counted stays NULL-able: 'not counted yet' is a real state.
+ALTER TABLE stock_count_lines ADD COLUMN counted_qty_milli INTEGER;
+UPDATE stock_count_lines SET counted_qty_milli = counted_qty * 1000 WHERE counted_qty IS NOT NULL;
+ALTER TABLE stock_count_lines ADD COLUMN system_qty_milli INTEGER NOT NULL DEFAULT 0;
+UPDATE stock_count_lines SET system_qty_milli = system_qty * 1000;
+ALTER TABLE stock_movements ADD COLUMN delta_milli INTEGER NOT NULL DEFAULT 0;
+UPDATE stock_movements SET delta_milli = delta * 1000;
+ALTER TABLE stock_movements ADD COLUMN balance_after_milli INTEGER NOT NULL DEFAULT 0;
+UPDATE stock_movements SET balance_after_milli = balance_after * 1000;
+`,
+		Pg: `
+ALTER TABLE products ADD COLUMN IF NOT EXISTS stock_qty_milli BIGINT NOT NULL DEFAULT 0;
+UPDATE products SET stock_qty_milli = stock_qty * 1000;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS unit TEXT NOT NULL DEFAULT 'pc';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS allow_fraction INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS qty_milli BIGINT NOT NULL DEFAULT 0;
+UPDATE order_items SET qty_milli = qty * 1000;
+ALTER TABLE return_items ADD COLUMN IF NOT EXISTS qty_milli BIGINT NOT NULL DEFAULT 0;
+UPDATE return_items SET qty_milli = qty * 1000;
+ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS qty_milli BIGINT NOT NULL DEFAULT 0;
+UPDATE purchase_order_items SET qty_milli = qty * 1000;
+ALTER TABLE stock_take_items ADD COLUMN IF NOT EXISTS expected_qty_milli BIGINT NOT NULL DEFAULT 0;
+UPDATE stock_take_items SET expected_qty_milli = expected_qty * 1000;
+ALTER TABLE stock_take_items ADD COLUMN IF NOT EXISTS counted_qty_milli BIGINT NOT NULL DEFAULT 0;
+UPDATE stock_take_items SET counted_qty_milli = counted_qty * 1000;
+ALTER TABLE stock_count_lines ADD COLUMN IF NOT EXISTS expected_qty_milli BIGINT NOT NULL DEFAULT 0;
+UPDATE stock_count_lines SET expected_qty_milli = expected_qty * 1000;
+ALTER TABLE stock_count_lines ADD COLUMN IF NOT EXISTS counted_qty_milli BIGINT;
+UPDATE stock_count_lines SET counted_qty_milli = counted_qty * 1000 WHERE counted_qty IS NOT NULL;
+ALTER TABLE stock_count_lines ADD COLUMN IF NOT EXISTS system_qty_milli BIGINT NOT NULL DEFAULT 0;
+UPDATE stock_count_lines SET system_qty_milli = system_qty * 1000;
+ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS delta_milli BIGINT NOT NULL DEFAULT 0;
+UPDATE stock_movements SET delta_milli = delta * 1000;
+ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS balance_after_milli BIGINT NOT NULL DEFAULT 0;
+UPDATE stock_movements SET balance_after_milli = balance_after * 1000;
+`,
+		Go: func(d *DB, tx *sql.Tx) error {
+			return backfillMilliQuantityJSON(d, tx)
+		},
+	},
+	{
+		// v1.8.0 (v28) — batch / expiry tracking with FEFO allocation
+		// (First-Expired-First-Out). Milk, flour, medicine and soda all
+		// expire; a bare stock counter cannot warn the shopkeeper or
+		// say WHICH carton a sale came from. product_batches carries
+		// one row per received lot (batch no, expiry date, remaining
+		// quantity, cost at receipt, supplier); sales of batch-tracked
+		// products allocate across ACTIVE lots nearest-expiry-first and
+		// freeze the split into order_item_batches; disposals can
+		// target a specific lot. products.track_batches opts a product
+		// in (0 by default — tills keep working exactly as before);
+		// enabling it wraps existing stock into an OPENING batch so
+		// the batch sum always reconciles with the shelf projection.
+		Version: 28,
+		SQLite: `
+CREATE TABLE IF NOT EXISTS product_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL,
+        batch_no TEXT NOT NULL DEFAULT '',
+        expiry_date TEXT NOT NULL DEFAULT '',
+        qty_received_milli INTEGER NOT NULL DEFAULT 0,
+        qty_remaining_milli INTEGER NOT NULL DEFAULT 0,
+        cost_cents INTEGER NOT NULL DEFAULT 0,
+        supplier_id INTEGER NOT NULL DEFAULT 0,
+        reference TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        client_uuid TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_batches_product ON product_batches(product_id, status, expiry_date, id);
+CREATE INDEX IF NOT EXISTS idx_batches_expiry ON product_batches(status, expiry_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_batches_client_uuid ON product_batches(client_uuid) WHERE client_uuid != '';
+CREATE TABLE IF NOT EXISTS order_item_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_item_id INTEGER NOT NULL,
+        product_id INTEGER NOT NULL,
+        batch_id INTEGER NOT NULL,
+        qty_milli INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_oib_item ON order_item_batches(order_item_id);
+CREATE INDEX IF NOT EXISTS idx_oib_batch ON order_item_batches(batch_id);
+ALTER TABLE products ADD COLUMN track_batches INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE purchase_order_items ADD COLUMN expiry_date TEXT NOT NULL DEFAULT '';
+ALTER TABLE purchase_order_items ADD COLUMN batch_no TEXT NOT NULL DEFAULT '';
+`,
+		Pg: `
+CREATE TABLE IF NOT EXISTS product_batches (
+        id SERIAL PRIMARY KEY,
+        product_id BIGINT NOT NULL,
+        batch_no TEXT NOT NULL DEFAULT '',
+        expiry_date TEXT NOT NULL DEFAULT '',
+        qty_received_milli BIGINT NOT NULL DEFAULT 0,
+        qty_remaining_milli BIGINT NOT NULL DEFAULT 0,
+        cost_cents BIGINT NOT NULL DEFAULT 0,
+        supplier_id BIGINT NOT NULL DEFAULT 0,
+        reference TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        client_uuid TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_batches_product ON product_batches(product_id, status, expiry_date, id);
+CREATE INDEX IF NOT EXISTS idx_batches_expiry ON product_batches(status, expiry_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_batches_client_uuid ON product_batches(client_uuid) WHERE client_uuid != '';
+CREATE TABLE IF NOT EXISTS order_item_batches (
+        id SERIAL PRIMARY KEY,
+        order_item_id BIGINT NOT NULL,
+        product_id BIGINT NOT NULL,
+        batch_id BIGINT NOT NULL,
+        qty_milli BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_oib_item ON order_item_batches(order_item_id);
+CREATE INDEX IF NOT EXISTS idx_oib_batch ON order_item_batches(batch_id);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS track_batches INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS expiry_date TEXT NOT NULL DEFAULT '';
+ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS batch_no TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // backfillRolePermsV19 unions the v19 sales-oversight permission into the
@@ -1628,6 +1783,153 @@ func purgeDemoUsersV13(d *DB, tx *sql.Tx) error {
 // nowStampV13 matches services.nowStamp (database cannot import services).
 func nowStampV13() string {
 	return timeNowUTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+// backfillMilliQuantityJSON (v27) rewrites every JSON payload that carries
+// whole-unit quantities so nothing crosses the milli-unit upgrade boundary
+// with old semantics:
+//
+//   - held_sales.items_json  — parked carts resume with milli quantities
+//   - quotes.items_json      — quote lines price correctly after upgrade
+//   - sync_outbox.payload    — pending LAN-sync events replay in milli:
+//     entity=product → "stockQtyMilli", entity=stock → "deltaMilli",
+//     entity=order|return → items[]."qtyMilli"
+//
+// The whole-unit key is RENAMED to the milli key (qty → qtyMilli, stockQty
+// → stockQtyMilli, delta → deltaMilli) AND scaled ×1000 — the structs on
+// the other side of the upgrade read the new names only. A payload that
+// does not parse stays untouched (it is dead history at worst); a hard
+// failure on a writable row aborts the migration: half-converted is worse
+// than not starting.
+func backfillMilliQuantityJSON(d *DB, tx *sql.Tx) error {
+	scaleItem := func(items []any) bool {
+		changed := false
+		for _, raw := range items {
+			m, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if q, ok := m["qty"].(float64); ok {
+				delete(m, "qty")
+				m["qtyMilli"] = q * 1000
+				changed = true
+			}
+		}
+		return changed
+	}
+
+	// 1. held_sales.items_json — parked carts.
+	rows, err := tx.Query(d.Rebind(`SELECT id, items_json FROM held_sales`))
+	if err != nil {
+		return fmt.Errorf("held_sales scan: %w", err)
+	}
+	type heldFix struct {
+		id   int64
+		body string
+	}
+	var held []heldFix
+	for rows.Next() {
+		var id int64
+		var body string
+		if err := rows.Scan(&id, &body); err != nil {
+			rows.Close()
+			return err
+		}
+		var items []any
+		if json.Unmarshal([]byte(body), &items) == nil && scaleItem(items) {
+			if nb, err := json.Marshal(items); err == nil {
+				held = append(held, heldFix{id, string(nb)})
+			}
+		}
+	}
+	rows.Close()
+	for _, h := range held {
+		if _, err := tx.Exec(d.Rebind(`UPDATE held_sales SET items_json = ? WHERE id = ?`), h.body, h.id); err != nil {
+			return fmt.Errorf("held_sales rewrite: %w", err)
+		}
+	}
+
+	// 2. quotes.items_json — open quotes.
+	rows, err = tx.Query(d.Rebind(`SELECT id, items_json FROM quotes`))
+	if err != nil {
+		return fmt.Errorf("quotes scan: %w", err)
+	}
+	var quoteFixes []heldFix
+	for rows.Next() {
+		var id int64
+		var body string
+		if err := rows.Scan(&id, &body); err != nil {
+			rows.Close()
+			return err
+		}
+		var items []any
+		if json.Unmarshal([]byte(body), &items) == nil && scaleItem(items) {
+			if nb, err := json.Marshal(items); err == nil {
+				quoteFixes = append(quoteFixes, heldFix{id, string(nb)})
+			}
+		}
+	}
+	rows.Close()
+	for _, qf := range quoteFixes {
+		if _, err := tx.Exec(d.Rebind(`UPDATE quotes SET items_json = ? WHERE id = ?`), qf.body, qf.id); err != nil {
+			return fmt.Errorf("quotes rewrite: %w", err)
+		}
+	}
+
+	// 3. sync_outbox — pending LAN-sync events replay on sibling tills.
+	rows, err = tx.Query(d.Rebind(`SELECT seq, entity, payload FROM sync_outbox WHERE pushed_at = ''`))
+	if err != nil {
+		return fmt.Errorf("sync_outbox scan: %w", err)
+	}
+	type outboxFix struct {
+		seq  int64
+		body string
+	}
+	var outbox []outboxFix
+	for rows.Next() {
+		var seq int64
+		var entity, body string
+		if err := rows.Scan(&seq, &entity, &body); err != nil {
+			rows.Close()
+			return err
+		}
+		var payload map[string]any
+		if json.Unmarshal([]byte(body), &payload) != nil {
+			continue
+		}
+		changed := false
+		switch entity {
+		case "product":
+			if q, ok := payload["stockQty"].(float64); ok {
+				delete(payload, "stockQty")
+				payload["stockQtyMilli"] = q * 1000
+				changed = true
+			}
+		case "stock":
+			if q, ok := payload["delta"].(float64); ok {
+				delete(payload, "delta")
+				payload["deltaMilli"] = q * 1000
+				changed = true
+			}
+		case "order", "return":
+			if items, ok := payload["items"].([]any); ok && scaleItem(items) {
+				payload["items"] = items
+				changed = true
+			}
+		}
+		if changed {
+			if nb, err := json.Marshal(payload); err == nil {
+				outbox = append(outbox, outboxFix{seq, string(nb)})
+			}
+		}
+	}
+	rows.Close()
+	for _, of := range outbox {
+		if _, err := tx.Exec(d.Rebind(`UPDATE sync_outbox SET payload = ? WHERE seq = ?`), of.body, of.seq); err != nil {
+			return fmt.Errorf("sync_outbox rewrite: %w", err)
+		}
+	}
+	return nil
 }
 
 // Migrate applies pending migrations in order.

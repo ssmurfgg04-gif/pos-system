@@ -1,10 +1,20 @@
 // Demo parity tests (review 8.12): the web demo is a deliberately reduced
 // sandbox, but its permission VOCABULARY must be the server's — pinned to
 // the same generated JSON the Go test gates on.
-import { describe, expect, it } from 'vitest'
+//
+// @vitest-environment jsdom — the demo backend touches localStorage.
+import { beforeEach, describe, expect, it } from 'vitest'
 import catalog from './permissions.catalog.json'
 import { PERMISSION_CATALOG } from './seed'
 import { demoRequest } from './backend'
+
+beforeEach(async () => {
+  // The authed routes below need a token: log the admin in (demo accounts
+  // are ready to use) and stash it where the demo backend reads it.
+  localStorage.clear()
+  const res = await demoRequest<{ token: string }>('POST', '/api/v1/auth/login', { username: 'admin', password: '0000' })
+  localStorage.setItem('pos_token', res.token)
+})
 
 describe('demo permission parity', () => {
   it('uses the generated catalog verbatim', () => {
@@ -24,7 +34,7 @@ describe('demo permission parity', () => {
 
   it('demo roles only grant catalog permissions', async () => {
     const keys = new Set(PERMISSION_CATALOG.map((p) => p.key))
-    const roles = await demoRequest<{ name: string; permissions: string[] }[]>('GET', '/roles')
+    const roles = await demoRequest<{ name: string; permissions: string[] }[]>('GET', '/api/v1/roles')
     for (const role of roles) {
       for (const perm of role.permissions) {
         expect(keys.has(perm), `${role.name} grants unknown permission ${perm}`).toBe(true)
@@ -33,7 +43,7 @@ describe('demo permission parity', () => {
   })
 
   it('Admin holds the full catalog', async () => {
-    const roles = await demoRequest<{ name: string; permissions: string[] }[]>('GET', '/roles')
+    const roles = await demoRequest<{ name: string; permissions: string[] }[]>('GET', '/api/v1/roles')
     const admin = roles.find((r) => r.name === 'Admin')!
     expect([...admin.permissions].sort()).toEqual([...catalog.map((p) => p.key)].sort())
   })

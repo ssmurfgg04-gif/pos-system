@@ -96,7 +96,7 @@ function orderRow(id: number) {
     customerName: 'Amina',
     discrepancy: false,
     createdAt: '2026-10-29T09:00:00.000Z',
-    items: [{ id: 1, productId: 1, name: 'Mug', sku: 'M1', qty: 1, unitPriceCents: 1000, lineTotalCents: 1000 }],
+    items: [{ id: 1, productId: 1, name: 'Mug', sku: 'M1', qtyMilli: 1000, unitPriceCents: 1000, lineTotalCents: 1000 }],
     payments: [{ id: 1, method: 'cash', status: 'COMPLETED', amountCents: 1000 }],
   }
 }

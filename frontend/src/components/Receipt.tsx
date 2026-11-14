@@ -18,6 +18,7 @@
 
 import { Branding, Order, api, blob } from '../lib/api'
 import { centsToAmount } from '../lib/money'
+import { fmtQty } from '../lib/qty'
 import { openWhatsAppChat } from '../lib/whatsapp'
 import { toast } from '../stores/toasts'
 import { Button, Modal } from './ui'
@@ -233,7 +234,7 @@ export function ReceiptModal({ order, branding, open, onClose }: {
               <tr key={i.id} className="align-top">
                 <td className="py-0.5 pr-2">
                   <span className="block">{i.name}</span>
-                  <span className="text-[10px] text-ink-muted">{i.qty} × {centsToAmount(i.unitPriceCents)}</span>
+                  <span className="text-[10px] text-ink-muted">{fmtQty(i.qtyMilli)} × {centsToAmount(i.unitPriceCents)}</span>
                 </td>
                 <td className="py-0.5 text-right whitespace-nowrap tabular font-semibold">{centsToAmount(i.lineTotalCents)}</td>
               </tr>

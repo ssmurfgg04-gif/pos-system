@@ -133,7 +133,7 @@ func TestP6ShiftXZReport(t *testing.T) {
 	}
 	prodID := p6Product(t, s, "SKU-P6X", "Report Widget", 55_00)
 	order, err := s.Checkout(context.Background(), p, models.CheckoutRequest{
-		Items:         []models.CheckoutItem{{ProductID: prodID, Qty: 2}}, // 110.00 cash
+		Items:         []models.CheckoutItem{{ProductID: prodID, QtyMilli: 2000}}, // 110.00 cash
 		PaymentMethod: models.MethodCash,
 		ClientUUID:    "p6xz-1",
 	})
@@ -186,14 +186,14 @@ func TestP6POReceiveEmitsStockDeltas(t *testing.T) {
 	s := p6NewService(t)
 	prodID := p6Product(t, s, "SKU-P6PO", "Bought Widget", 90_00)
 	// 20 units on hand at 90.00 cost.
-	s.db.Exec(s.db.Rebind(`UPDATE products SET stock_qty = 20 WHERE id = ?`), prodID)
+	s.db.Exec(s.db.Rebind(`UPDATE products SET stock_qty_milli = 20000 WHERE id = ?`), prodID)
 
 	var supID int64
 	if err := s.db.QueryRow(`INSERT INTO suppliers (name) VALUES ('Acme') RETURNING id`).Scan(&supID); err != nil {
 		t.Fatalf("supplier: %v", err)
 	}
 	p := p6Cashier(t, s, "owner")
-	po, err := s.CreatePO(supID, []POItemInput{{ProductID: prodID, Qty: 10, CostCents: 50_00}}, "restock", p)
+	po, err := s.CreatePO(supID, []POItemInput{{ProductID: prodID, QtyMilli: 10000, CostCents: 50_00}}, "restock", p)
 	if err != nil {
 		t.Fatalf("create PO: %v", err)
 	}
@@ -206,9 +206,9 @@ func TestP6POReceiveEmitsStockDeltas(t *testing.T) {
 		t.Fatalf("PO status = %s, want RECEIVED", received.Status)
 	}
 	var stock, cost int64
-	s.db.QueryRow(`SELECT stock_qty, cost_cents FROM products WHERE id = ?`, prodID).Scan(&stock, &cost)
-	if stock != 30 {
-		t.Fatalf("stock after receive = %d, want 30", stock)
+	s.db.QueryRow(`SELECT stock_qty_milli, cost_cents FROM products WHERE id = ?`, prodID).Scan(&stock, &cost)
+	if stock != 30000 {
+		t.Fatalf("stock after receive = %d milli, want 30000", stock)
 	}
 	// Weighted average: (20*4500 + 10*5000) / 30 = 4666.67 -> 4667.
 	if cost != 4667 {
@@ -216,7 +216,7 @@ func TestP6POReceiveEmitsStockDeltas(t *testing.T) {
 	}
 	// The receive must have emitted a stock delta so other tills pick it up.
 	found := false
-	s.db.QueryRow(`SELECT COUNT(*) FROM sync_outbox WHERE entity = 'stock' AND payload LIKE '%"delta":10%'`).Scan(&found)
+	s.db.QueryRow(`SELECT COUNT(*) FROM sync_outbox WHERE entity = 'stock' AND payload LIKE '%"deltaMilli":10000%'`).Scan(&found)
 	_ = found
 	rows, qerr := s.db.Query(`SELECT payload FROM sync_outbox WHERE entity = 'stock'`)
 	if qerr != nil {
@@ -225,7 +225,7 @@ func TestP6POReceiveEmitsStockDeltas(t *testing.T) {
 	defer rows.Close()
 	for rows.Next() {
 		var payload string
-		if rows.Scan(&payload) == nil && strings.Contains(payload, `"delta":10`) && strings.Contains(payload, "SKU-P6PO") {
+		if rows.Scan(&payload) == nil && strings.Contains(payload, `"deltaMilli":10000`) && strings.Contains(payload, "SKU-P6PO") {
 			found = true
 		}
 	}
@@ -242,7 +242,7 @@ func TestP6ETimsBuyerPinOnCheckout(t *testing.T) {
 	prodID := p6Product(t, s, "SKU-P6VAT", "Invoiced Item", 116_00)
 
 	order, err := s.Checkout(context.Background(), p, models.CheckoutRequest{
-		Items:         []models.CheckoutItem{{ProductID: prodID, Qty: 1}},
+		Items:         []models.CheckoutItem{{ProductID: prodID, QtyMilli: 1000}},
 		PaymentMethod: models.MethodCash,
 		BuyerPIN:      " p051234567x ",
 		ClientUUID:    "p6etims-1",
@@ -262,7 +262,7 @@ func TestP6ETimsBuyerPinOnCheckout(t *testing.T) {
 	}
 	// Without a buyer PIN the order stays a plain receipt.
 	plain, err := s.Checkout(context.Background(), p, models.CheckoutRequest{
-		Items:         []models.CheckoutItem{{ProductID: prodID, Qty: 1}},
+		Items:         []models.CheckoutItem{{ProductID: prodID, QtyMilli: 1000}},
 		PaymentMethod: models.MethodCash,
 		ClientUUID:    "p6etims-2",
 	})
@@ -318,8 +318,8 @@ func p6Product(t *testing.T, s *Service, sku, name string, priceCents int64) int
 	t.Helper()
 	var id int64
 	err := s.db.QueryRow(s.db.Rebind(`
-                INSERT INTO products (sku, name, category_id, price_cents, cost_cents, stock_qty)
-                VALUES (?, ?, (SELECT id FROM categories LIMIT 1), ?, ?, 100) RETURNING id`),
+                INSERT INTO products (sku, name, category_id, price_cents, cost_cents, stock_qty_milli)
+                VALUES (?, ?, (SELECT id FROM categories LIMIT 1), ?, ?, 100000) RETURNING id`),
 		sku, name, priceCents, priceCents/2).Scan(&id)
 	if err != nil {
 		t.Fatalf("product %s: %v", sku, err)

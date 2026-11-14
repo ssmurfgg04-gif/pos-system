@@ -66,11 +66,14 @@ export function taxFromExclusive(subtotalCents: number, taxPercent: number): num
 }
 
 export function cartTotals(
-  lines: { qty: number; unitPriceCents: number }[],
+  lines: { qtyMilli: number; unitPriceCents: number }[],
   taxPercent: number,
   taxIncluded: boolean,
 ) {
-  const subtotal = lines.reduce((sum, l) => sum + l.qty * l.unitPriceCents, 0)
+  // v1.8.0 milli quantities: each line prices exactly like the server
+  // (Math.round(price × milli / 1000), half-up — same rounding money.ts
+  // uses everywhere else).
+  const subtotal = lines.reduce((sum, l) => sum + Math.round((l.unitPriceCents * l.qtyMilli) / 1000), 0)
   const tax = taxIncluded ? taxFromInclusive(subtotal, taxPercent) : taxFromExclusive(subtotal, taxPercent)
   const total = taxIncluded ? subtotal : subtotal + tax
   return { subtotal, tax, total }

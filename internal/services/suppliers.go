@@ -3,6 +3,7 @@ package services
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 
 	"posapp/internal/auth"
@@ -103,11 +104,15 @@ func (s *Service) UpdateSupplier(id int64, name, phone, email, address, notes st
 	return s.GetSupplier(id)
 }
 
-// POItemInput is one line on a new purchase order (prices re-read server-side).
+// POItemInput is one line on a new purchase order (prices re-read
+// server-side). ExpiryDate/BatchNo become the goods-in lot for
+// batch-tracked products on receive (v1.8.0).
 type POItemInput struct {
-	ProductID int64
-	Qty       int
-	CostCents int64
+	ProductID  int64
+	QtyMilli   int64
+	CostCents  int64
+	ExpiryDate string
+	BatchNo    string
 }
 
 // CreatePO drafts a PENDING purchase order (no stock movement until receive).
@@ -145,14 +150,17 @@ func (s *Service) CreatePO(supplierID int64, items []POItemInput, note string, p
 	poID, _ := res.LastInsertId()
 	var subtotal int64
 	for _, it := range items {
-		if it.Qty <= 0 {
+		if it.QtyMilli <= 0 {
 			return nil, fmt.Errorf("quantity must be positive")
 		}
-		if it.Qty > models.MaxOrderQty {
-			return nil, fmt.Errorf("quantity exceeds maximum (%d)", models.MaxOrderQty)
+		if it.QtyMilli > models.MaxOrderQtyMilli {
+			return nil, fmt.Errorf("quantity exceeds maximum (%d milli)", models.MaxOrderQtyMilli)
 		}
 		if it.CostCents < 0 || it.CostCents > models.MaxPriceCents {
 			return nil, fmt.Errorf("cost out of range")
+		}
+		if !validExpiryDate(it.ExpiryDate) {
+			return nil, fmt.Errorf("expiry date must be YYYY-MM-DD (or empty)")
 		}
 		var name, sku string
 		var active int
@@ -165,18 +173,18 @@ func (s *Service) CreatePO(supplierID int64, items []POItemInput, note string, p
 		if active != 1 {
 			return nil, fmt.Errorf("product %d is inactive", it.ProductID)
 		}
-		line := int64(it.Qty) * it.CostCents
-		if line/int64(it.Qty) != it.CostCents {
+		if it.CostCents > 0 && it.QtyMilli > math.MaxInt64/it.CostCents {
 			return nil, fmt.Errorf("line total overflow")
 		}
+		line := milliLineTotal(it.CostCents, it.QtyMilli)
 		subtotal += line
 		if subtotal < 0 {
 			return nil, fmt.Errorf("order total overflow")
 		}
 		if _, err := tx.Exec(s.db.Rebind(`
-                        INSERT INTO purchase_order_items (po_id, product_id, name, sku, qty, cost_cents, line_total_cents)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)`),
-			poID, it.ProductID, name, sku, it.Qty, it.CostCents, line); err != nil {
+                        INSERT INTO purchase_order_items (po_id, product_id, name, sku, qty_milli, qty, cost_cents, line_total_cents, expiry_date, batch_no)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			poID, it.ProductID, name, sku, it.QtyMilli, it.QtyMilli/1000, it.CostCents, line, it.ExpiryDate, truncStr(strings.TrimSpace(it.BatchNo), 80)); err != nil {
 			return nil, err
 		}
 	}
@@ -206,7 +214,7 @@ func (s *Service) GetPO(poID int64) (*models.PurchaseOrder, error) {
 	}
 	o.SupplierName = supplierName
 	rows, err := s.db.Query(s.db.Rebind(`
-                SELECT id, po_id, product_id, name, sku, qty, cost_cents, line_total_cents
+                SELECT id, po_id, product_id, name, sku, qty_milli, cost_cents, line_total_cents, COALESCE(expiry_date,''), COALESCE(batch_no,'')
                 FROM purchase_order_items WHERE po_id = ? ORDER BY id`), poID)
 	if err != nil {
 		return nil, err
@@ -216,7 +224,7 @@ func (s *Service) GetPO(poID int64) (*models.PurchaseOrder, error) {
 	for rows.Next() {
 		var it models.POItem
 		if err := rows.Scan(&it.ID, &it.POID, &it.ProductID, &it.Name,
-			&it.SKU, &it.Qty, &it.CostCents, &it.LineTotalCents); err != nil {
+			&it.SKU, &it.QtyMilli, &it.CostCents, &it.LineTotalCents, &it.ExpiryDate, &it.BatchNo); err != nil {
 			return nil, err
 		}
 		o.Items = append(o.Items, it)
@@ -262,7 +270,7 @@ func (s *Service) ListPOs() ([]models.PurchaseOrder, error) {
 		args[i] = id
 	}
 	irows, err := s.db.Query(s.db.Rebind(`
-                SELECT id, po_id, product_id, name, sku, qty, cost_cents, line_total_cents
+                SELECT id, po_id, product_id, name, sku, qty_milli, cost_cents, line_total_cents, COALESCE(expiry_date,''), COALESCE(batch_no,'')
                 FROM purchase_order_items WHERE po_id IN (`+strings.Join(holders, ",")+`) ORDER BY id`), args...)
 	if err != nil {
 		return nil, err
@@ -271,7 +279,7 @@ func (s *Service) ListPOs() ([]models.PurchaseOrder, error) {
 	for irows.Next() {
 		var it models.POItem
 		if err := irows.Scan(&it.ID, &it.POID, &it.ProductID, &it.Name,
-			&it.SKU, &it.Qty, &it.CostCents, &it.LineTotalCents); err != nil {
+			&it.SKU, &it.QtyMilli, &it.CostCents, &it.LineTotalCents, &it.ExpiryDate, &it.BatchNo); err != nil {
 			return nil, err
 		}
 		if o, ok := byID[it.POID]; ok {
@@ -304,13 +312,14 @@ func (s *Service) ListTakes() ([]models.StockTake, error) {
 }
 
 // avgCost returns the weighted-average unit cost in cents, rounded half-up.
+// Quantities are milli-units (v1.8.0) — the ratio is identical either way.
 // Zero stock (or zero receipt) falls back to the incoming unit cost.
-func avgCost(oldStock int, oldCost int64, recvQty int, unitCost int64) int64 {
-	newStock := int64(oldStock + recvQty)
-	if newStock <= 0 || recvQty <= 0 {
+func avgCost(oldStockMilli int64, oldCost int64, recvQtyMilli int64, unitCost int64) int64 {
+	newStock := oldStockMilli + recvQtyMilli
+	if newStock <= 0 || recvQtyMilli <= 0 {
 		return unitCost
 	}
-	num := int64(oldStock)*oldCost + int64(recvQty)*unitCost
+	num := oldStockMilli*oldCost + recvQtyMilli*unitCost
 	return (num + newStock/2) / newStock
 }
 
@@ -330,25 +339,43 @@ func (s *Service) ReceivePO(poID int64, p *auth.Principal) (*models.PurchaseOrde
 	}
 	defer tx.Rollback()
 	for _, it := range po.Items {
-		var stock, track int
+		var stock int64
+		var track, batches int
 		var cost int64
 		if err := tx.QueryRow(s.db.Rebind(`
-                        SELECT stock_qty, cost_cents, COALESCE(track_stock,1) FROM products WHERE id = ?`),
-			it.ProductID).Scan(&stock, &cost, &track); err != nil {
+                        SELECT stock_qty_milli, cost_cents, COALESCE(track_stock,1), COALESCE(track_batches,0) FROM products WHERE id = ?`),
+			it.ProductID).Scan(&stock, &cost, &track, &batches); err != nil {
 			return nil, fmt.Errorf("product %d: %w", it.ProductID, ErrNotFound)
 		}
 		if track == 0 {
 			continue
 		}
-		newStock := stock + it.Qty
-		newCost := avgCost(stock, cost, it.Qty, it.CostCents)
+		newStock := stock + it.QtyMilli
+		newCost := avgCost(stock, cost, it.QtyMilli, it.CostCents)
 		if _, err := tx.Exec(s.db.Rebind(`
-                        UPDATE products SET stock_qty = ?, cost_cents = ? WHERE id = ?`),
-			newStock, newCost, it.ProductID); err != nil {
+                        UPDATE products SET stock_qty_milli = ?, stock_qty = ? / 1000, cost_cents = ? WHERE id = ?`),
+			newStock, newStock, newCost, it.ProductID); err != nil {
 			return nil, err
 		}
-		if err := recordStockMoveTx(s, tx, it.ProductID, int64(it.Qty), models.MovePOReceive, po.Number, "", p.ID, p.Username); err != nil {
+		if err := recordStockMoveTx(s, tx, it.ProductID, it.QtyMilli, models.MovePOReceive, po.Number, "", p.ID, p.Username); err != nil {
 			return nil, err
+		}
+		// v1.8.0: a received line for a batch-tracked product BECOMES a
+		// lot — batch number and expiry ride on the PO line.
+		if batches == 1 {
+			batchNo := strings.TrimSpace(it.BatchNo)
+			if batchNo == "" {
+				batchNo = po.Number
+			}
+			if !validExpiryDate(it.ExpiryDate) {
+				return nil, fmt.Errorf("%w: expiry date must be YYYY-MM-DD (or empty)", ErrInvalidInput)
+			}
+			if _, err := tx.Exec(s.db.Rebind(`
+                        INSERT INTO product_batches (product_id, batch_no, expiry_date, qty_received_milli, qty_remaining_milli, cost_cents, supplier_id, reference, status, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, (SELECT supplier_id FROM purchase_orders WHERE id = ?), ?, 'ACTIVE', ?)`),
+				it.ProductID, truncStr(batchNo, 80), it.ExpiryDate, it.QtyMilli, it.QtyMilli, it.CostCents, poID, po.Number, nowStamp()); err != nil {
+				return nil, err
+			}
 		}
 	}
 	res, err := tx.Exec(s.db.Rebind(`
@@ -370,7 +397,7 @@ func (s *Service) ReceivePO(poID int64, p *auth.Principal) (*models.PurchaseOrde
 	// line (stockSet=false: the delta above already carries quantity)
 	// keeps every till's COGS/margin reports identical.
 	for _, it := range po.Items {
-		s.EmitStockDelta(it.SKU, it.Qty)
+		s.EmitStockDelta(it.SKU, it.QtyMilli)
 		var pid int64
 		s.db.QueryRow(s.db.Rebind(`SELECT id FROM products WHERE sku = ?`), it.SKU).Scan(&pid)
 		if pid != 0 {
@@ -407,7 +434,7 @@ func (s *Service) CancelPO(poID int64, reason string, p *auth.Principal) (*model
 // loadTakeItemsTx reads a take's lines inside the caller's tx.
 func (s *Service) loadTakeItemsTx(tx *sql.Tx, takeID int64) ([]models.StockTakeItem, error) {
 	rows, err := tx.Query(s.db.Rebind(`
-                SELECT id, take_id, product_id, name, sku, expected_qty, counted_qty
+                SELECT id, take_id, product_id, name, sku, expected_qty_milli, counted_qty_milli
                 FROM stock_take_items WHERE take_id = ? ORDER BY id`), takeID)
 	if err != nil {
 		return nil, err
@@ -417,7 +444,7 @@ func (s *Service) loadTakeItemsTx(tx *sql.Tx, takeID int64) ([]models.StockTakeI
 	for rows.Next() {
 		var it models.StockTakeItem
 		if err := rows.Scan(&it.ID, &it.TakeID, &it.ProductID, &it.Name,
-			&it.SKU, &it.ExpectedQty, &it.CountedQty); err != nil {
+			&it.SKU, &it.ExpectedQtyMilli, &it.CountedQtyMilli); err != nil {
 			return nil, err
 		}
 		out = append(out, it)
@@ -448,22 +475,23 @@ func (s *Service) CreateTake(productIDs []int64, note string, p *auth.Principal)
 	var rows *sql.Rows
 	if len(productIDs) == 0 {
 		rows, err = tx.Query(s.db.Rebind(`
-                        SELECT id, name, COALESCE(sku,''), stock_qty FROM products
+                        SELECT id, name, COALESCE(sku,''), stock_qty_milli FROM products
                         WHERE is_active = 1 AND COALESCE(track_stock,1) = 1 ORDER BY id`))
 	} else {
 		// Per-id lookups keep the tx portable across dialects.
 		for _, pid := range productIDs {
 			var name, sku string
-			var stock, active int
+			var stock int64
+			var active int
 			if err := tx.QueryRow(s.db.Rebind(`
-                                SELECT name, COALESCE(sku,''), stock_qty, COALESCE(is_active,1)
+                                SELECT name, COALESCE(sku,''), stock_qty_milli, COALESCE(is_active,1)
                                 FROM products WHERE id = ?`), pid).Scan(&name, &sku, &stock, &active); err != nil {
 				return nil, fmt.Errorf("product %d: %w", pid, ErrNotFound)
 			}
 			if _, err := tx.Exec(s.db.Rebind(`
-                                INSERT INTO stock_take_items (take_id, product_id, name, sku, expected_qty, counted_qty)
-                                VALUES (?, ?, ?, ?, ?, ?)`),
-				takeID, pid, name, sku, stock, stock); err != nil {
+                                INSERT INTO stock_take_items (take_id, product_id, name, sku, expected_qty_milli, expected_qty, counted_qty_milli, counted_qty)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+				takeID, pid, name, sku, stock, stock/1000, stock, stock/1000); err != nil {
 				return nil, err
 			}
 		}
@@ -473,14 +501,14 @@ func (s *Service) CreateTake(productIDs []int64, note string, p *auth.Principal)
 		for rows.Next() {
 			var pid int64
 			var name, sku string
-			var stock int
+			var stock int64
 			if err := rows.Scan(&pid, &name, &sku, &stock); err != nil {
 				return nil, err
 			}
 			if _, err := tx.Exec(s.db.Rebind(`
-                                INSERT INTO stock_take_items (take_id, product_id, name, sku, expected_qty, counted_qty)
-                                VALUES (?, ?, ?, ?, ?, ?)`),
-				takeID, pid, name, sku, stock, stock); err != nil {
+                                INSERT INTO stock_take_items (take_id, product_id, name, sku, expected_qty_milli, expected_qty, counted_qty_milli, counted_qty)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+				takeID, pid, name, sku, stock, stock/1000, stock, stock/1000); err != nil {
 				return nil, err
 			}
 		}
@@ -521,8 +549,8 @@ func (s *Service) GetTake(takeID int64) (*models.StockTake, error) {
 	return &t, nil
 }
 
-// CountTake records counted quantities on an OPEN take.
-func (s *Service) CountTake(takeID int64, counts map[int64]int, p *auth.Principal) (*models.StockTake, error) {
+// CountTake records counted quantities (milli-units) on an OPEN take.
+func (s *Service) CountTake(takeID int64, counts map[int64]int64, p *auth.Principal) (*models.StockTake, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -536,12 +564,12 @@ func (s *Service) CountTake(takeID int64, counts map[int64]int, p *auth.Principa
 		return nil, fmt.Errorf("%w: only open takes take counts", ErrInvalidState)
 	}
 	for pid, qty := range counts {
-		if qty < 0 || qty > models.MaxStockQty {
-			return nil, fmt.Errorf("count out of range (0-%d)", models.MaxStockQty)
+		if qty < 0 || qty > models.MaxStockQtyMilli {
+			return nil, fmt.Errorf("count out of range (0-%d milli)", models.MaxStockQtyMilli)
 		}
 		res, err := tx.Exec(s.db.Rebind(`
-                        UPDATE stock_take_items SET counted_qty = ? WHERE take_id = ? AND product_id = ?`),
-			qty, takeID, pid)
+                        UPDATE stock_take_items SET counted_qty_milli = ?, counted_qty = ? / 1000 WHERE take_id = ? AND product_id = ?`),
+			qty, qty, takeID, pid)
 		if err != nil {
 			return nil, err
 		}
@@ -575,16 +603,25 @@ func (s *Service) ApplyTake(takeID int64, p *auth.Principal) (*models.StockTake,
 		return nil, err
 	}
 	for _, it := range items {
-		var current int
-		if err := tx.QueryRow(s.db.Rebind(`SELECT stock_qty FROM products WHERE id = ?`), it.ProductID).Scan(&current); err != nil {
+		var current int64
+		var batches int
+		if err := tx.QueryRow(s.db.Rebind(`SELECT stock_qty_milli, COALESCE(track_batches,0) FROM products WHERE id = ?`), it.ProductID).Scan(&current, &batches); err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = ? WHERE id = ?`), it.CountedQty, it.ProductID); err != nil {
+		if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty_milli = ?, stock_qty = ? / 1000 WHERE id = ?`), it.CountedQtyMilli, it.CountedQtyMilli, it.ProductID); err != nil {
 			return nil, err
 		}
-		if it.CountedQty != current {
-			if err := recordStockMoveTx(s, tx, it.ProductID, int64(it.CountedQty-current), models.MoveCount, number, "", p.ID, p.Username); err != nil {
+		if it.CountedQtyMilli != current {
+			if err := recordStockMoveTx(s, tx, it.ProductID, it.CountedQtyMilli-current, models.MoveCount, number, "", p.ID, p.Username); err != nil {
 				return nil, err
+			}
+			// v1.8.0: the correction also has to land inside the lots —
+			// negative deltas FEFO off ACTIVE batches, positive ones
+			// arrive on the OPENING batch.
+			if batches == 1 {
+				if err := adjustBatchStockTx(s, tx, it.ProductID, it.CountedQtyMilli-current); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

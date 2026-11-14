@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { api, Supplier, PurchaseOrder, StockTake, Product } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { formatMoney } from '../lib/money'
+import { fmtQty } from '../lib/qty'
 import { Button, Card, EmptyState, Field, Input, Modal, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
 import { Truck, X } from 'lucide-react'
@@ -213,8 +214,16 @@ function POList({ manage }: { manage: boolean }) {
           <Table head={['Item', 'Qty', 'Unit cost', 'Line total']}>
             {viewing.items.map((i) => (
               <tr key={i.id}>
-                <td className="px-3 py-2"><p className="font-semibold text-ink text-[13px]">{i.name}</p><p className="text-[11px] text-ink-subtle">{i.sku}</p></td>
-                <td className="px-3 py-2 tabular">{i.qty}</td>
+                <td className="px-3 py-2">
+                  <p className="font-semibold text-ink text-[13px]">{i.name}</p>
+                  <p className="text-[11px] text-ink-subtle">{i.sku}</p>
+                  {(i.expiryDate || i.batchNo) && (
+                    <p className="text-[11px] text-ink-muted">
+                      lot {i.batchNo || '—'}{i.expiryDate ? ` · exp ${i.expiryDate}` : ''}
+                    </p>
+                  )}
+                </td>
+                <td className="px-3 py-2 tabular">{fmtQty(i.qtyMilli)}</td>
                 <td className="px-3 py-2 tabular text-ink-muted">{formatMoney(i.costCents)}</td>
                 <td className="px-3 py-2 tabular font-semibold">{formatMoney(i.lineTotalCents)}</td>
               </tr>
@@ -231,7 +240,12 @@ function POForm({ onDone }: { onDone: () => void }) {
   const [products, setProducts] = useState<Product[]>([])
   const [supplierId, setSupplierId] = useState('')
   const [note, setNote] = useState('')
-  const [lines, setLines] = useState<{ productId: string; qty: string; cost: string }[]>([{ productId: '', qty: '', cost: '' }])
+  // v1.8.0: qty is typed in UNITS (decimals for weighed products) and sent
+  // as qtyMilli; batch-tracked lines capture expiryDate/batchNo so the
+  // received goods become a dated lot.
+  const [lines, setLines] = useState<{ productId: string; qty: string; cost: string; expiryDate: string; batchNo: string }[]>([
+    { productId: '', qty: '', cost: '', expiryDate: '', batchNo: '' },
+  ])
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -249,14 +263,17 @@ function POForm({ onDone }: { onDone: () => void }) {
     })()
   }, [])
 
-  const setLine = (i: number, patch: Partial<{ productId: string; qty: string; cost: string }>) =>
+  const lineProduct = (l: { productId: string }): Product | undefined =>
+    products.find((p) => p.id === Number(l.productId))
+
+  const setLine = (i: number, patch: Partial<{ productId: string; qty: string; cost: string; expiryDate: string; batchNo: string }>) =>
     setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)))
 
   const save = async () => {
     const items = lines
       .filter((l) => l.productId && Number(l.qty) > 0)
       .map((l) => {
-        const prod = products.find((p) => p.id === Number(l.productId))
+        const prod = lineProduct(l)
         // l.cost is an AMOUNT (KES) — ×100 to cents. The fallback is
         // prod.costCents, already in cents: multiplying it again priced
         // every unit-cost line at a hundredfold (KES 50 stock entered
@@ -264,7 +281,14 @@ function POForm({ onDone }: { onDone: () => void }) {
         const costCents = l.cost.trim() !== ''
           ? Math.max(0, Math.round(Number(l.cost) * 100))
           : Math.max(0, Math.round(Number(prod?.costCents || 0)))
-        return { productId: Number(l.productId), qty: Math.round(Number(l.qty)), costCents }
+        const qtyMilli = Math.round(Number(l.qty) * 1000)
+        return {
+          productId: Number(l.productId),
+          qtyMilli,
+          costCents,
+          // Lot metadata rides along for batch-tracked products only.
+          ...(prod?.trackBatches ? { expiryDate: l.expiryDate, batchNo: l.batchNo.trim() } : {}),
+        }
       })
     if (!supplierId || items.length === 0) {
       toast.error('Pick a supplier and at least one line with quantity')
@@ -290,24 +314,44 @@ function POForm({ onDone }: { onDone: () => void }) {
           {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </Select>
       </Field>
-      {lines.map((l, i) => (
-        <div key={i} className="grid grid-cols-[1fr_72px_110px_auto] gap-2 items-end">
-          <Field label={i === 0 ? 'Product' : ''}>
-            <Select value={l.productId} onChange={(e) => setLine(i, { productId: e.target.value, cost: String((products.find((p) => p.id === Number(e.target.value))?.costCents ?? 0) / 100) })}>
-              <option value="">Choose…</option>
-              {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({formatMoney(p.costCents)})</option>)}
-            </Select>
-          </Field>
-          <Field label={i === 0 ? 'Qty' : ''}>
-            <Input value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value.replace(/[^\d]/g, '') })} inputMode="numeric" placeholder="0" />
-          </Field>
-          <Field label={i === 0 ? 'Unit cost' : ''}>
-            <Input value={l.cost} onChange={(e) => setLine(i, { cost: e.target.value.replace(/[^\d.]/g, '') })} inputMode="decimal" placeholder="0.00" />
-          </Field>
-          <Button size="sm" variant="ghost" onClick={() => setLines((ls) => ls.filter((_, j) => j !== i))} aria-label="Remove line"><X size={15} strokeWidth={2.25} aria-hidden /></Button>
-        </div>
-      ))}
-      <Button size="sm" variant="secondary" onClick={() => setLines((ls) => [...ls, { productId: '', qty: '', cost: '' }])}>+ Line</Button>
+      {lines.map((l, i) => {
+        const prod = lineProduct(l)
+        return (
+          <div key={i} className="border-2 border-line rounded-input p-2.5 space-y-2">
+            <div className="grid grid-cols-[1fr_84px_110px_auto] gap-2 items-end">
+              <Field label={i === 0 ? 'Product' : ''}>
+                <Select value={l.productId} onChange={(e) => setLine(i, { productId: e.target.value, cost: String((products.find((p) => p.id === Number(e.target.value))?.costCents ?? 0) / 100) })}>
+                  <option value="">Choose…</option>
+                  {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({formatMoney(p.costCents)})</option>)}
+                </Select>
+              </Field>
+              <Field label={i === 0 ? 'Qty' : ''}>
+                <Input
+                  value={l.qty}
+                  onChange={(e) => setLine(i, { qty: e.target.value.replace(/[^\d.]/g, '') })}
+                  inputMode="decimal"
+                  placeholder={prod?.allowFraction ? '0.5' : '0'}
+                />
+              </Field>
+              <Field label={i === 0 ? 'Unit cost' : ''}>
+                <Input value={l.cost} onChange={(e) => setLine(i, { cost: e.target.value.replace(/[^\d.]/g, '') })} inputMode="decimal" placeholder="0.00" />
+              </Field>
+              <Button size="sm" variant="ghost" onClick={() => setLines((ls) => ls.filter((_, j) => j !== i))} aria-label="Remove line"><X size={15} strokeWidth={2.25} aria-hidden /></Button>
+            </div>
+            {prod?.trackBatches && (
+              <div className="grid grid-cols-[1fr_1fr] gap-2 bg-surface-muted border border-line rounded-input p-2">
+                <Field label={i === 0 ? 'Expiry date (optional)' : ''} hint="Becomes the received lot">
+                  <Input type="date" value={l.expiryDate} onChange={(e) => setLine(i, { expiryDate: e.target.value })} />
+                </Field>
+                <Field label={i === 0 ? 'Batch no. (optional)' : ''} hint="Defaults to the PO number">
+                  <Input value={l.batchNo} onChange={(e) => setLine(i, { batchNo: e.target.value })} placeholder="e.g. LOT-2409B" />
+                </Field>
+              </div>
+            )}
+          </div>
+        )
+      })}
+      <Button size="sm" variant="secondary" onClick={() => setLines((ls) => [...ls, { productId: '', qty: '', cost: '', expiryDate: '', batchNo: '' }])}>+ Line</Button>
       <Field label="Note (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Invoice no, delivery date…" /></Field>
       <Button variant="primary" size="lg" className="w-full" onClick={save} disabled={busy}>
         {busy ? <Spinner /> : 'Create order'}
@@ -335,8 +379,9 @@ function TakeList({ manage }: { manage: boolean }) {
     try {
       const full = await api.get<StockTake>(`/api/v1/stock-takes/${t.id}`)
       setViewing(full)
+      // The input holds UNITS (decimals OK); the wire takes MILLI.
       const c: Record<number, string> = {}
-      full.items.forEach((i) => { c[i.productId] = String(i.countedQty) })
+      full.items.forEach((i) => { c[i.productId] = i.countedQtyMilli === 0 ? '0' : String(i.countedQtyMilli / 1000) })
       setCounts(c)
     } catch (e: any) {
       toast.error('Load failed', e?.message)
@@ -359,14 +404,14 @@ function TakeList({ manage }: { manage: boolean }) {
     const payload: Record<string, number> = {}
     viewing.items.forEach((i) => {
       const v = counts[i.productId]
-      payload[String(i.productId)] = v === undefined || v === '' ? i.countedQty : Math.max(0, Math.round(Number(v)))
+      payload[String(i.productId)] = v === undefined || v === '' ? i.countedQtyMilli : Math.max(0, Math.round(Number(v) * 1000) || 0)
     })
     setBusy(true)
     try {
       const updated = await api.post<StockTake>(`/api/v1/stock-takes/${viewing.id}/count`, { counts: payload })
       setViewing(updated)
       const c: Record<number, string> = {}
-      updated.items.forEach((i) => { c[i.productId] = String(i.countedQty) })
+      updated.items.forEach((i) => { c[i.productId] = i.countedQtyMilli === 0 ? '0' : String(i.countedQtyMilli / 1000) })
       setCounts(c)
       toast.success('Counts saved')
     } catch (e: any) {
@@ -397,7 +442,7 @@ function TakeList({ manage }: { manage: boolean }) {
     const payload: Record<string, number> = {}
     viewing.items.forEach((i) => {
       const v = counts[i.productId]
-      payload[String(i.productId)] = v === undefined || v === '' ? i.countedQty : Math.max(0, Math.round(Number(v)))
+      payload[String(i.productId)] = v === undefined || v === '' ? i.countedQtyMilli : Math.max(0, Math.round(Number(v) * 1000) || 0)
     })
     const updated = await api.post<StockTake>(`/api/v1/stock-takes/${viewing.id}/count`, { counts: payload })
     setViewing(updated)
@@ -441,21 +486,23 @@ function TakeList({ manage }: { manage: boolean }) {
         {viewing && (
           <Table head={['Item', 'Expected', 'Counted', 'Variance']}>
             {viewing.items.map((i) => {
-              const counted = counts[i.productId] === undefined || counts[i.productId] === '' ? i.countedQty : Number(counts[i.productId])
-              const variance = counted - i.expectedQty
+              // Drafts are UNITS text; the stored line is MILLI.
+              const draft = counts[i.productId]
+              const countedMilli = draft === undefined || draft === '' ? i.countedQtyMilli : Math.round(Number(draft) * 1000) || 0
+              const varianceMilli = countedMilli - i.expectedQtyMilli
               return (
                 <tr key={i.id}>
                   <td className="px-3 py-2"><p className="font-semibold text-ink text-[13px]">{i.name}</p><p className="text-[11px] text-ink-subtle">{i.sku}</p></td>
-                  <td className="px-3 py-2 tabular text-ink-muted">{i.expectedQty}</td>
+                  <td className="px-3 py-2 tabular text-ink-muted">{fmtQty(i.expectedQtyMilli)}</td>
                   <td className="px-3 py-2">
                     {manage && viewing.status === 'OPEN' ? (
-                      <Input value={counts[i.productId] ?? ''} onChange={(e) => setCounts((c) => ({ ...c, [i.productId]: e.target.value.replace(/[^\d]/g, '') }))} inputMode="numeric" className="w-20" />
+                      <Input value={counts[i.productId] ?? ''} onChange={(e) => setCounts((c) => ({ ...c, [i.productId]: e.target.value.replace(/[^\d.]/g, '') }))} inputMode="decimal" className="w-20" />
                     ) : (
-                      <span className="tabular">{i.countedQty}</span>
+                      <span className="tabular">{fmtQty(i.countedQtyMilli)}</span>
                     )}
                   </td>
-                  <td className={`px-3 py-2 tabular font-bold ${variance === 0 ? 'text-ink-muted' : variance > 0 ? 'text-paid-text' : 'text-danger-text'}`}>
-                    {variance === 0 ? '-' : variance > 0 ? `+${variance}` : variance}
+                  <td className={`px-3 py-2 tabular font-bold ${varianceMilli === 0 ? 'text-ink-muted' : varianceMilli > 0 ? 'text-paid-text' : 'text-danger-text'}`}>
+                    {varianceMilli === 0 ? '-' : varianceMilli > 0 ? `+${fmtQty(varianceMilli)}` : fmtQty(varianceMilli)}
                   </td>
                 </tr>
               )

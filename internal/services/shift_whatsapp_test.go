@@ -136,8 +136,8 @@ func TestShiftSyncOpenAndCloseAcrossDevices(t *testing.T) {
 func v146OrderFixture(t *testing.T, s *Service) (orderID, customerID int64) {
 	t.Helper()
 	s.db.Exec(`INSERT INTO categories (name, slug) VALUES ('Svc','svc')`)
-	s.db.Exec(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty)
-                SELECT 'P-1','Printing', id, 1000, 5 FROM categories WHERE slug='svc'`)
+	s.db.Exec(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty_milli)
+                SELECT 'P-1','Printing', id, 1000, 5000 FROM categories WHERE slug='svc'`)
 	s.db.Exec(`INSERT INTO customers (name, phone) VALUES ('Sal','0717344440')`)
 	s.db.QueryRow(`SELECT id FROM customers WHERE phone='0717344440'`).Scan(&customerID)
 	res, err := s.db.Exec(`INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent,
@@ -147,7 +147,7 @@ func v146OrderFixture(t *testing.T, s *Service) (orderID, customerID int64) {
 		t.Fatalf("order fixture: %v", err)
 	}
 	orderID, _ = res.LastInsertId()
-	s.db.Exec(`INSERT INTO order_items (order_id, product_id, name, sku, qty, unit_price_cents, line_total_cents)
+	s.db.Exec(`INSERT INTO order_items (order_id, product_id, name, sku, qty_milli, unit_price_cents, line_total_cents)
                 VALUES (?, 1, 'Printing', 'P-1', 1, 1000, 1000)`, orderID)
 	s.db.Exec(`INSERT INTO payments (order_id, method, mode, amount_cents, status, phone, mpesa_receipt, created_at, completed_at)
                 VALUES (?, 'mpesa', '', 1000, 'COMPLETED', '254717344440', 'UJRQBBDEU3', '2026-10-27T08:00:00.000Z', '2026-10-27T08:05:00.000Z')`, orderID)
