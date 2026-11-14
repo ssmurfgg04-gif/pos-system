@@ -19,7 +19,7 @@ func TestForgedCallbackWrongAmountCannotComplete(t *testing.T) {
 	a5SetSetting(t, engine, admin, "mpesa_mock_delay_ms", "60000")
 
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "mpesa", "paymentMode": "stk",
 		"customerPhone": "0722123456", "clientUuid": "amount-gate-1",
 	})

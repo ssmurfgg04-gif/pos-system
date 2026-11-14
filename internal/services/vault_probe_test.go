@@ -352,10 +352,12 @@ func vaultProbePending(s *Service) int64 {
 	return n
 }
 
+// vaultStock returns the product's stock in WHOLE UNITS (milli / 1000) so
+// the unit-era assertions keep their meaning under milli storage.
 func vaultStock(s *Service, sku string) int {
-	var q int
-	s.db.QueryRow(`SELECT stock_qty FROM products WHERE sku = ?`, sku).Scan(&q)
-	return q
+	var q int64
+	s.db.QueryRow(`SELECT stock_qty_milli FROM products WHERE sku = ?`, sku).Scan(&q)
+	return int(q / 1000)
 }
 
 // ---------------------------------------------------------------------------
@@ -719,10 +721,10 @@ func TestVaultSyncCursorRegressionDoubleApply(t *testing.T) {
 	s2.db.Exec(s2.db.Rebind(`INSERT INTO categories (name, slug) VALUES ('C','c')`))
 	var catID int64
 	s2.db.QueryRow(`SELECT id FROM categories LIMIT 1`).Scan(&catID)
-	s2.db.Exec(s2.db.Rebind(`INSERT INTO products (sku, name, category_id, stock_qty) VALUES ('SKU-A','A',?,10)`), catID)
+	s2.db.Exec(s2.db.Rebind(`INSERT INTO products (sku, name, category_id, stock_qty_milli) VALUES ('SKU-A','A',?,10000)`), catID)
 	s2.db.Exec(s2.db.Rebind(`INSERT INTO customers (name, phone) VALUES ('Jane','0700000001')`))
 
-	s1.Emit("stock", "upsert", map[string]any{"sku": "SKU-A", "delta": -3})
+	s1.Emit("stock", "upsert", map[string]any{"sku": "SKU-A", "deltaMilli": -3000})
 	s1.Emit("ledger", "upsert", map[string]any{
 		"phone": "0700000001", "kind": models.LedgerCreditTopup,
 		"amountCents": 5000, "pointsDelta": 0, "note": "topup", "createdAt": nowStamp(),
@@ -775,7 +777,7 @@ func TestVaultSyncCursorKeyMismatchProbe(t *testing.T) {
 	c1 := vaultProbeRegister(t, s1)
 	_ = vaultProbeRegister(t, s2)
 
-	s1.Emit("stock", "upsert", map[string]any{"sku": "SKU-K", "delta": -2})
+	s1.Emit("stock", "upsert", map[string]any{"sku": "SKU-K", "deltaMilli": -2000})
 	c1.push(s1)
 	_ = s1.settings.Set("sync_enabled", "false") // silence further emits
 
@@ -794,7 +796,7 @@ func TestVaultSyncCursorKeyMismatchProbe(t *testing.T) {
 	s2.db.Exec(s2.db.Rebind(`INSERT INTO categories (name, slug) VALUES ('C','c')`))
 	var catK int64
 	s2.db.QueryRow(`SELECT id FROM categories LIMIT 1`).Scan(&catK)
-	s2.db.Exec(s2.db.Rebind(`INSERT INTO products (sku, name, category_id, stock_qty) VALUES ('SKU-K','K',?,10)`), catK)
+	s2.db.Exec(s2.db.Rebind(`INSERT INTO products (sku, name, category_id, stock_qty_milli) VALUES ('SKU-K','K',?,10000)`), catK)
 
 	if applied, err := c2.pull(s2); err != nil || applied != 1 {
 		t.Fatalf("first pull: applied=%d err=%v", applied, err)
@@ -828,7 +830,7 @@ func TestVaultSyncOrderFKDropQuarantinedThenRecovered(t *testing.T) {
 	orderPayload := vaultProbeJSON(t, map[string]any{
 		"clientUuid": "ord-fk-1", "number": "9001", "status": "PAID",
 		"subtotalCents": 100, "totalCents": 100, "createdAt": nowStamp(),
-		"items":    []map[string]any{{"sku": "GHOST-SKU", "name": "Ghost", "qty": 1, "unitPriceCents": 100, "lineTotalCents": 100}},
+		"items":    []map[string]any{{"sku": "GHOST-SKU", "name": "Ghost", "qtyMilli": 1000, "unitPriceCents": 100, "lineTotalCents": 100}},
 		"payments": []map[string]any{},
 	})
 	err := s2.applyEvent("order", "upsert", orderPayload)
@@ -858,7 +860,7 @@ func TestVaultSyncOrderFKDropQuarantinedThenRecovered(t *testing.T) {
 	s2.db.Exec(s2.db.Rebind(`INSERT INTO categories (name, slug) VALUES ('C','c')`))
 	var catID int64
 	s2.db.QueryRow(`SELECT id FROM categories LIMIT 1`).Scan(&catID)
-	s2.db.Exec(s2.db.Rebind(`INSERT INTO products (sku, name, category_id, stock_qty) VALUES ('GHOST-SKU','Ghost',?,5)`), catID)
+	s2.db.Exec(s2.db.Rebind(`INSERT INTO products (sku, name, category_id, stock_qty_milli) VALUES ('GHOST-SKU','Ghost',?,5000)`), catID)
 	s2.db.Exec(s2.db.Rebind(`INSERT INTO roles (name) VALUES ('Cashier')`))
 	var roleID int64
 	s2.db.QueryRow(`SELECT id FROM roles LIMIT 1`).Scan(&roleID)
@@ -899,7 +901,7 @@ func TestVaultSyncVoidReplayAndDrops(t *testing.T) {
 	s2.db.Exec(s2.db.Rebind(`INSERT INTO categories (name, slug) VALUES ('C','c')`))
 	var catID int64
 	s2.db.QueryRow(`SELECT id FROM categories LIMIT 1`).Scan(&catID)
-	s2.db.Exec(s2.db.Rebind(`INSERT INTO products (sku, name, category_id, stock_qty) VALUES ('SKU-V','V',?,8)`), catID)
+	s2.db.Exec(s2.db.Rebind(`INSERT INTO products (sku, name, category_id, stock_qty_milli) VALUES ('SKU-V','V',?,10000)`), catID)
 	var prodID int64
 	s2.db.QueryRow(`SELECT id FROM products WHERE sku='SKU-V'`).Scan(&prodID)
 	s2.db.Exec(s2.db.Rebind(`INSERT INTO roles (name) VALUES ('Cashier')`))
@@ -914,8 +916,8 @@ func TestVaultSyncVoidReplayAndDrops(t *testing.T) {
 	var ordID int64
 	s2.db.QueryRow(`SELECT id FROM orders WHERE client_uuid='ord-void-1'`).Scan(&ordID)
 	s2.db.Exec(s2.db.Rebind(`
-                INSERT INTO order_items (order_id, product_id, name, sku, qty, unit_price_cents, line_total_cents)
-                VALUES (?, ?, 'V', 'SKU-V', 2, 500, 1000)`), ordID, prodID)
+                INSERT INTO order_items (order_id, product_id, name, sku, qty_milli, unit_price_cents, line_total_cents)
+                VALUES (?, ?, 'V', 'SKU-V', 2000, 500, 1000)`), ordID, prodID)
 	s2.db.Exec(s2.db.Rebind(`
                 INSERT INTO payments (order_id, method, amount_cents, status) VALUES (?, 'cash', 1000, 'COMPLETED')`), ordID)
 
@@ -972,7 +974,7 @@ func TestVaultSyncVoidReplayAndDrops(t *testing.T) {
 	//    forever. Now the delta dead-letters and retries (the catalog
 	//    rename/creation that precedes it lands on a later cycle).
 	before := vaultStock(s2, "SKU-V")
-	s1.Emit("stock", "upsert", map[string]any{"sku": "SKU-GHOST", "delta": -5})
+	s1.Emit("stock", "upsert", map[string]any{"sku": "SKU-GHOST", "deltaMilli": -5000})
 	c1.push(s1)
 	if applied, err := c2.pull(s2); err != nil || applied != 0 {
 		t.Fatalf("ghost stock pull: applied=%d err=%v (want 0: event must quarantine)", applied, err)
@@ -994,7 +996,7 @@ func TestVaultSyncVoidReplayAndDrops(t *testing.T) {
 	// out-of-order story heals instead of losing the movement).
 	s1.Emit("product", "upsert", map[string]any{
 		"sku": "SKU-GHOST", "name": "Ghost", "priceCents": 100,
-		"stockQty": 50, "stockSet": true, "trackStock": true, "active": true,
+		"stockQtyMilli": 50000, "stockSet": true, "trackStock": true, "active": true,
 		"updatedAt": nowStamp(),
 	})
 	c1.push(s1)
@@ -1005,9 +1007,9 @@ func TestVaultSyncVoidReplayAndDrops(t *testing.T) {
 		t.Fatalf("ghost delta recovered %d, want 1", recovered)
 	}
 	var ghostStock int
-	s2.db.QueryRow(`SELECT stock_qty FROM products WHERE sku='SKU-GHOST'`).Scan(&ghostStock)
-	if ghostStock != 45 {
-		t.Fatalf("ghost stock after recovery = %d, want 45 (50 - 5)", ghostStock)
+	s2.db.QueryRow(`SELECT stock_qty_milli FROM products WHERE sku='SKU-GHOST'`).Scan(&ghostStock)
+	if ghostStock != 45000 {
+		t.Fatalf("ghost stock after recovery = %d milli, want 45000 (50 - 5)", ghostStock)
 	}
 }
 
@@ -1400,8 +1402,8 @@ func TestVaultSyncOrderReplayExactlyOnce(t *testing.T) {
 	s2.db.Exec(s2.db.Rebind(`INSERT INTO categories (name, slug) VALUES ('C','c')`))
 	var catID int64
 	s2.db.QueryRow(`SELECT id FROM categories LIMIT 1`).Scan(&catID)
-	s2.db.Exec(s2.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty)
-                VALUES ('SKU-R','R',?,500,10)`), catID)
+	s2.db.Exec(s2.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty_milli)
+                VALUES ('SKU-R','R',?,500,10000)`), catID)
 	var prodID int64
 	s2.db.QueryRow(`SELECT id FROM products WHERE sku='SKU-R'`).Scan(&prodID)
 	s2.db.Exec(s2.db.Rebind(`INSERT INTO roles (name) VALUES ('Cashier')`))
@@ -1418,8 +1420,8 @@ func TestVaultSyncOrderReplayExactlyOnce(t *testing.T) {
 	var ordID int64
 	s2.db.QueryRow(`SELECT id FROM orders WHERE client_uuid='ord-dedupe-1'`).Scan(&ordID)
 	s2.db.Exec(s2.db.Rebind(`
-                INSERT INTO order_items (order_id, product_id, name, sku, qty, unit_price_cents, line_total_cents)
-                VALUES (?, ?, 'R', 'SKU-R', 2, 500, 1000)`), ordID, prodID)
+                INSERT INTO order_items (order_id, product_id, name, sku, qty_milli, unit_price_cents, line_total_cents)
+                VALUES (?, ?, 'R', 'SKU-R', 2000, 500, 1000)`), ordID, prodID)
 	s2.db.Exec(s2.db.Rebind(`
                 INSERT INTO payments (order_id, method, amount_cents, status) VALUES (?, 'cash', 1000, 'PENDING')`), ordID)
 
@@ -1430,7 +1432,7 @@ func TestVaultSyncOrderReplayExactlyOnce(t *testing.T) {
 			"subtotalCents": 1000, "totalCents": 1000,
 			"createdAt": nowStamp(), "paidAt": nowStamp(),
 			"items": []map[string]any{
-				{"sku": "SKU-R", "name": "R", "qty": 2, "unitPriceCents": 500, "lineTotalCents": 1000},
+				{"sku": "SKU-R", "name": "R", "qtyMilli": 2000, "unitPriceCents": 500, "lineTotalCents": 1000},
 			},
 			"payments": []map[string]any{
 				{"method": "cash", "amountCents": 1000, "status": "COMPLETED", "completedAt": nowStamp()},
@@ -1440,7 +1442,7 @@ func TestVaultSyncOrderReplayExactlyOnce(t *testing.T) {
 
 	// Remote completion arrives once: the checkout's stock delta moves
 	// stock exactly once; the PAID event adopts the payment.
-	s1.Emit("stock", "upsert", map[string]any{"sku": "SKU-R", "delta": -2})
+	s1.Emit("stock", "upsert", map[string]any{"sku": "SKU-R", "deltaMilli": -2000})
 	s1.Emit("order", "upsert", paidEvent())
 	c1.push(s1)
 	if applied, err := c2.pull(s2); err != nil || applied != 2 {
@@ -1502,8 +1504,8 @@ func TestAgent3SaleSurvivesSyncOutage(t *testing.T) {
 	s.db.Exec(s.db.Rebind(`INSERT INTO categories (name, slug) VALUES ('C','c')`))
 	var catID int64
 	s.db.QueryRow(`SELECT id FROM categories LIMIT 1`).Scan(&catID)
-	s.db.Exec(s.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty)
-                VALUES ('SKU-SALE','S',?,700,10)`), catID)
+	s.db.Exec(s.db.Rebind(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty_milli)
+                VALUES ('SKU-SALE','S',?,700,10000)`), catID)
 	var prodID int64
 	s.db.QueryRow(`SELECT id FROM products WHERE sku='SKU-SALE'`).Scan(&prodID)
 	s.db.Exec(s.db.Rebind(`INSERT INTO roles (name) VALUES ('Cashier')`))
@@ -1520,7 +1522,7 @@ func TestAgent3SaleSurvivesSyncOutage(t *testing.T) {
 	order, err := s.Checkout(context.Background(), &auth.Principal{
 		ID: userID, Username: "cash1", RoleID: roleID, RoleName: "Cashier", Active: true,
 	}, models.CheckoutRequest{
-		Items:         []models.CheckoutItem{{ProductID: prodID, Qty: 2}},
+		Items:         []models.CheckoutItem{{ProductID: prodID, QtyMilli: 2000}},
 		PaymentMethod: models.MethodCash,
 		ClientUUID:    "sale-outage-1",
 	})
@@ -1544,7 +1546,7 @@ func TestAgent3SaleSurvivesSyncOutage(t *testing.T) {
 	// Idempotent double-submit while offline: same sale, no duplicate.
 	if again, err := s.Checkout(context.Background(), &auth.Principal{ID: 1, Username: "vaultProbe", Active: true},
 		models.CheckoutRequest{
-			Items:         []models.CheckoutItem{{ProductID: prodID, Qty: 2}},
+			Items:         []models.CheckoutItem{{ProductID: prodID, QtyMilli: 2000}},
 			PaymentMethod: models.MethodCash, ClientUUID: "sale-outage-1",
 		}); err != nil || again.ID != order.ID {
 		t.Fatalf("offline replay: order=%+v err=%v", again, err)

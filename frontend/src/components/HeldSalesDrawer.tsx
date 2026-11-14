@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { api, HeldSale } from '../lib/api'
 import { Button, EmptyState, Spinner } from './ui'
 import { formatMoneyCompact } from '../lib/money'
+import { fmtQty, lineTotalCents } from '../lib/qty'
 import { toast } from '../stores/toasts'
 import { X, Archive, Play, Trash2 } from 'lucide-react'
 
@@ -92,8 +93,11 @@ export function HeldSalesDrawer({
     }
   }
 
-  const itemCount = (s: HeldSale) => s.items.reduce((n, i) => n + i.qty, 0)
-  const estimate = (s: HeldSale) => s.items.reduce((sum, i) => sum + (i.unitPriceCents ?? 0) * i.qty, 0)
+  // v1.8.0: quantities are milli-units — the item count reads in UNITS and
+  // can be fractional (a parked 0.5 kg line), the estimate prices each line
+  // with the exact server formula.
+  const itemCount = (s: HeldSale) => s.items.reduce((n, i) => n + i.qtyMilli, 0) / 1000
+  const estimate = (s: HeldSale) => s.items.reduce((sum, i) => sum + lineTotalCents(i.unitPriceCents ?? 0, i.qtyMilli), 0)
 
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Parked sales">
@@ -134,7 +138,7 @@ export function HeldSalesDrawer({
                   </div>
                   <span className="font-black text-ink tabular text-[15px] whitespace-nowrap">≈ {formatMoneyCompact(estimate(s))}</span>
                 </div>
-                <p className="text-[12px] text-ink-muted mt-1">{itemCount(s)} item{itemCount(s) === 1 ? '' : 's'}</p>
+                <p className="text-[12px] text-ink-muted mt-1">{fmtQty(itemCount(s) * 1000)} item{itemCount(s) === 1 ? '' : 's'}</p>
                 <div className="flex gap-2 mt-2.5">
                   <Button size="sm" variant="primary" className="flex-1" onClick={() => resume(s)} disabled={busyId === s.id}>
                     {busyId === s.id ? <Spinner className="border-t-brand-ink w-4 h-4" /> : <Play size={14} strokeWidth={2.5} aria-hidden />}

@@ -60,7 +60,7 @@ func a5CreateProduct(t *testing.T, engine *gin.Engine, admin string, body map[st
 func a5StockOf(t *testing.T, engine *gin.Engine, token string, name string) int {
 	t.Helper()
 	prods := productIDs(t, engine, token, name)
-	return int(prods[0]["stockQty"].(float64))
+	return int(prods[0]["stockQtyMilli"].(float64)) / 1000
 }
 
 func a5CustomerPoints(t *testing.T, engine *gin.Engine, admin string, cid int64) int64 {
@@ -422,7 +422,7 @@ func TestAdversarialProbeOrderNumberUniquenessUnderLoad(t *testing.T) {
 	engine, admin, cashier, _ := newTestServer(t)
 	pid := a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-SEQ", "name": "A5 Seq", "categoryId": 1,
-		"priceCents": 100, "stockQty": 10000, "trackStock": true,
+		"priceCents": 100, "stockQtyMilli": 10000000, "trackStock": true,
 	})
 	const n = 40
 	type res struct {
@@ -438,7 +438,7 @@ func TestAdversarialProbeOrderNumberUniquenessUnderLoad(t *testing.T) {
 			defer wg.Done()
 			<-start
 			w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-				"items":         []map[string]any{{"productId": pid, "qty": 1}},
+				"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 				"paymentMethod": "cash",
 				"clientUuid":    fmt.Sprintf("a5-seq-%d", i),
 			})
@@ -477,7 +477,7 @@ func TestAdversarialProbeParallelDrainNoNegativeStock(t *testing.T) {
 	const racers = 30
 	a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-DRAIN", "name": "A5 Drain", "categoryId": 1,
-		"priceCents": 100, "stockQty": stock, "trackStock": true,
+		"priceCents": 100, "stockQtyMilli": stock * 1000, "trackStock": true,
 	})
 	pid := int64(productIDs(t, engine, cashier, "A5 Drain")[0]["id"].(float64))
 	var ok, conflict, other atomic.Int32
@@ -489,7 +489,7 @@ func TestAdversarialProbeParallelDrainNoNegativeStock(t *testing.T) {
 			defer wg.Done()
 			<-start
 			w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-				"items":         []map[string]any{{"productId": pid, "qty": 1}},
+				"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 				"paymentMethod": "cash",
 				"clientUuid":    fmt.Sprintf("a5-drain-%d", i),
 			})
@@ -519,11 +519,11 @@ func TestAdversarialProbeConcurrentVoidSingleRestore(t *testing.T) {
 	engine, admin, cashier, _ := newTestServer(t)
 	a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-VOID", "name": "A5 Void", "categoryId": 1,
-		"priceCents": 100, "stockQty": 5, "trackStock": true,
+		"priceCents": 100, "stockQtyMilli": 5000, "trackStock": true,
 	})
 	pid := int64(productIDs(t, engine, cashier, "A5 Void")[0]["id"].(float64))
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 2}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 2000}},
 		"paymentMethod": "cash", "clientUuid": "a5-void-order",
 	})
 	if w.Code != 201 {
@@ -570,7 +570,7 @@ func TestAdversarialProbeCreditOverdrawUnderConcurrency(t *testing.T) {
 	engine, admin, cashier, _ := newTestServer(t)
 	a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-CRED", "name": "A5 Cred", "categoryId": 1,
-		"priceCents": 50000, "stockQty": 0, "trackStock": false,
+		"priceCents": 50000, "stockQtyMilli": 0, "trackStock": false,
 	})
 	pid := int64(productIDs(t, engine, cashier, "A5 Cred")[0]["id"].(float64))
 	w := do(t, engine, "POST", "/api/v1/customers", admin, map[string]any{"name": "A5 Cred Cust"})
@@ -596,7 +596,7 @@ func TestAdversarialProbeCreditOverdrawUnderConcurrency(t *testing.T) {
 			defer wg.Done()
 			<-start
 			r := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-				"items":         []map[string]any{{"productId": pid, "qty": 1}},
+				"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 				"paymentMethod": "credit",
 				"customerId":    cid,
 				"clientUuid":    fmt.Sprintf("a5-cred-%d", i),
@@ -640,7 +640,7 @@ func TestAdversarialProbeBugCallbackCompletesVoidedOrder(t *testing.T) {
 	engine, admin, cashier, _ := newTestServer(t)
 	a5SetSetting(t, engine, admin, "mpesa_mock_delay_ms", "60000")
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "mpesa", "paymentMode": "stk",
 		"customerPhone": "0722123456", "clientUuid": "a5-resurrect",
 	})
@@ -702,7 +702,7 @@ func TestAdversarialProbeBugLoyaltyKeptOnVoid(t *testing.T) {
 	}
 	cid := int64(dataMap(t, w)["id"].(float64))
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "mpesa", "paymentMode": "manual",
 		"customerId": cid, "clientUuid": "a5-loyal-1",
 	})
@@ -742,7 +742,7 @@ func TestAdversarialProbeBugCashCheckoutEarnsNoLoyalty(t *testing.T) {
 	}
 	cid := int64(dataMap(t, w)["id"].(float64))
 	if c := a5Code(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "customerId": cid, "clientUuid": "a5-loyal-cash",
 	}); c != 201 {
 		t.Fatalf("cash checkout: %d", c)
@@ -760,10 +760,10 @@ func TestAdversarialProbeBugZeroPriceCheckoutRejected(t *testing.T) {
 	engine, admin, cashier, _ := newTestServer(t)
 	pid := a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-FREE", "name": "A5 Freebie", "categoryId": 1,
-		"priceCents": 0, "stockQty": 5, "trackStock": true,
+		"priceCents": 0, "stockQtyMilli": 5000, "trackStock": true,
 	})
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 1}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "clientUuid": "a5-free-1",
 	})
 	if w.Code != 201 {
@@ -778,33 +778,33 @@ func TestAdversarialProbeDiscountAndRefundBoundaries(t *testing.T) {
 	engine, admin, cashier, _ := newTestServer(t)
 	a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-DISC", "name": "A5 Disc", "categoryId": 1,
-		"priceCents": 10000, "stockQty": 10, "trackStock": true,
+		"priceCents": 10000, "stockQtyMilli": 10000, "trackStock": true,
 	})
 	pid := int64(productIDs(t, engine, cashier, "A5 Disc")[0]["id"].(float64))
 	// Discount == subtotal must be rejected (no 100%-off orders).
 	if c := a5Code(t, engine, "POST", "/api/v1/orders/checkout", admin, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 1}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "discountCents": 10000, "clientUuid": "a5-d1",
 	}); c != 422 {
 		t.Errorf("100%% discount must 422, got %d", c)
 	}
 	// Negative discount rejected.
 	if c := a5Code(t, engine, "POST", "/api/v1/orders/checkout", admin, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 1}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "discountCents": -1, "clientUuid": "a5-d2",
 	}); c != 422 {
 		t.Errorf("negative discount must 422, got %d", c)
 	}
 	// Cashier without payments.apply_discount cannot discount at all.
 	if c := a5Code(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 1}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "discountCents": 100, "clientUuid": "a5-d3",
 	}); c != 403 {
 		t.Errorf("cashier discount must 403, got %d", c)
 	}
 	// subtotal-1 is the legal ceiling and produces total 1.
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", admin, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 1}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "discountCents": 9999, "clientUuid": "a5-d4",
 	})
 	if w.Code != 201 {
@@ -833,11 +833,11 @@ func TestAdversarialProbeDiscountAndRefundBoundaries(t *testing.T) {
 	// ErrNoStoreCredit / ErrLoyaltyPoints) — misleading 5xx on client errors.
 	a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-NOFC", "name": "A5 NoFund", "categoryId": 1,
-		"priceCents": 100000, "stockQty": 0, "trackStock": false,
+		"priceCents": 100000, "stockQtyMilli": 0, "trackStock": false,
 	})
 	p2 := int64(productIDs(t, engine, cashier, "A5 NoFund")[0]["id"].(float64))
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", admin, map[string]any{
-		"items":         []map[string]any{{"productId": p2, "qty": 1}},
+		"items":         []map[string]any{{"productId": p2, "qtyMilli": 1000}},
 		"paymentMethod": "credit", "customerId": cid, "clientUuid": "a5-nofund",
 	})
 	if w.Code >= 500 {
@@ -854,12 +854,12 @@ func TestAdversarialProbeCSVFormulaInjectionExport(t *testing.T) {
 	for i, n := range names {
 		a5CreateProduct(t, engine, admin, map[string]any{
 			"sku": fmt.Sprintf("A5-F%d", i), "name": n, "categoryId": 1,
-			"priceCents": 100, "costCents": 50, "stockQty": 1, "trackStock": true,
+			"priceCents": 100, "costCents": 50, "stockQtyMilli": 1000, "trackStock": true,
 		})
 	}
 	a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-FQ", "name": `Has,Comma "Quote"` + "\nNewline", "categoryId": 1,
-		"priceCents": 100, "stockQty": 1, "trackStock": true,
+		"priceCents": 100, "stockQtyMilli": 1000, "trackStock": true,
 	})
 	w := do(t, engine, "GET", "/api/v1/products/export", admin, nil)
 	if w.Code != 200 {
@@ -938,18 +938,18 @@ func TestAdversarialProbePayloadTypeConfusionAndLimits(t *testing.T) {
 	engine, admin, cashier, _ := newTestServer(t)
 	a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-TYPE", "name": "A5 Type", "categoryId": 1,
-		"priceCents": 100, "stockQty": 100000, "trackStock": true,
+		"priceCents": 100, "stockQtyMilli": 100000000, "trackStock": true,
 	})
 	pid := int64(productIDs(t, engine, cashier, "A5 Type")[0]["id"].(float64))
 
 	// Type confusion: wrong JSON types must bind-fail as 4xx, never 500.
 	bad := []map[string]any{
-		{"items": []map[string]any{{"productId": pid, "qty": "3"}}, "paymentMethod": "cash", "clientUuid": "a5-t1"},
-		{"items": []map[string]any{{"productId": pid, "qty": 1.5}}, "paymentMethod": "cash", "clientUuid": "a5-t2"},
-		{"items": []map[string]any{{"productId": -7, "qty": 1}}, "paymentMethod": "cash", "clientUuid": "a5-t3"},
+		{"items": []map[string]any{{"productId": pid, "qtyMilli": "3"}}, "paymentMethod": "cash", "clientUuid": "a5-t1"},
+		{"items": []map[string]any{{"productId": pid, "qtyMilli": 1000.5}}, "paymentMethod": "cash", "clientUuid": "a5-t2"},
+		{"items": []map[string]any{{"productId": -7, "qtyMilli": 1000}}, "paymentMethod": "cash", "clientUuid": "a5-t3"},
 		{"items": "not-an-array", "paymentMethod": "cash", "clientUuid": "a5-t4"},
-		{"items": []map[string]any{{"productId": pid, "qty": 1}}, "paymentMethod": "cash ", "clientUuid": "a5-t5"},
-		{"items": []map[string]any{{"productId": pid, "qty": 1, "unitPriceCents": -900}}, "paymentMethod": "cash", "clientUuid": "a5-t6"},
+		{"items": []map[string]any{{"productId": pid, "qtyMilli": 1000}}, "paymentMethod": "cash ", "clientUuid": "a5-t5"},
+		{"items": []map[string]any{{"productId": pid, "qtyMilli": 1000, "unitPriceCents": -900}}, "paymentMethod": "cash", "clientUuid": "a5-t6"},
 	}
 	for i, b := range bad {
 		w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, b)
@@ -960,7 +960,7 @@ func TestAdversarialProbePayloadTypeConfusionAndLimits(t *testing.T) {
 	// Line-count bomb: 600 lines > MaxOrderLines(500).
 	lines := make([]map[string]any, 600)
 	for i := range lines {
-		lines[i] = map[string]any{"productId": pid, "qty": 1}
+		lines[i] = map[string]any{"productId": pid, "qtyMilli": 1000}
 	}
 	if c := a5Code(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
 		"items": lines, "paymentMethod": "cash", "clientUuid": "a5-t7",
@@ -989,7 +989,7 @@ func TestAdversarialProbePayloadTypeConfusionAndLimits(t *testing.T) {
 	// Half-megabyte note: currently stored verbatim (unbounded) — must at
 	// minimum not 5xx; 201 documents the unbounded-note finding.
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 1}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "clientUuid": "a5-t8",
 		"note": strings.Repeat("N", 500<<10),
 	})
@@ -1043,7 +1043,7 @@ func TestAdversarialProbeUnicodeHomoglyphUsernames(t *testing.T) {
 func TestAdversarialProbeOrdersFilterHostility(t *testing.T) {
 	engine, _, cashier, _ := newTestServer(t)
 	if c := a5Code(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "clientUuid": "a5-filt",
 	}); c != 201 {
 		t.Fatalf("seed order: %d", c)
@@ -1124,7 +1124,7 @@ func TestAdversarialProbeBugWSCrossShopEventLeak(t *testing.T) {
 	// Stock shop B with its own product.
 	a5CreateProduct(t, engine, tokB, map[string]any{
 		"sku": "WS-B1", "name": "WS B Widget", "categoryId": 1,
-		"priceCents": 12345, "stockQty": 10, "trackStock": true,
+		"priceCents": 12345, "stockQtyMilli": 10000, "trackStock": true,
 	})
 	pidB := int64(productIDs(t, engine, tokB, "WS B Widget")[0]["id"].(float64))
 
@@ -1142,7 +1142,7 @@ func TestAdversarialProbeBugWSCrossShopEventLeak(t *testing.T) {
 
 	// Shop B sells; shop A's socket must hear NOTHING about it.
 	if c := a5Code(t, engine, "POST", "/api/v1/orders/checkout", tokB, map[string]any{
-		"items":         []map[string]any{{"productId": pidB, "qty": 1}},
+		"items":         []map[string]any{{"productId": pidB, "qtyMilli": 1000}},
 		"paymentMethod": "cash", "customerName": "Secret B Customer",
 		"clientUuid": "a5-wsleak",
 	}); c != 201 {
@@ -1161,7 +1161,7 @@ func TestAdversarialProbeWSBroadcastNeverStalls(t *testing.T) {
 	engine, admin, cashier, _ := newTestServer(t)
 	pid := a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-STALL", "name": "A5 Stall", "categoryId": 1,
-		"priceCents": 100, "stockQty": 100, "trackStock": true,
+		"priceCents": 100, "stockQtyMilli": 100000, "trackStock": true,
 	})
 	srv := httptest.NewServer(engine)
 	defer srv.Close()
@@ -1185,7 +1185,7 @@ func TestAdversarialProbeWSBroadcastNeverStalls(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		started := time.Now()
 		w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-			"items":         []map[string]any{{"productId": pid, "qty": 1}},
+			"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 			"paymentMethod": "cash", "clientUuid": fmt.Sprintf("a5-stall-%d", i),
 			"note": strings.Repeat("S", 500<<10),
 		})
@@ -1219,7 +1219,7 @@ func TestAdversarialProbeCrossShopWriteBattery(t *testing.T) {
 	// Shop A (default tenant) fixtures.
 	pid := a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-CSW", "name": "A5 CSW Widget", "categoryId": 1,
-		"priceCents": 2500, "stockQty": 7, "trackStock": true,
+		"priceCents": 2500, "stockQtyMilli": 7000, "trackStock": true,
 	})
 	w := do(t, engine, "POST", "/api/v1/customers", admin, map[string]any{
 		"name": "A5 CSW Debtor", "creditLimitCents": 900000,
@@ -1229,7 +1229,7 @@ func TestAdversarialProbeCrossShopWriteBattery(t *testing.T) {
 	}
 	cid := int64(dataMap(t, w)["id"].(float64))
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", admin, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 1}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 		"paymentMethod": "account", "customerId": cid, "clientUuid": "a5-csw-tab",
 	})
 	if w.Code != 201 {
@@ -1241,7 +1241,7 @@ func TestAdversarialProbeCrossShopWriteBattery(t *testing.T) {
 	w = do(t, engine, "POST", "/api/v1/held-sales", admin, map[string]any{
 		"refName": "a5-csw-hold",
 		"cart": map[string]any{
-			"items":         []map[string]any{{"productId": pid, "qty": 2}},
+			"items":         []map[string]any{{"productId": pid, "qtyMilli": 2000}},
 			"paymentMethod": "cash", // nested CheckoutRequest binds strictly
 		},
 	})
@@ -1260,22 +1260,22 @@ func TestAdversarialProbeCrossShopWriteBattery(t *testing.T) {
 		body   any
 	}{
 		{"checkout with foreign product", "POST", "/api/v1/orders/checkout", map[string]any{
-			"items":         []map[string]any{{"productId": pid, "qty": 1}},
+			"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 			"paymentMethod": "cash", "clientUuid": "a5-csw-x1",
 		}},
 		{"tab checkout on foreign customer", "POST", "/api/v1/orders/checkout", map[string]any{
-			"items":         []map[string]any{{"productId": 1, "qty": 1}},
+			"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 			"paymentMethod": "account", "customerId": cid, "clientUuid": "a5-csw-x2",
 		}},
 		{"credit checkout on foreign customer", "POST", "/api/v1/orders/checkout", map[string]any{
-			"items":         []map[string]any{{"productId": 1, "qty": 1}},
+			"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 			"paymentMethod": "credit", "customerId": cid, "clientUuid": "a5-csw-x3",
 		}},
 		{"loyalty redeem against foreign customer", "POST", "/api/v1/orders/checkout", map[string]any{
-			"items":         []map[string]any{{"productId": 1, "qty": 1}},
+			"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 			"paymentMethod": "cash", "customerId": cid, "redeemPoints": 10, "clientUuid": "a5-csw-x4",
 		}},
-		{"adjust foreign stock", "POST", "/api/v1/products/" + itoa64(pid) + "/adjust-stock", map[string]any{"delta": -7}},
+		{"adjust foreign stock", "POST", "/api/v1/products/" + itoa64(pid) + "/adjust-stock", map[string]any{"deltaMilli": -7000}},
 		{"deactivate foreign product", "DELETE", "/api/v1/products/" + itoa64(pid), nil},
 		{"discard foreign held sale", "DELETE", "/api/v1/held-sales/" + itoa64(heldID), nil},
 		{"settle foreign tab", "POST", "/api/v1/orders/" + itoa64(tabOID) + "/settle", map[string]any{"method": "cash"}},
@@ -1385,7 +1385,7 @@ func TestAdversarialProbeVoidExactlyOnceStockAndPoints(t *testing.T) {
 	a5SetSetting(t, engine, admin, "loyalty_earn_per_cents", "100") // 1 pt / KES 1
 	pid := a5CreateProduct(t, engine, admin, map[string]any{
 		"sku": "A5-VOID1", "name": "A5 VoidOnce", "categoryId": 1,
-		"priceCents": 50000, "stockQty": 5, "trackStock": true,
+		"priceCents": 50000, "stockQtyMilli": 5000, "trackStock": true,
 	})
 	w := do(t, engine, "POST", "/api/v1/customers", admin, map[string]any{"name": "A5 VoidOnce Cust"})
 	if w.Code != 201 {
@@ -1395,7 +1395,7 @@ func TestAdversarialProbeVoidExactlyOnceStockAndPoints(t *testing.T) {
 
 	// Order 1: paid via manual M-Pesa → earns 500 points (50000/100).
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 1}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 		"paymentMethod": "mpesa", "paymentMode": "manual",
 		"customerId": cid, "clientUuid": "a5-vo-1",
 	})
@@ -1414,7 +1414,7 @@ func TestAdversarialProbeVoidExactlyOnceStockAndPoints(t *testing.T) {
 	// Order 2: admin redeems 400 points (40000 cents, under the 50% cap
 	// of the 100000-cent subtotal) → stock 5→3, points 500→100.
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", admin, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 2}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 2000}},
 		"paymentMethod": "cash", "customerId": cid, "redeemPoints": 400,
 		"clientUuid": "a5-vo-2",
 	})
@@ -1474,7 +1474,7 @@ func TestAdversarialProbeBugZeroAmountCallbackMarksPaidSilently(t *testing.T) {
 	engine, admin, cashier, _ := newTestServer(t)
 	a5SetSetting(t, engine, admin, "mpesa_mock_delay_ms", "60000")
 	w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": 1, "qty": 1}},
+		"items":         []map[string]any{{"productId": 1, "qtyMilli": 1000}},
 		"paymentMethod": "mpesa", "paymentMode": "stk",
 		"customerPhone": "0722123456", "clientUuid": "a5-zero-cb",
 	})

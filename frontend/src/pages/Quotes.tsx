@@ -18,6 +18,7 @@ import {
 } from '../lib/api'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
+import { fmtQty, lineTotalCents } from '../lib/qty'
 import {
   Button, Card, EmptyState, Field, Input, Modal, MoneyInput,
   Spinner, StatusPill, Table, Textarea,
@@ -305,10 +306,10 @@ function QuoteEditor({
       const i = cur.findIndex((it) => it.productId === p.id)
       if (i >= 0) {
         const next = [...cur]
-        next[i] = { ...next[i], qty: next[i].qty + 1, lineTotalCents: (next[i].qty + 1) * next[i].unitPriceCents }
+        next[i] = { ...next[i], qtyMilli: next[i].qtyMilli + 1000, lineTotalCents: lineTotalCents(next[i].unitPriceCents, next[i].qtyMilli + 1000) }
         return next
       }
-      return [...cur, { productId: p.id, sku: p.sku, name: p.name, qty: 1, unitPriceCents: p.priceCents, lineTotalCents: p.priceCents }]
+      return [...cur, { productId: p.id, sku: p.sku, name: p.name, qtyMilli: 1000, unitPriceCents: p.priceCents, lineTotalCents: p.priceCents }]
     })
     setProdQ('')
   }
@@ -317,7 +318,7 @@ function QuoteEditor({
     setItems((cur) => cur.map((it, i) => {
       if (i !== idx) return it
       const next = { ...it, ...patch }
-      next.lineTotalCents = next.unitPriceCents * Math.max(0, next.qty)
+      next.lineTotalCents = lineTotalCents(next.unitPriceCents, Math.max(0, next.qtyMilli))
       return next
     }))
   }
@@ -440,7 +441,7 @@ function QuoteEditor({
                   className="w-full flex items-center justify-between gap-2 text-left px-3 py-2 hover:bg-surface-muted">
                   <span className="min-w-0">
                     <span className="block text-[13px] font-semibold text-ink truncate">{p.name}</span>
-                    <span className="block text-[11px] text-ink-muted">{p.sku} · stock {p.stockQty}</span>
+                    <span className="block text-[11px] text-ink-muted">{p.sku} · stock {fmtQty(p.stockQtyMilli)}{p.unit ? ` ${p.unit}` : ''}</span>
                   </span>
                   <span className="text-[12.5px] font-bold text-ink tabular shrink-0">{money(p.priceCents)}</span>
                 </button>
@@ -453,18 +454,20 @@ function QuoteEditor({
             </p>
           ) : (
             <div className="border-2 border-line rounded-input divide-y divide-line">
-              {items.map((it, idx) => (
+              {items.map((it, idx) => {
+                const prodUnit = products.find((x) => x.id === it.productId)?.unit
+                return (
                 <div key={`${it.productId}-${idx}`} className="flex flex-wrap items-center gap-2 px-2.5 py-2">
                   <div className="min-w-0 flex-1">
                     <p className="text-[13px] font-semibold text-ink truncate">{it.name}</p>
                     <p className="text-[11px] text-ink-muted">{it.sku}</p>
                   </div>
                   <label className="flex items-center gap-1 text-[11px] text-ink-muted">
-                    Qty
+                    Qty{prodUnit ? ` (${prodUnit})` : ''}
                     <input
-                      type="number" min={1} max={9999}
-                      value={it.qty}
-                      onChange={(e) => setLine(idx, { qty: Math.max(1, Math.round(Number(e.target.value) || 1)) })}
+                      type="number" min={0.001} max={9999} step={0.001}
+                      value={it.qtyMilli / 1000}
+                      onChange={(e) => setLine(idx, { qtyMilli: Math.max(1, Math.round((Number(e.target.value) * 1000) || 0)) })}
                       className="w-16 min-h-9 rounded-input border-2 border-line bg-surface px-2 text-[13px] text-ink tabular"
                     />
                   </label>
@@ -480,7 +483,8 @@ function QuoteEditor({
                     <Trash2 size={14} strokeWidth={2.25} aria-hidden />
                   </button>
                 </div>
-              ))}
+                )
+              })}
               <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-1 px-3 py-2 bg-surface-muted text-[12.5px]">
                 <span className="text-ink-muted">Subtotal <span className="font-bold text-ink tabular">{money(subtotal)}</span></span>
                 {discountCents > 0 && <span className="text-ink-muted">Discount <span className="font-bold text-ink tabular">−{money(discountCents)}</span></span>}
@@ -565,7 +569,7 @@ function QuoteDetail({
             <div key={i} className="flex items-center justify-between gap-3 px-3 py-2 text-[13px]">
               <span className="min-w-0">
                 <span className="block font-semibold text-ink truncate">{it.name}</span>
-                <span className="text-[11px] text-ink-muted">{it.qty} × {money(it.unitPriceCents)}</span>
+                <span className="text-[11px] text-ink-muted">{fmtQty(it.qtyMilli)} × {money(it.unitPriceCents)}</span>
               </span>
               <span className="font-bold text-ink tabular shrink-0">{money(it.lineTotalCents)}</span>
             </div>
@@ -709,7 +713,7 @@ function QuotePrint({ quote, onClose }: { quote: Quote; onClose: () => void }) {
             {quote.items.map((it, i) => (
               <tr key={i} className="border-b border-black/10">
                 <td className="py-1.5 font-semibold">{it.name}</td>
-                <td className="py-1.5 text-right tabular">{it.qty}</td>
+                <td className="py-1.5 text-right tabular">{fmtQty(it.qtyMilli)}</td>
                 <td className="py-1.5 text-right tabular">{cur}{money(it.unitPriceCents)}</td>
                 <td className="py-1.5 text-right tabular font-bold">{cur}{money(it.lineTotalCents)}</td>
               </tr>

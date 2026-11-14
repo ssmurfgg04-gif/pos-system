@@ -29,11 +29,11 @@ describe('tierPriceCents — the wholesale pricing rule', () => {
 describe('cart store — price tier', () => {
   const prod = (over: Partial<Product>): Product => ({
     id: 1, sku: 'SKU-1', barcode: '', name: 'Tee', categoryId: 1, categoryName: 'Cat',
-    priceCents: 55000, costCents: 0, stockQty: 100, trackStock: true, active: true, updatedAt: '',
+    priceCents: 55000, costCents: 0, stockQtyMilli: 100_000, trackStock: true, active: true, updatedAt: '',
     ...over,
   })
   const line = (productId: number, unitPriceCents: number) => ({
-    productId, name: `P${productId}`, sku: `S${productId}`, unitPriceCents, qty: 1, trackStock: false, stockQty: 0,
+    productId, name: `P${productId}`, sku: `S${productId}`, unitPriceCents, qtyMilli: 1000, trackStock: false, stockQtyMilli: 0,
   })
 
   beforeEach(() => {

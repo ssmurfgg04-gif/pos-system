@@ -152,9 +152,9 @@ describe('CheckoutRail cart row — the decrease control', () => {
     name: 'Classic Cotton Tee — Black',
     sku: 'TS-001',
     unitPriceCents: 55000,
-    qty: 1,
+    qtyMilli: 1000,
     trackStock: false,
-    stockQty: 0,
+    stockQtyMilli: 0,
     ...over,
   })
 
@@ -169,7 +169,7 @@ describe('CheckoutRail cart row — the decrease control', () => {
   })
 
   test('shows a − glyph at quantity 3 too — stable control shape', () => {
-    useCart.setState({ lines: [line({ qty: 3 })] })
+    useCart.setState({ lines: [line({ qtyMilli: 3000 })] })
     mount(<CheckoutRail products={null} payConfig={null} onOrderPaid={() => {}} onOrderVoided={() => {}} />)
     const dec = container.querySelector('button[aria-label="Decrease quantity"]') as HTMLButtonElement
     expect(dec).toBeTruthy()

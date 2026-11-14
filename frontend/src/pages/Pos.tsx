@@ -19,6 +19,7 @@ import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { usePosSearch } from '../stores/search'
 import { formatMoney, formatMoneyCompact } from '../lib/money'
+import { fmtQty, isFractionUnit, parseQtyInput, unitLabel } from '../lib/qty'
 import { tierPriceCents } from '../lib/pricing'
 import { lowStockAt } from '../lib/stock'
 import { Button, EmptyState, Input, Modal, Spinner, ErrorBoundary } from '../components/ui'
@@ -191,18 +192,18 @@ export function Pos() {
 
   const totals = cart.totals()
 
-  /** Live quantity of a product in the shared cart (0 when absent) —
+  /** Live quantity of a product in the shared cart in MILLI (0 when absent) —
    *  drives the quantity-aware product card controls. */
   const cartQty = (productId: number) =>
-    cart.lines.find((l) => l.productId === productId)?.qty ?? 0
+    cart.lines.find((l) => l.productId === productId)?.qtyMilli ?? 0
 
   // v1.6.3 wholesale tier: every cart add goes through here so a wholesale
   // customer on the sale starts new lines at the product's wholesale price
   // (products without one stay at retail — tierPriceCents is the rule).
   // Only a line still at the catalog retail price follows the tier; a
   // manually overridden price is never touched.
-  const addWithTier = (p: Product, qty = 1) => {
-    cart.add(p, qty)
+  const addWithTier = (p: Product, qtyMilli = 1000) => {
+    cart.add(p, qtyMilli)
     const target = tierPriceCents(p, useCart.getState().priceTier)
     if (target === p.priceCents) return
     const line = useCart.getState().lines.find((l) => l.productId === p.id)
@@ -210,11 +211,21 @@ export function Pos() {
   }
 
   const addToCart = (p: Product) => {
-    if (p.trackStock && p.stockQty <= 0) {
+    if (p.trackStock && p.stockQtyMilli <= 0) {
       toast.error('Out of stock', p.name)
       return
     }
-    addWithTier(p)
+    addWithTier(p, 1000)
+    if (navigator.vibrate) navigator.vibrate(10)
+  }
+
+  /** Fraction-aware add: the cashier typed "0.5" on a weighed product. */
+  const addToCartMilli = (p: Product, qtyMilli: number) => {
+    if (p.trackStock && qtyMilli > p.stockQtyMilli) {
+      toast.error('Not enough stock', `${p.name}: ${fmtQty(p.stockQtyMilli)} ${unitLabel(p.unit)} on the shelf`)
+      return
+    }
+    addWithTier(p, qtyMilli)
     if (navigator.vibrate) navigator.vibrate(10)
   }
 
@@ -227,7 +238,7 @@ export function Pos() {
     // merging (two merged baskets under one customer is a money bug, not a
     // convenience). The replaced basket is auto-held so nothing is lost.
     if (useCart.getState().lines.length > 0) {
-      const replaced = useCart.getState().lines.map((l) => ({ productId: l.productId, qty: l.qty }))
+      const replaced = useCart.getState().lines.map((l) => ({ productId: l.productId, qtyMilli: l.qtyMilli }))
       const name = useCart.getState().customerName || 'Replaced basket'
       try {
         await api.post('/api/v1/held-sales', {
@@ -254,7 +265,7 @@ export function Pos() {
       // Held items carry no prices — they come back at catalog retail
       // (the tier was reset with the clear above; re-picking the customer
       // re-applies it via the rail's picker).
-      cart.add(p, it.qty)
+      cart.add(p, it.qtyMilli)
     }
     if (sale.customerName) cart.setCustomerName(sale.customerName)
     if (sale.note) cart.setNote(sale.note)
@@ -318,7 +329,7 @@ export function Pos() {
               {formatMoneyCompact(totals.total)}
               {cart.lines.length > 0 && (
                 <span className="absolute -top-2 -right-2 min-w-5 h-5 px-1 rounded-pill bg-danger text-white text-[11px] font-bold flex items-center justify-center border-2 border-surface tabular">
-                  {totals.count}
+                  {fmtQty(totals.count * 1000)}
                 </span>
               )}
             </Button>
@@ -384,13 +395,29 @@ export function Pos() {
           ) : view === 'grid' ? (
             <div className="grid grid-cols-2 min-[480px]:grid-cols-3 md:grid-cols-4 2xl:grid-cols-5 gap-2.5">
               {filtered.map((p) => (
-                <ProductCard key={p.id} p={p} qty={cartQty(p.id)} onAdd={() => addToCart(p)} onInc={() => addToCart(p)} onDec={() => cart.setQty(p.id, cartQty(p.id) - 1)} />
+                <ProductCard
+                  key={p.id}
+                  p={p}
+                  qty={cartQty(p.id)}
+                  onAdd={() => addToCart(p)}
+                  onInc={() => addToCart(p)}
+                  onDec={() => cart.setQty(p.id, cartQty(p.id) - 1000)}
+                  onAddMilli={(m) => addToCartMilli(p, m)}
+                />
               ))}
             </div>
           ) : (
             <div className="space-y-1.5">
               {filtered.map((p) => (
-                <ProductRow key={p.id} p={p} qty={cartQty(p.id)} onAdd={() => addToCart(p)} onInc={() => addToCart(p)} onDec={() => cart.setQty(p.id, cartQty(p.id) - 1)} />
+                <ProductRow
+                  key={p.id}
+                  p={p}
+                  qty={cartQty(p.id)}
+                  onAdd={() => addToCart(p)}
+                  onInc={() => addToCart(p)}
+                  onDec={() => cart.setQty(p.id, cartQty(p.id) - 1000)}
+                  onAddMilli={(m) => addToCartMilli(p, m)}
+                />
               ))}
             </div>
           )}
@@ -457,29 +484,71 @@ function CategoryChip({ active, onClick, children }: { active: boolean; onClick:
 
 function StockBadge({ p }: { p: Product }) {
   if (!p.trackStock) return null
-  const out = p.stockQty <= 0
-  const low = !out && p.stockQty <= lowStockAt(p)
+  const out = p.stockQtyMilli <= 0
+  // per-product threshold (lib/stock), in whole units → milli-units
+  const low = !out && p.stockQtyMilli <= lowStockAt(p) * 1000
+  const label = `${fmtQty(p.stockQtyMilli)}${p.unit ? ` ${p.unit}` : ''}`
   return (
     <span
-      title={out ? 'Out of stock' : `${p.stockQty} in stock`}
+      title={out ? 'Out of stock' : `${label} in stock`}
       className={`absolute top-1.5 right-1.5 z-10 px-1.5 py-0.5 rounded-pill text-[10px] font-bold tabular ${
         out ? 'bg-danger-bg text-danger-text' : low ? 'bg-pending-bg text-pending-text' : 'bg-surface-muted text-ink-subtle'
       }`}
     >
-      {out ? 'OUT' : low ? `${p.stockQty} left` : `${p.stockQty} in stock`}
+      {out ? 'OUT' : low ? `${label} left` : `${label} in stock`}
     </span>
   )
 }
 
-function ProductCard({ p, qty, onAdd, onInc, onDec }: {
+/** Fraction-aware qty entry for weighed goods (allowFraction): the cashier
+ *  types "0.5" and the parsed MILLI quantity rides into the cart. */
+function FractionQtyInput({ p, onAddMilli }: { p: Product; onAddMilli: (milli: number) => void }) {
+  const [val, setVal] = useState('')
+  const submit = () => {
+    const m = parseQtyInput(val)
+    if (m === null) {
+      toast.error('Enter a quantity', `Type ${p.unit || 'pc'}s like 0.5 or 2`)
+      return
+    }
+    onAddMilli(m)
+    setVal('')
+  }
+  return (
+    <div className="flex items-center gap-1 h-9 rounded-input border border-line-strong bg-surface px-1.5" role="group" aria-label={`Weigh ${p.name} into the cart`}>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={val}
+        onChange={(e) => setVal(e.target.value.replace(/[^\d.]/g, ''))}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit() } }}
+        placeholder="0.5"
+        aria-label={`${p.name} quantity in ${unitLabel(p.unit)}`}
+        className="w-14 min-w-0 bg-transparent text-center font-bold text-[13px] tabular text-ink placeholder:text-ink-subtle/50 outline-none"
+      />
+      <span className="text-[10px] font-bold uppercase text-ink-subtle shrink-0">{unitLabel(p.unit)}</span>
+      <button
+        onClick={submit}
+        aria-label={`Add ${p.name} by weight`}
+        className="w-7 h-7 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:brightness-110"
+      >
+        <Plus size={13} strokeWidth={3} aria-hidden />
+      </button>
+    </div>
+  )
+}
+
+function ProductCard({ p, qty, onAdd, onInc, onDec, onAddMilli }: {
   p: Product
+  /** qty in MILLI. */
   qty: number
   onAdd: () => void
   onInc: () => void
   onDec: () => void
+  onAddMilli: (milli: number) => void
 }) {
-  const out = p.trackStock && p.stockQty <= 0
+  const out = p.trackStock && p.stockQtyMilli <= 0
   const inCart = qty > 0
+  const unit = unitLabel(p.unit)
   return (
     <div
       className={`relative flex flex-col rounded-input border bg-surface overflow-hidden transition-colors ${
@@ -516,16 +585,16 @@ function ProductCard({ p, qty, onAdd, onInc, onDec }: {
           <div className="flex items-stretch rounded-input border border-brand overflow-hidden h-9 bg-brand-soft" role="group" aria-label={`${p.name} quantity in cart`}>
             <button
               onClick={onDec}
-              aria-label={qty === 1 ? `Remove ${p.name} from cart` : `Decrease ${p.name} quantity`}
+              aria-label={qty === 1000 ? `Remove ${p.name} from cart` : `Decrease ${p.name} quantity`}
               className="w-10 font-bold text-brand hover:bg-brand/10 flex items-center justify-center"
             >
               <Minus size={15} strokeWidth={3} aria-hidden />
             </button>
-            <span className="flex-1 text-center font-extrabold text-brand text-[14px] tabular flex items-center justify-center" aria-live="polite">{qty}</span>
+            <span className="flex-1 text-center font-extrabold text-brand text-[14px] tabular flex items-center justify-center" aria-live="polite">{fmtQty(qty)}{isFractionUnit(p.unit) ? ` ${unit}` : ''}</span>
             <button
               onClick={onInc}
               aria-label={`Increase ${p.name} quantity`}
-              disabled={out || (p.trackStock && qty >= p.stockQty)}
+              disabled={out || (p.trackStock && qty >= p.stockQtyMilli)}
               className="w-10 font-bold text-brand hover:bg-brand/10 disabled:opacity-55 flex items-center justify-center"
             >
               <Plus size={15} strokeWidth={3} aria-hidden />
@@ -546,19 +615,24 @@ function ProductCard({ p, qty, onAdd, onInc, onDec }: {
             {out ? 'Out of stock' : 'Add'}
           </button>
         )}
+        {/* Weighed goods: a decimal qty entry rides under the add/stepper
+            zone — the stepper still handles whole units in ±1 steps. */}
+        {!!p.allowFraction && !out && <FractionQtyInput p={p} onAddMilli={onAddMilli} />}
       </div>
     </div>
   )
 }
 
-function ProductRow({ p, qty, onAdd, onInc, onDec }: {
+function ProductRow({ p, qty, onAdd, onInc, onDec, onAddMilli }: {
   p: Product
+  /** qty in MILLI. */
   qty: number
   onAdd: () => void
   onInc: () => void
   onDec: () => void
+  onAddMilli: (milli: number) => void
 }) {
-  const out = p.trackStock && p.stockQty <= 0
+  const out = p.trackStock && p.stockQtyMilli <= 0
   const inCart = qty > 0
   return (
     <div className={`flex items-center gap-3 p-2 rounded-input border bg-surface ${out ? 'border-line opacity-60' : inCart ? 'border-brand/50' : 'border-line'}`}>
@@ -570,8 +644,8 @@ function ProductRow({ p, qty, onAdd, onInc, onDec }: {
         <p className="text-[11px] text-ink-subtle">{p.sku || p.categoryName}</p>
       </button>
       {p.trackStock && (
-        <span className={`text-[10px] font-bold tabular whitespace-nowrap px-1.5 py-0.5 rounded-pill ${out ? 'bg-danger-bg text-danger-text' : p.stockQty <= lowStockAt(p) ? 'bg-pending-bg text-pending-text' : 'bg-surface-muted text-ink-subtle'}`}>
-          {out ? 'OUT' : `${p.stockQty} left`}
+        <span className={`text-[10px] font-bold tabular whitespace-nowrap px-1.5 py-0.5 rounded-pill ${out ? 'bg-danger-bg text-danger-text' : p.stockQtyMilli <= lowStockAt(p) * 1000 ? 'bg-pending-bg text-pending-text' : 'bg-surface-muted text-ink-subtle'}`}>
+          {out ? 'OUT' : `${fmtQty(p.stockQtyMilli)}${p.unit ? ` ${p.unit}` : ''} left`}
         </span>
       )}
       <span className={`font-bold text-[14px] tabular whitespace-nowrap ${inCart ? 'text-brand' : 'text-ink'}`}>{formatMoneyCompact(p.priceCents)}</span>
@@ -579,16 +653,16 @@ function ProductRow({ p, qty, onAdd, onInc, onDec }: {
         <div className="flex items-center rounded-pill border border-brand overflow-hidden h-8 bg-brand-soft shrink-0" role="group" aria-label={`${p.name} quantity in cart`}>
           <button
             onClick={onDec}
-            aria-label={qty === 1 ? `Remove ${p.name} from cart` : `Decrease ${p.name} quantity`}
+            aria-label={qty === 1000 ? `Remove ${p.name} from cart` : `Decrease ${p.name} quantity`}
             className="w-7 h-full font-bold text-brand hover:bg-brand/10 flex items-center justify-center"
           >
             <Minus size={13} strokeWidth={3} aria-hidden />
           </button>
-          <span className="w-6 text-center font-extrabold text-brand text-[13px] tabular" aria-live="polite">{qty}</span>
+          <span className="w-10 text-center font-extrabold text-brand text-[13px] tabular" aria-live="polite">{fmtQty(qty)}</span>
           <button
             onClick={onInc}
             aria-label={`Increase ${p.name} quantity`}
-            disabled={out || (p.trackStock && qty >= p.stockQty)}
+            disabled={out || (p.trackStock && qty >= p.stockQtyMilli)}
             className="w-7 h-full font-bold text-brand hover:bg-brand/10 disabled:opacity-55 flex items-center justify-center"
           >
             <Plus size={13} strokeWidth={3} aria-hidden />
@@ -605,6 +679,12 @@ function ProductRow({ p, qty, onAdd, onInc, onDec }: {
         >
           <Plus size={16} strokeWidth={2.75} aria-hidden />
         </button>
+      )}
+      {/* Weighed goods: decimal qty entry sits inline on the row. */}
+      {!!p.allowFraction && !out && (
+        <div className="w-28 shrink-0 [&>div]:h-8">
+          <FractionQtyInput p={p} onAddMilli={onAddMilli} />
+        </div>
       )}
     </div>
   )

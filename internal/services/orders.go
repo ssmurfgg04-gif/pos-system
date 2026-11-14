@@ -53,13 +53,17 @@ const nowStampLayout = "2006-01-02T15:04:05.000Z"
 func NowStamp() string { return nowStamp() }
 
 // checkoutLine is a validated cart line with server-side pricing.
+// Quantities are integer milli-units (1000 = one unit, v1.8.0).
 type checkoutLine struct {
 	productID      int64
 	name, sku      string
-	qty            int
+	qtyMilli       int64
 	unitPriceCents int64
+	lineTotalCents int64 // frozen at sale time: round(price × milli / 1000)
 	costCents      int64 // v1.7.0: unit cost snapshot frozen into order_items at sale time
 	trackStock     bool
+	trackBatches   bool // v1.8.0: FEFO lot allocation on deduction
+	allowFraction  bool
 }
 
 // roundToShilling rounds cents to the nearest whole shilling (M-Pesa STK
@@ -178,26 +182,27 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 	acc := map[int64]checkoutLine{}
 	var orderIdx []int64
 	for _, it := range req.Items {
-		if it.Qty <= 0 {
+		if it.QtyMilli <= 0 {
 			return nil, errors.New("quantity must be positive")
 		}
-		if it.Qty > models.MaxOrderQty {
-			return nil, fmt.Errorf("quantity exceeds maximum (%d)", models.MaxOrderQty)
+		if it.QtyMilli > models.MaxOrderQtyMilli {
+			return nil, fmt.Errorf("quantity exceeds maximum (%d milli)", models.MaxOrderQtyMilli)
 		}
 		if prev, ok := acc[it.ProductID]; ok {
-			prev.qty += it.Qty
-			if prev.qty > models.MaxOrderQty {
-				return nil, fmt.Errorf("quantity exceeds maximum (%d)", models.MaxOrderQty)
+			prev.qtyMilli += it.QtyMilli
+			if prev.qtyMilli > models.MaxOrderQtyMilli {
+				return nil, fmt.Errorf("quantity exceeds maximum (%d milli)", models.MaxOrderQtyMilli)
 			}
 			acc[it.ProductID] = prev
 			continue
 		}
 		var l checkoutLine
-		var track, active int
+		var track, active, batches, fraction int
 		err := s.db.QueryRow(s.db.Rebind(
-			`SELECT id, name, COALESCE(sku,''), price_cents, COALESCE(track_stock,1), COALESCE(is_active,1), COALESCE(cost_cents,0)
+			`SELECT id, name, COALESCE(sku,''), price_cents, COALESCE(track_stock,1), COALESCE(is_active,1), COALESCE(cost_cents,0),
+                                COALESCE(track_batches,0), COALESCE(allow_fraction,0)
                          FROM products WHERE id = ?`), it.ProductID).
-			Scan(&l.productID, &l.name, &l.sku, &l.unitPriceCents, &track, &active, &l.costCents)
+			Scan(&l.productID, &l.name, &l.sku, &l.unitPriceCents, &track, &active, &l.costCents, &batches, &fraction)
 		if err != nil {
 			return nil, fmt.Errorf("product %d: %w", it.ProductID, err)
 		}
@@ -205,6 +210,8 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 			return nil, fmt.Errorf("product %d is inactive", it.ProductID)
 		}
 		l.trackStock = track == 1
+		l.trackBatches = batches == 1
+		l.allowFraction = fraction == 1
 		// Price override is a permission-gated feature.
 		if it.UnitPriceCents != 0 && it.UnitPriceCents != l.unitPriceCents {
 			if !p.Can("payments.override_price") {
@@ -218,7 +225,13 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 		if l.unitPriceCents > models.MaxPriceCents {
 			return nil, fmt.Errorf("product %d price out of range", it.ProductID)
 		}
-		l.qty = it.Qty
+		// Whole-unit products reject fractional quantities (0.3 of a bar
+		// of soap is not a sale, it is a keying error) — fraction products
+		// (kg/l/…) accept any milli granularity.
+		if !l.allowFraction && it.QtyMilli%models.MilliPerUnit != 0 {
+			return nil, fmt.Errorf("%s is sold in whole units", l.name)
+		}
+		l.qtyMilli = it.QtyMilli
 		acc[it.ProductID] = l
 		orderIdx = append(orderIdx, it.ProductID)
 	}
@@ -236,12 +249,13 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 	}
 	included := s.settings.GetBool("tax_included", true)
 	var subtotal int64
-	for _, l := range lines {
-		line := l.unitPriceCents * int64(l.qty)
-		if l.qty > 0 && line/int64(l.qty) != l.unitPriceCents {
+	for i := range lines {
+		l := &lines[i]
+		if l.unitPriceCents > 0 && l.qtyMilli > math.MaxInt64/l.unitPriceCents {
 			return nil, errors.New("line total overflow")
 		}
-		subtotal += line
+		l.lineTotalCents = milliLineTotal(l.unitPriceCents, l.qtyMilli)
+		subtotal += l.lineTotalCents
 		if subtotal < 0 {
 			return nil, errors.New("order total overflow")
 		}
@@ -436,14 +450,19 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 		}
 		id, _ := res.LastInsertId()
 
-		for _, l := range lines {
-			if _, err := tx.Exec(s.db.Rebind(`
-                                INSERT INTO order_items (order_id, product_id, name, sku, qty, unit_price_cents, line_total_cents, cost_cents)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-				id, l.productID, l.name, l.sku, l.qty, l.unitPriceCents, l.unitPriceCents*int64(l.qty), l.costCents); err != nil {
+		// Line items freeze name/sku/price/cost at sale time; batch-tracked
+		// lines that deduct NOW (instant tender) allocate their lots below.
+		itemIDs := make([]int64, len(lines))
+		for li, l := range lines {
+			res, err := tx.Exec(s.db.Rebind(`
+                                INSERT INTO order_items (order_id, product_id, name, sku, qty_milli, qty, unit_price_cents, line_total_cents, cost_cents)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+				id, l.productID, l.name, l.sku, l.qtyMilli, l.qtyMilli/1000, l.unitPriceCents, l.lineTotalCents, l.costCents)
+			if err != nil {
 				tx.Rollback()
 				return nil, err
 			}
+			itemIDs[li], _ = res.LastInsertId()
 		}
 
 		if isSplit {
@@ -529,20 +548,20 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 				// Fail fast on stock BEFORE taking the money.
 				for _, l := range lines {
 					if l.trackStock {
-						var stock int
-						if err := tx.QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, l.productID).Scan(&stock); err != nil {
+						var stock int64
+						if err := tx.QueryRow(`SELECT stock_qty_milli FROM products WHERE id = ?`, l.productID).Scan(&stock); err != nil {
 							tx.Rollback()
 							return nil, err
 						}
-						if stock < l.qty {
+						if stock < l.qtyMilli {
 							tx.Rollback()
-							return nil, fmt.Errorf("%w: %s (have %d, need %d)", ErrInsufficientStock, l.name, stock, l.qty)
+							return nil, fmt.Errorf("%w: %s (have %d, need %d milli)", ErrInsufficientStock, l.name, stock, l.qtyMilli)
 						}
 					}
 				}
-				for _, l := range lines {
+				for li, l := range lines {
 					if l.trackStock {
-						gres, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty - ? WHERE id = ? AND stock_qty >= ?`), l.qty, l.productID, l.qty)
+						gres, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty_milli = stock_qty_milli - ?, stock_qty = (stock_qty_milli - ?) / 1000 WHERE id = ? AND stock_qty_milli >= ?`), l.qtyMilli, l.qtyMilli, l.productID, l.qtyMilli)
 						if err != nil {
 							tx.Rollback()
 							return nil, err
@@ -551,9 +570,15 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 							tx.Rollback()
 							return nil, fmt.Errorf("%w: %s", ErrInsufficientStock, l.name)
 						}
-						if err := recordStockMoveTx(s, tx, l.productID, -int64(l.qty), models.MoveSale, number, "", p.ID, p.Username); err != nil {
+						if err := recordStockMoveTx(s, tx, l.productID, -l.qtyMilli, models.MoveSale, number, "", p.ID, p.Username); err != nil {
 							tx.Rollback()
 							return nil, err
+						}
+						if l.trackBatches {
+							if err := allocateSaleBatchesTx(s, tx, itemIDs[li], l.productID, l.qtyMilli); err != nil {
+								tx.Rollback()
+								return nil, err
+							}
 						}
 					}
 				}
@@ -576,14 +601,14 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 			// Fail fast on stock BEFORE taking money.
 			for _, l := range lines {
 				if l.trackStock {
-					var stock int
-					if err := tx.QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, l.productID).Scan(&stock); err != nil {
+					var stock int64
+					if err := tx.QueryRow(`SELECT stock_qty_milli FROM products WHERE id = ?`, l.productID).Scan(&stock); err != nil {
 						tx.Rollback()
 						return nil, err
 					}
-					if stock < l.qty {
+					if stock < l.qtyMilli {
 						tx.Rollback()
-						return nil, fmt.Errorf("%w: %s (have %d, need %d)", ErrInsufficientStock, l.name, stock, l.qty)
+						return nil, fmt.Errorf("%w: %s (have %d, need %d milli)", ErrInsufficientStock, l.name, stock, l.qtyMilli)
 					}
 				}
 			}
@@ -633,9 +658,9 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 				}
 			}
 			// Guarded stock deduction (WHERE guard = no double-deduct ever).
-			for _, l := range lines {
+			for li, l := range lines {
 				if l.trackStock {
-					gres, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty - ? WHERE id = ? AND stock_qty >= ?`), l.qty, l.productID, l.qty)
+					gres, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty_milli = stock_qty_milli - ?, stock_qty = (stock_qty_milli - ?) / 1000 WHERE id = ? AND stock_qty_milli >= ?`), l.qtyMilli, l.qtyMilli, l.productID, l.qtyMilli)
 					if err != nil {
 						tx.Rollback()
 						return nil, err
@@ -644,9 +669,15 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 						tx.Rollback()
 						return nil, fmt.Errorf("%w: %s", ErrInsufficientStock, l.name)
 					}
-					if err := recordStockMoveTx(s, tx, l.productID, -int64(l.qty), models.MoveSale, number, "", p.ID, p.Username); err != nil {
+					if err := recordStockMoveTx(s, tx, l.productID, -l.qtyMilli, models.MoveSale, number, "", p.ID, p.Username); err != nil {
 						tx.Rollback()
 						return nil, err
+					}
+					if l.trackBatches {
+						if err := allocateSaleBatchesTx(s, tx, itemIDs[li], l.productID, l.qtyMilli); err != nil {
+							tx.Rollback()
+							return nil, err
+						}
 					}
 				}
 			}
@@ -690,14 +721,14 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 			// at settle time, like every other PENDING order).
 			for _, l := range lines {
 				if l.trackStock {
-					var stock int
-					if err := tx.QueryRow(`SELECT stock_qty FROM products WHERE id = ?`, l.productID).Scan(&stock); err != nil {
+					var stock int64
+					if err := tx.QueryRow(`SELECT stock_qty_milli FROM products WHERE id = ?`, l.productID).Scan(&stock); err != nil {
 						tx.Rollback()
 						return nil, err
 					}
-					if stock < l.qty {
+					if stock < l.qtyMilli {
 						tx.Rollback()
-						return nil, fmt.Errorf("%w: %s (have %d, need %d)", ErrInsufficientStock, l.name, stock, l.qty)
+						return nil, fmt.Errorf("%w: %s (have %d, need %d milli)", ErrInsufficientStock, l.name, stock, l.qtyMilli)
 					}
 				}
 			}
@@ -788,7 +819,7 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 	s.EmitOrder(orderID)
 	for _, l := range lines {
 		if l.trackStock {
-			s.EmitStockDelta(l.sku, -l.qty)
+			s.EmitStockDelta(l.sku, -l.qtyMilli)
 		}
 	}
 	// Money movements recorded at checkout (tab charge, credit/loyalty
@@ -1182,15 +1213,15 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
 		tx.QueryRow(`SELECT o.cashier_id, COALESCE(u.username,'') FROM orders o
                         LEFT JOIN users u ON u.id = o.cashier_id WHERE o.id = ?`, orderID).Scan(&saleUserID, &saleUsername)
 		for _, it := range items {
-			var track int
-			if err := tx.QueryRow(`SELECT COALESCE(track_stock,1) FROM products WHERE id = ?`, it.ProductID).Scan(&track); err != nil {
+			var track, batches int
+			if err := tx.QueryRow(`SELECT COALESCE(track_stock,1), COALESCE(track_batches,0) FROM products WHERE id = ?`, it.ProductID).Scan(&track, &batches); err != nil {
 				return nil, err
 			}
 			if track != 1 {
 				continue
 			}
-			gres, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty - ? WHERE id = ? AND stock_qty >= ?`),
-				it.Qty, it.ProductID, it.Qty)
+			gres, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty_milli = stock_qty_milli - ?, stock_qty = (stock_qty_milli - ?) / 1000 WHERE id = ? AND stock_qty_milli >= ?`),
+				it.QtyMilli, it.QtyMilli, it.ProductID, it.QtyMilli)
 			if err != nil {
 				return nil, err
 			}
@@ -1200,8 +1231,17 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
 				tx.Exec(`UPDATE orders SET discrepancy = 1 WHERE id = ?`, orderID)
 				continue
 			}
-			if err := recordStockMoveTx(s, tx, it.ProductID, -int64(it.Qty), models.MoveSale, orderNumber, "", saleUserID, saleUsername); err != nil {
+			if err := recordStockMoveTx(s, tx, it.ProductID, -it.QtyMilli, models.MoveSale, orderNumber, "", saleUserID, saleUsername); err != nil {
 				return nil, err
+			}
+			if batches == 1 {
+				if err := allocateSaleBatchesTx(s, tx, it.ID, it.ProductID, it.QtyMilli); err != nil {
+					// Batch short — same discrepancy semantics:
+					// the money landed, flag for staff, keep paid.
+					discrepancy = 1
+					tx.Exec(`UPDATE orders SET discrepancy = 1 WHERE id = ?`, orderID)
+					continue
+				}
 			}
 		}
 		// Loyalty earns on EVERY paid order tied to a customer —
@@ -1259,7 +1299,7 @@ func (s *Service) completePayment(paymentID int64, receipt string, amountCents i
 }
 
 func (s *Service) loadItemsTx(tx *sql.Tx, orderID int64) ([]models.OrderItem, error) {
-	rows, err := tx.Query(`SELECT product_id, qty FROM order_items WHERE order_id = ?`, orderID)
+	rows, err := tx.Query(`SELECT id, product_id, qty_milli FROM order_items WHERE order_id = ?`, orderID)
 	if err != nil {
 		return nil, err
 	}
@@ -1267,7 +1307,7 @@ func (s *Service) loadItemsTx(tx *sql.Tx, orderID int64) ([]models.OrderItem, er
 	var out []models.OrderItem
 	for rows.Next() {
 		var it models.OrderItem
-		if err := rows.Scan(&it.ProductID, &it.Qty); err != nil {
+		if err := rows.Scan(&it.ID, &it.ProductID, &it.QtyMilli); err != nil {
 			return nil, err
 		}
 		out = append(out, it)
@@ -1369,12 +1409,17 @@ func (s *Service) Void(orderID int64, reason string, p *auth.Principal) (*models
 	tx.QueryRow(`SELECT COALESCE(number,'') FROM orders WHERE id = ?`, orderID).Scan(&voidNumber)
 	if status == models.OrderPaid {
 		for _, it := range items {
-			if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty + ? WHERE id = ?`), it.Qty, it.ProductID); err != nil {
+			if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty_milli = stock_qty_milli + ?, stock_qty = (stock_qty_milli + ?) / 1000 WHERE id = ?`), it.QtyMilli, it.QtyMilli, it.ProductID); err != nil {
 				return nil, err
 			}
-			if err := recordStockMoveTx(s, tx, it.ProductID, int64(it.Qty), models.MoveVoidRestore, voidNumber, truncStr(reason, 120), p.ID, p.Username); err != nil {
+			if err := recordStockMoveTx(s, tx, it.ProductID, it.QtyMilli, models.MoveVoidRestore, voidNumber, truncStr(reason, 120), p.ID, p.Username); err != nil {
 				return nil, err
 			}
+		}
+		// Batch-tracked lines go back onto their original lots — the
+		// allocation rows frozen at sale time say exactly which.
+		if err := restockSaleBatchesTx(s, tx, orderID); err != nil {
+			return nil, err
 		}
 	}
 	// Collect the void-with-money signal BEFORE flipping the legs: a PAID

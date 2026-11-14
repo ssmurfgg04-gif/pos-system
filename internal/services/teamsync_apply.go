@@ -237,20 +237,20 @@ func (s *Service) applyCategoryDelete(payload json.RawMessage) error {
 
 func (s *Service) applyProduct(payload json.RawMessage) error {
 	var pr struct {
-		SKU          string `json:"sku"`
-		Barcode      string `json:"barcode"`
-		Name         string `json:"name"`
-		CategorySlug string `json:"categorySlug"`
-		PriceCents   int64  `json:"priceCents"`
-		CostCents    int64  `json:"costCents"`
-		StockQty     int    `json:"stockQty"`
-		StockSet     bool   `json:"stockSet"`
-		TrackStock   bool   `json:"trackStock"`
-		Active       bool   `json:"active"`
-		IsGiftCard   bool   `json:"isGiftCard"`
-		Wholesale    int64  `json:"wholesalePriceCents"`
-		LowStock     int    `json:"lowStockUnits"`
-		UpdatedAt    string `json:"updatedAt"`
+		SKU           string `json:"sku"`
+		Barcode       string `json:"barcode"`
+		Name          string `json:"name"`
+		CategorySlug  string `json:"categorySlug"`
+		PriceCents    int64  `json:"priceCents"`
+		CostCents     int64  `json:"costCents"`
+		StockQtyMilli int64  `json:"stockQtyMilli"`
+		StockSet      bool   `json:"stockSet"`
+		TrackStock    bool   `json:"trackStock"`
+		Active        bool   `json:"active"`
+		IsGiftCard    bool   `json:"isGiftCard"`
+		Wholesale     int64  `json:"wholesalePriceCents"`
+		LowStock      int    `json:"lowStockUnits"`
+		UpdatedAt     string `json:"updatedAt"`
 	}
 	if err := json.Unmarshal(payload, &pr); err != nil {
 		return err
@@ -292,7 +292,7 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
 			return err
 		}
 		if pr.StockSet {
-			_, err = s.db.Exec(s.db.Rebind(`UPDATE products SET stock_qty = ? WHERE id = ?`), pr.StockQty, localID)
+			_, err = s.db.Exec(s.db.Rebind(`UPDATE products SET stock_qty_milli = ?, stock_qty = ? / 1000 WHERE id = ?`), pr.StockQtyMilli, pr.StockQtyMilli, localID)
 		}
 		return err
 	}
@@ -304,21 +304,21 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
 		sku = "SKU-SYNC-" + randToken(6) // 48-bit token: a collision here would dead-letter the event
 	}
 	_, err = s.db.Exec(s.db.Rebind(`
-                INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock, is_active, is_gift_card, wholesale_price_cents, low_stock_units, updated_at)
+                INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty_milli, track_stock, is_active, is_gift_card, wholesale_price_cents, low_stock_units, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-		sku, pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, pr.StockQty, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.Wholesale, pr.LowStock, pr.UpdatedAt)
+		sku, pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, pr.StockQtyMilli, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.Wholesale, pr.LowStock, pr.UpdatedAt)
 	return err
 }
 
 func (s *Service) applyStockDelta(payload json.RawMessage) error {
 	var d struct {
-		SKU   string `json:"sku"`
-		Delta int    `json:"delta"`
+		SKU        string `json:"sku"`
+		DeltaMilli int64  `json:"deltaMilli"`
 	}
 	if err := json.Unmarshal(payload, &d); err != nil {
 		return err
 	}
-	if d.SKU == "" || d.Delta == 0 {
+	if d.SKU == "" || d.DeltaMilli == 0 {
 		return nil
 	}
 	// Zero rows MUST be an error, not a silent success: a delta that
@@ -329,8 +329,8 @@ func (s *Service) applyStockDelta(payload json.RawMessage) error {
 	// catalog edits only (an apply-time stamp made every remote sale
 	// beat later local price edits on this device).
 	res, err := s.db.Exec(s.db.Rebind(`
-                UPDATE products SET stock_qty = MAX(0, stock_qty + ?) WHERE sku = ?`),
-		d.Delta, d.SKU)
+                UPDATE products SET stock_qty_milli = MAX(0, stock_qty_milli + ?), stock_qty = MAX(0, stock_qty_milli + ?) / 1000 WHERE sku = ?`),
+		d.DeltaMilli, d.DeltaMilli, d.SKU)
 	if err != nil {
 		return err
 	}
@@ -471,7 +471,7 @@ type orderEvent struct {
 	Items          []struct {
 		SKU       string `json:"sku"`
 		Name      string `json:"name"`
-		Qty       int    `json:"qty"`
+		QtyMilli  int64  `json:"qtyMilli"`
 		UnitPrice int64  `json:"unitPriceCents"`
 		LineTotal int64  `json:"lineTotalCents"`
 		CostCents int64  `json:"costCents"` // v1.7.0: unit cost snapshot at sale time
@@ -575,9 +575,9 @@ func (s *Service) applyOrder(payload json.RawMessage) error {
 			s.db.QueryRow(s.db.Rebind(`SELECT id FROM products WHERE sku = ?`), it.SKU).Scan(&pid)
 		}
 		if _, err := tx.Exec(s.db.Rebind(`
-                        INSERT INTO order_items (order_id, product_id, name, sku, qty, unit_price_cents, line_total_cents, cost_cents)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-			orderID, pid, it.Name, it.SKU, it.Qty, it.UnitPrice, it.LineTotal, it.CostCents); err != nil {
+                        INSERT INTO order_items (order_id, product_id, name, sku, qty_milli, qty, unit_price_cents, line_total_cents, cost_cents)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			orderID, pid, it.Name, it.SKU, it.QtyMilli, it.QtyMilli/1000, it.UnitPrice, it.LineTotal, it.CostCents); err != nil {
 			return err
 		}
 	}
@@ -686,7 +686,7 @@ func (s *Service) applyVoid(payload json.RawMessage) error {
 		if track != 1 {
 			continue
 		}
-		if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty + ? WHERE id = ?`), it.Qty, it.ProductID); err != nil {
+		if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty_milli = stock_qty_milli + ?, stock_qty = (stock_qty_milli + ?) / 1000 WHERE id = ?`), it.QtyMilli, it.QtyMilli, it.ProductID); err != nil {
 			return err
 		}
 	}
@@ -929,7 +929,7 @@ func (s *Service) applyReturn(payload json.RawMessage) error {
 		return err
 	}
 	for _, it := range ev.Items {
-		qty := asInt(it["qty"])
+		qty := asInt64(it["qtyMilli"])
 		if qty <= 0 {
 			continue
 		}
@@ -943,9 +943,9 @@ func (s *Service) applyReturn(payload json.RawMessage) error {
 			s.db.QueryRow(s.db.Rebind(`SELECT id FROM products WHERE sku = ?`), sku).Scan(&productID)
 		}
 		if _, err := tx.Exec(s.db.Rebind(`INSERT INTO return_items
-			(return_id, order_item_id, product_id, name, sku, qty, unit_price_cents, line_total_cents)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-			returnID, orderItemID, productID, name, sku, qty, unit, lineTotal); err != nil {
+			(return_id, order_item_id, product_id, name, sku, qty_milli, qty, unit_price_cents, line_total_cents)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			returnID, orderItemID, productID, name, sku, qty, qty/1000, unit, lineTotal); err != nil {
 			return err
 		}
 	}

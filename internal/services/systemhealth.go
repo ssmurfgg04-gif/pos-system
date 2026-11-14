@@ -25,7 +25,7 @@ var ExpectedIndexes = []string{
 	"idx_print_status", "idx_shifts_user", "idx_design_status", "idx_audit_created",
 	"idx_customers_name", "idx_customers_phone", "idx_ledger_customer", "idx_ledger_customer_order",
 	"idx_suppliers_name", "idx_stock_movements_kind",
-	// v27 foreign-key child indexes.
+	// v29 foreign-key child indexes.
 	"idx_print_jobs_order", "idx_po_items_po", "idx_po_items_product", "idx_purchase_orders_supplier",
 	"idx_stock_take_items_take", "idx_stock_take_items_product", "idx_design_jobs_assignee",
 }
@@ -57,6 +57,15 @@ type SystemHealth struct {
 	StockDriftCount int64    `json:"stockDriftCount"`
 	StockDrift      []string `json:"stockDrift,omitempty"`
 	StockNoLedger   int64    `json:"stockNoLedger"`
+	// v1.8.0: batch integrity — for every batch-tracked product the sum
+	// of its lots must equal the shelf projection. Also: how many lots
+	// are already expired with goods still on them (the expiry report
+	// shows the money; this counts the alerts).
+	BatchesChecked    int64    `json:"batchesChecked"`
+	BatchDriftCount   int64    `json:"batchDriftCount"`
+	BatchDrift        []string `json:"batchDrift,omitempty"`
+	ExpiredBatches    int64    `json:"expiredBatches"`
+	ExpiredValueCents int64    `json:"expiredValueCents"`
 	// Backups: newest local snapshot (the 02:00 worker + manual runs).
 	LastBackupFile string `json:"lastBackupFile"`
 	LastBackupAt   string `json:"lastBackupAt"`
@@ -131,11 +140,11 @@ func (s *Service) SystemHealth() *SystemHealth {
 	}
 
 	// Stock projection check: the newest movement per product must agree
-	// with stock_qty. Products with no ledger rows predate v22 — counted,
-	// not flagged (their baseline predates the ledger).
+	// with stock_qty_milli. Products with no ledger rows predate v22 —
+	// counted, not flagged (their baseline predates the ledger).
 	h.StockDrift = []string{}
 	if rows, err := s.db.Query(`
-		SELECT p.name, p.stock_qty, m.balance_after
+		SELECT p.name, p.stock_qty_milli, m.balance_after_milli
 		FROM products p
 		JOIN (SELECT product_id, MAX(id) AS mid FROM stock_movements GROUP BY product_id) last
 		  ON last.product_id = p.id
@@ -156,6 +165,35 @@ func (s *Service) SystemHealth() *SystemHealth {
 		rows.Close()
 	}
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM products WHERE track_stock = 1 AND is_active = 1 AND id NOT IN (SELECT DISTINCT product_id FROM stock_movements)`).Scan(&h.StockNoLedger)
+
+	// v1.8.0 batch integrity: SUM(lots) must equal the shelf projection
+	// for every batch-tracked product, and expired lots holding stock are
+	// counted with their write-off value (expiry report carries the rest).
+	h.BatchDrift = []string{}
+	if rows, err := s.db.Query(`
+		SELECT p.name, p.stock_qty_milli,
+			(SELECT COALESCE(SUM(b.qty_remaining_milli),0) FROM product_batches b WHERE b.product_id = p.id)
+		FROM products p WHERE COALESCE(p.track_batches,0) = 1`); err == nil {
+		for rows.Next() {
+			var name string
+			var proj, lots int64
+			if rows.Scan(&name, &proj, &lots) == nil {
+				h.BatchesChecked++
+				if proj != lots {
+					h.BatchDriftCount++
+					if len(h.BatchDrift) < 10 {
+						h.BatchDrift = append(h.BatchDrift, fmt.Sprintf("%s: shelf %d milli vs lots %d milli", name, proj, lots))
+					}
+				}
+			}
+		}
+		rows.Close()
+	}
+	_ = s.db.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(b.qty_remaining_milli * b.cost_cents / 1000),0)
+		FROM product_batches b
+		WHERE b.expiry_date != '' AND b.expiry_date < date('now')
+		  AND b.qty_remaining_milli > 0 AND b.status != 'RECALLED'`).Scan(&h.ExpiredBatches, &h.ExpiredValueCents)
 
 	// Newest backup snapshot.
 	if p := s.db.Path(); p != "" {

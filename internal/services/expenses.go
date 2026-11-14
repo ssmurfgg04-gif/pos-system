@@ -170,7 +170,7 @@ func (s *Service) ExpensesTotalForDay(date string) (int64, error) {
 // units on hand × unit cost across tracked products.
 func (s *Service) StockValuation() (units int64, valueCents int64, err error) {
 	err = s.db.QueryRow(`
-                SELECT COALESCE(SUM(stock_qty),0), COALESCE(SUM(stock_qty * cost_cents),0)
+                SELECT COALESCE(SUM(stock_qty_milli),0), COALESCE(SUM(stock_qty_milli * cost_cents) / 1000, 0)
                 FROM products WHERE track_stock = 1 AND is_active = 1`).Scan(&units, &valueCents)
 	return units, valueCents, err
 }

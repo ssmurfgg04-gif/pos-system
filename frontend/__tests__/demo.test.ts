@@ -116,7 +116,7 @@ describe('demo backend RBAC parity', () => {
     await login('designer', '0000')
     await expect(
       demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-        items: [{ productId: 1, qty: 1 }],
+        items: [{ productId: 1, qtyMilli: 1000 }],
         paymentMethod: 'cash',
       }),
     ).rejects.toMatchObject({ status: 403 })
@@ -126,9 +126,9 @@ describe('demo backend RBAC parity', () => {
 describe('demo checkout lifecycle', () => {
   it('cash sale: PAID immediately, stock decremented, VAT math matches cartTotals', async () => {
     await login('cashier', '0000')
-    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty
+    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQtyMilli
     const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 1, qty: 2 }],
+      items: [{ productId: 1, qtyMilli: 2000 }],
       paymentMethod: 'cash',
       customerName: 'Test Buyer',
     })
@@ -137,10 +137,12 @@ describe('demo checkout lifecycle', () => {
     expect(o.customerName).toBe('Test Buyer')
     // 2 × 550.00 = 1100.00 subtotal, VAT 16% incl → tax = round(110000*16/116)
     expect(o.subtotalCents).toBe(110000)
+    expect(o.items[0].qtyMilli).toBe(2000)
+    expect(o.items[0].lineTotalCents).toBe(110000)
     expect(o.taxCents).toBe(Math.round((110000 * 16) / 116))
     expect(o.totalCents).toBe(110000)
-    const after = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty
-    expect(after).toBe(before - 2)
+    const after = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQtyMilli
+    expect(after).toBe(before - 2000)
     expect(o.payments[0].method).toBe('cash')
     expect(o.payments[0].status).toBe('COMPLETED')
   })
@@ -148,26 +150,49 @@ describe('demo checkout lifecycle', () => {
   it('rejects insufficient stock', async () => {
     await login('cashier', '0000')
     const products = await demoRequest<Any[]>('GET', '/api/v1/products')
-    const capped = products.find((p: Any) => p.trackStock && p.stockQty < 1000 && p.stockQty > 0)!
+    const capped = products.find((p: Any) => p.trackStock && p.stockQtyMilli < 1000000 && p.stockQtyMilli > 0)!
     await expect(
       demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-        items: [{ productId: capped.id, qty: capped.stockQty + 1 }],
+        items: [{ productId: capped.id, qtyMilli: capped.stockQtyMilli + 1000 }],
         paymentMethod: 'cash',
       }),
     ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('rejects fractional milli on a whole-unit product but sells 0.5 kg of a weighed one', async () => {
+    await login('cashier', '0000')
+    const products = await demoRequest<Any[]>('GET', '/api/v1/products')
+    const whole = products.find((p: Any) => p.trackStock && !p.allowFraction)!
+    await expect(
+      demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+        items: [{ productId: whole.id, qtyMilli: 500 }],
+        paymentMethod: 'cash',
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+    const weighed = products.find((p: Any) => p.allowFraction)!
+    const before = weighed.stockQtyMilli
+    // 0.5 kg at 150.00/kg = 75.00 — the exact server line formula.
+    const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: weighed.id, qtyMilli: 500 }],
+      paymentMethod: 'cash',
+    })
+    expect(o.items[0].qtyMilli).toBe(500)
+    expect(o.items[0].lineTotalCents).toBe(Math.round(weighed.priceCents * 500 / 1000))
+    const after = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === weighed.id)!.stockQtyMilli
+    expect(after).toBe(before - 500)
   })
 
   it('rejects price overrides without permission (cashier) but honors them for admin', async () => {
     await login('cashier', '0000')
     await expect(
       demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-        items: [{ productId: 1, qty: 1, unitPriceCents: 100 }],
+        items: [{ productId: 1, qtyMilli: 1000, unitPriceCents: 100 }],
         paymentMethod: 'cash',
       }),
     ).rejects.toMatchObject({ status: 403 })
     await login('admin', '0000')
     const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 1, qty: 1, unitPriceCents: 40000 }],
+      items: [{ productId: 1, qtyMilli: 1000, unitPriceCents: 40000 }],
       paymentMethod: 'cash',
     })
     expect(o.items[0].unitPriceCents).toBe(40000)
@@ -180,7 +205,7 @@ describe('demo checkout lifecycle', () => {
     await demoRequest<Any>('PUT', '/api/v1/settings', { values: { mpesa_mock_delay_ms: '700' } })
     await login('cashier', '0000')
     const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 2, qty: 1 }],
+      items: [{ productId: 2, qtyMilli: 1000 }],
       paymentMethod: 'mpesa',
       paymentMode: 'auto',
       customerPhone: '254712345678',
@@ -200,7 +225,7 @@ describe('demo checkout lifecycle', () => {
     await login('cashier', '0000')
     // Manual-mode order waits for the code.
     const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 3, qty: 1 }],
+      items: [{ productId: 3, qtyMilli: 1000 }],
       paymentMethod: 'mpesa',
       paymentMode: 'manual',
     })
@@ -213,7 +238,7 @@ describe('demo checkout lifecycle', () => {
     expect(done.payments[0].mpesaReceipt).toBe('NLJ7RT61SV')
     // Dedupe: the same code cannot confirm another order.
     const o2 = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 3, qty: 1 }],
+      items: [{ productId: 3, qtyMilli: 1000 }],
       paymentMethod: 'mpesa',
       paymentMode: 'manual',
     })
@@ -224,22 +249,22 @@ describe('demo checkout lifecycle', () => {
 
   it('void restores stock and records the reason', async () => {
     await login('cashier', '0000')
-    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 4)!.stockQty
+    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 4)!.stockQtyMilli
     const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 4, qty: 3 }],
+      items: [{ productId: 4, qtyMilli: 3000 }],
       paymentMethod: 'cash',
     })
-    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 4)!.stockQty).toBe(before - 3)
+    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 4)!.stockQtyMilli).toBe(before - 3000)
     const v = await demoRequest<Any>('POST', `/api/v1/orders/${o.id}/void`, { reason: 'wrong size' })
     expect(v.status).toBe('VOIDED')
     expect(v.voidReason).toBe('wrong size')
-    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 4)!.stockQty).toBe(before)
+    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 4)!.stockQtyMilli).toBe(before)
   })
 
   it('sync replays queued checkouts idempotently by clientUuid', async () => {
     await login('cashier', '0000')
     const tx = {
-      items: [{ productId: 5, qty: 1 }],
+      items: [{ productId: 5, qtyMilli: 1000 }],
       paymentMethod: 'cash',
       clientUuid: 'web-test-uuid-1',
     }
@@ -259,7 +284,7 @@ describe('demo tabs & credit parity', () => {
     expect(kevin.creditLimitCents).toBe(100000)
 
     const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 1, qty: 1 }],
+      items: [{ productId: 1, qtyMilli: 1000 }],
       paymentMethod: 'account',
       customerId: kevin.id,
     })
@@ -274,7 +299,7 @@ describe('demo tabs & credit parity', () => {
     // v1.5.0 policy: over an ADVISORY limit is still allowed — Kevin owes
     // 55000, his limit says 100000, the charge lands anyway (human call).
     const over = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 1, qty: 2 }],
+      items: [{ productId: 1, qtyMilli: 2000 }],
       paymentMethod: 'account',
       customerId: kevin.id,
     })
@@ -283,7 +308,7 @@ describe('demo tabs & credit parity', () => {
     // A zero-limit customer charges fine too — no cash-only state exists.
     const brian = customers.find((c: Any) => c.name === 'Brian O.')!
     const brianOrder = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 1, qty: 1 }],
+      items: [{ productId: 1, qtyMilli: 1000 }],
       paymentMethod: 'account',
       customerId: brian.id,
     })
@@ -313,7 +338,7 @@ describe('demo tabs & credit parity', () => {
     await login('cashier', '0000')
     const faith = (await demoRequest<Any[]>('GET', '/api/v1/customers?search=Faith'))[0]
     const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 1, qty: 1 }],
+      items: [{ productId: 1, qtyMilli: 1000 }],
       paymentMethod: 'account',
       customerId: faith.id,
     })
@@ -400,16 +425,18 @@ describe('demo suppliers & stock-in parity', () => {
     const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!
     const po = await demoRequest<Any>('POST', '/api/v1/purchase-orders', {
       supplierId: sup.id,
-      items: [{ productId: 1, qty: 10, costCents: 40000 }],
+      items: [{ productId: 1, qtyMilli: 10000, costCents: 40000 }],
     })
     expect(po.status).toBe('PENDING')
     expect(po.number).toMatch(/^PO\d{12}$/)
+    expect(po.items[0].qtyMilli).toBe(10000)
+    expect(po.items[0].lineTotalCents).toBe(400000)
     const received = await demoRequest<Any>('POST', `/api/v1/purchase-orders/${po.id}/receive`, {})
     expect(received.status).toBe('RECEIVED')
     const after = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!
-    expect(after.stockQty).toBe(before.stockQty + 10)
-    const newStock = before.stockQty + 10
-    expect(after.costCents).toBe(Math.floor((before.stockQty * before.costCents + 10 * 40000 + newStock / 2) / newStock))
+    expect(after.stockQtyMilli).toBe(before.stockQtyMilli + 10000)
+    const newStock = before.stockQtyMilli + 10000
+    expect(after.costCents).toBe(Math.floor((before.stockQtyMilli * before.costCents + 10000 * 40000 + newStock / 2) / newStock))
     await expect(
       demoRequest('POST', `/api/v1/purchase-orders/${po.id}/receive`, {}),
     ).rejects.toMatchObject({ status: 409 })
@@ -420,13 +447,14 @@ describe('demo suppliers & stock-in parity', () => {
     const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!
     const take = await demoRequest<Any>('POST', '/api/v1/stock-takes', { productIds: [1] })
     expect(take.status).toBe('OPEN')
-    expect(take.items[0].expectedQty).toBe(before.stockQty)
-    const counted = await demoRequest<Any>('POST', `/api/v1/stock-takes/${take.id}/count`, { counts: { '1': before.stockQty + 5 } })
-    expect(counted.items[0].countedQty).toBe(before.stockQty + 5)
+    expect(take.items[0].expectedQtyMilli).toBe(before.stockQtyMilli)
+    // v1.8.0: the counts map is MILLI (+5 units = +5000 milli).
+    const counted = await demoRequest<Any>('POST', `/api/v1/stock-takes/${take.id}/count`, { counts: { '1': before.stockQtyMilli + 5000 } })
+    expect(counted.items[0].countedQtyMilli).toBe(before.stockQtyMilli + 5000)
     const applied = await demoRequest<Any>('POST', `/api/v1/stock-takes/${take.id}/apply`, {})
     expect(applied.status).toBe('APPLIED')
     const after = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!
-    expect(after.stockQty).toBe(before.stockQty + 5)
+    expect(after.stockQtyMilli).toBe(before.stockQtyMilli + 5000)
   })
 })
 
@@ -471,7 +499,7 @@ describe('demo settings + reports parity', () => {
   it('daily summary reflects a fresh cash sale', async () => {
     await login('cashier', '0000')
     await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 1, qty: 1 }],
+      items: [{ productId: 1, qtyMilli: 1000 }],
       paymentMethod: 'cash',
     })
     const today = new Date().toISOString().slice(0, 10)
@@ -479,6 +507,8 @@ describe('demo settings + reports parity', () => {
     expect(d.ordersPaid).toBeGreaterThanOrEqual(1)
     expect(d.cashCents).toBeGreaterThanOrEqual(55000)
     expect(d.series).toHaveLength(7)
+    // v1.8.0: shelf stock reports in milli-units.
+    expect(d.stockQtyMilli).toBeGreaterThan(0)
   })
 
   it('users CRUD: admin resets passwords and PINs (the admin workflow)', async () => {
@@ -504,8 +534,9 @@ describe('demo settings + reports parity', () => {
 
   it('stock adjustment lands in the audit log', async () => {
     await login('admin', '0000')
-    const p = await demoRequest<Any>('POST', '/api/v1/products/1/adjust-stock', { delta: 20, reason: 'received from supplier' })
-    expect(p.stockQty).toBeGreaterThanOrEqual(20)
+    // v1.8.0: the wire takes deltaMilli (+20 units = +20000 milli).
+    const p = await demoRequest<Any>('POST', '/api/v1/products/1/adjust-stock', { deltaMilli: 20000, reason: 'received from supplier' })
+    expect(p.stockQtyMilli).toBeGreaterThanOrEqual(20000)
     const audit = await demoRequest<Any[]>('GET', '/api/v1/audit')
     expect(audit[0].action).toBe('STOCK_ADJUSTED')
     expect(audit[0].details).toContain('+20')
@@ -529,29 +560,31 @@ describe('demo stock counts, gift cards & split tender (v10 parity)', () => {
     expect(c.linesTotal).toBeGreaterThan(5)
     const detail = await demoRequest<Any>('GET', `/api/v1/stock-counts/${c.id}`)
     expect(detail.lines.length).toBe(c.linesTotal)
-    expect(detail.lines.every((l: Any) => l.countedQty === null)).toBe(true)
+    expect(detail.lines.every((l: Any) => l.countedQtyMilli === null)).toBe(true)
 
-    // Shrink product 1 by 2 on the sheet (report-only first).
-    await demoRequest('PUT', `/api/v1/stock-counts/${c.id}/lines`, { productId: 1, countedQty: before.stockQty - 2 })
+    // Shrink product 1 by 2 units on the sheet (report-only first) —
+    // v1.8.0: the line payload is countedQtyMilli.
+    await demoRequest('PUT', `/api/v1/stock-counts/${c.id}/lines`, { productId: 1, countedQtyMilli: before.stockQtyMilli - 2000 })
     const detail2 = await demoRequest<Any>('GET', `/api/v1/stock-counts/${c.id}`)
     expect(detail2.count.linesCounted).toBe(1)
     const closed = await demoRequest<Any>('POST', `/api/v1/stock-counts/${c.id}/complete`, { apply: false })
     expect(closed.status).toBe('DONE')
-    expect(closed.varianceUnits).toBe(-2)
+    // v1.8.0: varianceUnits sums MILLI diffs (the Go service stores milli).
+    expect(closed.varianceUnits).toBe(-2000)
     expect(closed.varianceValueCents).toBe(-2 * before.costCents)
     // Report-only: system stock untouched.
-    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty).toBe(before.stockQty)
+    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQtyMilli).toBe(before.stockQtyMilli)
     // Closed sessions reject edits.
     await expect(
-      demoRequest('PUT', `/api/v1/stock-counts/${c.id}/lines`, { productId: 2, countedQty: 1 }),
+      demoRequest('PUT', `/api/v1/stock-counts/${c.id}/lines`, { productId: 2, countedQtyMilli: 1000 }),
     ).rejects.toMatchObject({ status: 422 })
 
     // Second count applies the counted stock.
     const c2 = await demoRequest<Any>('POST', '/api/v1/stock-counts', { note: '' })
-    await demoRequest('PUT', `/api/v1/stock-counts/${c2.id}/lines`, { productId: 1, countedQty: before.stockQty - 1 })
+    await demoRequest('PUT', `/api/v1/stock-counts/${c2.id}/lines`, { productId: 1, countedQtyMilli: before.stockQtyMilli - 1000 })
     const applied = await demoRequest<Any>('POST', `/api/v1/stock-counts/${c2.id}/complete`, { apply: true })
     expect(applied.status).toBe('DONE')
-    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty).toBe(before.stockQty - 1)
+    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQtyMilli).toBe(before.stockQtyMilli - 1000)
     // Listing returns {counts} without lines.
     const list = await demoRequest<Any>('GET', '/api/v1/stock-counts?limit=50')
     expect(list.counts.length).toBe(2)
@@ -567,7 +600,7 @@ describe('demo stock counts, gift cards & split tender (v10 parity)', () => {
     expect(created.trackStock).toBe(false) // server forces stock tracking off
 
     const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: created.id, qty: 2 }],
+      items: [{ productId: created.id, qtyMilli: 2000 }],
       paymentMethod: 'cash',
     })
     expect(o.status).toBe('PAID')
@@ -601,9 +634,9 @@ describe('demo stock counts, gift cards & split tender (v10 parity)', () => {
   it('split tender: legs recorded as payments; validation mirrors the server', async () => {
     await login('cashier', '0000')
     // All-instant split (two cash legs): PAID, both legs COMPLETED, stock once.
-    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty
+    const before = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQtyMilli
     const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 1, qty: 1 }],
+      items: [{ productId: 1, qtyMilli: 1000 }],
       paymentMethod: 'cash',
       splitPayments: [
         { method: 'cash', amountCents: 30000 },
@@ -614,12 +647,12 @@ describe('demo stock counts, gift cards & split tender (v10 parity)', () => {
     expect(o.payments).toHaveLength(2)
     expect(o.payments.map((p: Any) => [p.method, p.amountCents])).toEqual([['cash', 30000], ['cash', 25000]])
     expect(o.payments.every((p: Any) => p.status === 'COMPLETED')).toBe(true)
-    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQty).toBe(before - 1)
+    expect((await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === 1)!.stockQtyMilli).toBe(before - 1000)
 
     // Mismatched sum rejected.
     await expect(
       demoRequest('POST', '/api/v1/orders/checkout', {
-        items: [{ productId: 1, qty: 1 }],
+        items: [{ productId: 1, qtyMilli: 1000 }],
         paymentMethod: 'cash',
         splitPayments: [{ method: 'cash', amountCents: 40000 }],
       }),
@@ -627,7 +660,7 @@ describe('demo stock counts, gift cards & split tender (v10 parity)', () => {
     // Two async legs rejected.
     await expect(
       demoRequest('POST', '/api/v1/orders/checkout', {
-        items: [{ productId: 1, qty: 1 }],
+        items: [{ productId: 1, qtyMilli: 1000 }],
         paymentMethod: 'cash',
         splitPayments: [
           { method: 'mpesa', amountCents: 30000 },
@@ -638,7 +671,7 @@ describe('demo stock counts, gift cards & split tender (v10 parity)', () => {
     // Credit leg without a customer rejected.
     await expect(
       demoRequest('POST', '/api/v1/orders/checkout', {
-        items: [{ productId: 1, qty: 1 }],
+        items: [{ productId: 1, qtyMilli: 1000 }],
         paymentMethod: 'cash',
         splitPayments: [
           { method: 'credit', amountCents: 30000 },
@@ -654,7 +687,7 @@ describe('demo stock counts, gift cards & split tender (v10 parity)', () => {
     await demoRequest('POST', `/api/v1/customers/${faith.id}/credit-topup`, { amountCents: 25000 })
     const walletBefore = (await demoRequest<Any[]>('GET', '/api/v1/customers?search=Faith'))[0].storeCreditCents ?? 0
     const o2 = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
-      items: [{ productId: 1, qty: 1 }],
+      items: [{ productId: 1, qtyMilli: 1000 }],
       paymentMethod: 'cash',
       paymentMode: 'manual',
       customerId: faith.id,
@@ -687,5 +720,93 @@ describe('demo stock counts, gift cards & split tender (v10 parity)', () => {
     // settings.manage gate: cashiers cannot even read the status.
     await login('cashier', '0000')
     await expect(demoRequest('GET', '/api/v1/team-sync')).rejects.toMatchObject({ status: 403 })
+  })
+})
+
+describe('demo v1.8.0 batches & expiry (FEFO parity)', () => {
+  it('lists seeded lots FEFO, goods-in moves both sides, recall writes the lot off', async () => {
+    await login('admin', '0000')
+    const products = await demoRequest<Any[]>('GET', '/api/v1/products')
+    const yoghurt = products.find((p: Any) => p.trackBatches)!
+    expect(yoghurt.unit).toBe('pc')
+    // Seeded lots: ACTIVE first, FEFO order (expired B-2409 before A-1120).
+    let lots = await demoRequest<Any[]>('GET', `/api/v1/products/${yoghurt.id}/batches`)
+    expect(lots.map((l: Any) => l.batchNo)).toEqual(['B-2409', 'A-1120'])
+    expect(lots[0].qtyRemainingMilli).toBe(12000)
+
+    const stockBefore = yoghurt.stockQtyMilli
+    // Goods-in: whole units only — a half-unit lot is rejected.
+    await expect(
+      demoRequest<Any>('POST', `/api/v1/products/${yoghurt.id}/batches`, {
+        batchNo: 'C-777', expiryDate: '', qtyMilli: 1500, costCents: 5500,
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+    const lot = await demoRequest<Any>('POST', `/api/v1/products/${yoghurt.id}/batches`, {
+      batchNo: 'C-777', expiryDate: '2030-01-31', qtyMilli: 15000, costCents: 5500, note: 'crate',
+    })
+    expect(lot.status).toBe('ACTIVE')
+    expect(lot.qtyReceivedMilli).toBe(15000)
+    // The projection grew with the lot (invariant: SUM(lots) == stock).
+    const afterIn = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === yoghurt.id)!
+    expect(afterIn.stockQtyMilli).toBe(stockBefore + 15000)
+
+    // A sale FEFO-deducts the earliest-expiring lot first.
+    const o = await demoRequest<Any>('POST', '/api/v1/orders/checkout', {
+      items: [{ productId: yoghurt.id, qtyMilli: 14000 }], // 14 units
+      paymentMethod: 'cash',
+    })
+    expect(o.status).toBe('PAID')
+    lots = await demoRequest<Any[]>('GET', `/api/v1/products/${yoghurt.id}/batches`)
+    expect(lots.find((l: Any) => l.batchNo === 'B-2409').qtyRemainingMilli).toBe(0)
+    expect(lots.find((l: Any) => l.batchNo === 'B-2409').status).toBe('EXHAUSTED')
+    expect(lots.find((l: Any) => l.batchNo === 'A-1120').qtyRemainingMilli).toBe(18000)
+
+    // Recall an ACTIVE lot: remaining stock leaves the projection.
+    const recall = await demoRequest<Any>('POST', `/api/v1/batches/${lots.find((l: Any) => l.batchNo === 'A-1120').id}/recall`, { reason: 'supplier recall RC-2291' })
+    expect(recall.status).toBe('RECALLED')
+    expect(recall.qtyRemainingMilli).toBe(0)
+    const afterRecall = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === yoghurt.id)!
+    expect(afterRecall.stockQtyMilli).toBe(18000 - 18000 + 15000)
+    await expect(
+      demoRequest<Any>('POST', `/api/v1/batches/${recall.id}/recall`, { reason: 'again' }),
+    ).rejects.toMatchObject({ status: 409 })
+
+    // Expiry report: the expired seed lot is gone (exhausted), C-777 sits
+    // outside the 30-day window — with days=-1 (all) it is the only row,
+    // and valueCents sums lineTotalCents per remaining lot.
+    const exp30 = await demoRequest<Any>('GET', '/api/v1/reports/expiry?days=30')
+    expect(exp30.days).toBe(30)
+    expect(exp30.expired).toEqual([])
+    expect(exp30.soon).toEqual([])
+    const exp = await demoRequest<Any>('GET', '/api/v1/reports/expiry?days=-1')
+    expect(exp.expired).toEqual([])
+    expect(exp.soon.map((r: Any) => r.batchNo)).toEqual(['C-777'])
+    expect(exp.soon[0].qtyRemainingMilli).toBe(15000)
+    expect(exp.soon[0].valueCents).toBe(Math.round(15000 * 5500 / 1000))
+    expect(exp.valueCents).toBe(exp.soon.reduce((s: number, r: Any) => s + r.valueCents, 0))
+  })
+
+  it('dispose takes qtyMilli and can name the exact lot', async () => {
+    await login('admin', '0000')
+    const products = await demoRequest<Any[]>('GET', '/api/v1/products')
+    const flour = products.find((p: Any) => p.allowFraction)!
+    const before = flour.stockQtyMilli
+    // 0.5 kg written off — milli wire field, decimal-friendly.
+    const r = await demoRequest<Any>('POST', `/api/v1/products/${flour.id}/dispose`, { qtyMilli: 500, reason: 'spoilt' })
+    expect(r.disposed).toBe(500)
+    expect(r.stockQtyMilli).toBe(before - 500)
+    const after = (await demoRequest<Any[]>('GET', '/api/v1/products')).find((p: Any) => p.id === flour.id)!
+    expect(after.stockQtyMilli).toBe(before - 500)
+
+    // Named-lot disposal on the batch-tracked product.
+    const yoghurt = products.find((p: Any) => p.trackBatches)!
+    const lots = await demoRequest<Any[]>('GET', `/api/v1/products/${yoghurt.id}/batches`)
+    const active = lots.find((l: Any) => l.status === 'ACTIVE' && l.qtyRemainingMilli > 0)
+    const r2 = await demoRequest<Any>('POST', `/api/v1/products/${yoghurt.id}/dispose`, {
+      qtyMilli: 1000, reason: 'expired', batchId: active.id,
+    })
+    expect(r2.disposed).toBe(1000)
+    const lots2 = await demoRequest<Any[]>('GET', `/api/v1/products/${yoghurt.id}/batches`)
+    expect(lots2.find((l: Any) => l.id === active.id).qtyRemainingMilli).toBe(active.qtyRemainingMilli - 1000)
   })
 })

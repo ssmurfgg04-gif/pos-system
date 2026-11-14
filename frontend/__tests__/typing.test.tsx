@@ -83,7 +83,7 @@ describe('typing repro', () => {
     const viFetch = vi.spyOn(globalThis, 'fetch') as any
     viFetch.mockImplementation(async (url: string) => {
       const body = String(url).includes('/api/v1/products')
-        ? [{ id: 1, sku: 'SKU1', barcode: '1234', name: 'Test Product', categoryId: 1, categoryName: 'General', priceCents: 100, costCents: 50, stockQty: 10, trackStock: true, active: true, updatedAt: '' }]
+        ? [{ id: 1, sku: 'SKU1', barcode: '1234', name: 'Test Product', categoryId: 1, categoryName: 'General', priceCents: 100, costCents: 50, stockQtyMilli: 10000, trackStock: true, active: true, updatedAt: '' }]
         : []
       return { ok: true, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ data: body }) } as any
     })

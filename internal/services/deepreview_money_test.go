@@ -30,8 +30,8 @@ func newMoneyTill(t *testing.T) *moneyFixture {
 	s.db.Exec(`INSERT INTO users (username, role_id) SELECT 'cash1', id FROM roles LIMIT 1`)
 	var prodID, userID, roleID int64
 	s.db.Exec(`INSERT INTO categories (name, slug) VALUES ('C', 'c')`)
-	s.db.Exec(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty)
-                SELECT 'SKU-M1', 'M1', id, 60000, 50 FROM categories LIMIT 1`)
+	s.db.Exec(`INSERT INTO products (sku, name, category_id, price_cents, stock_qty_milli)
+                SELECT 'SKU-M1', 'M1', id, 60000, 50000 FROM categories LIMIT 1`)
 	s.db.QueryRow(`SELECT id FROM products WHERE sku='SKU-M1'`).Scan(&prodID)
 	s.db.QueryRow(`SELECT id FROM users WHERE username='cash1'`).Scan(&userID)
 	s.db.QueryRow(`SELECT id FROM roles WHERE name='Cashier'`).Scan(&roleID)
@@ -48,7 +48,7 @@ func (f *moneyFixture) principal() *auth.Principal {
 
 func (f *moneyFixture) checkout(method string, custID int64, uuid string) (*models.Order, error) {
 	req := models.CheckoutRequest{
-		Items:         []models.CheckoutItem{{ProductID: f.prodID, Qty: 1}},
+		Items:         []models.CheckoutItem{{ProductID: f.prodID, QtyMilli: 1000}},
 		PaymentMethod: method,
 		CustomerID:    custID,
 		ClientUUID:    uuid,
@@ -245,7 +245,7 @@ func TestMoneyManualConfirmRemainingBalance(t *testing.T) {
 	f := newMoneyTill(t)
 	// Split: cash 20000 now + mpesa 40000 pending (payable 60000).
 	order, err := f.s.Checkout(context.Background(), f.principal(), models.CheckoutRequest{
-		Items:         []models.CheckoutItem{{ProductID: f.prodID, Qty: 1}},
+		Items:         []models.CheckoutItem{{ProductID: f.prodID, QtyMilli: 1000}},
 		PaymentMethod: models.MethodMpesa,
 		CustomerPhone: "0711223344",
 		CustomerID:    0,

@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react'
 import { api, StockCount, StockCountLine } from '../lib/api'
 import { Button, Card, EmptyState, Field, Input, Modal, Spinner, StatusPill, Table, Textarea } from './ui'
 import { centsToAmount, formatMoney } from '../lib/money'
+import { fmtQty } from '../lib/qty'
 import { toast } from '../stores/toasts'
 import { ClipboardList, ClipboardCheck, Plus } from 'lucide-react'
 import { fmtDateTime } from '../lib/when'
@@ -51,6 +52,7 @@ export function StockCountPanel({ onChanged }: { onChanged?: () => void }) {
         ) : (
           <Table head={['Count', 'Status', 'Opened', 'Closed', 'Counted', 'Variance', 'By', '']}>
             {counts.map((c) => {
+              // v1.8.0: the server sums MILLI diffs into varianceUnits.
               const surplus = c.varianceUnits > 0
               const shrink = c.varianceUnits < 0
               const closed = c.status !== 'OPEN'
@@ -71,7 +73,7 @@ export function StockCountPanel({ onChanged }: { onChanged?: () => void }) {
                   <td className="px-3 py-2.5 tabular text-[13px] font-semibold text-ink">{c.linesCounted}/{c.linesTotal}</td>
                   <td className={`px-3 py-2.5 text-[13px] font-bold tabular ${!closed ? 'text-ink-subtle' : shrink ? 'text-danger-text' : surplus ? 'text-paid-text' : 'text-ink-muted'}`}>
                     {closed
-                      ? `${c.varianceUnits > 0 ? '+' : ''}${c.varianceUnits} · ${c.varianceValueCents > 0 ? '+' : ''}${centsToAmount(c.varianceValueCents)}`
+                      ? `${c.varianceUnits > 0 ? '+' : ''}${fmtQty(c.varianceUnits)} · ${c.varianceValueCents > 0 ? '+' : ''}${centsToAmount(c.varianceValueCents)}`
                       : '-'}
                   </td>
                   <td className="px-3 py-2.5 text-[12px] text-ink-muted">{c.countedByName || '-'}</td>
@@ -168,7 +170,8 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
       setDrafts((prev) => {
         const next: Record<number, string> = { ...prev }
         for (const l of r.lines ?? []) {
-          if (next[l.productId] === undefined) next[l.productId] = l.countedQty === null ? '' : String(l.countedQty)
+          // The draft holds UNITS text; the stored line is MILLI.
+          if (next[l.productId] === undefined) next[l.productId] = l.countedQtyMilli === null ? '' : String(l.countedQtyMilli / 1000)
         }
         return next
       })
@@ -181,14 +184,21 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
 
   const saveLine = async (line: StockCountLine) => {
     if (!count || count.status !== 'OPEN') return
+    // Typed in UNITS (decimals for weighed goods) → milli on the wire;
+    // clearing the field sends null which un-counts the line.
     const raw = (drafts[line.productId] ?? '').trim()
-    const digits = raw.replace(/[^\d]/g, '')
-    const value: number | null = raw === '' || digits === '' ? null : Math.min(parseInt(digits, 10), 1_000_000)
-    const current = line.countedQty
+    let value: number | null
+    if (raw === '') {
+      value = null
+    } else {
+      const units = Number(raw)
+      value = Number.isFinite(units) && units >= 0 ? Math.min(Math.round(units * 1000), 1_000_000_000) : null
+    }
+    const current = line.countedQtyMilli
     if (value === current) return
     setSaving(line.productId)
     try {
-      await api.put(`/api/v1/stock-counts/${id}/lines`, { productId: line.productId, countedQty: value })
+      await api.put(`/api/v1/stock-counts/${id}/lines`, { productId: line.productId, countedQtyMilli: value })
       await load()
     } catch (e: any) {
       toast.error('Could not save the count', e?.message)
@@ -207,7 +217,7 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
       setConfirmApply(false)
       toast.success(
         apply ? 'Counted stock applied' : 'Count closed',
-        `${done.number}, variance ${done.varianceUnits > 0 ? '+' : ''}${done.varianceUnits} units · ${formatMoney(done.varianceValueCents)}`,
+        `${done.number}, variance ${done.varianceUnits > 0 ? '+' : ''}${fmtQty(done.varianceUnits)} units · ${formatMoney(done.varianceValueCents)}`,
       )
       onChanged()
       await load()
@@ -228,6 +238,7 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
 
   const open = count.status === 'OPEN'
   const pct = count.linesTotal > 0 ? Math.round((count.linesCounted / count.linesTotal) * 100) : 0
+  // v1.8.0: variance rides as MILLI from the server.
   const shrink = count.varianceUnits < 0
   const surplus = count.varianceUnits > 0
 
@@ -279,7 +290,7 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
           <div className={`rounded-input border-2 p-3 ${shrink ? 'bg-danger-bg border-danger-text/30' : surplus ? 'bg-paid-bg border-paid-text/30' : 'bg-surface-muted border-line'}`}>
             <p className="text-[13px] font-bold text-ink">Variance summary</p>
             <p className={`text-sm font-bold tabular mt-0.5 ${shrink ? 'text-danger-text' : surplus ? 'text-paid-text' : 'text-ink-muted'}`}>
-              {count.varianceUnits > 0 ? '+' : ''}{count.varianceUnits} units · {count.varianceValueCents > 0 ? '+' : ''}{formatMoney(count.varianceValueCents)} at cost
+              {count.varianceUnits > 0 ? '+' : ''}{fmtQty(count.varianceUnits)} units · {count.varianceValueCents > 0 ? '+' : ''}{formatMoney(count.varianceValueCents)} at cost
             </p>
             <p className="text-[12px] text-ink-muted mt-0.5">
               Negative = shrinkage (counted less than the system believed). Report only, system stock was left untouched.
@@ -289,36 +300,39 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
 
         <Table head={['SKU', 'Product', 'Expected', 'Counted', 'Difference']}>
           {lines.map((l) => {
+            // Draft is UNITS text; the diff renders in UNITS off MILLI.
             const raw = (drafts[l.productId] ?? '').trim()
-            const n = raw === '' ? null : parseInt(raw.replace(/[^\d]/g, ''), 10)
-            const diff = open && n !== null && !isNaN(n) ? n - l.systemQty : l.countedQty !== null ? l.countedQty - l.systemQty : null
+            const draftMilli = raw === '' ? null : Math.round(Number(raw) * 1000) || null
+            const diff = open && draftMilli !== null && !isNaN(draftMilli)
+              ? draftMilli - l.systemQtyMilli
+              : l.countedQtyMilli !== null ? l.countedQtyMilli - l.systemQtyMilli : null
             return (
               <tr key={l.id}>
                 <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{l.sku || '-'}</td>
                 <td className="px-3 py-2 font-semibold text-ink text-[13px]">{l.name}</td>
-                <td className="px-3 py-2 tabular text-[13px] text-ink-muted">{l.expectedQty}</td>
+                <td className="px-3 py-2 tabular text-[13px] text-ink-muted">{fmtQty(l.expectedQtyMilli)}</td>
                 <td className="px-3 py-2">
                   <Input
                     value={drafts[l.productId] ?? ''}
-                    onChange={(e) => setDrafts((d) => ({ ...d, [l.productId]: e.target.value.replace(/[^\d]/g, '') }))}
+                    onChange={(e) => setDrafts((d) => ({ ...d, [l.productId]: e.target.value.replace(/[^\d.]/g, '') }))}
                     onBlur={() => saveLine(l)}
                     onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur() } }}
                     disabled={!open}
-                    inputMode="numeric"
-                    placeholder=", "
+                    inputMode="decimal"
+                    placeholder="0"
                     aria-label={`Counted quantity for ${l.name}`}
                     className={`w-24 text-center tabular font-bold ${open ? '' : 'opacity-70'}`}
                   />
                   {saving === l.productId && <span className="ml-2 inline-block align-middle"><Spinner className="w-4 h-4" /></span>}
                 </td>
                 <td className={`px-3 py-2 tabular text-[13px] font-bold ${diff === null ? 'text-ink-subtle' : diff > 0 ? 'text-paid-text' : diff < 0 ? 'text-danger-text' : 'text-ink-muted'}`}>
-                  {diff === null ? '-' : `${diff > 0 ? '+' : ''}${diff}`}
+                  {diff === null ? '-' : `${diff > 0 ? '+' : ''}${fmtQty(diff)}`}
                 </td>
               </tr>
             )
           })}
         </Table>
-        {open && <p className="text-[11px] text-ink-subtle">Type the physical quantity, it saves when you leave the field or press Enter. Clear a field to un-count that line.</p>}
+        {open && <p className="text-[11px] text-ink-subtle">Type the physical quantity (decimals for weighed goods), it saves when you leave the field or press Enter. Clear a field to un-count that line.</p>}
         {!open && <p className="text-[11px] text-ink-subtle">This count is closed, the sheet is read-only.</p>}
       </div>
 

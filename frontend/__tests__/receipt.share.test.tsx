@@ -55,7 +55,7 @@ const order = (over: Partial<any> = {}) => ({
   totalCents: 55000,
   customerName: 'Amina Njeri',
   createdAt: '2026-10-29T09:00:00.000Z',
-  items: [{ id: 1, productId: 1, name: 'Mug', sku: 'M1', qty: 1, unitPriceCents: 55000, lineTotalCents: 55000 }],
+  items: [{ id: 1, productId: 1, name: 'Mug', sku: 'M1', qtyMilli: 1000, unitPriceCents: 55000, lineTotalCents: 55000 }],
   payments: [{ id: 1, method: 'mpesa', status: 'COMPLETED', amountCents: 55000, phone: '254722123456', mpesaReceipt: 'QGH7XYZ1' }],
   ...over,
 })

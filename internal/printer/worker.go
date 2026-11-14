@@ -264,14 +264,14 @@ func (w *Worker) loadOrder(orderID int64) (*models.Order, error) {
 	}
 	o.PaidAt, o.VoidedAt = paidAt.String, voidedAt.String
 
-	itemRows, err := w.db.Query(w.db.Rebind(`SELECT id, product_id, name, COALESCE(sku,''), qty, unit_price_cents, line_total_cents
+	itemRows, err := w.db.Query(w.db.Rebind(`SELECT id, product_id, name, COALESCE(sku,''), qty_milli, unit_price_cents, line_total_cents
                 FROM order_items WHERE order_id = ? ORDER BY id`), orderID)
 	if err != nil {
 		return nil, err
 	}
 	for itemRows.Next() {
 		var it models.OrderItem
-		if err := itemRows.Scan(&it.ID, &it.ProductID, &it.Name, &it.SKU, &it.Qty, &it.UnitPriceCents, &it.LineTotalCents); err != nil {
+		if err := itemRows.Scan(&it.ID, &it.ProductID, &it.Name, &it.SKU, &it.QtyMilli, &it.UnitPriceCents, &it.LineTotalCents); err != nil {
 			itemRows.Close()
 			return nil, err
 		}
@@ -317,7 +317,7 @@ func (w *Worker) TestPrint() error {
 		return err
 	}
 	defer wc.Close()
-	items := []models.OrderItem{{ID: 1, ProductID: 0, Name: "Test item", Qty: 1, UnitPriceCents: 100, LineTotalCents: 100}}
+	items := []models.OrderItem{{ID: 1, ProductID: 0, Name: "Test item", QtyMilli: 1000, UnitPriceCents: 100, LineTotalCents: 100}}
 	var logo image.Image
 	if w.settings.GetBool("receipt_logo", true) {
 		logo = loadLogo(576)

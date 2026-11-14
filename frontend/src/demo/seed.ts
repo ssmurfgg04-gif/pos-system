@@ -41,11 +41,32 @@ export interface DemoProduct {
   categoryId: number
   priceCents: number
   costCents: number
-  stockQty: number
+  /** v1.8.0: integer milli-units (1000 = one unit). */
+  stockQtyMilli: number
   trackStock: boolean
   /** Gift-card products mint redeemable codes when sold (never track stock). */
   isGiftCard: boolean
+  /** v1.8.0: sellable unit + fractional till input + batch/expiry tracking. */
+  unit?: string
+  allowFraction?: boolean
+  trackBatches?: boolean
   active: boolean
+  updatedAt: string
+}
+
+/** v1.8.0 — one received lot of a batch-tracked product (demo mirror). */
+export interface DemoProductBatch {
+  id: number
+  productId: number
+  batchNo: string
+  expiryDate: string
+  qtyReceivedMilli: number
+  qtyRemainingMilli: number
+  costCents: number
+  supplierId: number
+  reference: string
+  status: 'ACTIVE' | 'EXHAUSTED' | 'RECALLED'
+  createdAt: string
   updatedAt: string
 }
 
@@ -54,7 +75,8 @@ export interface DemoOrderItem {
   productId: number
   name: string
   sku: string
-  qty: number
+  /** v1.8.0: integer milli-units. */
+  qtyMilli: number
   unitPriceCents: number
   lineTotalCents: number
 }
@@ -89,9 +111,13 @@ export interface DemoPOItem {
   productId: number
   name: string
   sku: string
-  qty: number
+  /** v1.8.0: integer milli-units. */
+  qtyMilli: number
   costCents: number
   lineTotalCents: number
+  /** v1.8.0: goods-in lot metadata for batch-tracked products. */
+  expiryDate?: string
+  batchNo?: string
 }
 
 export interface DemoPurchaseOrder {
@@ -113,8 +139,9 @@ export interface DemoTakeItem {
   productId: number
   name: string
   sku: string
-  expectedQty: number
-  countedQty: number
+  /** v1.8.0: integer milli-units. */
+  expectedQtyMilli: number
+  countedQtyMilli: number
 }
 
 export interface DemoStockTake {
@@ -234,6 +261,9 @@ export interface DemoDB {
   settings: Record<string, string>
   seq: { user: number; role: number; cat: number; product: number; order: number; item: number; pay: number; shift: number; job: number; audit: number; customer: number; ledger: number; supplier: number; po: number; poItem: number; take: number; takeItem: number }
   dailyOrderSeq: Record<string, number>
+  /** v1.8.0: dated lots for batch-tracked products (optional — older
+   *  stored seeds migrate lazily in the backend). */
+  productBatches?: DemoProductBatch[]
 }
 
 // Demo permission catalog — GENERATED from the Go server's catalog
@@ -317,30 +347,44 @@ const CATEGORIES: [string, string][] = [
 ]
 
 const PRODUCTS: [string, string, string, string, number, number, number, boolean][] = [
-  // sku, barcode, name, catSlug, priceCents, costCents, stock, track
-  ['TS-001', '4001234500011', 'Classic Cotton Tee, Black', 'tshirts', 55000, 32000, 46, true],
-  ['TS-002', '4001234500028', 'Classic Cotton Tee, White', 'tshirts', 55000, 32000, 38, true],
-  ['TS-003', '4001234500035', 'Premium Heavyweight Tee', 'tshirts', 85000, 48000, 22, true],
-  ['TS-004', '4001234500042', 'Oversized Streetwear Tee', 'tshirts', 90000, 52000, 17, true],
-  ['TS-005', '4001234500127', 'Ladies Fitted Tee, Navy', 'tshirts', 65000, 36000, 25, true],
-  ['TS-006', '4001234500134', 'Kids Cotton Tee, Assorted', 'tshirts', 40000, 22000, 30, true],
-  ['HD-001', '4001234500141', 'Pullover Hoodie, Grey', 'hoodies', 180000, 110000, 12, true],
-  ['HD-002', '4001234500158', 'Zip Hoodie, Black', 'hoodies', 200000, 125000, 8, true],
-  ['HD-003', '4001234500165', 'Sleeveless Hoodie, Olive', 'hoodies', 150000, 92000, 4, true],
-  ['MG-001', '4001234500059', 'Ceramic Mug, 11oz', 'mugs-bottles', 45000, 22000, 54, true],
-  ['MG-002', '4001234500066', 'Enamel Camping Mug', 'mugs-bottles', 60000, 34000, 26, true],
-  ['MG-003', '4001234500073', 'Insulated Travel Tumbler', 'mugs-bottles', 120000, 70000, 14, true],
-  ['MG-004', '4001234500172', 'Magic Colour-Changing Mug', 'mugs-bottles', 80000, 45000, 3, true],
-  ['AC-001', '4001234500080', 'Silicone Wristband', 'accessories', 15000, 5000, 210, true],
-  ['AC-002', '4001234500097', 'Fabric Wristband', 'accessories', 20000, 8000, 160, true],
-  ['AC-003', '4001234500103', 'Canvas Tote Bag', 'accessories', 55000, 28000, 33, true],
-  ['AC-004', '4001234500110', 'Embroidered Cap', 'accessories', 70000, 40000, 19, true],
-  ['AC-005', '4001234500189', 'Lanyard with PVC Pouch', 'accessories', 35000, 16000, 75, true],
+  // sku, barcode, name, catSlug, priceCents, costCents, stockMilli, track
+  ['TS-001', '4001234500011', 'Classic Cotton Tee, Black', 'tshirts', 55000, 32000, 46000, true],
+  ['TS-002', '4001234500028', 'Classic Cotton Tee, White', 'tshirts', 55000, 32000, 38000, true],
+  ['TS-003', '4001234500035', 'Premium Heavyweight Tee', 'tshirts', 85000, 48000, 22000, true],
+  ['TS-004', '4001234500042', 'Oversized Streetwear Tee', 'tshirts', 90000, 52000, 17000, true],
+  ['TS-005', '4001234500127', 'Ladies Fitted Tee, Navy', 'tshirts', 65000, 36000, 25000, true],
+  ['TS-006', '4001234500134', 'Kids Cotton Tee, Assorted', 'tshirts', 40000, 22000, 30000, true],
+  ['HD-001', '4001234500141', 'Pullover Hoodie, Grey', 'hoodies', 180000, 110000, 12000, true],
+  ['HD-002', '4001234500158', 'Zip Hoodie, Black', 'hoodies', 200000, 125000, 8000, true],
+  ['HD-003', '4001234500165', 'Sleeveless Hoodie, Olive', 'hoodies', 150000, 92000, 4000, true],
+  ['MG-001', '4001234500059', 'Ceramic Mug, 11oz', 'mugs-bottles', 45000, 22000, 54000, true],
+  ['MG-002', '4001234500066', 'Enamel Camping Mug', 'mugs-bottles', 60000, 34000, 26000, true],
+  ['MG-003', '4001234500073', 'Insulated Travel Tumbler', 'mugs-bottles', 120000, 70000, 14000, true],
+  ['MG-004', '4001234500172', 'Magic Colour-Changing Mug', 'mugs-bottles', 80000, 45000, 3000, true],
+  ['AC-001', '4001234500080', 'Silicone Wristband', 'accessories', 15000, 5000, 210000, true],
+  ['AC-002', '4001234500097', 'Fabric Wristband', 'accessories', 20000, 8000, 160000, true],
+  ['AC-003', '4001234500103', 'Canvas Tote Bag', 'accessories', 55000, 28000, 33000, true],
+  ['AC-004', '4001234500110', 'Embroidered Cap', 'accessories', 70000, 40000, 19000, true],
+  ['AC-005', '4001234500189', 'Lanyard with PVC Pouch', 'accessories', 35000, 16000, 75000, true],
   ['SV-001', '', 'Custom Print Run, per design', 'services', 25000, 0, 0, false],
   ['SV-002', '', 'Artwork & Branding Setup', 'services', 100000, 0, 0, false],
   ['SV-003', '', 'Same-Day Rush Fee', 'services', 50000, 0, 0, false],
   ['GC-001', '', 'Gift Card', 'services', 100000, 0, 0, false],
 ]
+
+// v1.8.0 — the two special-cased demo products: a weighed good (sold by
+// the kg, fractional till input) and a batch-tracked good (two dated lots,
+// one already expired so the Expiry report has something to show).
+const WEIGHED_PRODUCT = {
+  sku: 'AC-006', barcode: '', name: 'Maize Flour, 1kg (scoop)', catSlug: 'accessories',
+  priceCents: 15000, costCents: 11000, stockMilli: 50000, // 50 kg
+  unit: 'kg', allowFraction: true, trackBatches: false,
+}
+const BATCH_PRODUCT = {
+  sku: 'FD-001', barcode: '', name: 'Yoghurt Cup, 500ml', catSlug: 'accessories',
+  priceCents: 8000, costCents: 5500,
+  unit: 'pc', allowFraction: false, trackBatches: true,
+}
 
 const CUSTOMERS = [
   '', 'Grace W.', 'Brian O.', 'Faith M.', 'Kevin K.', 'Wanjiku', 'Otieno', 'Aisha N.',
@@ -369,20 +413,67 @@ export function buildSeed(): DemoDB {
   const catBySlug: Record<string, number> = {}
   categories.forEach((c) => (catBySlug[c.slug] = c.id))
 
-  const products: DemoProduct[] = PRODUCTS.map((p, i) => ({
-    id: i + 1,
-    sku: p[0],
-    barcode: p[1],
-    name: p[2],
-    categoryId: catBySlug[p[3]],
-    priceCents: p[4],
-    costCents: p[5],
-    stockQty: p[6],
-    trackStock: p[7],
-    isGiftCard: p[0].startsWith('GC-'),
-    active: true,
-    updatedAt: iso(new Date(now.getTime() - Math.floor(rnd() * 20) * 864e5)),
-  }))
+  const products: DemoProduct[] = [
+    ...PRODUCTS.map((p, i) => ({
+      id: i + 1,
+      sku: p[0],
+      barcode: p[1],
+      name: p[2],
+      categoryId: catBySlug[p[3]],
+      priceCents: p[4],
+      costCents: p[5],
+      stockQtyMilli: p[6],
+      trackStock: p[7],
+      isGiftCard: p[0].startsWith('GC-'),
+      unit: 'pc' as const,
+      active: true,
+      updatedAt: iso(new Date(now.getTime() - Math.floor(rnd() * 20) * 864e5)),
+    })),
+    // The weighed good: sold by the kg, till accepts 0.5-style input.
+    {
+      id: PRODUCTS.length + 1,
+      sku: WEIGHED_PRODUCT.sku, barcode: WEIGHED_PRODUCT.barcode, name: WEIGHED_PRODUCT.name,
+      categoryId: catBySlug[WEIGHED_PRODUCT.catSlug],
+      priceCents: WEIGHED_PRODUCT.priceCents, costCents: WEIGHED_PRODUCT.costCents,
+      stockQtyMilli: WEIGHED_PRODUCT.stockMilli, trackStock: true, isGiftCard: false,
+      unit: WEIGHED_PRODUCT.unit, allowFraction: WEIGHED_PRODUCT.allowFraction, trackBatches: WEIGHED_PRODUCT.trackBatches,
+      active: true,
+      updatedAt: iso(new Date(now.getTime() - Math.floor(rnd() * 20) * 864e5)),
+    },
+    // The batch-tracked good: two dated lots seeded below.
+    {
+      id: PRODUCTS.length + 2,
+      sku: BATCH_PRODUCT.sku, barcode: BATCH_PRODUCT.barcode, name: BATCH_PRODUCT.name,
+      categoryId: catBySlug[BATCH_PRODUCT.catSlug],
+      priceCents: BATCH_PRODUCT.priceCents, costCents: BATCH_PRODUCT.costCents,
+      // Projection equals the SUM of the lot remainders below (12 + 20).
+      stockQtyMilli: 32000, trackStock: true, isGiftCard: false,
+      unit: BATCH_PRODUCT.unit, allowFraction: BATCH_PRODUCT.allowFraction, trackBatches: BATCH_PRODUCT.trackBatches,
+      active: true,
+      updatedAt: iso(new Date(now.getTime() - Math.floor(rnd() * 20) * 864e5)),
+    },
+  ]
+
+  // v1.8.0 — dated lots for the batch-tracked product: one expired
+  // (yesterday-ish, still holding stock) and one expiring soon (+20 days),
+  // so the Inventory lots panel and the Reports expiry watchlist are alive
+  // on a fresh seed. FEFO order = expired first.
+  const dayStr = (back: number) => new Date(now.getTime() - back * 864e5).toISOString().slice(0, 10)
+  const yoghurtId = PRODUCTS.length + 2
+  const productBatches: DemoProductBatch[] = [
+    {
+      id: 1, productId: yoghurtId, batchNo: 'B-2409', expiryDate: dayStr(3), // 3 days AGO (expired)
+      qtyReceivedMilli: 24000, qtyRemainingMilli: 12000, costCents: BATCH_PRODUCT.costCents,
+      supplierId: 1, reference: 'seed lot, expired', status: 'ACTIVE',
+      createdAt: iso(new Date(now.getTime() - 40 * 864e5)), updatedAt: iso(new Date(now.getTime() - 40 * 864e5)),
+    },
+    {
+      id: 2, productId: yoghurtId, batchNo: 'A-1120', expiryDate: dayStr(-20), // 20 days ahead (expiring soon)
+      qtyReceivedMilli: 30000, qtyRemainingMilli: 20000, costCents: BATCH_PRODUCT.costCents,
+      supplierId: 1, reference: 'seed lot, fresh', status: 'ACTIVE',
+      createdAt: iso(new Date(now.getTime() - 10 * 864e5)), updatedAt: iso(new Date(now.getTime() - 10 * 864e5)),
+    },
+  ]
 
   // ---- Tab customers (a few regulars with credit, one cash-only) ----
   const custSeed: [string, string, number, boolean][] = [
@@ -422,10 +513,10 @@ export function buildSeed(): DemoDB {
     const items: DemoOrderItem[] = []
     for (let i = 0; i < nLines; i++) {
       const p = sellable[Math.floor(rnd() * sellable.length)]
-      const qty = 1 + Math.floor(rnd() * 3)
+      const qtyMilli = (1 + Math.floor(rnd() * 3)) * 1000
       items.push({
-        id: itemId++, productId: p.id, name: p.name, sku: p.sku, qty,
-        unitPriceCents: p.priceCents, lineTotalCents: p.priceCents * qty,
+        id: itemId++, productId: p.id, name: p.name, sku: p.sku, qtyMilli,
+        unitPriceCents: p.priceCents, lineTotalCents: Math.round((p.priceCents * qtyMilli) / 1000),
       })
     }
     const subtotal = items.reduce((s, l) => s + l.lineTotalCents, 0)
@@ -508,12 +599,13 @@ export function buildSeed(): DemoDB {
   ]
 
   return {
-    v: 3, users, roles, categories, products, orders, customers, ledger: [],
+    v: 4, users, roles, categories, products, orders, customers, ledger: [],
     suppliers, purchaseOrders: [], stockTakes: [],
     shifts, designJobs, audit,
     settings: { ...DEMO_SETTINGS },
     seq: { user: users.length + 1, role: roles.length + 1, cat: categories.length + 1, product: products.length + 1, order: orderId, item: itemId, pay: payId, shift: shifts.length + 1, job: designJobs.length + 1, audit: audit.length + 1, customer: customers.length + 1, ledger: 1, supplier: suppliers.length + 1, po: 1, poItem: 1, take: 1, takeItem: 1 },
     dailyOrderSeq: dailySeq,
+    productBatches,
   }
 }
 

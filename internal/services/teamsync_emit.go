@@ -38,7 +38,7 @@ func (s *Service) EmitOrder(orderID int64) {
 		Items: []struct {
 			SKU       string `json:"sku"`
 			Name      string `json:"name"`
-			Qty       int    `json:"qty"`
+			QtyMilli  int64  `json:"qtyMilli"`
 			UnitPrice int64  `json:"unitPriceCents"`
 			LineTotal int64  `json:"lineTotalCents"`
 			CostCents int64  `json:"costCents"` // v1.7.0: unit cost snapshot at sale time
@@ -57,11 +57,11 @@ func (s *Service) EmitOrder(orderID int64) {
 		oe.Items = append(oe.Items, struct {
 			SKU       string `json:"sku"`
 			Name      string `json:"name"`
-			Qty       int    `json:"qty"`
+			QtyMilli  int64  `json:"qtyMilli"`
 			UnitPrice int64  `json:"unitPriceCents"`
 			LineTotal int64  `json:"lineTotalCents"`
 			CostCents int64  `json:"costCents"`
-		}{it.SKU, it.Name, it.Qty, it.UnitPriceCents, it.LineTotalCents, it.CostCents})
+		}{it.SKU, it.Name, it.QtyMilli, it.UnitPriceCents, it.LineTotalCents, it.CostCents})
 	}
 	for _, pm := range order.Payments {
 		oe.Payments = append(oe.Payments, struct {
@@ -101,7 +101,7 @@ func (s *Service) EmitProduct(productID int64, stockSet bool) {
 		Slug      string
 		Price     int64
 		Cost      int64
-		Stock     int
+		Stock     int64
 		Track     int
 		Active    int
 		Gift      int
@@ -110,7 +110,7 @@ func (s *Service) EmitProduct(productID int64, stockSet bool) {
 	}
 	err := s.db.QueryRow(s.db.Rebind(`
                 SELECT COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, COALESCE(c.slug,''),
-                        p.price_cents, p.cost_cents, p.stock_qty, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), COALESCE(p.is_gift_card,0),
+                        p.price_cents, p.cost_cents, p.stock_qty_milli, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), COALESCE(p.is_gift_card,0),
                         COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0)
                 FROM products p LEFT JOIN categories c ON c.id = p.category_id WHERE p.id = ?`), productID).
 		Scan(&pr.SKU, &pr.Barcode, &pr.Name, &pr.Slug, &pr.Price, &pr.Cost, &pr.Stock, &pr.Track, &pr.Active, &pr.Gift, &pr.Wholesale, &pr.LowStock)
@@ -119,7 +119,7 @@ func (s *Service) EmitProduct(productID int64, stockSet bool) {
 	}
 	s.Emit("product", "upsert", map[string]any{
 		"sku": pr.SKU, "barcode": pr.Barcode, "name": pr.Name, "categorySlug": pr.Slug,
-		"priceCents": pr.Price, "costCents": pr.Cost, "stockQty": pr.Stock,
+		"priceCents": pr.Price, "costCents": pr.Cost, "stockQtyMilli": pr.Stock,
 		"stockSet": stockSet, "trackStock": pr.Track == 1, "active": pr.Active == 1,
 		"isGiftCard": pr.Gift == 1, "wholesalePriceCents": pr.Wholesale,
 		"lowStockUnits": pr.LowStock, "updatedAt": nowStamp(),
@@ -129,11 +129,11 @@ func (s *Service) EmitProduct(productID int64, stockSet bool) {
 // EmitStockDelta queues a signed stock movement (sales use per-line deltas
 // inside the order event; this covers adjusts, PO receives, stock takes).
 
-func (s *Service) EmitStockDelta(sku string, delta int) {
+func (s *Service) EmitStockDelta(sku string, delta int64) {
 	if sku == "" || delta == 0 {
 		return
 	}
-	s.Emit("stock", "upsert", map[string]any{"sku": sku, "delta": delta})
+	s.Emit("stock", "upsert", map[string]any{"sku": sku, "deltaMilli": delta})
 }
 
 // EmitCustomer queues the identity row (balances ride on ledger events).
@@ -266,7 +266,7 @@ func (s *Service) EmitReturn(doc *models.ReturnDoc) {
 	for _, it := range doc.Items {
 		items = append(items, map[string]any{
 			"orderItemId": it.OrderItemID, "sku": it.SKU, "name": it.Name,
-			"qty": it.Qty, "unitPriceCents": it.UnitPriceCents,
+			"qtyMilli": it.QtyMilli, "unitPriceCents": it.UnitPriceCents,
 			"lineTotalCents": it.LineTotalCents,
 		})
 	}

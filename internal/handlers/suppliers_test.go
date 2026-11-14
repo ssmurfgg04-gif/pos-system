@@ -16,7 +16,7 @@ func prodState(t *testing.T, engine *gin.Engine, token string, id int64) (costCe
 	for _, it := range decode(t, w)["data"].([]any) {
 		m := it.(map[string]any)
 		if int64(m["id"].(float64)) == id {
-			return int64(m["costCents"].(float64)), int(m["stockQty"].(float64))
+			return int64(m["costCents"].(float64)), int(m["stockQtyMilli"].(float64)) / 1000
 		}
 	}
 	t.Fatalf("product %d not found", id)
@@ -40,7 +40,7 @@ func TestSupplierPOLifecycle(t *testing.T) {
 
 	w = do(t, engine, "POST", "/api/v1/purchase-orders", admin, map[string]any{
 		"supplierId": sid,
-		"items":      []map[string]any{{"productId": 1, "qty": 10, "costCents": 40000}},
+		"items":      []map[string]any{{"productId": 1, "qtyMilli": 10000, "costCents": 40000}},
 		"note":       "test receive",
 	})
 	if w.Code != 201 {
@@ -93,14 +93,15 @@ func TestStockTakeApply(t *testing.T) {
 	}
 	take := dataMap(t, w)
 	items := take["items"].([]any)
-	if len(items) != 1 || int64(items[0].(map[string]any)["expectedQty"].(float64)) != int64(stockBefore) {
+	if len(items) != 1 || int64(items[0].(map[string]any)["expectedQtyMilli"].(float64)) != int64(stockBefore)*1000 {
 		t.Fatalf("take should snapshot stock %d: %v", stockBefore, take)
 	}
 	takeID := itoa64(take["id"])
 
 	counted := stockBefore + 5
+	countedMilli := int64(counted) * 1000
 	w = do(t, engine, "POST", "/api/v1/stock-takes/"+takeID+"/count", admin, map[string]any{
-		"counts": map[string]int{"1": counted},
+		"counts": map[string]int64{"1": countedMilli},
 	})
 	if w.Code != 200 {
 		t.Fatalf("count: %d %s", w.Code, w.Body.String())

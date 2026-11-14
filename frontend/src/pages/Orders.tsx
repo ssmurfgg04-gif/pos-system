@@ -13,6 +13,7 @@ import { Button, Card, EmptyState, Input, Modal, Select, Spinner, StatusPill, Ta
 import { ReceiptModal } from '../components/Receipt'
 import { useBranding } from '../stores/branding'
 import { centsToAmount, formatMoney } from '../lib/money'
+import { fmtQty, lineTotalCents } from '../lib/qty'
 import { toast } from '../stores/toasts'
 import { ReceiptText, Banknote, Smartphone, AlertTriangle, Printer, BookUser, CreditCard, Wallet, MessageCircle, Briefcase, History, Undo2 } from 'lucide-react'
 import { fmtDateTime, fmtTime } from '../lib/when'
@@ -245,7 +246,7 @@ export function Orders() {
                       </p>
                     )}
                   </td>
-                  <td className="px-3 py-2.5 tabular text-ink-muted">{o.items.reduce((n, i) => n + i.qty, 0)}</td>
+                  <td className="px-3 py-2.5 tabular text-ink-muted">{fmtQty(o.items.reduce((n, i) => n + i.qtyMilli, 0))}</td>
                   <td className="px-3 py-2.5 font-bold tabular text-ink">{centsToAmount(o.totalCents)}</td>
                   <td className="px-3 py-2.5 text-[13px] text-ink-muted">
                     {pay ? (
@@ -459,7 +460,7 @@ function OrderDrawer({
               <p className="font-semibold text-ink text-[13px]">{i.name}</p>
               <p className="text-[11px] text-ink-subtle">{i.sku}</p>
             </td>
-            <td className="px-3 py-2 tabular">{i.qty}</td>
+            <td className="px-3 py-2 tabular">{fmtQty(i.qtyMilli)}</td>
             <td className="px-3 py-2 tabular text-ink-muted">{centsToAmount(i.unitPriceCents)}</td>
             <td className="px-3 py-2 tabular font-semibold">{centsToAmount(i.lineTotalCents)}</td>
           </tr>
@@ -925,13 +926,15 @@ function ReturnModal({ order, onClose, onDone }: { order: Order; onClose: () => 
     return () => { alive = false }
   }, [method])
 
-  const setQty = (id: number, qty: number, max: number) =>
-    setQtys((q) => ({ ...q, [id]: Math.max(0, Math.min(max, Math.floor(qty) || 0)) }))
+  // v1.8.0: the picker holds MILLI quantities; the input stays in UNITS
+  // (decimals allowed for weighed lines) and ×1000 becomes the payload.
+  const setQty = (id: number, units: number, maxMilli: number) =>
+    setQtys((q) => ({ ...q, [id]: Math.max(0, Math.min(maxMilli, Math.round(units * 1000) || 0)) }))
 
   const lines = (items ?? [])
     .filter((i) => (qtys[i.id] || 0) > 0)
-    .map((i) => ({ orderItemId: i.id, qty: qtys[i.id] || 0 }))
-  const refundCents = (items ?? []).reduce((s, i) => s + (qtys[i.id] || 0) * i.unitPriceCents, 0)
+    .map((i) => ({ orderItemId: i.id, qtyMilli: qtys[i.id] || 0 }))
+  const refundCents = (items ?? []).reduce((s, i) => s + lineTotalCents(i.unitPriceCents, qtys[i.id] || 0), 0)
   const picked = (customers ?? []).find((c) => c.id === customerId)
   const canSubmit = !!items && lines.length > 0 && (method === 'CASH' || customerId > 0)
 
@@ -984,20 +987,21 @@ function ReturnModal({ order, onClose, onDone }: { order: Order; onClose: () => 
                   <p className="font-semibold text-ink text-[13px]">{i.name}</p>
                   <p className="text-[11px] text-ink-subtle">{i.sku}</p>
                 </td>
-                <td className="px-3 py-2 tabular text-ink-muted">{i.qty}</td>
+                <td className="px-3 py-2 tabular text-ink-muted">{fmtQty(i.qtyMilli)}</td>
                 <td className="px-3 py-2 tabular text-ink-muted">{centsToAmount(i.unitPriceCents)}</td>
                 <td className="px-3 py-2">
                   <Input
                     type="number"
                     min={0}
-                    max={i.qty}
-                    value={qtys[i.id] ?? 0}
-                    onChange={(e) => setQty(i.id, Number(e.target.value), i.qty)}
+                    max={i.qtyMilli / 1000}
+                    step={0.001}
+                    value={(qtys[i.id] ?? 0) / 1000}
+                    onChange={(e) => setQty(i.id, Number(e.target.value), i.qtyMilli)}
                     className="w-20"
                     aria-label={`Return quantity for ${i.name}`}
                   />
                 </td>
-                <td className="px-3 py-2 tabular font-semibold">{centsToAmount((qtys[i.id] || 0) * i.unitPriceCents)}</td>
+                <td className="px-3 py-2 tabular font-semibold">{centsToAmount(lineTotalCents(i.unitPriceCents, qtys[i.id] || 0))}</td>
               </tr>
             ))}
           </Table>

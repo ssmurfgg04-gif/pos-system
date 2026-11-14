@@ -62,7 +62,7 @@ func (s *Service) HoldSale(refName string, req models.CheckoutRequest, p *auth.P
 		return nil, fmt.Errorf("too many lines (max %d)", models.MaxOrderLines)
 	}
 	for _, it := range req.Items {
-		if it.Qty <= 0 || it.Qty > models.MaxOrderQty {
+		if it.QtyMilli <= 0 || it.QtyMilli > models.MaxOrderQtyMilli {
 			return nil, fmt.Errorf("invalid quantity")
 		}
 		if it.UnitPriceCents < 0 || it.UnitPriceCents > models.MaxPriceCents {

@@ -37,7 +37,7 @@ type soldReturnLine struct {
 	productID  int64
 	name       string
 	sku        string
-	qty        int
+	qtyMilli   int64
 	price      int64
 	trackStock bool
 }
@@ -51,7 +51,7 @@ func (s *Service) CreateReturn(req models.CreateReturnRequest, p *auth.Principal
 	}
 	total := int64(0)
 	for _, l := range req.Lines {
-		if l.Qty <= 0 {
+		if l.QtyMilli <= 0 {
 			return nil, fmt.Errorf("%w: return quantities must be positive", ErrInvalidInput)
 		}
 	}
@@ -98,7 +98,7 @@ func (s *Service) CreateReturn(req models.CreateReturnRequest, p *auth.Principal
 	// How much of each line has already been returned (across returns).
 	alreadyReturned := map[int64]int{}
 	rows, err := tx.Query(s.db.Rebind(`
-                SELECT ri.order_item_id, SUM(ri.qty)
+                SELECT ri.order_item_id, SUM(ri.qty_milli)
                 FROM return_items ri JOIN returns r ON r.id = ri.return_id
                 WHERE r.order_id = ?
                 GROUP BY ri.order_item_id`), req.OrderID)
@@ -107,12 +107,12 @@ func (s *Service) CreateReturn(req models.CreateReturnRequest, p *auth.Principal
 	}
 	for rows.Next() {
 		var itemID int64
-		var qty int
+		var qty int64
 		if err := rows.Scan(&itemID, &qty); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		alreadyReturned[itemID] = qty
+		alreadyReturned[itemID] = int(qty)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -125,7 +125,7 @@ func (s *Service) CreateReturn(req models.CreateReturnRequest, p *auth.Principal
 		productID   int64
 		name        string
 		sku         string
-		qty         int
+		qtyMilli    int64
 		price       int64
 		lineTotal   int64
 		trackStock  bool
@@ -136,14 +136,14 @@ func (s *Service) CreateReturn(req models.CreateReturnRequest, p *auth.Principal
 		if !ok {
 			return nil, fmt.Errorf("%w: order item %d is not part of %s", ErrInvalidInput, l.OrderItemID, orderNumber)
 		}
-		remaining := sold.qty - alreadyReturned[l.OrderItemID]
-		if l.Qty > remaining {
-			return nil, fmt.Errorf("%w: %s — only %d of %d returnable", ErrInvalidInput, sold.name, remaining, sold.qty)
+		remaining := sold.qtyMilli - int64(alreadyReturned[l.OrderItemID])
+		if l.QtyMilli > remaining {
+			return nil, fmt.Errorf("%w: %s — only %d of %d milli returnable", ErrInvalidInput, sold.name, remaining, sold.qtyMilli)
 		}
-		lineTotal := sold.price * int64(l.Qty)
+		lineTotal := milliLineTotal(sold.price, l.QtyMilli)
 		lines = append(lines, retLine{
 			orderItemID: sold.id, productID: sold.productID, name: sold.name, sku: sold.sku,
-			qty: l.Qty, price: sold.price, lineTotal: lineTotal, trackStock: sold.trackStock,
+			qtyMilli: l.QtyMilli, price: sold.price, lineTotal: lineTotal, trackStock: sold.trackStock,
 		})
 		total += lineTotal
 	}
@@ -170,19 +170,30 @@ func (s *Service) CreateReturn(req models.CreateReturnRequest, p *auth.Principal
 	// Restock + ledger rows.
 	for _, l := range lines {
 		if _, err := tx.Exec(s.db.Rebind(`INSERT INTO return_items
-                        (return_id, order_item_id, product_id, name, sku, qty, unit_price_cents, line_total_cents)
+                        (return_id, order_item_id, product_id, name, sku, qty_milli, unit_price_cents, line_total_cents)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-			returnID, l.orderItemID, l.productID, l.name, l.sku, l.qty, l.price, l.lineTotal); err != nil {
+			returnID, l.orderItemID, l.productID, l.name, l.sku, l.qtyMilli, l.price, l.lineTotal); err != nil {
 			return nil, err
 		}
 		if !l.trackStock {
 			continue
 		}
-		if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty = stock_qty + ? WHERE id = ?`), l.qty, l.productID); err != nil {
+		if _, err := tx.Exec(s.db.Rebind(`UPDATE products SET stock_qty_milli = stock_qty_milli + ?, stock_qty = (stock_qty_milli + ?) / 1000 WHERE id = ?`), l.qtyMilli, l.qtyMilli, l.productID); err != nil {
 			return nil, err
 		}
-		if err := recordStockMoveTx(s, tx, l.productID, int64(l.qty), models.MoveReturnRestock, number, orderNumber, p.ID, p.Username); err != nil {
+		if err := recordStockMoveTx(s, tx, l.productID, l.qtyMilli, models.MoveReturnRestock, number, orderNumber, p.ID, p.Username); err != nil {
 			return nil, err
+		}
+		// v1.8.0: batch-tracked products receive the goods onto their
+		// OPENING lot (the original lot of a returned item is not
+		// recorded — the shelf gets the goods back, the OPENING batch
+		// keeps the batch sum reconciled with the projection).
+		var batches int
+		tx.QueryRow(s.db.Rebind(`SELECT COALESCE(track_batches,0) FROM products WHERE id = ?`), l.productID).Scan(&batches)
+		if batches == 1 {
+			if err := adjustBatchStockTx(s, tx, l.productID, l.qtyMilli); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -246,7 +257,7 @@ func (s *Service) GetReturn(id int64) (*models.ReturnDoc, error) {
 	d.Items = []models.ReturnItem{}
 	rows, err := s.db.Query(s.db.Rebind(`
                 SELECT id, return_id, order_item_id, product_id, COALESCE(name,''), COALESCE(sku,''),
-                        qty, unit_price_cents, line_total_cents
+                        qty_milli, unit_price_cents, line_total_cents
                 FROM return_items WHERE return_id = ? ORDER BY id`), id)
 	if err != nil {
 		return nil, err
@@ -255,7 +266,7 @@ func (s *Service) GetReturn(id int64) (*models.ReturnDoc, error) {
 	for rows.Next() {
 		var it models.ReturnItem
 		if err := rows.Scan(&it.ID, &it.ReturnID, &it.OrderItemID, &it.ProductID, &it.Name, &it.SKU,
-			&it.Qty, &it.UnitPriceCents, &it.LineTotalCents); err != nil {
+			&it.QtyMilli, &it.UnitPriceCents, &it.LineTotalCents); err != nil {
 			return nil, err
 		}
 		d.Items = append(d.Items, it)
@@ -301,7 +312,7 @@ func (s *Service) ListReturns(orderID int64, limit int) ([]models.ReturnDoc, err
 // needs (id, product, snapshot fields, trackability).
 func loadOrderItemsFullTx(tx *sql.Tx, rebind func(string) string, orderID int64) ([]soldReturnLine, error) {
 	rows, err := tx.Query(rebind(`
-                SELECT oi.id, oi.product_id, oi.name, COALESCE(oi.sku,''), oi.qty, oi.unit_price_cents,
+                SELECT oi.id, oi.product_id, oi.name, COALESCE(oi.sku,''), oi.qty_milli, oi.unit_price_cents,
                         COALESCE(p.track_stock,1)
                 FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id
                 WHERE oi.order_id = ? ORDER BY oi.id`), orderID)
@@ -313,7 +324,7 @@ func loadOrderItemsFullTx(tx *sql.Tx, rebind func(string) string, orderID int64)
 	for rows.Next() {
 		var l soldReturnLine
 		var track int
-		if err := rows.Scan(&l.id, &l.productID, &l.name, &l.sku, &l.qty, &l.price, &track); err != nil {
+		if err := rows.Scan(&l.id, &l.productID, &l.name, &l.sku, &l.qtyMilli, &l.price, &track); err != nil {
 			return nil, err
 		}
 		l.trackStock = track == 1

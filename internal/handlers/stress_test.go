@@ -15,7 +15,7 @@ func TestStressLastUnitRace(t *testing.T) {
 
 	w := do(t, engine, "POST", "/api/v1/products", admin, map[string]any{
 		"name": "Stress Last Unit", "categoryId": 1, "priceCents": 100,
-		"stockQty": 1, "trackStock": true,
+		"stockQtyMilli": 1000, "trackStock": true,
 	})
 	if w.Code != 201 {
 		t.Fatalf("create product: %d %s", w.Code, w.Body.String())
@@ -35,7 +35,7 @@ func TestStressLastUnitRace(t *testing.T) {
 			defer wg.Done()
 			<-start
 			w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-				"items":         []map[string]any{{"productId": pid, "qty": 1}},
+				"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 				"paymentMethod": "cash",
 				"clientUuid":    fmt.Sprintf("stress-race-%d", i),
 			})
@@ -58,7 +58,7 @@ func TestStressLastUnitRace(t *testing.T) {
 			got, conflictCount.Load(), otherCount.Load())
 	}
 	prods = productIDs(t, engine, cashier, "Stress Last Unit")
-	if stock := int(prods[0]["stockQty"].(float64)); stock != 0 {
+	if stock := int(prods[0]["stockQtyMilli"].(float64)); stock != 0 {
 		t.Fatalf("stock must end at 0, got %d", stock)
 	}
 }
@@ -70,7 +70,7 @@ func TestStressSyncBurstIdempotent(t *testing.T) {
 
 	w := do(t, engine, "POST", "/api/v1/products", admin, map[string]any{
 		"name": "Stress Burst", "categoryId": 1, "priceCents": 100,
-		"stockQty": 50, "trackStock": true,
+		"stockQtyMilli": 50000, "trackStock": true,
 	})
 	if w.Code != 201 {
 		t.Fatalf("create product: %d %s", w.Code, w.Body.String())
@@ -88,7 +88,7 @@ func TestStressSyncBurstIdempotent(t *testing.T) {
 			defer wg.Done()
 			<-start
 			w := do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-				"items":         []map[string]any{{"productId": pid, "qty": 1}},
+				"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 				"paymentMethod": "cash",
 				"clientUuid":    "stress-burst-1",
 			})
@@ -111,7 +111,7 @@ func TestStressSyncBurstIdempotent(t *testing.T) {
 		}
 	}
 	prods := productIDs(t, engine, cashier, "Stress Burst")
-	if stock := int(prods[0]["stockQty"].(float64)); stock != 49 {
+	if stock := int(prods[0]["stockQtyMilli"].(float64)) / 1000; stock != 49 {
 		t.Fatalf("burst must deduct exactly once (50->49), got %d", stock)
 	}
 }

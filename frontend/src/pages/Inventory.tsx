@@ -5,19 +5,20 @@
 // images via the public /products/:id/image route, thumbnails in the list).
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, downloadFile, Category, Product, StockMovement } from '../lib/api'
+import { api, downloadFile, Category, Product, ProductBatch, StockMovement } from '../lib/api'
 import { productPhotoCandidates } from '../lib/photos'
 import { ProductPhoto } from '../components/ProductPhoto'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
-import { Button, Card, EmptyState, Field, Input, Modal, MoneyInput, Select, Spinner, Table, Tabs } from '../components/ui'
+import { Button, Card, EmptyState, Field, Input, Modal, MoneyInput, Select, Spinner, StatusPill, Table, Tabs } from '../components/ui'
 import { StockCountPanel } from '../components/StockCount'
 import { printBarcodeLabels } from '../lib/labels'
-import { centsToAmount } from '../lib/money'
+import { centsToAmount, formatMoney } from '../lib/money'
+import { UNITS, fmtQty, isFractionUnit, parseQtyInput, unitLabel } from '../lib/qty'
 import { normalizeProductImage, PHOTO_ACCEPT } from '../lib/photo'
 import { toast } from '../stores/toasts'
 import { lowStockAt } from '../lib/stock'
-import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2, Printer, History, PackageMinus } from 'lucide-react'
+import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2, Printer, History, PackageMinus, Layers, TriangleAlert } from 'lucide-react'
 import { fmtDateTime } from '../lib/when'
 
 /** Editor preview: the product's CURRENT best photo (uploaded first, then
@@ -33,6 +34,31 @@ function ProductThumb({ p }: { p: Product }) {
   return (
     <span className="w-10 h-10 shrink-0 rounded-input border-2 border-line bg-surface-muted overflow-hidden flex" aria-hidden>
       <ProductPhoto p={p} />
+    </span>
+  )
+}
+
+/** v1.8.0 expiry badge tone for a YYYY-MM-DD date ('' = undated). */
+function expiryTone(d: string): 'danger' | 'warn' | 'none' {
+  if (!d) return 'none'
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const diff = Math.round((Date.parse(d + 'T00:00:00') - today.getTime()) / 864e5)
+  if (diff < 0) return 'danger'
+  if (diff <= 30) return 'warn'
+  return 'none'
+}
+
+function ExpiryCell({ d }: { d: string }) {
+  const tone = expiryTone(d)
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-pill text-[11px] font-bold tabular whitespace-nowrap ${
+        tone === 'danger' ? 'bg-danger-bg text-danger-text' : tone === 'warn' ? 'bg-pending-bg text-pending-text' : 'text-ink-muted'
+      }`}
+    >
+      {tone === 'danger' && <TriangleAlert size={11} strokeWidth={2.5} aria-hidden />}
+      {d || '—'}
     </span>
   )
 }
@@ -63,6 +89,8 @@ export function Inventory() {
   const [editing, setEditing] = useState<Product | 'new' | null>(null)
   const [stockFor, setStockFor] = useState<Product | null>(null)
   const [disposeFor, setDisposeFor] = useState<Product | null>(null)
+  // v1.8.0 batch/expiry lots — the per-product lots panel (read + goods-in + recall).
+  const [batchesFor, setBatchesFor] = useState<Product | null>(null)
   // v1.6.3 stock ledger — the per-product movement history (read-only).
   const [historyFor, setHistoryFor] = useState<Product | null>(null)
   const [movements, setMovements] = useState<StockMovement[] | null>(null)
@@ -130,12 +158,16 @@ export function Inventory() {
         categoryId: p.categoryId,
         priceCents: p.priceCents,
         costCents: p.costCents,
-        stockQty: p.stockQty,
+        stockQtyMilli: p.stockQtyMilli,
         trackStock: p.trackStock,
         barcode: p.barcode || '',
         // v1.6.3 fields — a full replace would silently reset them to 0.
         wholesalePriceCents: p.wholesalePriceCents ?? 0,
         lowStockUnits: p.lowStockUnits ?? 0,
+        // v1.8.0 fields — same full-replace rule.
+        unit: p.unit ?? 'pc',
+        allowFraction: p.allowFraction ?? false,
+        trackBatches: p.trackBatches ?? false,
         active: true,
       })
       toast.success('Product restored', p.name)
@@ -365,10 +397,10 @@ export function Inventory() {
                   <td className="px-3 py-2.5">
                     {p.trackStock ? (
                       <span
-                        className={`font-bold tabular text-[13px] ${p.stockQty <= 0 ? 'text-danger-text' : p.stockQty <= lowStockAt(p) ? 'text-pending-text' : 'text-ink'}`}
-                        title={(p.lowStockUnits ?? 0) > 0 ? `Low-stock alert at ${lowStockAt(p)} units (product setting)` : undefined}
+                        className={`font-bold tabular text-[13px] ${p.stockQtyMilli <= 0 ? 'text-danger-text' : p.stockQtyMilli <= lowStockAt(p) * 1000 ? 'text-pending-text' : 'text-ink'}`}
+                        title={(p.lowStockUnits ?? 0) > 0 ? `Low-stock alert at ${lowStockAt(p)} ${unitLabel(p.unit)} (product setting)` : undefined}
                       >
-                        {p.stockQty}
+                        {fmtQty(p.stockQtyMilli)}{p.unit ? ` ${p.unit}` : ''}
                       </span>
                     ) : (
                       <span className="text-ink-subtle text-[12px]">service</span>
@@ -397,6 +429,12 @@ export function Inventory() {
                           <Button size="sm" variant="ghost" onClick={() => setDisposeFor(p)} title="Record a loss — expired, spoilt, lost or damaged">
                             <PackageMinus size={14} strokeWidth={2.5} aria-hidden />
                             Loss
+                          </Button>
+                        )}
+                        {p.trackBatches && p.active && (
+                          <Button size="sm" variant="ghost" onClick={() => setBatchesFor(p)} title="Batches and expiry lots">
+                            <Layers size={14} strokeWidth={2.5} aria-hidden />
+                            Batches
                           </Button>
                         )}
                         {p.active ? (
@@ -495,6 +533,7 @@ export function Inventory() {
 
       {stockFor && <StockModal product={stockFor} onClose={() => setStockFor(null)} onSaved={load} />}
       {disposeFor && <DisposeModal product={disposeFor} onClose={() => setDisposeFor(null)} onSaved={load} />}
+      {batchesFor && <BatchesModal product={batchesFor} onClose={() => setBatchesFor(null)} onChanged={load} />}
 
       {/* v1.6.3 stock ledger — same shape as the Customers page's ledger
           modal: spinner → empty state → table. Rendered newest-first. */}
@@ -522,10 +561,10 @@ export function Inventory() {
                         {meta.label}
                       </span>
                     </td>
-                    <td className={`px-3 py-2 text-[12px] font-bold tabular ${m.delta > 0 ? 'text-paid-text' : m.delta < 0 ? 'text-danger-text' : 'text-ink-muted'}`}>
-                      {m.delta > 0 ? `+${m.delta}` : m.delta}
+                    <td className={`px-3 py-2 text-[12px] font-bold tabular ${m.deltaMilli > 0 ? 'text-paid-text' : m.deltaMilli < 0 ? 'text-danger-text' : 'text-ink-muted'}`}>
+                      {m.deltaMilli > 0 ? `+${fmtQty(m.deltaMilli)}` : fmtQty(m.deltaMilli)}
                     </td>
-                    <td className="px-3 py-2 text-[12px] font-bold tabular text-ink">{m.balanceAfter}</td>
+                    <td className="px-3 py-2 text-[12px] font-bold tabular text-ink">{fmtQty(m.balanceAfterMilli)}</td>
                     <td className="px-3 py-2 text-[12px] text-ink-muted max-w-36 truncate">{m.reference || '—'}</td>
                     <td className="px-3 py-2 text-[12px] text-ink-muted max-w-48 truncate">{m.note || '—'}</td>
                     <td className="px-3 py-2 text-[12px] text-ink-muted whitespace-nowrap">{m.username}</td>
@@ -541,6 +580,8 @@ export function Inventory() {
 
 // StockModal — receive stock / adjust with a reason (the admin's daily
 // "add stock" flow, without opening the full product editor).
+// v1.8.0: the input is in UNITS (decimals for weighed products) and the
+// wire takes deltaMilli — a whole-unit adjust stays a whole-unit delta.
 function StockModal({ product, onClose, onSaved }: { product: Product; onClose: () => void; onSaved: () => void }) {
   const [delta, setDelta] = useState('')
   const [reason, setReason] = useState('')
@@ -550,19 +591,29 @@ function StockModal({ product, onClose, onSaved }: { product: Product; onClose: 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const n = parseInt(delta, 10)
-  const valid = !isNaN(n) && n !== 0
+  // Optional leading minus (a correction), magnitude parsed by the shared
+  // milli parser; 0 stays out (the endpoint rejects zero deltas).
+  const deltaMilli = (() => {
+    const t = delta.trim()
+    if (t === '' || t === '-') return null
+    const neg = t.startsWith('-')
+    const mag = parseQtyInput(neg ? t.slice(1) : t)
+    return mag === null ? null : neg ? -mag : mag
+  })()
+  const valid = deltaMilli !== null && deltaMilli !== 0
+  const newStockMilli = valid ? Math.max(0, product.stockQtyMilli + (deltaMilli as number)) : 0
 
   const save = async () => {
+    if (deltaMilli === null) return
     setBusy(true)
     setError('')
     try {
       await api.post(`/api/v1/products/${product.id}/adjust-stock`, {
-        delta: n,
+        deltaMilli,
         reason: reason.trim() || undefined,
         note: note.trim() || undefined,
       })
-      toast.success('Stock updated', `${product.name}: ${product.stockQty} → ${Math.max(0, product.stockQty + n)}`)
+      toast.success('Stock updated', `${product.name}: ${fmtQty(product.stockQtyMilli)} → ${fmtQty(newStockMilli)}`)
       onSaved()
       onClose()
     } catch (e: any) {
@@ -582,12 +633,17 @@ function StockModal({ product, onClose, onSaved }: { product: Product; onClose: 
       </>
     }>
       <div className="space-y-3">
-        <p className="text-sm text-ink-muted">Current stock: <strong className="text-ink tabular">{product.stockQty}</strong></p>
-        <Field label="Quantity change" hint="Positive receives stock (e.g. 20), negative corrects overshoots (e.g. -3).">
+        <p className="text-sm text-ink-muted">Current stock: <strong className="text-ink tabular">{fmtQty(product.stockQtyMilli)}{product.unit ? ` ${product.unit}` : ''}</strong></p>
+        <Field
+          label="Quantity change"
+          hint={product.allowFraction
+            ? `Positive receives (${unitLabel(product.unit)}s, decimals OK), negative corrects overshoots (e.g. -0.5).`
+            : 'Positive receives stock (e.g. 20), negative corrects overshoots (e.g. -3).'}
+        >
           <Input
             value={delta}
-            onChange={(e) => setDelta(e.target.value.replace(/[^\d-]/g, ''))}
-            inputMode="numeric"
+            onChange={(e) => setDelta(e.target.value.replace(/[^\d.-]/g, ''))}
+            inputMode="decimal"
             placeholder="e.g. 20"
             className="tabular text-lg font-bold"
             autoFocus
@@ -601,7 +657,7 @@ function StockModal({ product, onClose, onSaved }: { product: Product; onClose: 
         </Field>
         {valid && (
           <p className="text-[13px] text-ink-muted">
-            New stock level: <strong className={`tabular ${n > 0 ? 'text-paid-text' : 'text-danger-text'}`}>{Math.max(0, product.stockQty + n)}</strong>
+            New stock level: <strong className={`tabular ${deltaMilli! > 0 ? 'text-paid-text' : 'text-danger-text'}`}>{fmtQty(newStockMilli)}{product.unit ? ` ${product.unit}` : ''}</strong>
           </p>
         )}
         {error && <p role="alert" className="text-danger-text text-sm font-semibold">{error}</p>}
@@ -632,7 +688,12 @@ function ProductModal({
     // low-stock threshold (0 = shop default). Persisted on PUT/POST below.
     wholesalePriceCents: product?.wholesalePriceCents ?? 0,
     lowStockUnits: product?.lowStockUnits ?? 0,
-    stockQty: product?.stockQty ?? 0,
+    // v1.8.0: stock is typed in UNITS (decimals for weighed goods) and the
+    // wire takes stockQtyMilli; unit/allowFraction/trackBatches ride along.
+    stockUnits: product ? fmtQty(product.stockQtyMilli) : '0',
+    unit: (product?.unit ?? 'pc') as string,
+    allowFraction: product?.allowFraction ?? false,
+    trackBatches: product?.trackBatches ?? false,
     trackStock: product?.trackStock ?? true,
     isGiftCard: product?.isGiftCard ?? false,
     active: product?.active ?? true,
@@ -657,9 +718,37 @@ function ProductModal({
     setError('')
     try {
       let savedId = product?.id ?? 0
+      // Units text → milli: empty/0 stays 0; anything else rides the shared
+      // milli parser (decimals only make sense when allowFraction is on,
+      // but the parser accepts them either way — the server validates).
+      const unitsText = form.stockUnits.trim()
+      const stockMilli = unitsText === '' || Number(unitsText) === 0
+        ? 0
+        : parseQtyInput(unitsText)
+      if (stockMilli === null) {
+        setBusy(false)
+        setError('Stock quantity must look like 12 or 0.5 (max 3 decimals).')
+        return
+      }
       // Gift cards sell value, not shelf stock — trackStock is forced off
       // here and the backend forces it too.
-      const payload = { ...form, trackStock: form.isGiftCard ? false : form.trackStock }
+      const payload = {
+        name: form.name,
+        sku: form.sku,
+        barcode: form.barcode,
+        categoryId: form.categoryId,
+        priceCents: form.priceCents,
+        costCents: form.costCents,
+        wholesalePriceCents: form.wholesalePriceCents,
+        lowStockUnits: form.lowStockUnits,
+        stockQtyMilli: stockMilli,
+        unit: form.unit,
+        allowFraction: form.allowFraction,
+        trackBatches: form.trackBatches,
+        trackStock: form.isGiftCard ? false : form.trackStock,
+        isGiftCard: form.isGiftCard,
+        active: form.active,
+      }
       if (product) {
         await api.put(`/api/v1/products/${product.id}`, payload)
         toast.success('Product updated', form.name)
@@ -861,12 +950,14 @@ function ProductModal({
             {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
         </Field>
-        <Field label="Stock quantity">
+        <Field label="Stock quantity" hint={form.allowFraction ? `Decimals OK (${unitLabel(form.unit)}s, e.g. 0.5)` : 'Whole units on the shelf'}>
           <Input
             type="number"
-            value={form.stockQty}
-            onChange={(e) => setForm({ ...form, stockQty: Number(e.target.value) })}
-            inputMode="numeric"
+            value={form.stockUnits}
+            onChange={(e) => setForm({ ...form, stockUnits: e.target.value.replace(/[^\d.]/g, '') })}
+            inputMode="decimal"
+            step={form.allowFraction ? 0.001 : 1}
+            min={0}
           />
         </Field>
         <Field label="Selling price">
@@ -896,6 +987,32 @@ function ProductModal({
           />
           Track stock
         </label>
+        <Field label="Unit" hint="How the till counts and displays this product">
+          <Select
+            value={form.unit}
+            onChange={(e) => setForm({ ...form, unit: e.target.value, ...(isFractionUnit(e.target.value) ? { allowFraction: true } : {}) })}
+          >
+            {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+          </Select>
+        </Field>
+        <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink">
+          <input
+            type="checkbox"
+            checked={form.allowFraction}
+            onChange={(e) => setForm({ ...form, allowFraction: e.target.checked })}
+            className="w-5 h-5 accent-[#10B981]"
+          />
+          Allow fractional quantities
+        </label>
+        <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink">
+          <input
+            type="checkbox"
+            checked={form.trackBatches}
+            onChange={(e) => setForm({ ...form, trackBatches: e.target.checked })}
+            className="w-5 h-5 accent-[#10B981]"
+          />
+          Track batches / expiry
+        </label>
         <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink">
           <input
             type="checkbox"
@@ -915,6 +1032,12 @@ function ProductModal({
             codes are redeemed into a customer's store credit from their profile.
           </p>
         )}
+        {form.trackBatches && (
+          <p className="sm:col-span-2 text-[11px] text-ink-subtle -mt-2">
+            Every receipt becomes a dated lot: goods-in captures batch number + expiry, sales consume the
+            earliest-expiring lot first, and the Reports page lists anything expired or expiring soon.
+          </p>
+        )}
         {error && <p role="alert" className="sm:col-span-2 text-danger-text text-sm font-semibold">{error}</p>}
       </div>
     </Modal>
@@ -926,6 +1049,8 @@ function ProductModal({
 // disposal module: expired / spoilt / lost / damaged / other. The deduction
 // is guarded (never below zero) and lands in the stock ledger as DISPOSAL
 // with the loss value computable from product cost in the reports.
+// v1.8.0: the wire takes qtyMilli (input in units, decimals for weighed
+// goods) and a batch-tracked product can name the specific lot written off.
 const DISPOSE_REASONS = [
   { value: 'expired', label: 'Expired' },
   { value: 'spoilt', label: 'Spoilt / damaged goods' },
@@ -938,20 +1063,43 @@ function DisposeModal({ product, onClose, onSaved }: { product: Product; onClose
   const [qty, setQty] = useState('')
   const [reason, setReason] = useState('expired')
   const [note, setNote] = useState('')
+  const [batchId, setBatchId] = useState(0)
+  const [batches, setBatches] = useState<ProductBatch[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const n = parseInt(qty, 10)
-  const valid = !isNaN(n) && n > 0 && n <= product.stockQty
+  // Batch-tracked lots: only ACTIVE lots with stock left can take a write-off.
+  useEffect(() => {
+    if (!product.trackBatches) return
+    let alive = true
+    api.get<ProductBatch[]>(`/api/v1/products/${product.id}/batches`)
+      .then((list) => {
+        if (!alive) return
+        const usable = (Array.isArray(list) ? list : []).filter((b) => b.status === 'ACTIVE' && b.qtyRemainingMilli > 0)
+        setBatches(usable)
+      })
+      .catch(() => { if (alive) setBatches([]) })
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product.id])
+
+  const qtyMilli = parseQtyInput(qty)
+  const valid =
+    qtyMilli !== null &&
+    (!product.trackStock || qtyMilli <= product.stockQtyMilli)
 
   const save = async () => {
+    if (qtyMilli === null) return
     setBusy(true)
     setError('')
     try {
       await api.post(`/api/v1/products/${product.id}/dispose`, {
-        qty: n, reason, note: note.trim() || undefined,
+        qtyMilli,
+        reason,
+        note: note.trim() || undefined,
+        ...(product.trackBatches && batchId > 0 ? { batchId } : {}),
       })
-      toast.success('Loss recorded', `${product.name}: ${n} units (${reason})`)
+      toast.success('Loss recorded', `${product.name}: ${fmtQty(qtyMilli)} ${unitLabel(product.unit)} (${reason})`)
       onSaved()
       onClose()
     } catch (e: any) {
@@ -972,14 +1120,26 @@ function DisposeModal({ product, onClose, onSaved }: { product: Product; onClose
     }>
       <div className="space-y-3">
         <p className="text-sm text-ink-muted">
-          Current stock: <strong className="text-ink tabular">{product.stockQty}</strong>
-          {(product.costCents ?? 0) > 0 && n > 0 && (
-            <> · loss value ≈ <strong className="text-danger-text tabular">{centsToAmount(n * product.costCents)}</strong></>
+          Current stock: <strong className="text-ink tabular">{fmtQty(product.stockQtyMilli)}{product.unit ? ` ${product.unit}` : ''}</strong>
+          {(product.costCents ?? 0) > 0 && qtyMilli !== null && (
+            <> · loss value ≈ <strong className="text-danger-text tabular">{centsToAmount(Math.round(product.costCents * qtyMilli / 1000))}</strong></>
           )}
         </p>
-        <Field label="Quantity written off">
-          <Input value={qty} onChange={(e) => setQty(e.target.value.replace(/\D/g, ''))} inputMode="numeric" autoFocus placeholder="0" />
+        <Field label={product.allowFraction ? `Quantity written off (${unitLabel(product.unit)}s, decimals OK)` : 'Quantity written off'}>
+          <Input value={qty} onChange={(e) => setQty(e.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" autoFocus placeholder="0" />
         </Field>
+        {product.trackBatches && (
+          <Field label="Batch (optional)" hint="Name the exact lot written off when it matters for expiry.">
+            <Select value={batchId} onChange={(e) => setBatchId(Number(e.target.value))}>
+              <option value={0}>{batches === null ? 'Loading lots…' : 'No specific lot'}</option>
+              {(batches ?? []).map((b) => (
+                <option key={b.id} value={b.id}>
+                  {`${b.batchNo || '(no batch)'} · exp ${b.expiryDate || '—'} · ${fmtQty(b.qtyRemainingMilli)} left`}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
         <Field label="Reason" hint="Shows in the disposal report so losses can be explained, not guessed.">
           <Select value={reason} onChange={(e) => setReason(e.target.value)}>
             {DISPOSE_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
@@ -989,6 +1149,196 @@ function DisposeModal({ product, onClose, onSaved }: { product: Product; onClose
           <Input value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>
         {error && <p className="text-[12px] font-bold text-danger-text">{error}</p>}
+      </div>
+    </Modal>
+  )
+}
+
+// BatchesModal (v1.8.0) — the per-product lots panel for batch-tracked
+// products: list (ACTIVE first, FEFO order as the server returns them),
+// goods-in (batchNo, expiry date, whole units, cost) and recall of an
+// ACTIVE lot with a reason. Expiry renders red once past, amber within
+// 30 days.
+function BatchesModal({ product, onClose, onChanged }: { product: Product; onClose: () => void; onChanged: () => void }) {
+  const [batches, setBatches] = useState<ProductBatch[] | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [batchNo, setBatchNo] = useState('')
+  const [expiryDate, setExpiryDate] = useState('')
+  const [qtyUnits, setQtyUnits] = useState('')
+  const [cost, setCost] = useState(String((product.costCents ?? 0) / 100))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  // Recall flow: the reason is required — capture it inline instead of a
+  // browser prompt (same audit rule as the void-reason modal).
+  const [recallFor, setRecallFor] = useState<ProductBatch | null>(null)
+  const [recallReason, setRecallReason] = useState('')
+
+  const load = async () => {
+    try {
+      const list = await api.get<ProductBatch[]>(`/api/v1/products/${product.id}/batches`)
+      setBatches(Array.isArray(list) ? list : [])
+    } catch (e: any) {
+      toast.error('Could not load batches', e?.message)
+      setBatches([])
+    }
+  }
+  useEffect(() => { load() /* eslint-disable-line react-hooks/exhaustive-deps */ }, [product.id])
+
+  const goodsIn = async () => {
+    if (busy) return
+    const units = Number(qtyUnits)
+    if (!Number.isFinite(units) || units <= 0 || !Number.isInteger(units)) {
+      setError('Goods-in quantity must be a whole number of units (lots are received whole).')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const costCents = cost.trim() !== '' ? Math.max(0, Math.round(Number(cost) * 100)) : 0
+      await api.post<ProductBatch>(`/api/v1/products/${product.id}/batches`, {
+        batchNo: batchNo.trim(),
+        expiryDate,
+        qtyMilli: Math.round(units) * 1000,
+        costCents,
+        supplierId: 0,
+        note: '',
+      })
+      toast.success('Batch received', `${batchNo.trim() || 'New lot'}, ${units} ${unitLabel(product.unit)}`)
+      setAdding(false)
+      setBatchNo('')
+      setExpiryDate('')
+      setQtyUnits('')
+      await load()
+      onChanged()
+    } catch (e: any) {
+      setError(e?.message || 'Could not record the batch')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const recall = async () => {
+    if (!recallFor || busy) return
+    if (!recallReason.trim()) {
+      setError('A recall reason is required.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const b = await api.post<ProductBatch>(`/api/v1/batches/${recallFor.id}/recall`, { reason: recallReason.trim() })
+      toast.success('Batch recalled', `${b.batchNo || 'Lot'} pulled off the shelf, remaining stock written off`)
+      setRecallFor(null)
+      setRecallReason('')
+      await load()
+      onChanged()
+    } catch (e: any) {
+      setError(e?.message || 'Recall failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Batches, ${product.name}`} size="lg">
+      <div className="space-y-3">
+        <p className="text-[13px] text-ink-muted">
+          Lots sell earliest-expiry-first (FEFO). Current stock:{' '}
+          <strong className="text-ink tabular">{fmtQty(product.stockQtyMilli)}{product.unit ? ` ${product.unit}` : ''}</strong>
+        </p>
+
+        {!batches ? (
+          <div className="py-8 flex justify-center"><Spinner /></div>
+        ) : batches.length === 0 ? (
+          <EmptyState icon={<Layers size={24} strokeWidth={2.25} />} title="No batches yet" body="Record the first goods-in below to start tracking lots and expiry." />
+        ) : (
+          <Table head={['Batch', 'Expiry', 'Received', 'Remaining', 'Unit cost', 'Status', '']}>
+            {batches.map((b) => (
+              <tr key={b.id} className={b.status === 'RECALLED' ? 'opacity-60' : ''}>
+                <td className="px-3 py-2">
+                  <p className="font-semibold text-ink text-[13px]">{b.batchNo || '(no batch)'}</p>
+                  {b.reference && <p className="text-[11px] text-ink-subtle max-w-40 truncate">{b.reference}</p>}
+                </td>
+                <td className="px-3 py-2"><ExpiryCell d={b.expiryDate} /></td>
+                <td className="px-3 py-2 tabular text-[13px] text-ink-muted">{fmtQty(b.qtyReceivedMilli)}</td>
+                <td className="px-3 py-2 tabular text-[13px] font-bold text-ink">{fmtQty(b.qtyRemainingMilli)}{product.unit ? ` ${product.unit}` : ''}</td>
+                <td className="px-3 py-2 tabular text-[13px] text-ink-muted">{formatMoney(b.costCents)}</td>
+                <td className="px-3 py-2">
+                  <StatusPill
+                    status={b.status === 'ACTIVE' ? 'paid' : b.status === 'RECALLED' ? 'danger' : 'void'}
+                    label={b.status === 'ACTIVE' ? 'Active' : b.status === 'RECALLED' ? 'Recalled' : 'Exhausted'}
+                  />
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {b.status === 'ACTIVE' && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-danger-text hover:bg-danger-bg"
+                      onClick={() => { setRecallFor(b); setRecallReason('') }}
+                      title="Pull this lot off the shelf — remaining stock is written off"
+                    >
+                      Recall
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </Table>
+        )}
+
+        {recallFor && (
+          <div className="border-2 border-danger-text/40 bg-danger-bg rounded-input p-3 space-y-2">
+            <p className="text-[13px] font-bold text-danger-text">Recall lot {recallFor.batchNo || '(no batch)'} — {fmtQty(recallFor.qtyRemainingMilli)} {unitLabel(product.unit)} will be written off</p>
+            <div className="flex gap-2 items-end">
+              <div className="flex-1">
+                <Input
+                  value={recallReason}
+                  onChange={(e) => setRecallReason(e.target.value)}
+                  placeholder="Reason, e.g. supplier recall notice RC-2291"
+                  autoFocus
+                />
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => setRecallFor(null)} disabled={busy}>Cancel</Button>
+              <Button size="sm" variant="danger" onClick={recall} disabled={busy || !recallReason.trim()}>
+                {busy ? <Spinner className="w-4 h-4 border-t-danger-text" /> : 'Recall lot'}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {!adding ? (
+          <Button variant="secondary" size="sm" onClick={() => { setAdding(true); setError('') }}>
+            <Plus size={14} strokeWidth={2.5} aria-hidden />
+            Add batch
+          </Button>
+        ) : (
+          <div className="border-2 border-line rounded-input p-3 space-y-2.5 bg-surface-muted">
+            <p className="text-[13px] font-bold text-ink">Goods-in — new lot</p>
+            <div className="grid sm:grid-cols-2 gap-2.5">
+              <Field label="Batch number (optional)">
+                <Input value={batchNo} onChange={(e) => setBatchNo(e.target.value)} placeholder="e.g. LOT-2409B" />
+              </Field>
+              <Field label="Expiry date (optional)">
+                <Input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
+              </Field>
+              <Field label="Quantity (whole units)" hint="Lots are received whole, never weighed in">
+                <Input value={qtyUnits} onChange={(e) => setQtyUnits(e.target.value.replace(/\D/g, ''))} inputMode="numeric" placeholder="0" />
+              </Field>
+              <Field label="Unit cost (KES)" hint="0 = use the product's cost">
+                <Input value={cost} onChange={(e) => setCost(e.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" placeholder="0.00" />
+              </Field>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button size="sm" variant="ghost" onClick={() => { setAdding(false); setError('') }} disabled={busy}>Cancel</Button>
+              <Button size="sm" variant="primary" onClick={goodsIn} disabled={busy || qtyUnits.trim() === ''}>
+                {busy ? <Spinner className="w-4 h-4 border-t-brand-ink" /> : 'Receive batch'}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {error && <p role="alert" className="text-[12px] font-bold text-danger-text">{error}</p>}
       </div>
     </Modal>
   )

@@ -25,7 +25,7 @@ const paidOrder = (id: number) => ({
   cashierName: 'Test',
   discrepancy: false,
   createdAt: new Date().toISOString(),
-  items: [{ id: 1, productId: 7, name: 'Classic Cotton Tee — Black', sku: 'TS-001', qty: 1, unitPriceCents: 55000, lineTotalCents: 55000 }],
+  items: [{ id: 1, productId: 7, name: 'Classic Cotton Tee — Black', sku: 'TS-001', qtyMilli: 1000, unitPriceCents: 55000, lineTotalCents: 55000 }],
   payments: [{ id: 1, method: 'mpesa', mode: 'stk', amountCents: 55000, status: 'PENDING', phone: '254722123456' }],
 })
 
@@ -101,9 +101,9 @@ const line = (over: Partial<CartLine> = {}): CartLine => ({
   name: 'Classic Cotton Tee — Black',
   sku: 'TS-001',
   unitPriceCents: 55000,
-  qty: 1,
+  qtyMilli: 1000,
   trackStock: false,
-  stockQty: 0,
+  stockQtyMilli: 0,
   ...over,
 })
 
@@ -192,13 +192,13 @@ describe('ErrorBoundary', () => {
 })
 
 describe('Cart quantity semantics (card stepper)', () => {
-  test('setQty to 0 removes the line — minus at qty 1 means remove', () => {
-    act(() => { useCart.getState().add({ id: 7, sku: 'TS-001', barcode: '', name: 'Tee', categoryId: 1, categoryName: '', priceCents: 55000, costCents: 0, stockQty: 10, trackStock: true, active: true, updatedAt: '' }, 1) })
+  test('setQty to 0 removes the line — minus at qty 1 means remove (milli units)', () => {
+    act(() => { useCart.getState().add({ id: 7, sku: 'TS-001', barcode: '', name: 'Tee', categoryId: 1, categoryName: '', priceCents: 55000, costCents: 0, stockQtyMilli: 10000, trackStock: true, active: true, updatedAt: '' }, 1000) })
     expect(useCart.getState().lines).toHaveLength(1)
-    act(() => { useCart.getState().setQty(7, 2) })
-    expect(useCart.getState().lines[0].qty).toBe(2)
-    act(() => { useCart.getState().setQty(7, 1) })
-    expect(useCart.getState().lines[0].qty).toBe(1)
+    act(() => { useCart.getState().setQty(7, 2000) })
+    expect(useCart.getState().lines[0].qtyMilli).toBe(2000)
+    act(() => { useCart.getState().setQty(7, 1000) })
+    expect(useCart.getState().lines[0].qtyMilli).toBe(1000)
     act(() => { useCart.getState().setQty(7, 0) })
     expect(useCart.getState().lines).toHaveLength(0)
   })

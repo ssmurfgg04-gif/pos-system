@@ -57,15 +57,20 @@ describe('tax math', () => {
     expect(taxFromExclusive(100000, 16)).toBe(16000)
   })
   it('cart totals in both modes', () => {
+    // v1.8.0: quantities are milli-units (2000 = two units) and each line
+    // prices with the server formula Math.round(price × milli / 1000).
     const lines = [
-      { qty: 2, unitPriceCents: 55000 },
-      { qty: 1, unitPriceCents: 45000 },
+      { qtyMilli: 2000, unitPriceCents: 55000 },
+      { qtyMilli: 1000, unitPriceCents: 45000 },
     ]
     expect(cartTotals(lines, 16, true)).toEqual({ subtotal: 155000, tax: 21379, total: 155000 })
     expect(cartTotals(lines, 16, false)).toEqual({ subtotal: 155000, tax: 24800, total: 179800 })
   })
   it('zero-rated carts', () => {
-    expect(cartTotals([{ qty: 1, unitPriceCents: 100 }], 0, true)).toEqual({ subtotal: 100, tax: 0, total: 100 })
+    expect(cartTotals([{ qtyMilli: 1000, unitPriceCents: 100 }], 0, true)).toEqual({ subtotal: 100, tax: 0, total: 100 })
+  })
+  it('fractional milli lines price with the half-up formula', () => {
+    expect(cartTotals([{ qtyMilli: 1500, unitPriceCents: 333 }], 0, true).subtotal).toBe(500) // 499.5 → 500
   })
 })
 

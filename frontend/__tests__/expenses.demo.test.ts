@@ -80,20 +80,20 @@ describe('demo returns (v1.6.3 parity)', () => {
     const line = o.items[0]
     const r = await demoRequest<Any>('POST', '/api/v1/returns', {
       orderId: o.id,
-      lines: [{ orderItemId: line.id, qty: 1 }],
+      lines: [{ orderItemId: line.id, qtyMilli: 1000 }],
       method: 'CASH',
       reason: 'wrong size',
     })
     expect(r.number).toMatch(/^RET/)
     expect(r.orderNumber).toBe(o.number)
     expect(r.totalCents).toBe(line.unitPriceCents)
-    expect(r.items[0].qty).toBe(1)
+    expect(r.items[0].qtyMilli).toBe(1000)
     const list = await demoRequest<Any[]>('GET', '/api/v1/returns')
     expect(list.some((x: Any) => x.id === r.id)).toBe(true)
     // Over-return (server parity: a friendly 4xx, not a 500).
     await expect(demoRequest<Any>('POST', '/api/v1/returns', {
       orderId: o.id,
-      lines: [{ orderItemId: line.id, qty: 999 }],
+      lines: [{ orderItemId: line.id, qtyMilli: 999000 }],
       method: 'CASH',
     })).rejects.toMatchObject({ status: 422 })
   })
@@ -103,14 +103,14 @@ describe('demo returns (v1.6.3 parity)', () => {
     const paid = await demoRequest<Any[]>('GET', '/api/v1/orders?status=PAID&limit=5')
     const o = paid[0]
     await expect(demoRequest<Any>('POST', '/api/v1/returns', {
-      orderId: o.id, lines: [{ orderItemId: o.items[0].id, qty: 1 }], method: 'STORE_CREDIT',
+      orderId: o.id, lines: [{ orderItemId: o.items[0].id, qtyMilli: 1000 }], method: 'STORE_CREDIT',
     })).rejects.toMatchObject({ status: 400 })
     const customers = await demoRequest<Any[]>('GET', '/api/v1/customers')
     const c = customers.find((x: Any) => x.active)!
     const before = Number(c.storeCreditCents) || 0
     const r = await demoRequest<Any>('POST', '/api/v1/returns', {
       orderId: o.id,
-      lines: [{ orderItemId: o.items[0].id, qty: 1 }],
+      lines: [{ orderItemId: o.items[0].id, qtyMilli: 1000 }],
       method: 'STORE_CREDIT',
       customerId: c.id,
       reason: 'changed mind',

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { Product } from '../lib/api'
 import { cartTotals } from '../lib/money'
+import { MAX_QTY_MILLI } from '../lib/qty'
 import { tierPriceCents } from '../lib/pricing'
 import { useBranding } from './branding'
 import { useAuth } from './auth'
@@ -10,9 +11,10 @@ export interface CartLine {
   name: string
   sku: string
   unitPriceCents: number
-  qty: number
+  /** v1.8.0: integer milli-units (1000 = one unit). */
+  qtyMilli: number
   trackStock: boolean
-  stockQty: number
+  stockQtyMilli: number
 }
 
 interface CartState {
@@ -21,8 +23,9 @@ interface CartState {
   note: string
   /** v1.6.3 price tier of the customer on this sale ('retail' = walk-in). */
   priceTier: 'retail' | 'wholesale'
-  add: (p: Product, qty?: number) => void
-  setQty: (productId: number, qty: number) => void
+  add: (p: Product, qtyMilli?: number) => void
+  /** qtyMilli <= 0 removes the line. */
+  setQty: (productId: number, qtyMilli: number) => void
   remove: (productId: number) => void
   /** Cashier price override (payments.override_price) — writes the unit
    *  price back to the line so totals and the charge amount follow. */
@@ -82,13 +85,15 @@ export const useCart = create<CartState>((set, get) => ({
   customerName: persisted.customerName,
   note: persisted.note,
   priceTier: persisted.priceTier,
-  add: (p, qty = 1) =>
+  add: (p, qtyMilli = 1000) =>
     set((s) => {
       const existing = s.lines.find((l) => l.productId === p.id)
       if (existing) {
         return {
           lines: s.lines.map((l) =>
-            l.productId === p.id ? { ...l, qty: Math.min(999, l.qty + qty) } : l,
+            l.productId === p.id
+              ? { ...l, qtyMilli: Math.min(MAX_QTY_MILLI, l.qtyMilli + qtyMilli) }
+              : l,
           ),
         }
       }
@@ -100,16 +105,16 @@ export const useCart = create<CartState>((set, get) => ({
             name: p.name,
             sku: p.sku,
             unitPriceCents: p.priceCents,
-            qty,
+            qtyMilli: Math.min(MAX_QTY_MILLI, Math.max(0, qtyMilli)),
             trackStock: p.trackStock,
-            stockQty: p.stockQty,
+            stockQtyMilli: p.stockQtyMilli,
           },
         ],
       }
     }),
-  setQty: (productId, qty) =>
+  setQty: (productId, qtyMilli) =>
     set((s) => ({
-      lines: qty <= 0 ? s.lines.filter((l) => l.productId !== productId) : s.lines.map((l) => (l.productId === productId ? { ...l, qty } : l)),
+      lines: qtyMilli <= 0 ? s.lines.filter((l) => l.productId !== productId) : s.lines.map((l) => (l.productId === productId ? { ...l, qtyMilli } : l)),
     })),
   remove: (productId) => set((s) => ({ lines: s.lines.filter((l) => l.productId !== productId) })),
   setUnitPrice: (productId, unitPriceCents) =>
@@ -146,11 +151,13 @@ export const useCart = create<CartState>((set, get) => ({
   totals: () => {
     const b = useBranding.getState().branding
     const t = cartTotals(
-      get().lines.map((l) => ({ qty: l.qty, unitPriceCents: l.unitPriceCents })),
+      get().lines.map((l) => ({ qtyMilli: l.qtyMilli, unitPriceCents: l.unitPriceCents })),
       b.tax_percent,
       b.tax_included,
     )
-    return { ...t, count: get().lines.reduce((n, l) => n + l.qty, 0) }
+    // v1.8.0: the count is in UNITS again (sum of milli / 1000) and can be
+    // fractional for weighed lines (0.5 kg) — keep the number as-is.
+    return { ...t, count: get().lines.reduce((n, l) => n + l.qtyMilli, 0) / 1000 }
   },
 }))
 

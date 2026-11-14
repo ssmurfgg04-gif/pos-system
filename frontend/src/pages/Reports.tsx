@@ -4,12 +4,13 @@
 // accountant's return, downloadable as CSV.
 
 import { useEffect, useState } from 'react'
-import { api, downloadFile, DailySummary, MonthlySummary } from '../lib/api'
+import { api, downloadFile, DailySummary, ExpiryBatchRow, ExpiryReport, MonthlySummary } from '../lib/api'
 import { Button, Card, EmptyState, Input, Spinner, StatusPill, Tabs } from '../components/ui'
 import { centsToAmount, formatMoney } from '../lib/money'
+import { fmtQty } from '../lib/qty'
 import { todayLocal, thisMonthLocal } from '../lib/katime'
 import { toast } from '../stores/toasts'
-import { BarChart3, Banknote, Smartphone, CreditCard, Wallet, Download, FileSpreadsheet, Undo2, ReceiptText } from 'lucide-react'
+import { BarChart3, Banknote, Smartphone, CreditCard, Wallet, Download, FileSpreadsheet, Undo2, ReceiptText, CalendarClock } from 'lucide-react'
 
 // Local (EAT) date strings — toISOString() is UTC and put Nairobi's
 // 00:00-03:00 sales on yesterday's report.
@@ -24,6 +25,18 @@ const thisMonth = thisMonthLocal
 export function netSalesOf(s: { salesCents: number; returnsCents?: number; netSalesCents?: number }): number {
   if (s.netSalesCents !== undefined) return s.netSalesCents
   return s.salesCents - (s.returnsCents ?? 0)
+}
+
+/**
+ * v1.8.0: the daily summary reports shelf stock in milli-units
+ * (stockQtyMilli); older backends send the legacy whole-unit stockUnits
+ * field. Both stay optional in the shared type — read the milli one first.
+ */
+function shelfUnitsOf(s: DailySummary): string | null {
+  const milli = (s as DailySummary & { stockQtyMilli?: number }).stockQtyMilli
+  if (milli !== undefined) return fmtQty(milli)
+  if (s.stockUnits !== undefined) return String(s.stockUnits)
+  return null
 }
 
 export function Reports() {
@@ -79,27 +92,28 @@ function Daily() {
   const max = Math.max(1, ...series.map((s) => s.salesCents), 1)
 
   return (
-    <Card
-      title="Daily report"
-      sub={data?.consolidated ? 'All shops combined' : undefined}
-      actions={
-        <div className="flex gap-2 items-center">
-          {shops && shops.length > 1 && (
-            <label className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={allShops}
-                onChange={(e) => setAllShops(e.target.checked)}
-                className="w-4 h-4 accent-[#0047AB]"
-              />
-              All shops
-            </label>
-          )}
-          <Input type="date" value={date} max={today()} onChange={(e) => setDate(e.target.value)} className="w-40" />
-          <Button size="sm" variant="secondary" onClick={() => setDate(today())}>Today</Button>
-        </div>
-      }
-    >
+    <>
+      <Card
+        title="Daily report"
+        sub={data?.consolidated ? 'All shops combined' : undefined}
+        actions={
+          <div className="flex gap-2 items-center">
+            {shops && shops.length > 1 && (
+              <label className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={allShops}
+                  onChange={(e) => setAllShops(e.target.checked)}
+                  className="w-4 h-4 accent-[#0047AB]"
+                />
+                All shops
+              </label>
+            )}
+            <Input type="date" value={date} max={today()} onChange={(e) => setDate(e.target.value)} className="w-40" />
+            <Button size="sm" variant="secondary" onClick={() => setDate(today())}>Today</Button>
+          </div>
+        }
+      >
       {loading && !data ? (
         <div className="py-12 flex justify-center"><Spinner /></div>
       ) : loadError ? (
@@ -170,7 +184,7 @@ function Daily() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
               {data.stockValueCents !== undefined && (
                 <Stat
-                  label={`Stock value${data.stockUnits !== undefined ? ` · ${data.stockUnits} units` : ''}`}
+                  label={`Stock value${shelfUnitsOf(data) ? ` · ${shelfUnitsOf(data)} units` : ''}`}
                   value={formatMoney(data.stockValueCents)}
                 />
               )}
@@ -308,7 +322,7 @@ function Daily() {
                   <div key={`${tp.productId}-${i}`} className={`flex items-center gap-3 px-3 py-2 text-[13px] ${i % 2 ? 'bg-surface-muted' : 'bg-surface'}`}>
                     <span className="w-5 text-ink-subtle tabular font-bold">{i + 1}</span>
                     <span className="font-semibold text-ink flex-1 truncate">{tp.name}</span>
-                    <span className="text-ink-muted tabular">{tp.qty} sold</span>
+                    <span className="text-ink-muted tabular">{fmtQty(tp.qtyMilli)} sold</span>
                     {tp.profitCents !== undefined && (
                       <span className={`tabular text-[12px] font-bold ${tp.profitCents >= 0 ? 'text-paid-text' : 'text-danger-text'}`} title="Sales − cost of goods">
                         {tp.profitCents >= 0 ? '+' : ''}{centsToAmount(tp.profitCents)}
@@ -344,7 +358,130 @@ function Daily() {
           )}
         </>
       )}
+      </Card>
+      <ExpirySection />
+    </>
+  )
+}
+
+// ExpirySection (v1.8.0) — batch/expiry watchlist: every dated lot holding
+// stock whose expiry falls inside the window, split into already-expired
+// and expiring-soon, with the value at risk at cost. days filter mirrors
+// the Go query param (7/30/60/90).
+function ExpirySection() {
+  const [days, setDays] = useState(30)
+  const [data, setData] = useState<ExpiryReport | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    setError('')
+    api.get<ExpiryReport>(`/api/v1/reports/expiry?days=${days}`)
+      .then((r) => { if (alive) setData(r) })
+      .catch((e: any) => {
+        if (!alive) return
+        setError(e?.message || 'Could not load the expiry report')
+        setData(null)
+      })
+    return () => { alive = false }
+  }, [days])
+
+  const expired = data?.expired ?? []
+  const soon = data?.soon ?? []
+
+  return (
+    <Card
+      title="Expiry"
+      sub="Dated lots at risk, value at cost — pull and write them off before they sell"
+      actions={
+        <div className="flex gap-1.5" role="group" aria-label="Expiry window">
+          {[7, 30, 60, 90].map((d) => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              aria-pressed={days === d}
+              className={`min-h-9 px-3.5 rounded-pill border font-semibold text-[13px] transition-colors ${
+                days === d ? 'bg-brand border-brand text-white' : 'bg-surface text-ink-muted border-line hover:text-ink hover:border-line-strong'
+              }`}
+            >
+              {d}d
+            </button>
+          ))}
+        </div>
+      }
+    >
+      {error ? (
+        <EmptyState icon={<CalendarClock size={24} strokeWidth={2.25} />} title="Expiry report could not load" body={error} />
+      ) : !data ? (
+        <div className="py-10 flex justify-center"><Spinner /></div>
+      ) : expired.length === 0 && soon.length === 0 ? (
+        <EmptyState
+          icon={<CalendarClock size={24} strokeWidth={2.25} />}
+          title="Nothing at risk"
+          body={`No expired lots and nothing expiring within ${days} days.`}
+        />
+      ) : (
+        <div className="space-y-4">
+          <ExpiryTable title={`Expired (${expired.length})`} rows={expired} emptyNote="No expired lots." />
+          <ExpiryTable title={`Expiring soon, within ${days} days (${soon.length})`} rows={soon} emptyNote="Nothing expiring in the window." />
+          <p className="text-[13px] font-bold text-ink">
+            Total value at risk:{' '}
+            <span className="tabular text-danger-text">{formatMoney(data.valueCents)}</span>
+            {' '}at cost across {expired.length + soon.length} lot{(expired.length + soon.length) === 1 ? '' : 's'}.
+          </p>
+        </div>
+      )}
     </Card>
+  )
+}
+
+function ExpiryTable({ title, rows, emptyNote }: { title: string; rows: ExpiryBatchRow[]; emptyNote: string }) {
+  return (
+    <div>
+      <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">{title}</p>
+      {rows.length === 0 ? (
+        <p className="text-sm text-ink-muted bg-surface-muted border-2 border-line rounded-input px-3 py-2">{emptyNote}</p>
+      ) : (
+        <div className="border-2 border-line rounded-input overflow-hidden">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="bg-surface-muted text-left">
+                <th className="px-3 py-2 font-bold text-ink-muted">Product</th>
+                <th className="px-3 py-2 font-bold text-ink-muted">Batch</th>
+                <th className="px-3 py-2 font-bold text-ink-muted">Expiry</th>
+                <th className="px-3 py-2 font-bold text-ink-muted text-right">Remaining</th>
+                <th className="px-3 py-2 font-bold text-ink-muted text-right">Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const past = !!r.expiryDate && Date.parse(r.expiryDate + 'T00:00:00') < Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00')
+                return (
+                  <tr key={r.batchId} className="border-t border-line">
+                    <td className="px-3 py-2">
+                      <p className="font-semibold text-ink">{r.name}</p>
+                      <p className="text-[11px] text-ink-subtle">{r.sku}</p>
+                    </td>
+                    <td className="px-3 py-2 text-ink-muted">{r.batchNo || '—'}</td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={`inline-flex items-center px-1.5 py-0.5 rounded-pill text-[11px] font-bold tabular whitespace-nowrap ${
+                          past ? 'bg-danger-bg text-danger-text' : 'bg-pending-bg text-pending-text'
+                        }`}
+                      >
+                        {r.expiryDate || '—'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular font-bold text-ink">{fmtQty(r.qtyRemainingMilli)}</td>
+                    <td className="px-3 py-2 text-right tabular text-ink">{centsToAmount(r.valueCents)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }
 

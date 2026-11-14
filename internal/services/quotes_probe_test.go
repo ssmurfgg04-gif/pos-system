@@ -48,8 +48,8 @@ func quoteTestPrincipal() *auth.Principal {
 
 func quoteTestItems() []models.QuoteItem {
 	return []models.QuoteItem{
-		{ProductID: 11, SKU: "BRAND-KIT", Name: "Brand kit", Qty: 1, UnitPriceCents: 2500000},
-		{ProductID: 12, SKU: "FLYERS-500", Name: "Flyers x500", Qty: 2, UnitPriceCents: 150000},
+		{ProductID: 11, SKU: "BRAND-KIT", Name: "Brand kit", QtyMilli: 1000, UnitPriceCents: 2500000},
+		{ProductID: 12, SKU: "FLYERS-500", Name: "Flyers x500", QtyMilli: 2000, UnitPriceCents: 150000},
 	}
 }
 
@@ -107,7 +107,7 @@ func TestQuoteValidationGuardrails(t *testing.T) {
 	}
 	// Bad quantity.
 	bad := quoteTestItems()
-	bad[0].Qty = 0
+	bad[0].QtyMilli = 0
 	if _, err := s.CreateQuote(models.QuoteInput{CustomerName: "X", Items: bad}, p); err == nil {
 		t.Fatal("zero-qty line accepted")
 	}
@@ -152,7 +152,7 @@ func TestQuoteConvertParksHeldSaleAndStampsConverted(t *testing.T) {
 	}
 	for _, p := range seed {
 		if _, err := s.db.Exec(s.db.Rebind(
-			`INSERT INTO products (id, sku, name, category_id, price_cents, stock_qty, track_stock, is_active)
+			`INSERT INTO products (id, sku, name, category_id, price_cents, stock_qty_milli, track_stock, is_active)
                          VALUES (?, ?, ?, ?, ?, 0, 0, 1)`),
 			p.id, p.sku, "Prod", catID, 1000); err != nil {
 			t.Fatalf("seed product: %v", err)
@@ -192,7 +192,7 @@ func TestApplyQuoteInsertOnceLWWAndRenumber(t *testing.T) {
 		ClientUUID: "q-abc-1", QuoteNo: "QT-000001", CustomerName: "Njeri",
 		Status: models.QuoteDraft,
 		Items: []models.QuoteItem{
-			{ProductID: 5, SKU: "MUG", Name: "Mug", Qty: 3, UnitPriceCents: 50000, LineTotalCents: 150000},
+			{ProductID: 5, SKU: "MUG", Name: "Mug", QtyMilli: 3000, UnitPriceCents: 50000, LineTotalCents: 150000},
 		},
 		SubtotalCents: 150000, TaxCents: 0, TotalCents: 150000,
 		CreatedAt: "2026-10-13T08:00:00.000Z", UpdatedAt: "2026-10-13T08:00:00.000Z",
@@ -281,18 +281,18 @@ func TestQuoteMoneyPermissionsMirrorCheckout(t *testing.T) {
 	s.db.Exec(`INSERT INTO categories (name, slug) VALUES ('C','c')`)
 	var catID int64
 	s.db.QueryRow(`SELECT id FROM categories LIMIT 1`).Scan(&catID)
-	s.db.Exec(s.db.Rebind(`INSERT INTO products (id, sku, name, category_id, price_cents, stock_qty, track_stock, is_active)
+	s.db.Exec(s.db.Rebind(`INSERT INTO products (id, sku, name, category_id, price_cents, stock_qty_milli, track_stock, is_active)
                 VALUES (21, 'MUG-1', 'Mug', ?, 50000, 0, 0, 1)`), catID)
 	if _, err := s.CreateQuote(models.QuoteInput{
 		CustomerName: "C",
-		Items:        []models.QuoteItem{{ProductID: 21, SKU: "MUG-1", Name: "Mug", Qty: 1, UnitPriceCents: 99000}},
+		Items:        []models.QuoteItem{{ProductID: 21, SKU: "MUG-1", Name: "Mug", QtyMilli: 1000, UnitPriceCents: 99000}},
 	}, clerk); err == nil {
 		t.Fatal("off-catalog price accepted without payments.override_price")
 	}
 	// At-catalog pricing is fine for the same clerk.
 	if _, err := s.CreateQuote(models.QuoteInput{
 		CustomerName: "C",
-		Items:        []models.QuoteItem{{ProductID: 21, SKU: "MUG-1", Name: "Mug", Qty: 2, UnitPriceCents: 50000}},
+		Items:        []models.QuoteItem{{ProductID: 21, SKU: "MUG-1", Name: "Mug", QtyMilli: 2000, UnitPriceCents: 50000}},
 	}, clerk); err != nil {
 		t.Fatalf("catalog-priced quote should pass: %v", err)
 	}

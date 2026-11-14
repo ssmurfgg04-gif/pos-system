@@ -137,6 +137,10 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	prod.DELETE("/products/:id", h.DeactivateProduct)
 	prod.POST("/products/:id/adjust-stock", h.AdjustStock)
 	prod.POST("/products/:id/dispose", h.DisposeStock)
+	// v1.8.0: batch/expiry tracking (lots, goods-in, recall).
+	prod.GET("/products/:id/batches", h.ListProductBatches)
+	prod.POST("/products/:id/batches", h.CreateBatchGoodsIn)
+	prod.POST("/batches/:id/recall", h.RecallBatch)
 	prod.POST("/products/:id/image", h.UploadProductImage)
 	prod.DELETE("/products/:id/image", h.DeleteProductImage)
 	prod.POST("/products/import", h.ProductsImport)
@@ -187,6 +191,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	// belongs to, with per-shop rows).
 	authd.GET("/reports/daily", perm("reports.view"), h.ConsolidatedDailyReport)
 	authd.GET("/reports/disposals", perm("reports.view"), h.DisposalReport)
+	authd.GET("/reports/expiry", perm("reports.view"), h.ExpiryReport)
 	authd.GET("/reports/monthly", perm("reports.view"), h.MonthlyReport)
 	authd.GET("/reports/monthly.csv", perm("reports.view"), h.MonthlyReportCSV)
 	authd.POST("/shifts/open", perm("shifts.manage"), h.OpenShift)

@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"posapp/internal/auth"
@@ -39,18 +40,17 @@ func (s *Service) quoteTotals(items []models.QuoteItem, discountCents int64) (su
 	}
 	for i := range items {
 		it := &items[i]
-		if it.Qty <= 0 || it.Qty > models.MaxOrderQty {
+		if it.QtyMilli <= 0 || it.QtyMilli > models.MaxOrderQtyMilli {
 			return 0, 0, 0, 0, fmt.Errorf("invalid quantity on %q", lineName(*it))
 		}
 		if it.UnitPriceCents < 0 || it.UnitPriceCents > models.MaxPriceCents {
 			return 0, 0, 0, 0, fmt.Errorf("invalid price on %q", lineName(*it))
 		}
-		line := it.UnitPriceCents * int64(it.Qty)
-		if it.Qty > 0 && line/int64(it.Qty) != it.UnitPriceCents {
+		if it.UnitPriceCents > 0 && it.QtyMilli > math.MaxInt64/it.UnitPriceCents {
 			return 0, 0, 0, 0, fmt.Errorf("line total overflow on %q", lineName(*it))
 		}
-		it.LineTotalCents = line
-		sub += line
+		it.LineTotalCents = milliLineTotal(it.UnitPriceCents, it.QtyMilli)
+		sub += it.LineTotalCents
 		if sub < 0 {
 			return 0, 0, 0, 0, fmt.Errorf("quote total overflow")
 		}
@@ -443,7 +443,7 @@ func (s *Service) ConvertQuote(id int64, p *auth.Principal) (*models.HeldSale, e
 			continue
 		}
 		req.Items = append(req.Items, models.CheckoutItem{
-			ProductID: pid, Qty: it.Qty, UnitPriceCents: it.UnitPriceCents,
+			ProductID: pid, QtyMilli: it.QtyMilli, UnitPriceCents: it.UnitPriceCents,
 		})
 	}
 	if len(req.Items) == 0 {

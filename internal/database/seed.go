@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"posapp/internal/hash"
 	"posapp/internal/models"
@@ -101,8 +102,10 @@ var DefaultSettings = map[string]string{
 
 type seedProduct struct {
 	sku, barcode, name, category string
-	price, cost, stock           int64
+	price, cost, stock           int64 // stock is WHOLE UNITS (converted to milli on insert)
 	track                        bool
+	unit                         string // '' = 'pc'; weigh units default fraction on
+	batches                      bool   // seed two demo lots with expiries
 }
 
 var seedCategories = []struct{ name, slug string }{
@@ -113,19 +116,21 @@ var seedCategories = []struct{ name, slug string }{
 }
 
 var seedProducts = []seedProduct{
-	{"TS-001", "4001234500011", "Classic Cotton Tee, Black", "tshirts", 55000, 32000, 40, true},
-	{"TS-002", "4001234500028", "Classic Cotton Tee, White", "tshirts", 55000, 32000, 35, true},
-	{"TS-003", "4001234500035", "Premium Heavyweight Tee", "tshirts", 85000, 48000, 22, true},
-	{"TS-004", "4001234500042", "Oversized Streetwear Tee", "tshirts", 90000, 52000, 18, true},
-	{"MG-001", "4001234500059", "Ceramic Mug, 11oz", "mugs-bottles", 45000, 22000, 50, true},
-	{"MG-002", "4001234500066", "Enamel Camping Mug", "mugs-bottles", 60000, 34000, 25, true},
-	{"MG-003", "4001234500073", "Insulated Travel Tumbler", "mugs-bottles", 120000, 70000, 15, true},
-	{"AC-001", "4001234500080", "Silicone Wristband", "accessories", 15000, 5000, 200, true},
-	{"AC-002", "4001234500097", "Fabric Wristband", "accessories", 20000, 8000, 150, true},
-	{"AC-003", "4001234500103", "Canvas Tote Bag", "accessories", 55000, 28000, 30, true},
-	{"AC-004", "4001234500110", "Embroidered Cap", "accessories", 70000, 40000, 20, true},
-	{"SV-001", "", "Custom Print Run, per design", "services", 25000, 0, 0, false},
-	{"SV-002", "", "Artwork & Branding Setup", "services", 100000, 0, 0, false},
+	{"TS-001", "4001234500011", "Classic Cotton Tee, Black", "tshirts", 55000, 32000, 40, true, "", false},
+	{"TS-002", "4001234500028", "Classic Cotton Tee, White", "tshirts", 55000, 32000, 35, true, "", false},
+	{"TS-003", "4001234500035", "Premium Heavyweight Tee", "tshirts", 85000, 48000, 22, true, "", false},
+	{"TS-004", "4001234500042", "Oversized Streetwear Tee", "tshirts", 90000, 52000, 18, true, "", false},
+	{"MG-001", "4001234500059", "Ceramic Mug, 11oz", "mugs-bottles", 45000, 22000, 50, true, "", false},
+	{"MG-002", "4001234500066", "Enamel Camping Mug", "mugs-bottles", 60000, 34000, 25, true, "", false},
+	{"MG-003", "4001234500073", "Insulated Travel Tumbler", "mugs-bottles", 120000, 70000, 15, true, "", false},
+	{"AC-001", "4001234500080", "Silicone Wristband", "accessories", 15000, 5000, 200, true, "", false},
+	{"AC-002", "4001234500097", "Fabric Wristband", "accessories", 20000, 8000, 150, true, "", false},
+	{"AC-003", "4001234500103", "Canvas Tote Bag", "accessories", 55000, 28000, 30, true, "", false},
+	{"AC-004", "4001234500110", "Embroidered Cap", "accessories", 70000, 40000, 20, true, "", false},
+	{"GD-001", "4001234500127", "Maize Flour, 1kg (scoop)", "accessories", 21000, 15000, 50, true, "kg", true},
+	{"GD-002", "4001234500134", "Cooking Oil, per litre", "accessories", 35000, 26000, 20, true, "l", true},
+	{"SV-001", "", "Custom Print Run, per design", "services", 25000, 0, 0, false, "", false},
+	{"SV-002", "", "Artwork & Branding Setup", "services", 100000, 0, 0, false, "", false},
 }
 
 var seedUsers = []struct {
@@ -363,19 +368,44 @@ func (d *DB) seedCatalog() error {
 	}
 	// category_id resolved via subquery on slug (the v1 bug fix — never
 	// assume a specific autoincrement value).
-	insProd := d.Rebind(`INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock)
-                SELECT ?, ?, ?, (SELECT id FROM categories WHERE slug = ?), ?, ?, ?, ?
-                WHERE NOT EXISTS (SELECT 1 FROM products WHERE sku = ?)`)
+	insProd := d.Rebind(d.seedProductsInsert())
 	for _, p := range seedProducts {
 		track := 0
 		if p.track {
 			track = 1
 		}
-		if _, err := d.Exec(insProd, p.sku, p.barcode, p.name, p.category, p.price, p.cost, p.stock, track, p.sku); err != nil {
-			return err
+		unit := p.unit
+		if unit == "" {
+			unit = "pc"
+		}
+		fraction := 0
+		if models.UnitFractionDefault(unit) {
+			fraction = 1
+		}
+		batches := 0
+		if p.batches {
+			batches = 1
+		}
+		if d.hasColumn("products", "stock_qty_milli") {
+			if _, err := d.Exec(insProd, p.sku, p.barcode, p.name, p.category, p.price, p.cost, p.stock*1000, p.stock, track, unit, fraction, batches, p.sku); err != nil {
+				return err
+			}
+		} else {
+			if _, err := d.Exec(insProd, p.sku, p.barcode, p.name, p.category, p.price, p.cost, p.stock, track, p.sku); err != nil {
+				return err
+			}
 		}
 	}
-	return d.backfillStockOpenings()
+	if err := d.backfillStockOpenings(); err != nil {
+		return err
+	}
+	// v1.8.0 demo lots: the two weighable goods-in products start with two
+	// dated batches each so the FEFO allocator and the expiry report have
+	// something honest to show on a fresh demo box.
+	if err := d.seedDemoBatches(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // backfillStockOpenings anchors the v1.6.3 stock ledger at the current
@@ -383,11 +413,108 @@ func (d *DB) seedCatalog() error {
 // runs after migration v22 AND after catalog seeding (a fresh demo database
 // seeds products AFTER migrations, so the migration backfill saw zero rows).
 func (d *DB) backfillStockOpenings() error {
-	_, err := d.Exec(d.Rebind(`INSERT INTO stock_movements
-                (product_id, delta, balance_after, kind, reference, note, user_id, username, device_id, client_uuid, created_at)
-                SELECT id, stock_qty, stock_qty, 'OPENING', '', 'ledger start', 0, '', '', '', ` + d.nowExpr() + `
+	// Column names depend on which side of the v27 milli migration the
+	// database sits on: pre-update snapshot tests seed an OLD schema
+	// (whole-unit columns) and migrate afterwards, so probe first.
+	useMilli := true
+	rows, err := d.Query("PRAGMA table_info(stock_movements)")
+	if err == nil {
+		useMilli = false
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notNull, pk int
+			var dflt any
+			if rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk) == nil && name == "delta_milli" {
+				useMilli = true
+			}
+		}
+		rows.Close()
+	}
+	q := `INSERT INTO stock_movements
+                (product_id, %s, %s, kind, reference, note, user_id, username, device_id, client_uuid, created_at)
+                SELECT id, %s, %s, 'OPENING', '', 'ledger start', 0, '', '', '', ` + d.nowExpr() + `
                 FROM products
                 WHERE COALESCE(track_stock,1) = 1
-                  AND NOT EXISTS (SELECT 1 FROM stock_movements WHERE stock_movements.product_id = products.id)`))
+                  AND NOT EXISTS (SELECT 1 FROM stock_movements WHERE stock_movements.product_id = products.id)`
+	if useMilli {
+		// Post-v27: milli columns are authoritative, the frozen whole-unit
+		// columns mirror them (NOT NULL — every insert must satisfy both).
+		q = `INSERT INTO stock_movements
+                (product_id, delta_milli, balance_after_milli, delta, balance_after, kind, reference, note, user_id, username, device_id, client_uuid, created_at)
+                SELECT id, stock_qty_milli, stock_qty_milli, stock_qty_milli/1000, stock_qty_milli/1000, 'OPENING', '', 'ledger start', 0, '', '', '', ` + d.nowExpr() + `
+                FROM products
+                WHERE COALESCE(track_stock,1) = 1
+                  AND NOT EXISTS (SELECT 1 FROM stock_movements WHERE stock_movements.product_id = products.id)`
+	} else {
+		q = fmt.Sprintf(q, "delta", "balance_after", "stock_qty", "stock_qty")
+	}
+	_, err = d.Exec(d.Rebind(q))
 	return err
+}
+
+// seedDemoBatches gives the demo batch-tracked products two dated lots
+// each (near expiry first) so the FEFO flow and expiry report demo well.
+// Idempotent: only runs when the product has no batches yet.
+func (d *DB) seedDemoBatches() error {
+	type lot struct {
+		sku     string
+		batchNo string
+		days    int // expiry offset from today
+		qtyMill int64
+	}
+	lots := []lot{
+		{"GD-001", "FLR-0771", 21, 20 * 1000},
+		{"GD-001", "FLR-0612", 7, 30 * 1000},
+		{"GD-002", "OIL-4482", 60, 12 * 1000},
+		{"GD-002", "OIL-3907", 10, 8 * 1000},
+	}
+	for _, l := range lots {
+		expiry := time.Now().UTC().AddDate(0, 0, l.days).Format("2006-01-02")
+		_, err := d.Exec(d.Rebind(`INSERT INTO product_batches
+                (product_id, batch_no, expiry_date, qty_received_milli, qty_remaining_milli, cost_cents, reference, status, updated_at)
+                SELECT id, ?, ?, ?, ?, COALESCE(cost_cents,0), 'demo goods-in', 'ACTIVE', `+d.nowExpr()+`
+                FROM products WHERE sku = ?
+                  AND COALESCE(track_batches,0) = 1
+                  AND NOT EXISTS (SELECT 1 FROM product_batches b2 WHERE b2.product_id = products.id AND b2.batch_no = ?)`),
+			l.batchNo, expiry, l.qtyMill, l.qtyMill, l.sku, l.batchNo)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seedProductsInsert builds the catalog INSERT for whichever side of the
+// v27 milli migration the database sits on (pre-update snapshot tests seed
+// an OLD schema and migrate afterwards). Post-v27 schemas keep the frozen
+// whole-unit column in sync with the milli column.
+func (d *DB) seedProductsInsert() string {
+	if d.hasColumn("products", "stock_qty_milli") {
+		return `INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty_milli, stock_qty, track_stock, unit, allow_fraction, track_batches)
+                SELECT ?, ?, ?, (SELECT id FROM categories WHERE slug = ?), ?, ?, ?, ?, ?, ?, ?, ?
+                WHERE NOT EXISTS (SELECT 1 FROM products WHERE sku = ?)`
+	}
+	return `INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty, track_stock)
+                SELECT ?, ?, ?, (SELECT id FROM categories WHERE slug = ?), ?, ?, ?, ?
+                WHERE NOT EXISTS (SELECT 1 FROM products WHERE sku = ?)`
+}
+
+// hasColumn probes pragma table_info (the seed path is local SQLite).
+func (d *DB) hasColumn(table, column string) bool {
+	rows, err := d.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt any
+		if rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk) == nil && name == column {
+			return true
+		}
+	}
+	return false
 }

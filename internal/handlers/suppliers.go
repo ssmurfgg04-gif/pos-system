@@ -99,9 +99,11 @@ func (h *H) CreatePO(c *gin.Context) {
 	var body struct {
 		SupplierID int64 `json:"supplierId" binding:"required"`
 		Items      []struct {
-			ProductID int64 `json:"productId" binding:"required"`
-			Qty       int   `json:"qty" binding:"required"`
-			CostCents int64 `json:"costCents"`
+			ProductID  int64  `json:"productId" binding:"required"`
+			QtyMilli   int64  `json:"qtyMilli" binding:"required"`
+			ExpiryDate string `json:"expiryDate"`
+			BatchNo    string `json:"batchNo"`
+			CostCents  int64  `json:"costCents"`
 		} `json:"items" binding:"required,min=1"`
 		Note string `json:"note"`
 	}
@@ -111,7 +113,7 @@ func (h *H) CreatePO(c *gin.Context) {
 	}
 	items := make([]services.POItemInput, 0, len(body.Items))
 	for _, it := range body.Items {
-		items = append(items, services.POItemInput{ProductID: it.ProductID, Qty: it.Qty, CostCents: it.CostCents})
+		items = append(items, services.POItemInput{ProductID: it.ProductID, QtyMilli: it.QtyMilli, CostCents: it.CostCents, ExpiryDate: it.ExpiryDate, BatchNo: it.BatchNo})
 	}
 	po, err := h.svc(c).CreatePO(body.SupplierID, items, body.Note, p)
 	if err != nil {
@@ -206,7 +208,7 @@ func (h *H) CountTake(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Counts map[int64]int `json:"counts" binding:"required"`
+		Counts map[int64]int64 `json:"counts" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		h.fail(c, 400, err.Error())

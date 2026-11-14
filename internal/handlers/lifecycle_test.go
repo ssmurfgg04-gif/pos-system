@@ -83,7 +83,7 @@ func cashSale(t *testing.T, engine *gin.Engine, admin string, name string) map[s
 			}
 			w = doJSON(t, engine, http.MethodPost, "/api/v1/products", admin, map[string]any{
 				"sku": "SKU-LC", "name": name, "priceCents": 50000,
-				"categoryId": cats[0]["id"], "stockQty": 100,
+				"categoryId": cats[0]["id"], "stockQtyMilli": 100000,
 			})
 			if w.Code != 201 && w.Code != 200 {
 				t.Fatalf("product seed failed: %d %s", w.Code, w.Body.String())
@@ -98,7 +98,7 @@ func cashSale(t *testing.T, engine *gin.Engine, admin string, name string) map[s
 		}
 	}
 	w := doJSON(t, engine, http.MethodPost, "/api/v1/orders/checkout", admin, map[string]any{
-		"items":         []map[string]any{{"productId": pid, "qty": 1}},
+		"items":         []map[string]any{{"productId": pid, "qtyMilli": 1000}},
 		"paymentMethod": "cash",
 		"clientUuid":    fmt.Sprintf("lc-%v", pid),
 		"customerName":  "Jane Customer",

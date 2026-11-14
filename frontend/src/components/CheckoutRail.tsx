@@ -15,6 +15,7 @@ import { useCart } from '../stores/cart'
 import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { formatMoney, formatMoneyCompact, normalizePhoneKe, splitRemaining } from '../lib/money'
+import { fmtQty, lineTotalCents } from '../lib/qty'
 import { Button, EmptyState, Field, Input, MoneyInput, Spinner, StatusPill, Modal } from './ui'
 import { ProductPhoto } from './ProductPhoto'
 import { SplitTenderEditor, isAsyncLeg } from './SplitTenderEditor'
@@ -343,7 +344,7 @@ export function CheckoutRail({
       ? [...(wiredLegs ?? []).filter((l) => !isAsyncLeg(l)), asyncLeg]
       : wiredLegs
     const body: CheckoutRequest = {
-      items: cart.lines.map((l) => ({ productId: l.productId, qty: l.qty })),
+      items: cart.lines.map((l) => ({ productId: l.productId, qtyMilli: l.qtyMilli })),
       paymentMethod: wiredMethod,
       paymentMode: paymentMethod === 'mpesa' ? paymentMode : undefined,
       customerName: customerName.trim() || undefined,
@@ -503,7 +504,7 @@ export function CheckoutRail({
           <div className="min-w-0">
             <h2 className="font-bold text-ink leading-tight">Current Sale</h2>
             <p className="text-[11px] text-ink-subtle leading-tight">
-              {totals.count} item{totals.count === 1 ? '' : 's'}
+              {fmtQty(totals.count * 1000)} item{totals.count === 1 ? '' : 's'}
               {canHold && heldCount ? ` · ${heldCount} parked` : ''}
             </p>
           </div>
@@ -546,8 +547,8 @@ export function CheckoutRail({
                   <div className="flex items-center justify-between gap-2 mt-1">
                     <div className="flex items-center border border-line-strong rounded-input overflow-hidden h-7">
                       <button
-                        onClick={() => cart.setQty(l.productId, l.qty - 1)}
-                        aria-label={l.qty === 1 ? `Remove ${l.name}` : 'Decrease quantity'}
+                        onClick={() => cart.setQty(l.productId, l.qtyMilli - 1000)}
+                        aria-label={l.qtyMilli === 1000 ? `Remove ${l.name}` : 'Decrease quantity'}
                         className="w-7 h-full bg-surface-muted font-bold text-ink hover:bg-line flex items-center justify-center"
                       >
                         {/* ALWAYS a − glyph: at quantity 1 it removes the line,
@@ -556,15 +557,15 @@ export function CheckoutRail({
                             affordance and made the stepper shape unstable). */}
                         <Minus size={12} strokeWidth={2.75} aria-hidden />
                       </button>
-                      <span className="w-7 text-center font-bold tabular text-ink text-[12.5px]">{l.qty}</span>
+                      <span className="w-8 text-center font-bold tabular text-ink text-[12.5px]">{fmtQty(l.qtyMilli)}</span>
                       {(() => {
-                        const atCap = l.trackStock && l.qty >= l.stockQty
+                        const atCap = l.trackStock && l.qtyMilli >= l.stockQtyMilli
                         return (
                           <button
-                            onClick={() => cart.setQty(l.productId, Math.min(999, l.qty + 1))}
+                            onClick={() => cart.setQty(l.productId, Math.min(100_000_000, l.qtyMilli + 1000))}
                             disabled={atCap}
                             aria-label={atCap ? 'No more stock' : 'Increase quantity'}
-                            title={atCap ? `Only ${l.stockQty} in stock` : undefined}
+                            title={atCap ? `Only ${fmtQty(l.stockQtyMilli)} in stock` : undefined}
                             className={`w-7 h-full bg-surface-muted font-bold flex items-center justify-center ${atCap ? 'text-ink-subtle/60 cursor-not-allowed' : 'text-ink hover:bg-line'}`}
                           >
                             <Plus size={12} strokeWidth={2.75} aria-hidden />
@@ -573,7 +574,7 @@ export function CheckoutRail({
                       })()}
                     </div>
                     <div className="text-right">
-                      <p className="font-bold text-[13px] text-ink tabular leading-none">{formatMoneyCompact(l.qty * l.unitPriceCents)}</p>
+                      <p className="font-bold text-[13px] text-ink tabular leading-none">{formatMoneyCompact(lineTotalCents(l.unitPriceCents, l.qtyMilli))}</p>
                       <button
                         onClick={() => { if (canOverride) { setEditing(l.productId); setOverrideVal(l.unitPriceCents) } else toast.error('Price override needs permission') }}
                         className={`text-[11px] font-semibold mt-0.5 ${canOverride ? 'text-ink-subtle hover:text-ink underline' : 'text-ink-subtle'}`}
@@ -1619,7 +1620,7 @@ function ParkModal({
     const body = {
       refName,
       cart: {
-        items: cart.lines.map((l) => ({ productId: l.productId, qty: l.qty, unitPriceCents: l.unitPriceCents })),
+        items: cart.lines.map((l) => ({ productId: l.productId, qtyMilli: l.qtyMilli, unitPriceCents: l.unitPriceCents })),
         paymentMethod: 'cash' as const,
         customerName: cart.customerName.trim() || undefined,
         note: cart.note.trim() || undefined,
@@ -1646,7 +1647,7 @@ function ParkModal({
     }>
       <div className="space-y-3">
         <p className="text-sm text-ink-muted">
-          {totals.count} item{totals.count === 1 ? '' : 's'} · {formatMoney(totals.total)}, nothing is charged until the sale is resumed and completed.
+          {fmtQty(totals.count * 1000)} item{totals.count === 1 ? '' : 's'} · {formatMoney(totals.total)}, nothing is charged until the sale is resumed and completed.
         </p>
         <Field label="Reference name" hint="Find it again in the Parked drawer.">
           <Input

@@ -11,7 +11,7 @@ func TestStocktakeFlow(t *testing.T) {
 
 	// Stock before (product 1: 40 units in seed).
 	prods := productIDs(t, engine, admin, "Classic Cotton Tee, Black")
-	before := int(prods[0]["stockQty"].(float64))
+	before := int(prods[0]["stockQtyMilli"].(float64))
 
 	// Open a count session.
 	w := do(t, engine, "POST", "/api/v1/stock-counts", admin, map[string]any{"note": "month end"})
@@ -35,7 +35,7 @@ func TestStocktakeFlow(t *testing.T) {
 	pid := int64(prods[0]["id"].(float64))
 	three := before - 3
 	w = do(t, engine, "PUT", fmt.Sprintf("/api/v1/stock-counts/%d/lines", id), admin,
-		map[string]any{"productId": pid, "countedQty": three})
+		map[string]any{"productId": pid, "countedQtyMilli": three})
 	if w.Code != 200 {
 		t.Fatalf("save line: %d %s", w.Code, w.Body.String())
 	}
@@ -65,14 +65,14 @@ func TestStocktakeFlow(t *testing.T) {
 
 	// System stock must now equal the counted value.
 	prods = productIDs(t, engine, admin, "Classic Cotton Tee, Black")
-	after := int(prods[0]["stockQty"].(float64))
+	after := int(prods[0]["stockQtyMilli"].(float64))
 	if after != three {
 		t.Fatalf("stock after apply = %d, want %d", after, three)
 	}
 
 	// Completed session is closed: saving a line must fail.
 	w = do(t, engine, "PUT", fmt.Sprintf("/api/v1/stock-counts/%d/lines", id), admin,
-		map[string]any{"productId": pid, "countedQty": 999})
+		map[string]any{"productId": pid, "countedQtyMilli": 999000})
 	if w.Code == 200 {
 		t.Fatal("expected closed-session rejection")
 	}
@@ -101,7 +101,7 @@ func TestGiftCardLifecycle(t *testing.T) {
 
 	// Sell 2 units for cash → two codes minted. Fetch them from the order.
 	w = do(t, engine, "POST", "/api/v1/orders/checkout", cashier, map[string]any{
-		"items":         []map[string]any{{"productId": created.Data.ID, "qty": 2}},
+		"items":         []map[string]any{{"productId": created.Data.ID, "qtyMilli": 2000}},
 		"paymentMethod": "cash",
 	})
 	if w.Code != 200 && w.Code != 201 {
