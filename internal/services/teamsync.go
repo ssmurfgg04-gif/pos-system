@@ -780,11 +780,6 @@ func (s *Service) TeamSyncLoop(ctx context.Context, version string) {
 			if ticks == 1 || ticks%90 == 0 {
 				s.PaymentProfileGet()
 			}
-			// v1.10 eTIMS: queue + send this till's sales (own goroutine:
-			// a slow KRA must never hold up sync). ~every minute.
-			if ticks%3 == 1 {
-				go s.EtimsTick()
-			}
 			if ticks%30 == 0 { // ~every 10 minutes
 				s.pruneSyncTables()
 			}

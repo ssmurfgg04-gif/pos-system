@@ -24,6 +24,14 @@ this file records what each release means for the shop.
   to the items with one big **Charge** button. Tapping it opens the
   payment step, with the items folded into a "5 items · KES 3,500 · Edit"
   bar. Before, the payment form covered everything after the second item.
+- **Voids and returns are honest with KRA and with profit.** Voiding a
+  sale KRA already signed sends a credit note, so you don't owe VAT on a
+  sale that never happened; a sale voided before sending is never sent.
+  Returns now come off profit (the refund goes out, the buying price of
+  the returned goods comes back).
+- **The paper receipt is the tax invoice.** Sales are sent to KRA within
+  seconds and the printer waits briefly for the signature. If KRA is slow
+  or the internet is down it prints straight away and says so.
 - Under the hood: migration v30 (eTIMS outbox, product tax type / class),
   cloud schema `db/deploy-v1100-etims.sql` and the `etims` function, a
   receipt that always loads the latest copy of the sale.

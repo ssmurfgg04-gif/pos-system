@@ -257,16 +257,20 @@ async function sale(team: string, b: any) {
   const cashier = { id: String(s.cashierId ?? "pos").slice(0, 20), name: String(s.cashierName ?? "POS").slice(0, 60) };
 
   // Already signed? Hand the stamp back without touching KRA (idempotent).
-  const res = await rpc<any>("etims_reserve_invoice", { p_team: team, p_client_ref: clientRef, p_kind: kind, p_org_invc_no: orgInvcNo });
-  if (!res?.ok) return json({ ok: false, error: res?.error ?? "could not number the invoice", retry: true }, 503);
-  if (res.status === "signed") return json({ ok: true, stamp: stampOf(d, res) });
+  const done = (await rows(`etims_invoices?team_code=eq.${encodeURIComponent(team)}&client_ref=eq.${encodeURIComponent(clientRef)}&kind=eq.${kind}&status=eq.signed&select=*`))[0];
+  if (done) return json({ ok: true, stamp: stampOf(d, done) });
 
+  // Items first, number second: a sale KRA can't accept yet (no item
+  // class...) must not hold an invoice number and leave a gap.
   let items;
   try {
     items = await ensureItems(d, lines, cashier);
   } catch (e: any) {
     return json({ ok: false, error: e?.error ?? String(e), retry: !!e?.retry }, e?.retry ? 503 : 422);
   }
+  const res = await rpc<any>("etims_reserve_invoice", { p_team: team, p_client_ref: clientRef, p_kind: kind, p_org_invc_no: orgInvcNo });
+  if (!res?.ok) return json({ ok: false, error: res?.error ?? "could not number the invoice", retry: true }, 503);
+  if (res.status === "signed") return json({ ok: true, stamp: stampOf(d, res) });
   const confirmedAt = /^\d{14}$/.test(String(s.confirmedAt ?? "")) ? String(s.confirmedAt) : kenyaStamp(new Date());
   let payload;
   try {

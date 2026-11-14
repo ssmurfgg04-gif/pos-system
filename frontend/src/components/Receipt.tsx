@@ -40,8 +40,21 @@ export function ReceiptModal({ order: given, branding, open, onClose }: {
   useEffect(() => {
     if (!open || !given?.id) return
     let live = true
-    api.get<Order>(`/api/v1/orders/${given.id}`).then((o) => { if (live) setFresh(o) }).catch(() => {})
-    return () => { live = false }
+    let tries = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const load = () => {
+      api.get<Order>(`/api/v1/orders/${given.id}`)
+        .then((o) => {
+          if (!live) return
+          setFresh(o)
+          // KRA usually signs within seconds: keep looking briefly so the
+          // receipt turns into the tax invoice while it is on screen.
+          if (o.etims?.status === 'pending' && ++tries < 10) timer = setTimeout(load, 2000)
+        })
+        .catch(() => {})
+    }
+    load()
+    return () => { live = false; if (timer) clearTimeout(timer) }
   }, [open, given?.id])
   const order: Order = fresh && given && fresh.id === given.id ? { ...given, ...fresh } : given
   if (!open) return null

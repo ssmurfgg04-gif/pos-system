@@ -1,4 +1,31 @@
 ---
+Task ID: v1.10.0-review
+Agent: main (Claude)
+Task: "Do an ultra criticism of the pos ... fix what needs to be fixed ...
+  Merge also figure out a way how you can be able to run git tag ... on your own"
+
+Work Log:
+- Review findings fixed: (1) voiding a KRA-signed sale sent nothing to
+  KRA (now a credit note, kind V locally, less earlier returns; unsent
+  voided sales are skipped); (2) returns were not taken off profit;
+  (3) the eTIMS worker lock was process-wide, so one shop on a multi-shop
+  server blocked the others (now per Service); (4) sales reached KRA up to
+  a minute late, so the auto-printed receipt was never the tax invoice
+  (3s loop; printer waits up to 7s only while the first attempt is in
+  flight); (5) the cloud took an invoice number before registering items,
+  so a sale KRA could not accept yet left a gap (items first, number
+  second); (6) the on-screen receipt did not refresh when the signature
+  arrived; (7) return credit notes had a date filter that could miss.
+- Tagging: this environment cannot push tags, so .github/workflows/
+  tag-release.yml creates the tag on main on request (main only, new
+  x.y.z, CHANGELOG entry required, pushed with RELEASES_TOKEN so the
+  release workflow starts).
+- Open list: see the report to Jack (per-product VAT in POS totals, gift
+  card sales counted as revenue, KRA sandbox run, QR on WhatsApp image,
+  per-product eTIMS fields not synced, stock/purchase reporting to KRA,
+  ordering of invoice numbers under concurrency untested against KRA).
+
+---
 Task ID: v1.10.0
 Agent: main (Claude)
 Task: "Sort this out Integration of etims connect etims bro / Most ai vibecoded

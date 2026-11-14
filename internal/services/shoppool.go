@@ -169,6 +169,8 @@ func (p *ShopPool) EnsureStarted(ctx context.Context, shopID string) {
 	// Team sync: links this till to the rest of the team through the
 	// Supabase event log. The loop no-ops while sync is disabled.
 	go svc.TeamSyncLoop(ctx, svc.AppVersion())
+	// v1.10 KRA eTIMS: sign this till's sales in the background.
+	go svc.EtimsLoop(ctx)
 }
 
 // SetVersion stamps the build version; started services pick it up on

@@ -343,6 +343,10 @@ type ProfitBlock struct {
 	NetProfitCents     int64 `json:"netProfitCents"`
 	UncostedLines      int   `json:"uncostedLines"`
 	UncostedSalesCents int64 `json:"uncostedSalesCents"`
+	// ReturnsProfitCents: profit given back on goods returned in the
+	// period (refund ex-VAT minus the buying price of what came back to
+	// stock). Already taken off ProfitCents.
+	ReturnsProfitCents int64 `json:"returnsProfitCents"`
 }
 
 // profitBlock fills a ProfitBlock for paid orders in [from, to).
@@ -356,7 +360,21 @@ func (s *Service) profitBlock(from, to string, sales, cogs, expenses, disposal i
 		WHERE o.status = 'PAID' AND o.created_at >= ? AND o.created_at < ?
 		  AND COALESCE(oi.cost_cents,0) <= 0 AND COALESCE(p.cost_cents,0) <= 0`), from, to).
 		Scan(&pb.UncostedLines, &pb.UncostedSalesCents)
-	pb.ProfitCents = sales - pb.SalesVatCents - cogs
+	// Returns issued in the period: the refund (less its VAT share) leaves,
+	// the goods' buying price comes back with the restock.
+	var refundExVat, returnedCost int64
+	_ = s.db.QueryRow(s.db.Rebind(`
+		SELECT COALESCE(SUM(CASE WHEN o.total_cents > 0
+			THEN rt.total_cents * (o.total_cents - o.tax_cents) / o.total_cents ELSE rt.total_cents END),0)
+		FROM returns rt JOIN orders o ON o.id = rt.order_id
+		WHERE rt.created_at >= ? AND rt.created_at < ?`), from, to).Scan(&refundExVat)
+	_ = s.db.QueryRow(s.db.Rebind(`
+		SELECT COALESCE(SUM(ri.qty_milli * (CASE WHEN COALESCE(oi.cost_cents,0) > 0 THEN oi.cost_cents ELSE COALESCE(p.cost_cents,0) END) / 1000),0)
+		FROM return_items ri JOIN returns rt ON rt.id = ri.return_id
+		LEFT JOIN order_items oi ON oi.id = ri.order_item_id LEFT JOIN products p ON p.id = ri.product_id
+		WHERE rt.created_at >= ? AND rt.created_at < ?`), from, to).Scan(&returnedCost)
+	pb.ReturnsProfitCents = refundExVat - returnedCost
+	pb.ProfitCents = sales - pb.SalesVatCents - cogs - pb.ReturnsProfitCents
 	pb.NetProfitCents = pb.ProfitCents - expenses - disposal
 	return pb
 }

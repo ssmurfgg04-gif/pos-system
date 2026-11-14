@@ -19,6 +19,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -249,11 +251,26 @@ func (s *Service) etimsEnqueue() {
 		INSERT INTO etims_receipts (kind, ref_id, client_ref, org_client_ref, status)
 		SELECT 'R', rt.id, CASE WHEN COALESCE(rt.client_uuid,'') != '' THEN rt.client_uuid ELSE rt.number END, org.client_ref, 'pending'
 		FROM returns rt JOIN etims_receipts org ON org.kind = 'S' AND org.ref_id = rt.order_id AND org.status = 'signed'
-		WHERE rt.created_at >= ?
-		  AND NOT EXISTS (SELECT 1 FROM etims_receipts r WHERE r.kind = 'R' AND r.ref_id = rt.id)`), since)
+		WHERE NOT EXISTS (SELECT 1 FROM etims_receipts r WHERE r.kind = 'R' AND r.ref_id = rt.id)`))
 	if err != nil {
 		log.Printf("[etims] enqueue returns: %v", err)
 	}
+	// A VOIDED sale KRA already signed → credit note for what is left of
+	// it (kind 'V' locally; a credit note on the wire). Without this the
+	// shop would owe VAT on a sale that never happened.
+	_, err = s.db.Exec(`
+		INSERT INTO etims_receipts (kind, ref_id, client_ref, org_client_ref, status)
+		SELECT 'V', o.id, 'void:' || org.client_ref, org.client_ref, 'pending'
+		FROM orders o JOIN etims_receipts org ON org.kind = 'S' AND org.ref_id = o.id AND org.status = 'signed'
+		WHERE o.status = 'VOIDED'
+		  AND NOT EXISTS (SELECT 1 FROM etims_receipts r WHERE r.kind = 'V' AND r.ref_id = o.id)`)
+	if err != nil {
+		log.Printf("[etims] enqueue voids: %v", err)
+	}
+	// A sale voided BEFORE KRA signed it is never sent.
+	_, _ = s.db.Exec(`UPDATE etims_receipts SET status = 'skipped', last_error = 'voided before sending', next_try_at = ''
+		WHERE kind = 'S' AND status IN ('pending','failed')
+		  AND ref_id IN (SELECT id FROM orders WHERE status = 'VOIDED')`)
 }
 
 type etimsRow struct {
@@ -265,14 +282,20 @@ type etimsRow struct {
 	Attempts     int
 }
 
-var etimsBusy atomic.Bool
+// one run at a time PER SHOP (a multi-shop server has many Services)
+var etimsBusy sync.Map // *Service -> *atomic.Bool
 
 // EtimsTick queues and sends; safe to call often (one run at a time).
 func (s *Service) EtimsTick() {
-	if !s.EtimsEnabled() || !etimsBusy.CompareAndSwap(false, true) {
+	if !s.EtimsEnabled() {
 		return
 	}
-	defer etimsBusy.Store(false)
+	v, _ := etimsBusy.LoadOrStore(s, new(atomic.Bool))
+	busy := v.(*atomic.Bool)
+	if !busy.CompareAndSwap(false, true) {
+		return
+	}
+	defer busy.Store(false)
 	s.etimsEnqueue()
 	s.etimsSendDue(8)
 }
@@ -304,17 +327,28 @@ func (s *Service) etimsSendDue(limit int) int {
 func (s *Service) etimsSendOne(r etimsRow) bool {
 	var sale map[string]any
 	var err error
-	if r.Kind == "R" {
+	switch r.Kind {
+	case "R":
 		sale, err = s.etimsReturnBody(r.RefID)
-	} else {
+	case "V":
+		sale, err = s.etimsVoidBody(r.RefID)
+		if errors.Is(err, errEtimsNothingLeft) {
+			_, _ = s.db.Exec(s.db.Rebind(`UPDATE etims_receipts SET status = 'skipped', last_error = 'fully returned already', updated_at = ? WHERE id = ?`), nowStamp(), r.ID)
+			return false
+		}
+	default:
 		sale, err = s.etimsSaleBody(r.RefID)
 	}
 	if err != nil {
 		s.etimsMark(r, "failed", err.Error(), false, nil)
 		return false
 	}
-	body := map[string]any{"kind": r.Kind, "clientRef": r.ClientRef, "sale": sale}
-	if r.Kind == "R" {
+	wire := r.Kind
+	if wire == "V" {
+		wire = "R"
+	}
+	body := map[string]any{"kind": wire, "clientRef": r.ClientRef, "sale": sale}
+	if wire == "R" {
 		body["orgClientRef"] = r.OrgClientRef
 	}
 	out, code, err := etimsCall(s, "sale", body)
@@ -469,6 +503,73 @@ func (s *Service) etimsReturnBody(returnID int64) (map[string]any, error) {
 		body["payment"] = etimsPaymentOf(o)
 	}
 	return body, nil
+}
+
+var errEtimsNothingLeft = errors.New("nothing left to credit")
+
+// etimsVoidBody: credit note for a voided, KRA-signed sale: every line,
+// less what earlier returns already credited.
+func (s *Service) etimsVoidBody(orderID int64) (map[string]any, error) {
+	body, err := s.etimsSaleBody(orderID)
+	if err != nil {
+		return nil, err
+	}
+	o, _ := s.GetOrder(orderID)
+	returned := map[int64]int64{} // order_item_id -> milli already returned
+	rows, err := s.db.Query(s.db.Rebind(`SELECT ri.order_item_id, COALESCE(SUM(ri.qty_milli),0) FROM return_items ri
+		JOIN returns rt ON rt.id = ri.return_id WHERE rt.order_id = ? GROUP BY ri.order_item_id`), orderID)
+	if err == nil {
+		for rows.Next() {
+			var id, q int64
+			if rows.Scan(&id, &q) == nil {
+				returned[id] = q
+			}
+		}
+		rows.Close()
+	}
+	lines := body["lines"].([]map[string]any)
+	var left []map[string]any
+	for i, it := range o.Items {
+		if i >= len(lines) {
+			break
+		}
+		rest := it.QtyMilli - returned[it.ID]
+		if rest <= 0 {
+			continue
+		}
+		l := lines[i]
+		if rest < it.QtyMilli {
+			l["lineTotalCents"] = l["lineTotalCents"].(int64) * rest / it.QtyMilli
+			l["qtyMilli"] = rest
+		}
+		left = append(left, l)
+	}
+	if len(left) == 0 {
+		return nil, errEtimsNothingLeft
+	}
+	body["lines"] = left
+	if len(returned) > 0 {
+		body["discountCents"] = int64(0) // partial: credit the remaining lines at face value
+	}
+	body["traderInvoiceNo"] = o.Number + "-VOID"
+	body["confirmedAt"] = kenyaStampOf(firstNonEmpty(o.VoidedAt, nowStamp()))
+	body["refundReason"] = "06"
+	return body, nil
+}
+
+// EtimsLoop keeps signing close to real time (the paper receipt waits a
+// few seconds for KRA): a cheap local check every 3s.
+func (s *Service) EtimsLoop(ctx context.Context) {
+	t := time.NewTicker(3 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.EtimsTick()
+		}
+	}
 }
 
 func etimsPaymentOf(o *models.Order) string {

@@ -211,3 +211,46 @@ func TestKenyaStampOf(t *testing.T) {
 		}
 	}
 }
+
+// A sale KRA signed and the shop then voids goes out as a credit note; a
+// sale voided before it was ever sent is never sent.
+func TestEtimsVoidCreditNote(t *testing.T) {
+	f := newMoneyTill(t)
+	fake := &fakeEtims{reply: func(b map[string]any) (map[string]any, int, error) { return signedReply(1), 200, nil }}
+	useFakeEtims(t, fake)
+	etimsOn(f)
+	signed, err := f.checkout("cash", 0, "uuid-void-1")
+	if err != nil {
+		t.Fatalf("checkout: %v", err)
+	}
+	f.s.EtimsTick()
+	unsent, err := f.checkout("cash", 0, "uuid-void-2")
+	if err != nil {
+		t.Fatalf("checkout: %v", err)
+	}
+	for _, id := range []int64{signed.ID, unsent.ID} {
+		if _, err := f.s.Void(id, "wrong sale", f.principal()); err != nil {
+			t.Fatalf("void: %v", err)
+		}
+	}
+	before := len(fake.calls)
+	f.s.EtimsTick()
+	var note map[string]any
+	for _, c := range fake.calls[before:] {
+		if c["clientRef"] == "uuid-void-2" {
+			t.Fatal("a sale voided before sending was sent to KRA")
+		}
+		if c["kind"] == "R" {
+			note = c
+		}
+	}
+	if note == nil || note["orgClientRef"] != "uuid-void-1" || note["clientRef"] != "void:uuid-void-1" {
+		t.Fatalf("void credit note missing: %v", fake.calls[before:])
+	}
+	if st := f.s.etimsStampFor("V", signed.ID); st == nil || st.Status != "signed" {
+		t.Fatalf("void note: %+v", st)
+	}
+	if st := f.s.etimsStampFor("S", unsent.ID); st != nil && st.Status != "skipped" {
+		t.Fatalf("unsent voided sale: %+v", st)
+	}
+}

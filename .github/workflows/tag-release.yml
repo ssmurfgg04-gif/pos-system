@@ -1,0 +1,58 @@
+name: Tag a release
+
+# Creates the release tag on main, which starts "LedgerPOS Release".
+# Exists so a release can be cut without a local git checkout: run it from
+# the Actions tab (or the API) with the version number.
+#
+# Guards: main only, version must be new, must be x.y.z, and CHANGELOG.md
+# must already have an entry for it. Pushes with RELEASES_TOKEN because a
+# tag pushed with the default GITHUB_TOKEN does not start other workflows.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the v (e.g. 1.10.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ledgerpos-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run this workflow from main."
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.RELEASES_TOKEN }}
+      - name: Validate and tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Version must look like 1.10.0"; exit 1
+          fi
+          TAG="v$VERSION"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::$TAG already exists"; exit 1
+          fi
+          if ! grep -q "^## v$VERSION " CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no entry for v$VERSION"; exit 1
+          fi
+          git config user.name "ledgerpos-release"
+          git config user.email "release@ledgerpos.local"
+          git tag -a "$TAG" -m "LedgerPOS $VERSION"
+          git push origin "$TAG"
+          echo "Tagged $(git rev-parse --short HEAD) as $TAG" >> "$GITHUB_STEP_SUMMARY"

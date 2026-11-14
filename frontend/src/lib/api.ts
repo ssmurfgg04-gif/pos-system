@@ -713,6 +713,7 @@ export interface DailySummary {
   netProfitCents?: number
   uncostedLines?: number
   uncostedSalesCents?: number
+  returnsProfitCents?: number
   /** P6 multi-store: present (with per-shop rows) on the ?shop=all consolidated view. */
   consolidated?: boolean
   shops?: { id: string; name: string; salesCents: number; ordersPaid: number; cashCents: number; mpesaCents: number; paystackCents: number; creditCents: number; ordersVoided?: number; discrepancies?: number }[]
@@ -750,6 +751,7 @@ export interface MonthlySummary {
   netProfitCents?: number
   uncostedLines?: number
   uncostedSalesCents?: number
+  returnsProfitCents?: number
 }
 
 export interface BackupResult {
