@@ -845,7 +845,7 @@ function PaymentForm(props: {
         </label>
         {branding.kra_pin ? (
           <label className="block col-span-2 -mt-1">
-            <span className="block text-[12px] font-semibold text-ink-muted mb-0.5">Buyer KRA PIN <span className="font-normal text-ink-subtle">(optional, makes it a tax invoice)</span></span>
+            <span className="block text-[12px] font-semibold text-ink-muted mb-0.5">Buyer KRA PIN <span className="font-normal text-ink-subtle">(optional, printed on the invoice)</span></span>
             <Input
               value={buyerPin}
               onChange={(e) => setBuyerPin(e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase())}
