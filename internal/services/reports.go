@@ -347,6 +347,10 @@ type ProfitBlock struct {
 	// period (refund ex-VAT minus the buying price of what came back to
 	// stock). Already taken off ProfitCents.
 	ReturnsProfitCents int64 `json:"returnsProfitCents"`
+	// GiftCardSalesCents: gift cards sold in the period. Not income yet
+	// (the shop owes the goods); it becomes a sale when the card is spent,
+	// so it is taken off profit here.
+	GiftCardSalesCents int64 `json:"giftCardSalesCents"`
 }
 
 // profitBlock fills a ProfitBlock for paid orders in [from, to).
@@ -358,7 +362,8 @@ func (s *Service) profitBlock(from, to string, sales, cogs, expenses, disposal i
 		SELECT COUNT(*), COALESCE(SUM(oi.line_total_cents),0)
 		FROM order_items oi JOIN orders o ON o.id = oi.order_id LEFT JOIN products p ON p.id = oi.product_id
 		WHERE o.status = 'PAID' AND o.created_at >= ? AND o.created_at < ?
-		  AND COALESCE(oi.cost_cents,0) <= 0 AND COALESCE(p.cost_cents,0) <= 0`), from, to).
+		  AND COALESCE(oi.cost_cents,0) <= 0 AND COALESCE(p.cost_cents,0) <= 0
+		  AND COALESCE(oi.tax_type,'') != 'X' AND COALESCE(p.is_gift_card,0) = 0`), from, to).
 		Scan(&pb.UncostedLines, &pb.UncostedSalesCents)
 	// Returns issued in the period: the refund (less its VAT share) leaves,
 	// the goods' buying price comes back with the restock.
@@ -374,7 +379,12 @@ func (s *Service) profitBlock(from, to string, sales, cogs, expenses, disposal i
 		LEFT JOIN order_items oi ON oi.id = ri.order_item_id LEFT JOIN products p ON p.id = ri.product_id
 		WHERE rt.created_at >= ? AND rt.created_at < ?`), from, to).Scan(&returnedCost)
 	pb.ReturnsProfitCents = refundExVat - returnedCost
-	pb.ProfitCents = sales - pb.SalesVatCents - cogs - pb.ReturnsProfitCents
+	_ = s.db.QueryRow(s.db.Rebind(`
+		SELECT COALESCE(SUM(CASE WHEN COALESCE(oi.paid_cents,0) > 0 THEN oi.paid_cents ELSE oi.line_total_cents END),0)
+		FROM order_items oi JOIN orders o ON o.id = oi.order_id LEFT JOIN products p ON p.id = oi.product_id
+		WHERE o.status = 'PAID' AND o.created_at >= ? AND o.created_at < ?
+		  AND (COALESCE(oi.tax_type,'') = 'X' OR COALESCE(p.is_gift_card,0) = 1)`), from, to).Scan(&pb.GiftCardSalesCents)
+	pb.ProfitCents = sales - pb.SalesVatCents - cogs - pb.ReturnsProfitCents - pb.GiftCardSalesCents
 	pb.NetProfitCents = pb.ProfitCents - expenses - disposal
 	return pb
 }

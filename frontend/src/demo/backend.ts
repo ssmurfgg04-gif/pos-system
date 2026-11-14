@@ -12,7 +12,7 @@ function isDefaultPassword(pw: string) {
 // localStorage; "Reset demo data" in Settings rebuilds the seed.
 
 import { ApiError, token } from '../lib/api'
-import { cartTotals } from '../lib/money'
+import { cartTotals, computeLines } from '../lib/money'
 import { MAX_QTY_MILLI, fmtQty, lineTotalCents } from '../lib/qty'
 import { buildSeed, receiptCode, DemoDB, DemoOrder, DemoUser, DemoCustomer, DemoLedgerEntry, DemoPayment, DemoSupplier, DemoPurchaseOrder, DemoStockTake, DemoProductBatch, PERMISSION_CATALOG } from './seed'
 
@@ -592,7 +592,21 @@ function productDTO(p: DemoDB['products'][number]) {
     allowFraction: !!p.allowFraction,
     trackBatches: !!p.trackBatches,
     active: p.active, updatedAt: p.updatedAt,
+    etimsTaxType: (p as { etimsTaxType?: string }).etimsTaxType ?? '',
+    etimsClsCd: (p as { etimsClsCd?: string }).etimsClsCd ?? '',
+    ...demoVat(p),
   }
+}
+
+/** v1.11 — services.vatFor twin: the VAT a product sells at. */
+function demoVat(p: DemoDB['products'][number]): { vatType: string; vatRate: number } {
+  const d = db!
+  const pct = Number(d.settings.tax_percent ?? 16) || 0
+  if ((p as { isGiftCard?: boolean }).isGiftCard) return { vatType: 'X', vatRate: 0 }
+  let t = String((p as { etimsTaxType?: string }).etimsTaxType || '').toUpperCase()
+  if (!/^[A-E]$/.test(t)) t = String(d.settings.etims_default_tax || (pct > 0 ? 'B' : 'D')).toUpperCase()
+  if (pct <= 0) return { vatType: t === 'B' || t === 'E' ? 'D' : t, vatRate: 0 }
+  return { vatType: t, vatRate: t === 'B' ? pct : t === 'E' ? 8 : 0 }
 }
 
 /** v1.8.0 lot DTO: names ride along like the Go GetBatch join. */
@@ -1728,7 +1742,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     }
     const taxPercent = Number(d.settings.tax_percent) || 16
     const taxIncluded = (d.settings.tax_included ?? 'true') === 'true'
-    const t = cartTotals(lines.map((l) => ({ qtyMilli: l.qtyMilli, unitPriceCents: l.unitPriceCents })), taxPercent, taxIncluded)
+    const t = cartTotals(lines.map((l) => ({ qtyMilli: l.qtyMilli, unitPriceCents: l.unitPriceCents, vatRate: demoVat(l.product).vatRate })), taxPercent, taxIncluded)
     const rawMethod = body?.paymentMethod
     const method =
       rawMethod === 'mpesa' ? 'mpesa'
@@ -1760,11 +1774,11 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     if (discount > 0 && !perms.includes('payments.apply_discount')) {
       throw new ApiError(403, 'applying a discount requires payments.apply_discount permission')
     }
-    const discountedSub = t.subtotal - discount
-    const taxCents = taxIncluded
-      ? Math.round((discountedSub * taxPercent) / (100 + taxPercent))
-      : Math.round((discountedSub * taxPercent) / 100)
-    const totalCents = taxIncluded ? discountedSub : discountedSub + taxCents
+    // v1.11 per-line VAT (server parity: money.ComputeLines)
+    const vatLines = lines.map((l) => ({ amountCents: lineTotalCents(l.unitPriceCents, l.qtyMilli), rate: demoVat(l.product).vatRate }))
+    let priced = computeLines(vatLines, discount, 0, taxIncluded)
+    let taxCents = priced.taxCents
+    const totalCents = priced.totalCents
     // Loyalty redemption: points × point value, capped at a configured
     // share of the order total (whole points only). Spent points are
     // deducted now and refunded automatically if the order is voided.
@@ -1792,6 +1806,10 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     }
     // Payable is what changes hands (discount + points already applied).
     const payable = Math.max(0, totalCents - redeemCents)
+    if (redeemCents > 0) {
+      priced = computeLines(vatLines, discount, redeemCents, taxIncluded)
+      taxCents = priced.taxCents
+    }
     // ---- Split / mixed tender validation (server parity): legs must sum
     // exactly to the payable, at most one async leg (mpesa), no account
     // tabs; credit legs need a live customer and wallet coverage. (Card
@@ -1843,11 +1861,14 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
       customerId: tabCustomer ? tabCustomer.id : 0, note: String(body?.note || ''),
       clientUuid: String(body?.clientUuid || ''), discrepancy: false,
       createdAt: nowIso(), paidAt: '', voidedAt: '', voidReason: '',
-      items: lines.map((l) => ({
+      items: lines.map((l, i) => ({
         id: d.seq.item++, productId: l.product.id, name: l.product.name, sku: l.product.sku,
         qtyMilli: l.qtyMilli, unitPriceCents: l.unitPriceCents,
         lineTotalCents: lineTotalCents(l.unitPriceCents, l.qtyMilli),
         costCents: l.product.costCents || 0, // v1.7 cost snapshot, as the server does
+        // v1.11 per-line VAT frozen on the line, as the server does
+        taxType: demoVat(l.product).vatType, taxRate: vatLines[i].rate,
+        taxCents: priced.lines[i].taxCents, paidCents: priced.lines[i].paidCents,
       })),
       payments: [],
     }
