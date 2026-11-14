@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -66,6 +67,12 @@ func NewBuniCloud(edgeBase, edgeKey, deviceID, secretHash string) *BuniCloud {
 }
 
 func (b *BuniCloud) Name() string { return "buni" }
+
+// ErrSTKNotAvailable: the cloud has no M-Pesa prompt route for this store
+// (v1.9 per-store routing: only the founding business uses the platform
+// till; other shops are paid on their own till number until their own STK
+// route is verified). Not a transient error: the till stops offering STK.
+var ErrSTKNotAvailable = errors.New("stk_not_available")
 
 // BuniCheckoutPrefix marks payments whose STK checkout was issued through
 // the Buni cloud route (stored on payments.checkout_request_id). The
@@ -130,6 +137,9 @@ func (b *BuniCloud) InitiateSTK(ctx context.Context, req STKRequest) (STKRespons
 	dec := json.NewDecoder(resp.Body)
 	if err := dec.Decode(&out); err != nil {
 		return STKResponse{}, fmt.Errorf("buni proxy: bad response (%d)", resp.StatusCode)
+	}
+	if out.Error == "stk_not_available" {
+		return STKResponse{}, fmt.Errorf("buni proxy: %w", ErrSTKNotAvailable)
 	}
 	if resp.StatusCode != 200 || !out.OK {
 		return STKResponse{}, fmt.Errorf("buni proxy: %s", out.Error)

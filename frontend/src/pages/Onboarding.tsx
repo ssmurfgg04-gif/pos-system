@@ -38,7 +38,18 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     try {
       await api.put('/api/v1/settings', { values: { onboarding_done: 'true' } })
       await useBranding.getState().load()
-      toast.success('Shop ready', 'Karibu, add your products in Inventory, or go sell.')
+      // v1.9: this shop gets its OWN space in LedgerPOS Cloud (it used to
+      // queue under whichever business owned the cloud's only store).
+      // Offline is fine: the shop works, and Settings → Payments / Team
+      // can connect it later.
+      let cloudNote = ''
+      try {
+        await api.post('/api/v1/team-sync/register-business', {})
+      } catch (e: any) {
+        const msg = String(e?.message || '')
+        if (!/already connected/i.test(msg)) cloudNote = ' You can connect the shop to LedgerPOS Cloud later in Settings.'
+      }
+      toast.success('Shop ready', 'Karibu, add your products in Inventory, or go sell.' + cloudNote)
       // Continue means CONTINUE: land on the main page immediately instead of
       // waiting for a second click on the success banner.
       onDone()

@@ -25,6 +25,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -58,7 +59,11 @@ func (s *Service) buniUsable() bool {
 	if !s.cloudEdgeAvailable() {
 		return false
 	}
-	return s.buniViaCloud() && s.settings.GetBool("buni_enabled", true)
+	// stk_available mirrors the cloud's payment profile for THIS store
+	// (business.go). Unknown → true, so a till that has not fetched it yet
+	// keeps working; the cloud refuses (and we learn) if it is not allowed.
+	return s.buniViaCloud() && s.settings.GetBool("buni_enabled", true) &&
+		s.settings.GetBool("stk_available", true)
 }
 
 // buniCloud builds the provider for the current link, or nil. Cached on
@@ -159,7 +164,13 @@ func (s *Service) buniMpesaSTK(ctx context.Context, order *models.Order, pay *mo
 		// string into something a cashier can act on. Same semantics: leg
 		// FAILED, order stays PENDING, money only ever moves on callback.
 		msg := err.Error()
-		if strings.Contains(msg, "Duplicated MSISDN") || strings.Contains(msg, "existing USSD Session") {
+		if errors.Is(err, mpesa.ErrSTKNotAvailable) {
+			// This store takes M-Pesa on its own till number: remember it so
+			// checkout stops offering the prompt, and tell the cashier what
+			// to do instead.
+			_ = s.settings.Set("stk_available", "false")
+			err = fmt.Errorf("%w: %v", ErrNotConfigured, ErrSTKNotAvailable)
+		} else if strings.Contains(msg, "Duplicated MSISDN") || strings.Contains(msg, "existing USSD Session") {
 			err = fmt.Errorf("the customer's phone already has an active M-Pesa session (KCB: Duplicated MSISDN) — let them finish or cancel it, then retry")
 		}
 		s.db.Exec(s.db.Rebind(`UPDATE payments SET status = 'FAILED', result_desc = ? WHERE id = ? AND status = 'PENDING'`),

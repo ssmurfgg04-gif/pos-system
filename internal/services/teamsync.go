@@ -605,6 +605,13 @@ func (c *syncClient) registerCloud(s *Service, version string) error {
 	if !out.OK {
 		return fmt.Errorf("register: %s", out.Error)
 	}
+	// v1.9: the cloud moved an APPROVED till to another store (an owner
+	// reassignment). Events it queued for the old store must not ride into
+	// the new one: quarantine them, exactly like a join-link team change.
+	if prev := s.settings.Get("sync_team_code"); out.TeamCode != "" && prev != "" &&
+		prev != out.TeamCode && s.settings.GetBool("sync_approved", false) {
+		s.QuarantineOutboxForTeamChange(prev, out.TeamCode)
+	}
 	_ = s.settings.Set("sync_registered", "true")
 	_ = s.settings.Set("sync_approved", boolStr(out.Approved))
 	if out.TeamCode != "" {

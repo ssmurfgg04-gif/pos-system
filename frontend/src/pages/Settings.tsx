@@ -27,6 +27,7 @@ import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
+import { PaymentProfilePanel } from '../components/PaymentProfilePanel'
 import { centsToAmount } from '../lib/money'
 import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck, Undo2, LifeBuoy, KeyRound, Smartphone } from 'lucide-react'
 
@@ -272,8 +273,7 @@ export function Settings() {
             <div className="sm:col-span-2 flex flex-wrap items-start justify-between gap-2 bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
               <p className="min-w-56 flex-1">
                 <strong className="text-ink inline-flex items-center gap-1.5"><Smartphone size={15} strokeWidth={2.25} aria-hidden />M-Pesa payments.</strong>{' '}
-                Card checkout rode the retired Paystack rail and was removed in v1.4.4; KCB Buni STK is the electronic tender.
-                Staff only touch the Till / Paybill numbers below.
+                Every shop is paid on its own numbers. Set them below; nothing secret is stored on this machine.
               </p>
               <div className="flex items-center gap-2">
                 {payConfig ? (
@@ -295,38 +295,7 @@ export function Settings() {
               </div>
             </div>
 
-            <div className="sm:col-span-2 border-t-2 border-line pt-3 mt-1">
-              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">M-Pesa</p>
-              <p className="text-[13px] text-ink-muted">
-                <strong className="text-ink">M-Pesa is connected for you.</strong> When card payments are connected above,
-                the M-Pesa button at checkout sends a real STK prompt to the customer's phone and the sale completes
-                only after the money is confirmed. Manual receipt-code entry always works, even offline.
-              </p>
-              {payConfig && (
-                <p className="text-[12px] mt-1.5">
-                  Current route:{' '}
-                  <strong className={
-                    payConfig.mpesa.route === 'paystack' || payConfig.mpesa.route === 'daraja' || payConfig.mpesa.route === 'buni'
-                      ? 'text-paid-text'
-                      : payConfig.mpesa.route === 'mock'
-                        ? 'text-pending-text'
-                        : 'text-ink-muted'
-                  }>
-                    {payConfig.mpesa.route === 'buni' ? 'KCB Buni M-Pesa STK push (real money)'
-                      : payConfig.mpesa.route === 'paystack' ? 'Automatic STK push (real money)'
-                      : payConfig.mpesa.route === 'daraja' ? 'Safaricom Daraja (real money)'
-                      : payConfig.mpesa.route === 'mock' ? 'Training mode, no real money (ALLOW_MOCK_PAYMENTS)'
-                      : 'Manual receipt code, no STK configured'}
-                  </strong>
-                </p>
-              )}
-            </div>
-            <Field label="Till number" hint="Shown to customers when paying manually">
-              <Input value={values.till_number ?? ''} onChange={(e) => set('till_number', e.target.value)} inputMode="numeric" />
-            </Field>
-            <Field label="Paybill number">
-              <Input value={values.paybill_number ?? ''} onChange={(e) => set('paybill_number', e.target.value)} inputMode="numeric" />
-            </Field>
+            <PaymentProfilePanel />
             <Field label="Default M-Pesa mode at checkout" hint="Used when automatic STK is unavailable.">
               <Select value={values.payment_mode ?? 'auto'} onChange={(e) => set('payment_mode', e.target.value)}>
                 <option value="auto">Auto, STK push with manual fallback</option>
@@ -334,10 +303,6 @@ export function Settings() {
                 <option value="manual">Manual receipt code only</option>
               </Select>
             </Field>
-            <p className="sm:col-span-2 text-[12px] text-ink-subtle">
-              Payment connections are managed for you, nothing to paste or store on this machine.
-              Till / Paybill numbers here are shown to customers paying by M-Pesa manually.
-            </p>
           </div>
         )}
 

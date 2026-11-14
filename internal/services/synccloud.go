@@ -106,6 +106,19 @@ func (s *Service) ensureCloudBootstrap() *cloudBootstrap {
 // row carries its project_url; the registry is read from the constant) so
 // tests can point the client at a fake cloud.
 func (s *Service) resolveCloudStore() *cloudBootstrap {
+	// v1.9: membership is the cloud's decision (sync_devices, returned by
+	// sync_register), never the registry's. A till the cloud has approved
+	// into a team keeps that team on every refresh — otherwise a till of a
+	// second business would be flipped back to the founding store's team
+	// by the legacy single-store fallback below.
+	if team := s.settings.Get("sync_team_code"); team != "" && s.settings.GetBool("sync_approved", false) {
+		projectURL := strings.TrimRight(cloudBaseURL, "/")
+		if bs, err := fetchBootstrap(); err == nil && bs.ProjectURL != "" {
+			projectURL = strings.TrimRight(bs.ProjectURL, "/")
+		}
+		return &cloudBootstrap{ProjectURL: projectURL, TeamCode: team,
+			AutoApprove: s.settings.GetBool("sync_auto_approve", false)}
+	}
 	stores, serr := fetchStores()
 	// cloudBaseURL is the host the registry was read from (the constant in
 	// production, the fake server in tests) — never point the sync client

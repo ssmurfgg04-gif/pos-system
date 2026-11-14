@@ -216,3 +216,27 @@ func TestSignupDisabledByDefault(t *testing.T) {
 		t.Fatalf("signup without ALLOW_SIGNUP should 403, got %d", w.Code)
 	}
 }
+
+// v1.9: a newly signed-up shop starts EMPTY — no demo print-shop products,
+// stock or batches (they used to be seeded into every signup and looked
+// like the first shop's data leaking into the new one).
+func TestSignupShopStartsWithoutDemoCatalog(t *testing.T) {
+	t.Setenv("ALLOW_SIGNUP", "true")
+	engine, _, _, _ := newTestServer(t)
+	tok, _ := signup(t, engine, "freshowner", "freshpass987", "Fresh Shop Ltd")
+	w := do(t, engine, "GET", "/api/v1/products", tok, nil)
+	if w.Code != 200 {
+		t.Fatalf("products: %d", w.Code)
+	}
+	if n := len(decode(t, w)["data"].([]any)); n != 0 {
+		t.Fatalf("a new shop must start with no products, got %d", n)
+	}
+	// ...but it can add its first product straight away (category 1 exists).
+	w = do(t, engine, "POST", "/api/v1/products", tok, map[string]any{
+		"sku": "F1", "name": "First Item", "categoryId": 1,
+		"priceCents": 500, "costCents": 200, "stockQtyMilli": 3000, "trackStock": true,
+	})
+	if w.Code != 201 && w.Code != 200 {
+		t.Fatalf("first product: %d %s", w.Code, w.Body.String())
+	}
+}
