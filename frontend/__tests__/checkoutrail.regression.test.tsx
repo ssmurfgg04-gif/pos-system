@@ -69,6 +69,12 @@ function mount(el: React.ReactElement) {
   act(() => {
     root!.render(el)
   })
+  // v1.10 two-step rail: the cart step shows the lines + one Charge button;
+  // tapping it opens the payment form these tests exercise.
+  const toPay = [...container.querySelectorAll('button')].find(
+    (b) => /^Charge /.test(b.textContent || '') && !(b as HTMLButtonElement).disabled,
+  )
+  if (toPay) act(() => { toPay.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
 }
 
 function unmount() {
@@ -313,5 +319,26 @@ describe('Tab charge — the button is never a dead end', () => {
     const charge = chargeBtn()!
     expect(charge.disabled).toBe(false)
     expect(charge.textContent).toMatch(/Charge KES 550\.00 to tab/)
+  })
+})
+
+describe('Two-step rail — every cart line stays visible', () => {
+  afterEach(unmount)
+  test('cart step lists all lines with one Charge button; Edit from the payment step returns to them', () => {
+    useCart.setState({ lines: [1, 2, 3, 4, 5].map((i) => line({ productId: i, name: `Item ${i}` })) })
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    act(() => { root!.render(<CheckoutRail products={null} payConfig={null} onOrderPaid={() => {}} onOrderVoided={() => {}} />) })
+    const removeBtns = () => container.querySelectorAll('button[aria-label$="from cart"]').length
+    expect(removeBtns()).toBe(5)
+    expect(container.textContent).not.toContain('Customer phone')
+    const charge = [...container.querySelectorAll('button')].find((b) => /^Charge /.test(b.textContent || ''))!
+    act(() => { charge.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(removeBtns()).toBe(0)
+    expect(container.textContent).toContain('5 items')
+    const back = container.querySelector('button[aria-label^="Back to the cart"]') as HTMLButtonElement
+    act(() => { back.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(removeBtns()).toBe(5)
   })
 })

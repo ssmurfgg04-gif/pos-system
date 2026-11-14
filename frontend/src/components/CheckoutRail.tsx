@@ -26,7 +26,7 @@ import { enqueue, newClientUuid } from '../offline/queue'
 import { useNet } from '../offline/heartbeat'
 import { PAID_HOLD_MS, openCustomerDisplay, publishDisplay, railDisplayState } from '../lib/customerDisplay'
 import { withBase } from '../lib/router'
-import { ShoppingCart, Smartphone, Banknote, BookUser, Wallet, X, Minus, Plus, Check, AlertTriangle, RotateCcw, Ban, Star, SplitSquareHorizontal, Pause, Archive, Trash2, Share2, BadgePercent, MonitorSmartphone } from 'lucide-react'
+import { ShoppingCart, Smartphone, Banknote, BookUser, Wallet, X, Minus, Plus, Check, AlertTriangle, RotateCcw, Ban, Star, SplitSquareHorizontal, Pause, Archive, Trash2, Share2, BadgePercent, MonitorSmartphone, ChevronLeft } from 'lucide-react'
 
 type Method = 'mpesa' | 'cash' | 'tab' | 'credit'
 type StkStage = 'sending' | 'sent' | 'waiting' | 'slow' | 'paid' | 'failed'
@@ -93,6 +93,11 @@ export function CheckoutRail({
   const [payError, setPayError] = useState('')
   const [receiptOpen, setReceiptOpen] = useState(false)
   const [parkOpen, setParkOpen] = useState(false)
+  // Two-step rail: 'cart' gives the item list the whole height (every line
+  // visible, one Charge button); 'pay' gives the payment form the space and
+  // folds the items into a one-line summary. The payment inputs live in this
+  // component, so going back to the cart and returning keeps them.
+  const [step, setStep] = useState<'cart' | 'pay'>('cart')
   // F2 guard: the mobile sheet must not unmount a rail with a payment in
   // flight (poll timers die, cart stays, second charge becomes possible).
   const paymentBusy = mode !== 'idle' || receiptOpen || parkOpen
@@ -488,6 +493,10 @@ export function CheckoutRail({
   //   v1.1.6 white-screen crash ("Rendered fewer hooks than expected") the
   //   moment a sale entered the payment panel. productById lives ABOVE the
   //   early return for that reason; never move it back down.
+  useEffect(() => {
+    if (cart.lines.length === 0) setStep('cart')
+  }, [cart.lines.length])
+
   const productById = useMemo(() => {
     const m = new Map<number, Product>()
     for (const p of products ?? []) m.set(p.id, p)
@@ -578,13 +587,32 @@ export function CheckoutRail({
 
       {/* Items, compact rows (photo, name, inline stepper) so multi-item
           carts fit without scrolling the rail into a sliver */}
+      {step === 'pay' && cart.lines.length > 0 ? (
+        <button
+          type="button"
+          onClick={() => setStep('cart')}
+          className="mx-2.5 mt-2.5 shrink-0 flex items-center gap-2 rounded-input border border-line bg-surface px-3 py-2 text-left hover:bg-surface-muted"
+          aria-label="Back to the cart to see or change the items"
+        >
+          <ChevronLeft size={16} strokeWidth={2.5} className="text-ink-muted shrink-0" aria-hidden />
+          <span className="flex-1 min-w-0">
+            <span className="block text-[12.5px] font-bold text-ink">
+              {fmtQty(totals.count * 1000)} item{totals.count === 1 ? '' : 's'} · {formatMoney(totals.total)}
+            </span>
+            <span className="block text-[11px] text-ink-subtle truncate">
+              {cart.lines.map((l) => `${fmtQty(l.qtyMilli)}× ${l.name}`).join(', ')}
+            </span>
+          </span>
+          <span className="text-[12px] font-semibold text-brand shrink-0">Edit</span>
+        </button>
+      ) : (
       <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-2.5 space-y-1.5">
         {cart.lines.length === 0 ? (
           <EmptyState icon={<ShoppingCart size={24} strokeWidth={2.25} />} title="Cart is empty" body="Tap products or scan a barcode to add them." />
         ) : (
           cart.lines.map((l) => {
             return (
-              <div key={l.productId} className="flex gap-2 p-1.5 rounded-input border border-line bg-surface">
+              <div key={l.productId} className="flex gap-2 px-1.5 py-1 rounded-input border border-line bg-surface">
                 <Thumb p={productById.get(l.productId)} name={l.name} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-1.5">
@@ -597,8 +625,7 @@ export function CheckoutRail({
                       <X size={14} strokeWidth={2.5} aria-hidden />
                     </button>
                   </div>
-                  <p className="text-[10.5px] text-ink-subtle leading-tight">{l.sku || '\u00a0'}</p>
-                  <div className="flex items-center justify-between gap-2 mt-1">
+                  <div className="flex items-center justify-between gap-2 mt-0.5">
                     <div className="flex items-center border border-line-strong rounded-input overflow-hidden h-7">
                       <button
                         onClick={() => cart.setQty(l.productId, l.qtyMilli - 1000)}
@@ -627,14 +654,14 @@ export function CheckoutRail({
                         )
                       })()}
                     </div>
-                    <div className="text-right">
-                      <p className="font-bold text-[13px] text-ink tabular leading-none">{formatMoneyCompact(lineTotalCents(l.unitPriceCents, l.qtyMilli))}</p>
+                    <div className="flex items-baseline gap-2 text-right">
                       <button
                         onClick={() => { if (canOverride) { setEditing(l.productId); setOverrideVal(l.unitPriceCents) } else toast.error('Price override needs permission') }}
-                        className={`text-[11px] font-semibold mt-0.5 ${canOverride ? 'text-ink-subtle hover:text-ink underline' : 'text-ink-subtle'}`}
+                        className={`text-[11px] font-semibold ${canOverride ? 'text-ink-subtle hover:text-ink underline' : 'text-ink-subtle'}`}
                       >
                         @ {formatMoneyCompact(l.unitPriceCents)}
                       </button>
+                      <p className="font-bold text-[13px] text-ink tabular leading-none">{formatMoneyCompact(lineTotalCents(l.unitPriceCents, l.qtyMilli))}</p>
                     </div>
                   </div>
                 </div>
@@ -655,13 +682,14 @@ export function CheckoutRail({
           </div>
         )}
       </div>
+      )}
 
       {/* Totals + payment, the totals stay PINNED (money info never scrolls
           away) and the interactive payment form scrolls INSIDE the footer
           when it grows (split tender, M-Pesa panel, discounts): the items
           list above keeps its flex-1 share and neither region ever clips a
           button. pb-6 keeps rounded action cards off the window frame. */}
-      <footer className="border-t border-line bg-shell-edge rounded-b-card px-3.5 pt-2.5 pb-6 flex flex-col max-h-[68%] shrink-0">
+      <footer className={`border-t border-line bg-shell-edge rounded-b-card px-3.5 pt-2.5 pb-6 flex flex-col ${step === 'pay' && cart.lines.length > 0 ? 'flex-1 min-h-0 mt-2.5' : 'shrink-0'}`}>
         <div className="space-y-1 shrink-0 pb-2">
           <Row label="Subtotal" value={formatMoney(totals.subtotal)} />
           <Row label={`${branding.tax_percent}% ${branding.tax_included ? 'VAT (incl.)' : 'VAT'}`} value={formatMoney(totals.tax)} />
@@ -676,6 +704,17 @@ export function CheckoutRail({
             <Button variant="primary" size="lg" className="w-full h-[50px] text-base" disabled>
               Charge {formatMoney(totals.total)} →
             </Button>
+          </div>
+        ) : mode === 'idle' && step === 'cart' ? (
+          <div className="shrink-0 space-y-2">
+            <Button variant="primary" size="lg" className="w-full h-[50px] text-base" onClick={() => setStep('pay')}>
+              Charge {formatMoney(totals.total)} →
+            </Button>
+            {canHold && (
+              <Button variant="secondary" className="w-full" onClick={() => setParkOpen(true)}>
+                Park for later
+              </Button>
+            )}
           </div>
         ) : mode === 'idle' ? (
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain -mx-1 px-1">
@@ -725,7 +764,7 @@ function Row({ label, value }: { label: string; value: string }) {
 // right"), while the row stays compact enough for a multi-item cart.
 function Thumb({ p, name }: { p?: Product; name: string }) {
   return (
-    <div className="w-11 h-11 rounded-input overflow-hidden bg-surface-muted border border-line p-0.5 shrink-0 self-center" aria-hidden>
+    <div className="w-10 h-10 rounded-input overflow-hidden bg-surface-muted border border-line p-0.5 shrink-0 self-center" aria-hidden>
       <ProductPhoto p={p} name={name} />
     </div>
   )

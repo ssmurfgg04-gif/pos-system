@@ -17,6 +17,7 @@ import { centsToAmount, formatMoney } from '../lib/money'
 import { UNITS, fmtQty, isFractionUnit, parseQtyInput, unitLabel } from '../lib/qty'
 import { normalizeProductImage, PHOTO_ACCEPT } from '../lib/photo'
 import { toast } from '../stores/toasts'
+import { unitProfit } from '../lib/profit'
 import { lowStockAt } from '../lib/stock'
 import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2, Printer, History, PackageMinus, Layers, TriangleAlert } from 'lucide-react'
 import { fmtDateTime } from '../lib/when'
@@ -963,8 +964,9 @@ function ProductModal({
         <Field label="Selling price">
           <MoneyInput value={form.priceCents} onCents={(c) => setForm({ ...form, priceCents: c })} />
         </Field>
-        <Field label="Cost price" hint="Used for margin reports">
+        <Field label="Buying price" hint="What you pay the supplier for one. Profit = selling price - VAT - this">
           <MoneyInput value={form.costCents} onCents={(c) => setForm({ ...form, costCents: c })} />
+          <UnitProfitHint priceCents={form.priceCents} costCents={form.costCents} />
         </Field>
         <Field label="Wholesale price (KES)" hint="0 = same as retail; wholesale customers auto-get this price at the till">
           <MoneyInput value={form.wholesalePriceCents} onCents={(c) => setForm({ ...form, wholesalePriceCents: c })} />
@@ -1341,5 +1343,18 @@ function BatchesModal({ product, onClose, onChanged }: { product: Product; onClo
         {error && <p role="alert" className="text-[12px] font-bold text-danger-text">{error}</p>}
       </div>
     </Modal>
+  )
+}
+
+// v1.10 — live "you make KES X on each" under the buying price.
+function UnitProfitHint({ priceCents, costCents }: { priceCents: number; costCents: number }) {
+  const b = useBranding((st) => st.branding)
+  if (!costCents) return <p className="mt-1 text-[12px] text-pending-text">No buying price: sales of this item will show as unknown profit.</p>
+  const u = unitProfit(priceCents, costCents, Number(b.tax_percent) || 0, !!b.tax_included)
+  if (!u) return null
+  return (
+    <p className={`mt-1 text-[12px] font-semibold ${u.profitCents >= 0 ? 'text-paid-text' : 'text-danger-text'}`}>
+      {u.profitCents >= 0 ? 'You make ' : 'You LOSE '}{formatMoney(Math.abs(u.profitCents))} on each ({u.marginPct.toFixed(1)}%){Number(b.tax_percent) > 0 && b.tax_included ? ', after VAT' : ''}
+    </p>
   )
 }

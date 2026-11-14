@@ -978,6 +978,26 @@ function dayBounds(date: string) {
   return [date + 'T00:00:00', date + 'T23:59:59'] as const
 }
 
+// v1.10 profit block — the same rule as services.profitBlock on the server.
+function demoProfit(d: ReturnType<typeof load>, paid: { totalCents: number; taxCents: number; items: { productId: number; qtyMilli: number; lineTotalCents: number; costCents?: number }[] }[], expensesCents: number) {
+  let cogs = 0, uncostedLines = 0, uncostedSalesCents = 0
+  const sales = paid.reduce((s, o) => s + o.totalCents, 0)
+  const vat = paid.reduce((s, o) => s + (o.taxCents || 0), 0)
+  for (const o of paid) for (const it of o.items) {
+    const unit = (it.costCents && it.costCents > 0) ? it.costCents : (d.products.find((p) => p.id === it.productId)?.costCents ?? 0)
+    if (unit <= 0) { uncostedLines++; uncostedSalesCents += it.lineTotalCents }
+    else cogs += Math.round(unit * it.qtyMilli / 1000)
+  }
+  const profit = sales - vat - cogs
+  return {
+    cogsCents: cogs, grossProfitCents: sales - cogs,
+    marginPct: sales > 0 ? Math.round(((sales - cogs) / sales) * 1000) / 10 : 0,
+    disposalCount: 0, disposalValueCents: 0,
+    salesVatCents: vat, profitCents: profit, netProfitCents: profit - expensesCents,
+    uncostedLines, uncostedSalesCents,
+  }
+}
+
 function dailySummary(date: string) {
   const d = load()
   const day = date || new Date().toISOString().slice(0, 10)
@@ -1028,6 +1048,7 @@ function dailySummary(date: string) {
     expensesCents, returnsCents, returnsCount: dayReturns.length,
     netSalesCents: sales - returnsCents,
     stockQtyMilli: Math.round(stockQtyMilli), stockValueCents, lowStockCount,
+    ...demoProfit(d, paid, expensesCents),
   }
 }
 
@@ -1059,6 +1080,7 @@ function monthlySummary(month: string) {
       topMap.set(it.productId, cur)
     }
   }
+  const monthExpenses = ((d as DemoDBX).expenses || []).filter((e) => e.spentOn.slice(0, 7) === m).reduce((s, e) => s + e.amountCents, 0)
   return {
     month: m, grossCents: gross, nettCents: gross - vat, vatCents: vat,
     ordersPaid: paid.length,
@@ -1072,8 +1094,9 @@ function monthlySummary(month: string) {
     series,
     topProducts: [...topMap.values()].sort((a, b) => b.salesCents - a.salesCents).slice(0, 10),
     // v1.6.3 — expenses booked in the month + refunds given out.
-    expensesCents: ((d as DemoDBX).expenses || []).filter((e) => e.spentOn.slice(0, 7) === m).reduce((s, e) => s + e.amountCents, 0),
+    expensesCents: monthExpenses,
     returnsCents: ((d as DemoDBX).returns || []).filter((r) => r.createdAt.slice(0, 7) === m).reduce((s, r) => s + r.totalCents, 0),
+    ...demoProfit(d, paid, monthExpenses),
   }
 }
 
@@ -1811,6 +1834,7 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
         id: d.seq.item++, productId: l.product.id, name: l.product.name, sku: l.product.sku,
         qtyMilli: l.qtyMilli, unitPriceCents: l.unitPriceCents,
         lineTotalCents: lineTotalCents(l.unitPriceCents, l.qtyMilli),
+        costCents: l.product.costCents || 0, // v1.7 cost snapshot, as the server does
       })),
       payments: [],
     }

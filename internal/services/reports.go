@@ -42,6 +42,7 @@ type DailySummary struct {
 	MarginPct          float64 `json:"marginPct"`          // profit / sales * 100
 	DisposalCount      int     `json:"disposalCount"`      // DISPOSAL ledger rows today
 	DisposalValueCents int64   `json:"disposalValueCents"` // qty x product cost written off today
+	ProfitBlock
 }
 
 // TillSales is one originating till's slice of a reporting window (v19:
@@ -233,6 +234,7 @@ func (s *Service) GetDailySummary(date string) (*DailySummary, error) {
 		FROM stock_movements m LEFT JOIN products p ON p.id = m.product_id
 		WHERE m.kind = 'DISPOSAL' AND m.created_at >= ? AND m.created_at < ?`), from, to).
 		Scan(&out.DisposalCount, &out.DisposalValueCents)
+	out.ProfitBlock = s.profitBlock(from, to, out.SalesCents, out.CogsCents, out.ExpensesCents, out.DisposalValueCents)
 	return out, nil
 }
 
@@ -322,6 +324,41 @@ type MonthlySummary struct {
 	MarginPct          float64 `json:"marginPct"`
 	DisposalCount      int     `json:"disposalCount"`
 	DisposalValueCents int64   `json:"disposalValueCents"`
+	ProfitBlock
+}
+
+// ProfitBlock (v1.10) — "sell minus buying price", stated the way a
+// shopkeeper reads it:
+//
+//	ProfitCents     = paid sales - VAT on them - buying price of the goods
+//	                  (VAT is KRA's money, never the shop's profit)
+//	NetProfitCents  = ProfitCents - expenses - stock written off
+//
+// Lines sold with NO buying price (none on the line and none on the
+// product) are counted separately: they make profit look bigger than it
+// is, so the owner is told how much of the sales they cover.
+type ProfitBlock struct {
+	SalesVatCents      int64 `json:"salesVatCents"`
+	ProfitCents        int64 `json:"profitCents"`
+	NetProfitCents     int64 `json:"netProfitCents"`
+	UncostedLines      int   `json:"uncostedLines"`
+	UncostedSalesCents int64 `json:"uncostedSalesCents"`
+}
+
+// profitBlock fills a ProfitBlock for paid orders in [from, to).
+func (s *Service) profitBlock(from, to string, sales, cogs, expenses, disposal int64) ProfitBlock {
+	var pb ProfitBlock
+	_ = s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(SUM(tax_cents),0) FROM orders
+		WHERE status = 'PAID' AND created_at >= ? AND created_at < ?`), from, to).Scan(&pb.SalesVatCents)
+	_ = s.db.QueryRow(s.db.Rebind(`
+		SELECT COUNT(*), COALESCE(SUM(oi.line_total_cents),0)
+		FROM order_items oi JOIN orders o ON o.id = oi.order_id LEFT JOIN products p ON p.id = oi.product_id
+		WHERE o.status = 'PAID' AND o.created_at >= ? AND o.created_at < ?
+		  AND COALESCE(oi.cost_cents,0) <= 0 AND COALESCE(p.cost_cents,0) <= 0`), from, to).
+		Scan(&pb.UncostedLines, &pb.UncostedSalesCents)
+	pb.ProfitCents = sales - pb.SalesVatCents - cogs
+	pb.NetProfitCents = pb.ProfitCents - expenses - disposal
+	return pb
 }
 
 // monthBounds returns the UTC window [from, toExcl) covering one EAT
@@ -441,6 +478,7 @@ func (s *Service) GetMonthlySummary(month string) (*MonthlySummary, error) {
 		FROM stock_movements m LEFT JOIN products p ON p.id = m.product_id
 		WHERE m.kind = 'DISPOSAL' AND m.created_at >= ? AND m.created_at < ?`), from, to).
 		Scan(&out.DisposalCount, &out.DisposalValueCents)
+	out.ProfitBlock = s.profitBlock(from, to, out.GrossCents, out.CogsCents, out.ExpensesCents, out.DisposalValueCents)
 	return out, nil
 }
 

@@ -669,6 +669,12 @@ export interface DailySummary {
   marginPct?: number
   disposalCount?: number
   disposalValueCents?: number
+  /** v1.10 — sell minus buying price, after VAT; net after expenses. */
+  salesVatCents?: number
+  profitCents?: number
+  netProfitCents?: number
+  uncostedLines?: number
+  uncostedSalesCents?: number
   /** P6 multi-store: present (with per-shop rows) on the ?shop=all consolidated view. */
   consolidated?: boolean
   shops?: { id: string; name: string; salesCents: number; ordersPaid: number; cashCents: number; mpesaCents: number; paystackCents: number; creditCents: number; ordersVoided?: number; discrepancies?: number }[]
@@ -700,6 +706,12 @@ export interface MonthlySummary {
   marginPct?: number
   disposalCount?: number
   disposalValueCents?: number
+  /** v1.10 — sell minus buying price, after VAT; net after expenses. */
+  salesVatCents?: number
+  profitCents?: number
+  netProfitCents?: number
+  uncostedLines?: number
+  uncostedSalesCents?: number
 }
 
 export interface BackupResult {
