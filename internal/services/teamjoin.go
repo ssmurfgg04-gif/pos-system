@@ -187,6 +187,12 @@ func (s *Service) TeamJoinWithLink(link, name, pin string) (models.TeamJoinInfo,
 	if !auth.ValidPIN(pin) {
 		return info, fmt.Errorf("choose a 4-digit PIN that isn't an obvious pattern like 0000 or 1234")
 	}
+	// v1.9: a join link is for a FRESH till. One that already holds a
+	// shop's data must never be pulled into another team (the cloud call
+	// below consumes the link and moves the device, so check first).
+	if err := s.guardFreshTillForJoin(); err != nil {
+		return info, err
+	}
 
 	// 1. The cloud decides: is this token real, alive, and unused?
 	var res struct {

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	"posapp/internal/auth"
 	"posapp/internal/models"
+	"posapp/internal/services"
 )
 
 type loginBody struct {
@@ -394,14 +396,22 @@ func (h *H) TeamJoin(c *gin.Context) {
 		h.fail(c, 429, "too many attempts, wait a minute")
 		return
 	}
-	svc := h.svc(c)
+	// Public route: the shop is the one the request names (?shop=, as the
+	// PIN pad does), never silently the server's default. The fresh-till
+	// guard in TeamJoinWithLink refuses a shop that already has data, so a
+	// join can no longer re-point a live shop at another team.
+	svc, err := h.shopSvc(c)
+	if err != nil {
+		h.fail(c, 404, "unknown shop")
+		return
+	}
 	info, err := svc.TeamJoinWithLink(body.Link, body.Name, body.PIN)
 	if err != nil {
-		h.fail(c, 422, err.Error())
+		h.fail(c, joinRefusal(err), err.Error())
 		return
 	}
 	// Registry routing so the new worker can log in on multi-shop servers.
-	shopID := h.shopID(c)
+	shopID := h.publicShopID(c)
 	if h.Tenants != nil {
 		if err := h.Tenants.RegisterUser(info.Username, shopID); err != nil {
 			h.fail(c, 409, err.Error())
@@ -459,14 +469,22 @@ func (h *H) OwnerSignin(c *gin.Context) {
 		h.fail(c, 429, "too many attempts, wait a minute")
 		return
 	}
-	svc := h.svc(c)
+	svc, err := h.shopSvc(c)
+	if err != nil {
+		h.fail(c, 404, "unknown shop")
+		return
+	}
 	info, err := svc.OwnerCloudSignin(body.Username, body.Password, body.DeviceName)
 	if err != nil {
+		if errors.Is(err, services.ErrTillHasShopData) {
+			h.fail(c, 409, err.Error())
+			return
+		}
 		h.fail(c, 401, err.Error())
 		return
 	}
 	// Registry routing so the owner can log in on multi-shop servers.
-	shopID := h.shopID(c)
+	shopID := h.publicShopID(c)
 	if h.Tenants != nil {
 		if err := h.Tenants.RegisterUser(info.Username, shopID); err != nil {
 			h.fail(c, 409, err.Error())

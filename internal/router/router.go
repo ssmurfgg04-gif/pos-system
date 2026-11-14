@@ -319,6 +319,11 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	ts.POST("/team-sync/use-cloud", h.TeamSyncUseCloud)
 	// Multi-store: stores under one owner cloud + device assignment.
 	ts.POST("/team-sync/stores", h.TeamStoreCreate)
+	// v1.9: a shop registers as its OWN business in the cloud.
+	ts.POST("/team-sync/register-business", h.TeamRegisterBusiness)
+	// v1.9: where this store's M-Pesa money goes (own till / own STK).
+	ts.GET("/payments/profile", h.PaymentProfileGet)
+	ts.PUT("/payments/profile", h.PaymentProfileSet)
 	ts.POST("/team-sync/assign", h.TeamDeviceAssign)
 	ts.POST("/team-sync/remove", h.TeamDeviceRemove)
 	ts.POST("/team-sync/approve", h.TeamDeviceApprove)

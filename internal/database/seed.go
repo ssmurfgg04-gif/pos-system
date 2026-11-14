@@ -341,8 +341,14 @@ func (d *DB) SeedShop(storeName, adminUser, adminPass string) error {
 	if err := d.seedRoles(); err != nil {
 		return fmt.Errorf("seed roles: %w", err)
 	}
-	if err := d.seedCatalog(); err != nil {
-		return fmt.Errorf("seed catalog: %w", err)
+	// v1.9: a real new shop starts EMPTY. Seeding the demo print-shop
+	// catalog here put another shop's T-shirts, hoodies, stock counts and
+	// expiry batches into every signup — it looked like shop 1's data had
+	// leaked in. The demo catalog stays opt-in (Seed with SEED_DEMO=true).
+	// One neutral category so the owner can add a product immediately.
+	if _, err := d.Exec(d.Rebind(`INSERT INTO categories (name, slug, sort_order)
+                SELECT 'General', 'general', 0 WHERE NOT EXISTS (SELECT 1 FROM categories)`)); err != nil {
+		return fmt.Errorf("seed category: %w", err)
 	}
 	pwHash, err := hash.Password(adminPass)
 	if err != nil {

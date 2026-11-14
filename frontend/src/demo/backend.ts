@@ -2849,6 +2849,41 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     // reachability, the demo till is always cloud-linked, so teach that.
     throw new ApiError(409, 'No team code needed, this till already found its team in the cloud automatically. Codes are only for tills that cannot reach the cloud.')
   }
+  // v1.9: one cloud, many businesses. The demo till already owns its own
+  // business; payments use the demo's own till number (no real STK).
+  if (m === 'POST' && p === '/team-sync/register-business') {
+    requirePerm(perms, 'settings.manage')
+    throw new ApiError(422, 'this till is already connected to a business in LedgerPOS Cloud')
+  }
+  if (m === 'GET' && p === '/payments/profile') {
+    requirePerm(perms, 'settings.manage')
+    return {
+      stkMode: 'manual', stkAvailable: false,
+      tillNumber: d.settings.till_number || '', paybillNumber: d.settings.paybill_number || '',
+      displayName: d.settings.store_name || '', orgShortcode: '', ownRequested: false,
+      ownVerified: false, hasPasskey: false, linked: true,
+    } as T
+  }
+  if (m === 'PUT' && p === '/payments/profile') {
+    requirePerm(perms, 'settings.manage')
+    const req = body as { stkMode?: string; tillNumber?: string; paybillNumber?: string; displayName?: string; orgShortcode?: string }
+    const digits = (v?: string) => (v || '').replace(/\s/g, '')
+    for (const v of [req.tillNumber, req.paybillNumber, req.orgShortcode]) {
+      if (!/^\d{0,10}$/.test(digits(v))) throw new ApiError(422, 'till, paybill and short code are digits only (up to 10)')
+    }
+    if (req.stkMode === 'own' && !digits(req.orgShortcode)) throw new ApiError(422, 'enter the short code M-Pesa prompts should pay')
+    d.settings.till_number = digits(req.tillNumber)
+    d.settings.paybill_number = digits(req.paybillNumber)
+    audit(user.id, user.username, 'PAYMENT_PROFILE_SAVED', 'settings', '', req.stkMode || 'manual')
+    persist()
+    const own = req.stkMode === 'own'
+    return {
+      stkMode: own ? 'own' : 'manual', stkAvailable: false,
+      tillNumber: d.settings.till_number, paybillNumber: d.settings.paybill_number,
+      displayName: (req.displayName || '').slice(0, 40), orgShortcode: own ? digits(req.orgShortcode) : '',
+      ownRequested: own, ownVerified: false, hasPasskey: false, linked: true,
+    } as T
+  }
   if (m === 'POST' && p === '/team-sync/stores') {
     requirePerm(perms, 'settings.manage')
     const req = body as { name?: string; slug?: string }
