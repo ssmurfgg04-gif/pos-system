@@ -5,8 +5,9 @@ name: Tag a release
 # the Actions tab (or the API) with the version number.
 #
 # Guards: main only, version must be new, must be x.y.z, and CHANGELOG.md
-# must already have an entry for it. Pushes with RELEASES_TOKEN because a
-# tag pushed with the default GITHUB_TOKEN does not start other workflows.
+# must already have an entry for it. A tag pushed with the default token
+# does not start other workflows, so this job starts the release run on
+# the new tag itself (a run on a tag ref publishes, like a tag push).
 
 on:
   workflow_dispatch:
@@ -17,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: ledgerpos-tag
@@ -38,7 +40,7 @@ jobs:
       - name: Validate and tag
         env:
           VERSION: ${{ inputs.version }}
-          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -54,10 +56,6 @@ jobs:
           git config user.name "ledgerpos-release"
           git config user.email "release@ledgerpos.local"
           git tag -a "$TAG" -m "LedgerPOS $VERSION"
-          if [ -z "${RELEASES_TOKEN:-}" ]; then
-            echo "::error::RELEASES_TOKEN repo secret is missing: a tag pushed with the default token would not start the release."
-            exit 1
-          fi
-          # same push form the release workflow uses for its manifest commit
-          git push "https://x-access-token:${RELEASES_TOKEN}@github.com/${{ github.repository }}.git" "refs/tags/$TAG"
+          git push origin "refs/tags/$TAG"
+          gh workflow run release.yml --repo "${{ github.repository }}" --ref "$TAG"
           echo "Tagged $(git rev-parse --short HEAD) as $TAG" >> "$GITHUB_STEP_SUMMARY"
