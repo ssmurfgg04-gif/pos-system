@@ -24,7 +24,9 @@ import { shareReceiptWhatsapp } from '../lib/receipt-share'
 import { toast } from '../stores/toasts'
 import { enqueue, newClientUuid } from '../offline/queue'
 import { useNet } from '../offline/heartbeat'
-import { ShoppingCart, Smartphone, Banknote, BookUser, Wallet, X, Minus, Plus, Check, AlertTriangle, RotateCcw, Ban, Star, SplitSquareHorizontal, Pause, Archive, Trash2, Share2, BadgePercent } from 'lucide-react'
+import { PAID_HOLD_MS, openCustomerDisplay, publishDisplay, railDisplayState } from '../lib/customerDisplay'
+import { withBase } from '../lib/router'
+import { ShoppingCart, Smartphone, Banknote, BookUser, Wallet, X, Minus, Plus, Check, AlertTriangle, RotateCcw, Ban, Star, SplitSquareHorizontal, Pause, Archive, Trash2, Share2, BadgePercent, MonitorSmartphone } from 'lucide-react'
 
 type Method = 'mpesa' | 'cash' | 'tab' | 'credit'
 type StkStage = 'sending' | 'sent' | 'waiting' | 'slow' | 'paid' | 'failed'
@@ -98,6 +100,19 @@ export function CheckoutRail({
     onBusyChange?.(paymentBusy)
   }, [paymentBusy, onBusyChange])
 
+  // ---- Customer display feed (lib/customerDisplay) ----
+  // The rail is mounted twice on small screens (desktop aside hidden by
+  // CSS + the mobile sheet): only the instance the cashier can SEE
+  // publishes, detected by a marker that has no offsetParent when hidden.
+  const displayMarker = useRef<HTMLSpanElement>(null)
+  const paidHoldUntil = useRef(0)
+  const isVisibleInstance = () => !!displayMarker.current && displayMarker.current.offsetParent !== null
+  const displayBrand = {
+    storeName: branding.store_name || branding.app_name,
+    logoUrl: branding.brand_logo_url,
+    color: branding.brand_color,
+  }
+
   const pollRef = useRef<number | null>(null)
   const timerRef = useRef<number | null>(null)
 
@@ -156,6 +171,16 @@ export function CheckoutRail({
   // reset. The offline queue reports a null order; skip the chime there.
   const handlePaid = (o: Order | null) => {
     if (o) celebrate()
+    // customer screen: "Asante" + change, held while the cart resets
+    if (o && isVisibleInstance()) {
+      paidHoldUntil.current = Date.now() + PAID_HOLD_MS
+      publishDisplay({
+        kind: 'paid',
+        brand: displayBrand,
+        total: formatMoney(o.totalCents),
+        change: change !== null && change > 0 ? formatMoney(change) : undefined,
+      })
+    }
     onOrderPaid(o as Order)
   }
 
@@ -180,6 +205,27 @@ export function CheckoutRail({
 
   const change = received !== null ? received - tenderDue : null
   const canCash = received === null || (change !== null && change >= 0)
+
+  useEffect(() => {
+    if (!isVisibleInstance()) return
+    const state = railDisplayState({
+      brand: displayBrand,
+      lines: cart.lines,
+      dueCents: tenderDue,
+      discountCents: canDiscount ? Math.min(discountCents, totals.subtotal) : 0,
+      receivedCents: method === 'cash' ? received : null,
+      pending: mode !== 'idle' && activeOrder
+        ? { number: activeOrder.number, totalCents: activeOrder.totalCents, payments: activeOrder.payments, stkStage, manualOnly }
+        : null,
+      till: branding,
+      holdingPaid: Date.now() < paidHoldUntil.current,
+      fmt: formatMoney,
+    })
+    if (state) publishDisplay(state)
+    // a new item after a sale starts the next customer's screen at once
+    if (cart.lines.length > 0) paidHoldUntil.current = 0
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart.lines, tenderDue, discountCents, received, method, mode, activeOrder, stkStage, manualOnly, branding])
 
   // Kenyan phone sanity for the M-Pesa tile ("Required for M-Pesa").
   const normalizedPhone = normalizePhoneKe(phone)
@@ -463,6 +509,7 @@ export function CheckoutRail({
   if (mode !== 'idle' && activeOrder) {
     return (
       <>
+        <span ref={displayMarker} aria-hidden className="sr-only" />
         <PaymentPanel
           mode={mode}
           stkStage={stkStage}
@@ -495,6 +542,7 @@ export function CheckoutRail({
 
   return (
     <div className="h-full flex flex-col">
+      <span ref={displayMarker} aria-hidden className="sr-only" />
       {/* Rail header */}
       <header className="px-4 pt-4 pb-3 border-b border-line flex items-center justify-between gap-3 bg-surface rounded-t-card shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -510,6 +558,12 @@ export function CheckoutRail({
           </div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* desktop-only: a phone can't drive a second window */}
+          <span className="hidden lg:inline-flex">
+            <Button size="sm" variant="ghost" onClick={() => openCustomerDisplay(withBase)} title="Open the customer screen (drag it to a second monitor facing the customer)">
+              <MonitorSmartphone size={14} strokeWidth={2.5} aria-hidden />
+            </Button>
+          </span>
           {canHold && onOpenHeld && (
             <Button size="sm" variant="ghost" onClick={onOpenHeld} title="Parked sales">
               <Archive size={14} strokeWidth={2.5} aria-hidden />
@@ -845,7 +899,7 @@ function PaymentForm(props: {
         </label>
         {branding.kra_pin ? (
           <label className="block col-span-2 -mt-1">
-            <span className="block text-[12px] font-semibold text-ink-muted mb-0.5">Buyer KRA PIN <span className="font-normal text-ink-subtle">(optional, makes it a tax invoice)</span></span>
+            <span className="block text-[12px] font-semibold text-ink-muted mb-0.5">Buyer KRA PIN <span className="font-normal text-ink-subtle">(optional, printed on the invoice)</span></span>
             <Input
               value={buyerPin}
               onChange={(e) => setBuyerPin(e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase())}

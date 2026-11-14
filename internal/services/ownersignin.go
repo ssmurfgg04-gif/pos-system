@@ -39,6 +39,11 @@ func (s *Service) OwnerCloudSignin(username, password, deviceName string) (model
 	if len(password) > 128 {
 		return info, fmt.Errorf("wrong username or password")
 	}
+	// v1.9: owner sign-in brings an EXISTING business onto a fresh till; a
+	// till already holding a shop's data must not be merged into it.
+	if err := s.guardFreshTillForJoin(); err != nil {
+		return info, err
+	}
 
 	// 1. The cloud decides: are these portal credentials real?
 	var res struct {

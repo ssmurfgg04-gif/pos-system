@@ -210,11 +210,16 @@ export function ReceiptModal({ order, branding, open, onClose }: {
           {branding.app_name && branding.app_name !== store && (
             <p className="text-[10px] text-ink-muted">{branding.app_name}</p>
           )}
-          {/* eTIMS (P6): a buyer KRA PIN on the order makes this a tax
-              invoice, print the header plus both PINs so the document is
-              ready for the KRA electronic tax invoice rules. */}
+          {/* A buyer KRA PIN makes this an INVOICE with both PINs on it, but
+              NOT a tax invoice: only an invoice transmitted to KRA eTIMS
+              (control-unit number + QR) lets the buyer claim input VAT, and
+              LedgerPOS does not transmit yet. Saying "TAX INVOICE" here
+              would mislead the buyer's accountant. */}
           {order.buyerPin && (
-            <p className="font-bold text-[12px] tracking-widest uppercase mt-1">TAX INVOICE</p>
+            <>
+              <p className="font-bold text-[12px] tracking-widest uppercase mt-1">Invoice</p>
+              <p className="text-[10px] text-ink-muted">Not an eTIMS tax invoice</p>
+            </>
           )}
           {branding.kra_pin && (
             <p className="text-[10px] text-ink-muted">KRA PIN: {branding.kra_pin}</p>

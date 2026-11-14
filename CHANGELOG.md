@@ -3,6 +3,59 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.9.0 — One cloud, many businesses; weighed goods and expiry dates
+
+The first release where LedgerPOS can be sold to a second business. Until
+now the cloud assumed one shop: every new install joined Main Store, new
+shops showed the first shop's demo stock, and every M-Pesa prompt said the
+same name and paid the same till. This release also ships the v1.8.0 work
+(weighed quantities, batches and expiry) that was never released on its own.
+
+- **Each business is its own cloud.** A shop set up from scratch now
+  registers as a new business with its own store and owner till. Store
+  lists, store creation and the waiting-device pool only show your own
+  business, and the store registry is no longer readable by anyone with
+  the app key. Fresh devices never auto-join someone else's shop.
+- **Join links join the right team.** A join link or owner sign-in is
+  refused on a till that already holds products, sales or customers, so
+  a working shop can't be pulled into another team by accident, and an
+  approved till keeps its team. If the cloud does move a till, its unsent
+  events are held back instead of landing in the new team.
+- **New shops start empty.** No demo print-shop products or stock in a
+  new shop: one "General" category and nothing else.
+- **Each shop is paid on its own numbers.** Settings → Payments has a new
+  **Where customers pay** panel: your till or paybill and the name
+  customers see. Our own stores keep the shared KCB till as before.
+  Another business gets prompts to its own short code once that short
+  code is verified, and until then the prompt is refused and the
+  customer pays the shop's till directly, so no money lands on the wrong
+  till.
+- **Owner login can't be taken over.** Once an owner account exists, no
+  till can overwrite it, and owner usernames are unique.
+- **Weighed goods (from v1.8.0).** Products have a unit (pc, kg, g, l,
+  ml, pack, box, dozen, m) and the till sells fractions: 0.5 kg, 250 g.
+  Quantities are stored as whole thousandths, like cents for money, so
+  totals never drift. Receipts, reports and CSV all show the real amount.
+- **Batches and expiry (from v1.8.0).** Goods-in can record a batch
+  number and expiry date. Sales take the batch that expires first, a loss
+  can name the batch, and a new expiry report shows what is about to go
+  off.
+- **Customer screen.** A second monitor facing the customer shows each
+  item and the total, the change, and for M-Pesa the exact amount and the
+  till or paybill to pay. Open it from the monitor icon in the cart.
+- **Receipts are honest about tax.** A receipt with a buyer KRA PIN now
+  says **INVOICE** and "Not an eTIMS tax invoice" instead of TAX INVOICE,
+  until real eTIMS submission lands.
+- **Phones and screens.** The app now fits on a phone. Stock badges read
+  "46 in stock" and "3 left", the 7-day chart no longer clips, dates are
+  day-first everywhere (14 Nov 2026), and inventory actions are clearer.
+- **Under the hood:** migrations v27/v28 (milli quantities, batches) and
+  v29 (indexes on 7 foreign-key columns), cloud schema
+  `db/deploy-v190-multitenant.sql` and `db/deploy-v171.sql` (internal
+  sign-in helpers locked), `buni-stkpush` routes per store, CI deploys
+  only from main and only after tests pass, and the nightly COGS test
+  flake is fixed.
+
 ## v1.7.0 — Shopkeeper's ledger: margin, opening balances, reversals, disposals
 
 The second wave of the deep research (the friend's SmartPOS schema — 54

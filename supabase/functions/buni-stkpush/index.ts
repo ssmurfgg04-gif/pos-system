@@ -22,7 +22,20 @@
 //   { p_device_id, p_secret_hash, phone, amount (cents), invoice_ref,
 //     order_number, client_uuid? }
 //   -> { ok, merchant_request_id, checkout_request_id, customer_message }
-//      | { ok:false, error }  (401 device, 503 no keys, 400 bad input, 502 kcb)
+//      | { ok:false, error }  (401 device, 503 no keys, 400 bad input, 502 kcb,
+//                              409 stk_not_available)
+//
+// Per-store routing (v1.9, db/deploy-v190-multitenant.sql): every push asks
+// stk_route_for_team() where THIS store's money goes.
+//   shared → the platform's KCB till (BUNI_TILL). Founding business only;
+//            the request is byte-for-byte the pre-v1.9 one.
+//   own    → the shop's own short code (sharedShortCode=false), only once
+//            the platform has verified it live (own_verified). The prompt
+//            carries the shop's name.
+//   manual / anything else → 409 stk_not_available: the till falls back to
+//            "pay to our till number + enter the code", so another business's
+//            money can never land on the platform's till.
+// A failed lookup fails CLOSED (503): no route, no push.
 const SB_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
@@ -52,6 +65,36 @@ async function deviceOK(deviceId: string, secretHash: string): Promise<string> {
   const rows = await r.json();
   if (!Array.isArray(rows) || rows.length !== 1) return "";
   return String(rows[0].team_code ?? "");
+}
+
+type StkRoute = {
+  stk_mode: string;
+  own_verified: boolean;
+  org_shortcode: string;
+  org_passkey: string;
+  display_name: string;
+  is_platform: boolean;
+};
+
+async function routeFor(team: string): Promise<StkRoute | null> {
+  const r = await fetch(`${SB_URL}/rest/v1/rpc/stk_route_for_team`, {
+    method: "POST",
+    headers: {
+      apikey: SB_KEY,
+      Authorization: `Bearer ${SB_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ p_team: team }),
+  });
+  if (!r.ok) return null;
+  const j = await r.json().catch(() => null);
+  if (!j || typeof j !== "object" || !("stk_mode" in j)) return null;
+  return j as StkRoute;
+}
+
+// <=13 chars, letters/digits/spaces: what the customer's prompt shows.
+function promptName(name: string): string {
+  return name.replace(/[^A-Za-z0-9 ]/g, "").replace(/\s+/g, " ").trim().slice(0, 13) || "LedgerPOS";
 }
 
 // Buni OAuth (client_credentials), cached until ~120s before expiry.
@@ -90,9 +133,24 @@ Deno.serve(async (req) => {
   const team = await deviceOK(String(b.p_device_id ?? ""), String(b.p_secret_hash ?? ""));
   if (!team) return json({ ok: false, error: "device not recognized" }, 401);
 
+  const route = await routeFor(team);
+  if (!route) return json({ ok: false, error: "payment route unavailable, try again" }, 503);
+  const shared = route.stk_mode === "shared" && route.is_platform === true;
+  const own = route.stk_mode === "own" && route.own_verified === true &&
+    /^[0-9]{5,10}$/.test(route.org_shortcode ?? "");
+  if (!shared && !own) {
+    return json({
+      ok: false,
+      error: "stk_not_available",
+      message: "M-Pesa prompts are not set up for this shop yet. Ask the customer to pay your till number and enter the M-Pesa code.",
+    }, 409);
+  }
+
   const key = (Deno.env.get("BUNI_CONSUMER_KEY") ?? "").trim();
   const secret = (Deno.env.get("BUNI_CONSUMER_SECRET") ?? "").trim();
-  const till = (Deno.env.get("BUNI_TILL") ?? "").trim();
+  // the short code that receives the money: the platform till (shared) or
+  // the shop's own (own)
+  const till = shared ? (Deno.env.get("BUNI_TILL") ?? "").trim() : route.org_shortcode.trim();
   if (!key || !secret || !till || !CALLBACK_URL) {
     return json({ ok: false, error: "buni keys not configured" }, 503);
   }
@@ -131,11 +189,11 @@ Deno.serve(async (req) => {
       phoneNumber: phone,
       amount,
       invoiceNumber,
-      sharedShortCode: true,
-      orgShortCode: "",
-      orgPassKey: "",
+      sharedShortCode: shared,
+      orgShortCode: shared ? "" : till,
+      orgPassKey: shared ? "" : (route.org_passkey ?? ""),
       callbackUrl: CALLBACK_URL,
-      transactionDescription: "LedgerPOS",
+      transactionDescription: shared ? "LedgerPOS" : promptName(route.display_name ?? ""),
     }),
   });
   const pj = await pushRes.json().catch(() => null);

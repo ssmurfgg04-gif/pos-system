@@ -17,7 +17,9 @@ import { centsToAmount, formatMoney } from '../lib/money'
 import { UNITS, fmtQty, isFractionUnit, parseQtyInput, unitLabel } from '../lib/qty'
 import { normalizeProductImage, PHOTO_ACCEPT } from '../lib/photo'
 import { toast } from '../stores/toasts'
-import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2, Printer, History, Layers, TriangleAlert } from 'lucide-react'
+import { lowStockAt } from '../lib/stock'
+import { Package, Upload, Download, Plus, PackagePlus, Image as ImageIcon, Pencil, Trash2, Printer, History, PackageMinus, Layers, TriangleAlert } from 'lucide-react'
+import { fmtDateTime } from '../lib/when'
 
 /** Editor preview: the product's CURRENT best photo (uploaded first, then
  *  the demo's bundled fallback) — unlike the thumbnails this must NOT walk
@@ -34,15 +36,6 @@ function ProductThumb({ p }: { p: Product }) {
       <ProductPhoto p={p} />
     </span>
   )
-}
-
-// v1.6.3 per-product low-stock threshold: the product's own lowStockUnits
-// wins when set (>0), otherwise the shop default. The page previously
-// hardcoded 5 — that constant stays the fallback (the server's global
-// low_stock_threshold setting defaults to 5 too; the /products/low-stock
-// report computes this authoritatively server-side).
-function lowStockAt(p: Product): number {
-  return (p.lowStockUnits ?? 0) > 0 ? (p.lowStockUnits as number) : 5
 }
 
 /** v1.8.0 expiry badge tone for a YYYY-MM-DD date ('' = undated). */
@@ -281,7 +274,7 @@ export function Inventory() {
                 size="sm"
                 onClick={doPrintLabels}
                 disabled={labelPicks.length === 0}
-                title="Print price labels with Code128 barcodes"
+                title={labelPicks.length ? 'Print price labels with Code128 barcodes' : 'Tick products in the list below to print their price labels'}
               >
                 <Printer size={14} strokeWidth={2.5} aria-hidden />
                 Print labels{labelPicks.length ? ` (${labelPicks.length})` : ''}
@@ -416,6 +409,12 @@ export function Inventory() {
                   {canManage && (
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                       <span className="inline-flex items-center gap-1">
+                        {p.active && (
+                          <Button size="sm" variant="ghost" onClick={() => setEditing(p)}>
+                            <Pencil size={14} strokeWidth={2.5} aria-hidden />
+                            Edit
+                          </Button>
+                        )}
                         <Button size="sm" variant="ghost" onClick={() => openHistory(p)} title="Stock ledger — sales, adjustments, counts">
                           <History size={14} strokeWidth={2.5} aria-hidden />
                           History
@@ -428,7 +427,7 @@ export function Inventory() {
                         )}
                         {p.trackStock && p.active && (
                           <Button size="sm" variant="ghost" onClick={() => setDisposeFor(p)} title="Record a loss — expired, spoilt, lost or damaged">
-                            <Trash2 size={14} strokeWidth={2.5} aria-hidden />
+                            <PackageMinus size={14} strokeWidth={2.5} aria-hidden />
                             Loss
                           </Button>
                         )}
@@ -438,7 +437,6 @@ export function Inventory() {
                             Batches
                           </Button>
                         )}
-                        <Button size="sm" variant="ghost" onClick={() => setEditing(p)} disabled={!p.active}>Edit</Button>
                         {p.active ? (
                           <Button
                             size="sm"
@@ -557,7 +555,7 @@ export function Inventory() {
                 const meta = MOVEMENT_META[m.kind] ?? { label: m.kind, cls: 'bg-void-bg text-void-text' }
                 return (
                   <tr key={m.id}>
-                    <td className="px-3 py-2 text-[12px] text-ink-subtle whitespace-nowrap">{new Date(m.createdAt).toLocaleString()}</td>
+                    <td className="px-3 py-2 text-[12px] text-ink-subtle whitespace-nowrap">{fmtDateTime(m.createdAt)}</td>
                     <td className="px-3 py-2">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-pill text-[11px] font-bold whitespace-nowrap ${meta.cls}`}>
                         {meta.label}

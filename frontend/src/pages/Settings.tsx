@@ -27,8 +27,10 @@ import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
 import { Button, Card, EmptyState, Field, Input, Select, Spinner, StatusPill, Table, Tabs, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
+import { PaymentProfilePanel } from '../components/PaymentProfilePanel'
 import { centsToAmount } from '../lib/money'
 import { Printer, DatabaseBackup, HardDriveDownload, RotateCcw, RefreshCw, MonitorSmartphone, Cloud, AlertTriangle, ShieldCheck, Store, UserPlus, Trash2, Copy, Check, Link2, CircleCheck, Undo2, LifeBuoy, KeyRound, Smartphone } from 'lucide-react'
+import { fmtDate, fmtDateTime } from '../lib/when'
 
 type SettingsMap = Record<string, string>
 
@@ -251,7 +253,7 @@ export function Settings() {
             <Field label="Receipt footer" hint="Printed at the bottom of every receipt">
               <Textarea value={values.receipt_footer ?? ''} onChange={(e) => set('receipt_footer', e.target.value)} />
             </Field>
-            <Field label="KRA PIN (eTIMS)" hint="Your business KRA PIN, when set, receipts print it and checkout offers a buyer PIN for tax invoices.">
+            <Field label="KRA PIN (eTIMS)" hint="Your business KRA PIN. Receipts print it and checkout can add the buyer's PIN. LedgerPOS does not send invoices to KRA eTIMS yet, so these are not eTIMS tax invoices.">
               <Input
                 value={values.kra_pin ?? ''}
                 onChange={(e) => set('kra_pin', e.target.value.toUpperCase())}
@@ -272,8 +274,7 @@ export function Settings() {
             <div className="sm:col-span-2 flex flex-wrap items-start justify-between gap-2 bg-surface-muted border-2 border-line rounded-input p-3 text-[13px] text-ink-muted">
               <p className="min-w-56 flex-1">
                 <strong className="text-ink inline-flex items-center gap-1.5"><Smartphone size={15} strokeWidth={2.25} aria-hidden />M-Pesa payments.</strong>{' '}
-                Card checkout rode the retired Paystack rail and was removed in v1.4.4; KCB Buni STK is the electronic tender.
-                Staff only touch the Till / Paybill numbers below.
+                Every shop is paid on its own numbers. Set them below; nothing secret is stored on this machine.
               </p>
               <div className="flex items-center gap-2">
                 {payConfig ? (
@@ -295,38 +296,7 @@ export function Settings() {
               </div>
             </div>
 
-            <div className="sm:col-span-2 border-t-2 border-line pt-3 mt-1">
-              <p className="text-[12px] uppercase font-bold text-ink-muted mb-1.5">M-Pesa</p>
-              <p className="text-[13px] text-ink-muted">
-                <strong className="text-ink">M-Pesa is connected for you.</strong> When card payments are connected above,
-                the M-Pesa button at checkout sends a real STK prompt to the customer's phone and the sale completes
-                only after the money is confirmed. Manual receipt-code entry always works, even offline.
-              </p>
-              {payConfig && (
-                <p className="text-[12px] mt-1.5">
-                  Current route:{' '}
-                  <strong className={
-                    payConfig.mpesa.route === 'paystack' || payConfig.mpesa.route === 'daraja' || payConfig.mpesa.route === 'buni'
-                      ? 'text-paid-text'
-                      : payConfig.mpesa.route === 'mock'
-                        ? 'text-pending-text'
-                        : 'text-ink-muted'
-                  }>
-                    {payConfig.mpesa.route === 'buni' ? 'KCB Buni M-Pesa STK push (real money)'
-                      : payConfig.mpesa.route === 'paystack' ? 'Automatic STK push (real money)'
-                      : payConfig.mpesa.route === 'daraja' ? 'Safaricom Daraja (real money)'
-                      : payConfig.mpesa.route === 'mock' ? 'Training mode, no real money (ALLOW_MOCK_PAYMENTS)'
-                      : 'Manual receipt code, no STK configured'}
-                  </strong>
-                </p>
-              )}
-            </div>
-            <Field label="Till number" hint="Shown to customers when paying manually">
-              <Input value={values.till_number ?? ''} onChange={(e) => set('till_number', e.target.value)} inputMode="numeric" />
-            </Field>
-            <Field label="Paybill number">
-              <Input value={values.paybill_number ?? ''} onChange={(e) => set('paybill_number', e.target.value)} inputMode="numeric" />
-            </Field>
+            <PaymentProfilePanel />
             <Field label="Default M-Pesa mode at checkout" hint="Used when automatic STK is unavailable.">
               <Select value={values.payment_mode ?? 'auto'} onChange={(e) => set('payment_mode', e.target.value)}>
                 <option value="auto">Auto, STK push with manual fallback</option>
@@ -334,10 +304,6 @@ export function Settings() {
                 <option value="manual">Manual receipt code only</option>
               </Select>
             </Field>
-            <p className="sm:col-span-2 text-[12px] text-ink-subtle">
-              Payment connections are managed for you, nothing to paste or store on this machine.
-              Till / Paybill numbers here are shown to customers paying by M-Pesa manually.
-            </p>
           </div>
         )}
 
@@ -527,7 +493,7 @@ export function Settings() {
                     <tr key={b.file}>
                       <td className="px-3 py-2 font-mono text-[12px] text-ink">{b.file}</td>
                       <td className="px-3 py-2 tabular text-ink-muted">{(b.bytes / 1024).toFixed(0)} KB</td>
-                      <td className="px-3 py-2 text-[12px] text-ink-subtle">{new Date(b.at).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-[12px] text-ink-subtle">{fmtDateTime(b.at)}</td>
                     </tr>
                   ))}
                 </Table>
@@ -683,7 +649,7 @@ export function Settings() {
               ) : (
                 <div className="text-[13px] space-y-1">
                   {offsite.pending > 0 && <p className="font-bold text-pending-text">{offsite.pending} upload(s) queued, retrying automatically.</p>}
-                  {offsite.lastOk && <p className="text-paid-text">Last upload: <span className="font-mono text-[12px]">{offsite.lastOk}</span> ({offsite.lastAt ? new Date(offsite.lastAt).toLocaleString() : ''})</p>}
+                  {offsite.lastOk && <p className="text-paid-text">Last upload: <span className="font-mono text-[12px]">{offsite.lastOk}</span> ({offsite.lastAt ? fmtDateTime(offsite.lastAt) : ''})</p>}
                   {offsite.lastError && <p className="text-danger-text font-semibold">Last error: {offsite.lastError}</p>}
                   {!offsite.lastOk && !offsite.lastError && offsite.pending === 0 && <p className="text-ink-muted">No uploads yet, take a backup above.</p>}
                   <Button size="sm" variant="ghost" onClick={() => api.get<OffsiteStatus>('/api/v1/system/offsite').then(setOffsite).catch(() => undefined)}>Refresh status</Button>
@@ -702,7 +668,7 @@ export function Settings() {
             <Table head={['When', 'Who', 'Action', 'Entity', 'Details']}>
               {audit.map((a) => (
                 <tr key={a.id}>
-                  <td className="px-3 py-2 text-[12px] text-ink-subtle whitespace-nowrap">{new Date(a.createdAt).toLocaleString()}</td>
+                  <td className="px-3 py-2 text-[12px] text-ink-subtle whitespace-nowrap">{fmtDateTime(a.createdAt)}</td>
                   <td className="px-3 py-2 text-[13px] font-semibold text-ink">{a.username || 'system'}</td>
                   <td className="px-3 py-2"><span className="font-mono text-[11px] bg-surface-muted border border-line rounded px-1.5 py-0.5">{a.action}</span></td>
                   <td className="px-3 py-2 text-[12px] text-ink-muted">{a.entity}{a.entityId ? ` #${a.entityId}` : ''}</td>
@@ -1455,8 +1421,8 @@ function TeamSyncPanel() {
               </div>
             )}
             <div className="grid sm:grid-cols-2 gap-x-4 gap-y-1 text-[12px] text-ink-muted">
-              <span>Last push: <span className="tabular text-ink">{status.lastPush ? new Date(status.lastPush).toLocaleString() : 'never'}</span></span>
-              <span>Last pull: <span className="tabular text-ink">{status.lastPull ? new Date(status.lastPull).toLocaleString() : 'never'}</span></span>
+              <span>Last push: <span className="tabular text-ink">{status.lastPush ? fmtDateTime(status.lastPush) : 'never'}</span></span>
+              <span>Last pull: <span className="tabular text-ink">{status.lastPull ? fmtDateTime(status.lastPull) : 'never'}</span></span>
             </div>
             {/* The awaiting-approval box above already explains this state calmly; showing
                 the raw sync error in red too read as "something is broken" (VLM round). */}
@@ -1497,7 +1463,7 @@ function TeamSyncPanel() {
                     </td>
                     <td className="px-3 py-2 font-mono text-[12px] text-ink-muted">{d.appVersion || '-'}</td>
                     <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">
-                      {d.lastSeen ? new Date(d.lastSeen).toLocaleString() : 'never'}
+                      {d.lastSeen ? fmtDateTime(d.lastSeen) : 'never'}
                     </td>
                     <td className="px-3 py-2">
                       {d.revoked
@@ -1682,7 +1648,7 @@ function TeamSyncPanel() {
                           )}
                         </td>
                         <td className="px-3 py-2 text-[12px] text-ink-muted">{r.deviceName || r.deviceId.slice(0, 8)}</td>
-                        <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{new Date(r.createdAt).toLocaleString()}</td>
+                        <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{fmtDateTime(r.createdAt)}</td>
                         <td className="px-3 py-2">
                           <Input
                             value={resetPins[r.id] ?? ''}
@@ -1760,7 +1726,7 @@ function TeamSyncPanel() {
                           <tr key={inv.id}>
                             <td className="px-3 py-2 text-[13px] font-semibold text-ink">{inv.roleName}</td>
                             <td className="px-3 py-2 text-[12px] text-ink-muted">{inv.note || '-'}</td>
-                            <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{new Date(inv.createdAt).toLocaleDateString()}</td>
+                            <td className="px-3 py-2 text-[12px] text-ink-subtle tabular">{fmtDate(inv.createdAt)}</td>
                             <td className="px-3 py-2">
                               <StatusPill status={state === 'active' ? 'paid' : state === 'used' ? 'info' : 'pending'}
                                 label={state === 'active' ? 'Waiting' : state === 'used' ? 'Used' : state} />

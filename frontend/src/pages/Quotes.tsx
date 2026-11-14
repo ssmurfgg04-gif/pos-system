@@ -28,6 +28,7 @@ import {
   FileText, Plus, Printer, Search, Trash2, Send, CircleCheck, CircleX,
   ShoppingCart, Pencil, X,
 } from 'lucide-react'
+import { fmtDate, fmtDateTime } from '../lib/when'
 
 const STATUS_FILTERS: { key: string; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -558,7 +559,7 @@ function QuoteDetail({
           </div>
           <div>
             <p className="text-[11px] font-bold text-ink-muted uppercase">Created</p>
-            <p className="text-ink">{new Date(quote.createdAt).toLocaleString()}</p>
+            <p className="text-ink">{fmtDateTime(quote.createdAt)}</p>
             <p className="text-[12px] text-ink-muted">by {quote.createdByName}</p>
           </div>
         </div>
@@ -691,7 +692,7 @@ function QuotePrint({ quote, onClose }: { quote: Quote; onClose: () => void }) {
           <div className="text-right">
             <p className="font-black text-lg tracking-tight">QUOTATION</p>
             <p className="font-mono text-[12px]">{quote.quoteNo}</p>
-            <p className="text-[11.5px] text-black/70">{new Date(quote.createdAt).toLocaleDateString()}</p>
+            <p className="text-[11.5px] text-black/70">{fmtDate(quote.createdAt)}</p>
           </div>
         </div>
         <div className="mb-3">

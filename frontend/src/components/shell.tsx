@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../stores/auth'
 import { useBranding } from '../stores/branding'
 import { usePosSearch } from '../stores/search'
@@ -118,6 +118,18 @@ export function AppShell({ current, children }: { current: string; children: Rea
   const items = NAV.filter((n) => !n.perm || user?.permissions.includes(n.perm))
   const active = (to: string) => (to === '/' ? current === '/' : current.startsWith(to))
 
+  // Below lg the nav is a horizontal strip that scrolls; keep the current
+  // page's tab visible instead of leaving it off-screen to the right.
+  const navRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const nav = navRef.current
+    if (!nav || nav.scrollWidth <= nav.clientWidth) return
+    const tab = nav.querySelector<HTMLElement>('[aria-current="page"]')
+    if (!tab) return
+    const left = tab.offsetLeft - (nav.clientWidth - tab.offsetWidth) / 2
+    nav.scrollTo({ left: Math.max(0, left), behavior: 'auto' })
+  }, [current])
+
   return (
     <div className="h-full flex flex-col bg-shell">
       {updateNote && (
@@ -168,8 +180,10 @@ export function AppShell({ current, children }: { current: string; children: Rea
           </select>
         )}
 
-        {/* Global catalog search, drives the Sell screen filter */}
-        <div className="hidden md:block flex-1 max-w-xl mx-auto">
+        {/* Global catalog search, drives the Sell screen filter. Hidden ON the
+            Sell screen: it shares state with that screen's own scan box, so
+            showing both put two mirrored search fields on one page. */}
+        <div className={`${current === '/' ? 'hidden' : 'hidden md:block'} flex-1 max-w-xl mx-auto`}>
           <div className="relative">
             <Search size={15} strokeWidth={2.5} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-subtle pointer-events-none" aria-hidden />
             <input
@@ -242,10 +256,13 @@ export function AppShell({ current, children }: { current: string; children: Rea
 
       <OfflineBanner />
 
-      <div className="flex-1 min-h-0 flex">
-        {/* Dark slim navigation rail, 190px at desktop, icon strip below lg */}
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
+        {/* Dark slim navigation rail, 190px at desktop; below lg a horizontally
+            scrolling strip ABOVE the content (the wrapper stacks as a column —
+            as a row, the unshrinkable strip pushed the page ~1000px wide) */}
         <nav
-          className="bg-sidebar flex lg:flex-col items-center lg:items-stretch gap-1 p-2 lg:p-2.5 lg:w-[190px] shrink-0 overflow-x-auto lg:overflow-y-auto lg:overflow-x-hidden"
+          ref={navRef}
+          className="bg-sidebar flex lg:flex-col items-center lg:items-stretch gap-1 p-2 lg:p-2.5 w-full lg:w-[190px] shrink-0 overflow-x-auto lg:overflow-y-auto lg:overflow-x-hidden"
           aria-label="Main"
         >
           {items.map((n) => {
