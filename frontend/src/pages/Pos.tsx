@@ -21,6 +21,7 @@ import { usePosSearch } from '../stores/search'
 import { formatMoney, formatMoneyCompact } from '../lib/money'
 import { fmtQty, isFractionUnit, parseQtyInput, unitLabel } from '../lib/qty'
 import { tierPriceCents } from '../lib/pricing'
+import { lowStockAt } from '../lib/stock'
 import { Button, EmptyState, Input, Modal, Spinner, ErrorBoundary } from '../components/ui'
 import { ProductPhoto } from '../components/ProductPhoto'
 import { CheckoutRail } from '../components/CheckoutRail'
@@ -424,7 +425,7 @@ export function Pos() {
       </div>
 
       {/* ── Checkout rail (desktop) ───────────────────────────────────── */}
-      <aside className="hidden lg:flex w-[430px] shrink-0 ml-4 min-h-0 bg-surface border border-line rounded-card shadow-brutal">
+      <aside className="hidden lg:flex lg:flex-col w-[430px] shrink-0 ml-4 min-h-0 bg-surface border border-line rounded-card shadow-brutal">
         {rail}
       </aside>
 
@@ -484,17 +485,17 @@ function CategoryChip({ active, onClick, children }: { active: boolean; onClick:
 function StockBadge({ p }: { p: Product }) {
   if (!p.trackStock) return null
   const out = p.stockQtyMilli <= 0
-  // Low-stock threshold in units (the card hardcodes the shop default 5
-  // like before — the report endpoint computes the per-product one).
-  const low = !out && p.stockQtyMilli <= 5000
+  // per-product threshold (lib/stock), in whole units → milli-units
+  const low = !out && p.stockQtyMilli <= lowStockAt(p) * 1000
   const label = `${fmtQty(p.stockQtyMilli)}${p.unit ? ` ${p.unit}` : ''}`
   return (
     <span
+      title={out ? 'Out of stock' : `${label} in stock`}
       className={`absolute top-1.5 right-1.5 z-10 px-1.5 py-0.5 rounded-pill text-[10px] font-bold tabular ${
         out ? 'bg-danger-bg text-danger-text' : low ? 'bg-pending-bg text-pending-text' : 'bg-surface-muted text-ink-subtle'
       }`}
     >
-      {out ? 'OUT' : low ? `${label} low` : label}
+      {out ? 'OUT' : low ? `${label} left` : `${label} in stock`}
     </span>
   )
 }
@@ -643,8 +644,8 @@ function ProductRow({ p, qty, onAdd, onInc, onDec, onAddMilli }: {
         <p className="text-[11px] text-ink-subtle">{p.sku || p.categoryName}</p>
       </button>
       {p.trackStock && (
-        <span className={`text-[10px] font-bold tabular whitespace-nowrap px-1.5 py-0.5 rounded-pill ${out ? 'bg-danger-bg text-danger-text' : 'bg-surface-muted text-ink-subtle'}`}>
-          {out ? 'OUT' : `${fmtQty(p.stockQtyMilli)}${p.unit ? ` ${p.unit}` : ''}`}
+        <span className={`text-[10px] font-bold tabular whitespace-nowrap px-1.5 py-0.5 rounded-pill ${out ? 'bg-danger-bg text-danger-text' : p.stockQtyMilli <= lowStockAt(p) * 1000 ? 'bg-pending-bg text-pending-text' : 'bg-surface-muted text-ink-subtle'}`}>
+          {out ? 'OUT' : `${fmtQty(p.stockQtyMilli)}${p.unit ? ` ${p.unit}` : ''} left`}
         </span>
       )}
       <span className={`font-bold text-[14px] tabular whitespace-nowrap ${inCart ? 'text-brand' : 'text-ink'}`}>{formatMoneyCompact(p.priceCents)}</span>

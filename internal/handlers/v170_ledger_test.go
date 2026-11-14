@@ -330,8 +330,8 @@ func TestV170SystemHealthPage(t *testing.T) {
 		t.Fatalf("health: %d %s", w.Code, w.Body.String())
 	}
 	h := dataMap(t, w)
-	if int64(h["schemaVersion"].(float64)) != 28 {
-		t.Fatalf("schemaVersion: want 28, got %v", h["schemaVersion"])
+	if int64(h["schemaVersion"].(float64)) != 29 {
+		t.Fatalf("schemaVersion: want 29, got %v", h["schemaVersion"])
 	}
 	if h["indexesOk"] != true {
 		t.Fatalf("indexes should be complete, missing: %v", h["indexesMissing"])

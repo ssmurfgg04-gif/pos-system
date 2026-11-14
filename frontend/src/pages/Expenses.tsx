@@ -14,6 +14,7 @@ import { centsToAmount, formatMoney } from '../lib/money'
 import { todayLocal } from '../lib/katime'
 import { toast } from '../stores/toasts'
 import { Wallet, Plus, Banknote, Smartphone, Landmark } from 'lucide-react'
+import { fmtDateTime } from '../lib/when'
 
 function MethodLabel({ method }: { method: string }) {
   return method === 'MPESA' ? (
@@ -95,7 +96,7 @@ export function Expenses() {
                 <td className="px-3 py-2.5 text-[13px] text-ink-muted">{e.reference || '—'}</td>
                 <td className="px-3 py-2.5 text-[13px] text-ink-muted max-w-52 truncate" title={e.note}>{e.note || '—'}</td>
                 <td className="px-3 py-2.5 text-[13px] text-ink-muted">{e.createdByName}</td>
-                <td className="px-3 py-2.5 text-[11px] text-ink-subtle">{new Date(e.createdAt).toLocaleString()}</td>
+                <td className="px-3 py-2.5 text-[11px] text-ink-subtle">{fmtDateTime(e.createdAt)}</td>
               </tr>
             ))}
           </Table>

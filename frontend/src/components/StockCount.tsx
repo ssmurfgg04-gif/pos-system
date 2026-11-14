@@ -14,6 +14,7 @@ import { centsToAmount, formatMoney } from '../lib/money'
 import { fmtQty } from '../lib/qty'
 import { toast } from '../stores/toasts'
 import { ClipboardList, ClipboardCheck, Plus } from 'lucide-react'
+import { fmtDateTime } from '../lib/when'
 
 export function StockCountPanel({ onChanged }: { onChanged?: () => void }) {
   const [counts, setCounts] = useState<StockCount[] | null>(null)
@@ -67,8 +68,8 @@ export function StockCountPanel({ onChanged }: { onChanged?: () => void }) {
                       label={c.status === 'OPEN' ? 'Open' : c.status === 'DONE' ? 'Closed' : 'Cancelled'}
                     />
                   </td>
-                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.openedAt ? new Date(c.openedAt).toLocaleString() : '-'}</td>
-                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.closedAt ? new Date(c.closedAt).toLocaleString() : '-'}</td>
+                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.openedAt ? fmtDateTime(c.openedAt) : '-'}</td>
+                  <td className="px-3 py-2.5 text-[12px] text-ink-muted whitespace-nowrap">{c.closedAt ? fmtDateTime(c.closedAt) : '-'}</td>
                   <td className="px-3 py-2.5 tabular text-[13px] font-semibold text-ink">{c.linesCounted}/{c.linesTotal}</td>
                   <td className={`px-3 py-2.5 text-[13px] font-bold tabular ${!closed ? 'text-ink-subtle' : shrink ? 'text-danger-text' : surplus ? 'text-paid-text' : 'text-ink-muted'}`}>
                     {closed
@@ -269,8 +270,8 @@ function CountDetail({ id, onClose, onChanged }: { id: number; onClose: () => vo
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill status={open ? 'progress' : count.status === 'DONE' ? 'paid' : 'void'} label={open ? 'Open' : count.status === 'DONE' ? 'Closed' : 'Cancelled'} />
           <span className="text-[12px] text-ink-muted">
-            Opened {count.openedAt ? new Date(count.openedAt).toLocaleString() : '-'} by {count.countedByName || '-'}
-            {count.closedAt ? ` · closed ${new Date(count.closedAt).toLocaleString()}` : ''}
+            Opened {count.openedAt ? fmtDateTime(count.openedAt) : '-'} by {count.countedByName || '-'}
+            {count.closedAt ? ` · closed ${fmtDateTime(count.closedAt)}` : ''}
           </span>
         </div>
 

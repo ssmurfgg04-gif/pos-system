@@ -13,6 +13,7 @@ import { formatMoney } from '../lib/money'
 import { Button, Card, EmptyState, Field, Input, Modal, Select, Spinner, StatusPill, Table, Textarea } from '../components/ui'
 import { toast } from '../stores/toasts'
 import { BookUser, Ticket, ReceiptText } from 'lucide-react'
+import { fmtDateTime } from '../lib/when'
 
 // Older backends may not send the prepaid balance yet — optional locally so
 // the shared Customer type stays untouched.
@@ -159,7 +160,7 @@ export function Customers() {
                 <td className="px-3 py-2">
                   <StatusPill status={o.status === 'PAID' ? 'paid' : o.status === 'PENDING' ? 'pending' : 'void'} label={o.status} />
                 </td>
-                <td className="px-3 py-2 text-[12px] text-ink-subtle">{new Date(o.paidAt || o.createdAt).toLocaleString()}</td>
+                <td className="px-3 py-2 text-[12px] text-ink-subtle">{fmtDateTime(o.paidAt || o.createdAt)}</td>
                 <td className="px-3 py-2 font-bold tabular text-ink">{formatMoney(o.totalCents)}</td>
               </tr>
             ))}
