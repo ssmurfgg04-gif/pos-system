@@ -1,4 +1,40 @@
 ---
+Task ID: v1.10.0
+Agent: main (Claude)
+Task: "Sort this out Integration of etims connect etims bro / Most ai vibecoded
+  pos can't do sell minus buying price therefore giving you your profit fix
+  this in ours / the right side when you keep past 2 items before sell it
+  starts going under the payment amount tab ... figure best way"
+
+Work Log:
+- Cart: reproduced at 1366x768 (5 items: payment form ~70% of the rail,
+  1.5 lines visible, Charge below the fold). Fixed with a two-step rail
+  (cart step: lines get the height + one Charge; pay step: items fold
+  into a summary with Edit). Payment inputs survive going back. Verified
+  at 1366x768 (8 items) and iPhone 13; regression tests drive Charge first.
+- Profit: costs were already snapshotted per sale line (v1.7) but only
+  shown inside Reports as gross margin incl. VAT. Added ProfitBlock
+  (sales - VAT - cost; net = - expenses - write-offs; uncosted lines) to
+  daily and monthly reports, ProfitPanel ladder, per-sale profit in the
+  order drawer (reports.view only), live per-item profit in the product
+  form, demo parity. Go + vitest tests.
+- eTIMS: researched KRA OSCU spec v2.0 (endpoints, field tables, code
+  lists 4.9-4.19). Architecture: cloud edge function `etims` holds the
+  cmcKey, numbers invoices per store under a row lock bound to the sale
+  (gapless across tills, retry-safe), registers items (/saveItem), signs
+  sales and credit notes (/saveTrnsSalesOsdc). Payload builder is pure TS
+  with exact-cent VAT-inclusive arithmetic (12 vitest cases). Till: v30
+  outbox scanned from PAID orders on this device since switch-on (covers
+  every payment path), worker on the sync loop with backoff, failed +
+  retry, stamp on orders/receipts (screen QR via qrcode, ESC/POS QR, SCU
+  block on the WhatsApp image). Cloud schema applied and probed (rolled
+  back): gapless numbers, retry reuse, anon locked out. Function deployed.
+- Blocked: Go QR library (fetching outside the module proxy was denied),
+  so the WhatsApp image has no QR yet; pg_net live test of functions.
+- Not verified live: no KRA sandbox credentials yet. Next: connect a
+  sandbox device and send one sale end to end.
+
+---
 Task ID: v1.9.1
 Agent: main (Claude)
 Task: "do thorough testing and checking and review of your work also implement any pending work"

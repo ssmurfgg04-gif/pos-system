@@ -3,6 +3,31 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.10.0 — KRA eTIMS, real profit, a cart that shows everything
+
+- **KRA eTIMS (OSCU).** Connect the shop's eTIMS device in Settings →
+  eTIMS and every paid sale is signed by KRA in the background. Receipts
+  become **TAX INVOICES** with the SCU number, signature and a
+  verification QR, on screen and on thermal paper. Returns go to KRA as
+  credit notes. Checkout never waits on KRA, offline sales queue, and the
+  cloud keeps one gapless invoice sequence across all tills in a shop.
+  Products register with KRA automatically; tax type (A to E) and KRA item
+  class can be set per product. See docs/ETIMS.md.
+- **Profit = sell minus buying price.** Reports now read: Sales − VAT −
+  buying price = **Profit**, then − expenses − write-offs = **What you
+  keep**. VAT never counts as profit. Items sold without a buying price
+  are flagged instead of quietly counting as 100% profit.
+- **Profit on every sale.** The order screen shows the profit on that sale
+  for owners and managers (cashiers never see buying prices), and the
+  product form shows "You make KES X on each" as you type.
+- **The cart shows every item.** The right side now gives the whole height
+  to the items with one big **Charge** button. Tapping it opens the
+  payment step, with the items folded into a "5 items · KES 3,500 · Edit"
+  bar. Before, the payment form covered everything after the second item.
+- Under the hood: migration v30 (eTIMS outbox, product tax type / class),
+  cloud schema `db/deploy-v1100-etims.sql` and the `etims` function, a
+  receipt that always loads the latest copy of the sale.
+
 ## v1.9.1 — Review fixes for the multi-business release
 
 - **Payment routes stay current.** Tills re-check where their M-Pesa money
