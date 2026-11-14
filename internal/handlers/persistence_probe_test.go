@@ -642,8 +642,8 @@ INSERT INTO order_items (order_id, product_id, name, qty, unit_price_cents, line
 	}
 	// Migration ran exactly once (current head: v28 — v27 milli-unit
 	// quantities + v28 batch/expiry lots with FEFO allocation).
-	if v := persistenceSchemaVersion(t, path); v != 29 {
-		t.Errorf("schema version after migrate = %d, want 29", v)
+	if v := persistenceSchemaVersion(t, path); v != 30 {
+		t.Errorf("schema version after migrate = %d, want 30", v)
 	}
 	if err := db.Migrate(); err != nil {
 		t.Errorf("re-migrate on old DB: %v", err)

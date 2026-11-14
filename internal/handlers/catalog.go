@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -34,6 +35,33 @@ type productBody struct {
 	// low-stock threshold (0 = use the global setting).
 	WholesalePriceCents int64 `json:"wholesalePriceCents"`
 	LowStockUnits       *int  `json:"lowStockUnits"`
+	// v1.10 KRA eTIMS: tax type A-E ('' = shop default) and KRA item
+	// class code ('' = shop default). nil = leave unchanged.
+	EtimsTaxType *string `json:"etimsTaxType"`
+	EtimsClsCd   *string `json:"etimsClsCd"`
+}
+
+// saveEtimsFields writes the optional eTIMS fields of a product body.
+func (h *H) saveEtimsFields(c *gin.Context, id int64, body productBody) error {
+	if body.EtimsTaxType != nil {
+		t := strings.ToUpper(strings.TrimSpace(*body.EtimsTaxType))
+		if t != "" && (len(t) != 1 || !strings.Contains("ABCDE", t)) {
+			return fmt.Errorf("eTIMS tax type is one of A, B, C, D, E")
+		}
+		if _, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE products SET etims_tax_type = ? WHERE id = ?`), t, id); err != nil {
+			return err
+		}
+	}
+	if body.EtimsClsCd != nil {
+		cls := strings.TrimSpace(*body.EtimsClsCd)
+		if cls != "" && !regexp.MustCompile(`^\d{1,10}$`).MatchString(cls) {
+			return fmt.Errorf("KRA item class is up to 10 digits")
+		}
+		if _, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE products SET etims_cls_cd = ? WHERE id = ?`), cls, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureProductCategory maps a missing category to the shared "Uncategorised"
@@ -71,7 +99,7 @@ func (h *H) scanProducts(rows *sql.Rows) []models.Product {
 		var catName, unit string
 		if err := rows.Scan(&pr.ID, &pr.SKU, &pr.Barcode, &pr.Name, &pr.CategoryID, &catName,
 			&pr.PriceCents, &pr.CostCents, &pr.StockQtyMilli, &track, &active, &pr.UpdatedAt, &gift,
-			&pr.WholesalePriceCents, &pr.LowStockUnits, &unit, &fraction, &batches); err != nil {
+			&pr.WholesalePriceCents, &pr.LowStockUnits, &unit, &fraction, &batches, &pr.EtimsTaxType, &pr.EtimsClsCd); err != nil {
 			break
 		}
 		pr.CategoryName = catName
@@ -89,7 +117,8 @@ func (h *H) scanProducts(rows *sql.Rows) []models.Product {
 const productSelect = `
         SELECT p.id, COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, p.category_id, COALESCE(c.name,''),
                 p.price_cents, p.cost_cents, p.stock_qty_milli, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at, COALESCE(p.is_gift_card,0),
-                COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0), COALESCE(p.unit,'pc'), COALESCE(p.allow_fraction,0), COALESCE(p.track_batches,0)
+                COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0), COALESCE(p.unit,'pc'), COALESCE(p.allow_fraction,0), COALESCE(p.track_batches,0),
+                COALESCE(p.etims_tax_type,''), COALESCE(p.etims_cls_cd,'')
         FROM products p LEFT JOIN categories c ON c.id = p.category_id`
 
 // ListProducts (authed — POS needs it). Filters: category, search, active.
@@ -133,7 +162,8 @@ func (h *H) ListLowStock(c *gin.Context) {
 	rows, err := h.db(c).Query(h.db(c).Rebind(`
                 SELECT p.id, COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, p.category_id, COALESCE(c.name,''),
                         p.price_cents, p.cost_cents, p.stock_qty_milli, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), p.updated_at, COALESCE(p.is_gift_card,0),
-                        COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0), COALESCE(p.unit,'pc'), COALESCE(p.allow_fraction,0), COALESCE(p.track_batches,0)
+                        COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0), COALESCE(p.unit,'pc'), COALESCE(p.allow_fraction,0), COALESCE(p.track_batches,0),
+                COALESCE(p.etims_tax_type,''), COALESCE(p.etims_cls_cd,'')
                 FROM products p LEFT JOIN categories c ON c.id = p.category_id
                 WHERE p.track_stock = 1 AND p.is_active = 1
                   AND p.stock_qty_milli <= (CASE WHEN COALESCE(p.low_stock_units,0) > 0 THEN p.low_stock_units ELSE ? END) * 1000
@@ -213,6 +243,10 @@ func (h *H) CreateProduct(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	if err := h.saveEtimsFields(c, id, body); err != nil {
+		h.fail(c, 422, err.Error())
+		return
+	}
 	h.svc(c).Audit(p.ID, p.Username, "PRODUCT_CREATED", "product", body.Name, "")
 	if batches == 1 {
 		if err := h.svc(c).EnableBatchesIfNeeded(id); err != nil {
@@ -340,6 +374,10 @@ func (h *H) UpdateProduct(c *gin.Context) {
 	}
 	if n(res) != 1 {
 		h.fail(c, 404, "product not found")
+		return
+	}
+	if err := h.saveEtimsFields(c, id, body); err != nil {
+		h.fail(c, 422, err.Error())
 		return
 	}
 	h.svc(c).Audit(p.ID, p.Username, "PRODUCT_UPDATED", "product", body.Name, "")

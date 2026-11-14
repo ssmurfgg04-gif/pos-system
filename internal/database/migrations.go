@@ -1655,6 +1655,71 @@ CREATE INDEX IF NOT EXISTS idx_stock_take_items_product ON stock_take_items(prod
 CREATE INDEX IF NOT EXISTS idx_design_jobs_assignee ON design_jobs(assignee_id);
 `,
 	},
+	{
+		// v30 (v1.10.0): KRA eTIMS. etims_receipts is both the outbox of
+		// sales / credit notes waiting to be signed by KRA (through the
+		// cloud `etims` function) and the store of the signature each
+		// receipt prints. One row per (kind, sale or return). Products gain
+		// their KRA tax type (A-E, '' = shop default) and item class code
+		// ('' = shop default). Pure additions.
+		Version: 30,
+		SQLite: `
+ALTER TABLE products ADD COLUMN etims_tax_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE products ADD COLUMN etims_cls_cd TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS etims_receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL DEFAULT 'S',
+        ref_id INTEGER NOT NULL,
+        client_ref TEXT NOT NULL DEFAULT '',
+        org_client_ref TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        invc_no INTEGER NOT NULL DEFAULT 0,
+        cur_rcpt_no INTEGER NOT NULL DEFAULT 0,
+        tot_rcpt_no INTEGER NOT NULL DEFAULT 0,
+        intrl_data TEXT NOT NULL DEFAULT '',
+        rcpt_sign TEXT NOT NULL DEFAULT '',
+        sdc_date_time TEXT NOT NULL DEFAULT '',
+        sdc_id TEXT NOT NULL DEFAULT '',
+        mrc_no TEXT NOT NULL DEFAULT '',
+        qr TEXT NOT NULL DEFAULT '',
+        last_error TEXT NOT NULL DEFAULT '',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_try_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_etims_receipts_ref ON etims_receipts(kind, ref_id);
+CREATE INDEX IF NOT EXISTS idx_etims_receipts_status ON etims_receipts(status, next_try_at);
+`,
+		Pg: `
+ALTER TABLE products ADD COLUMN IF NOT EXISTS etims_tax_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS etims_cls_cd TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS etims_receipts (
+        id SERIAL PRIMARY KEY,
+        kind TEXT NOT NULL DEFAULT 'S',
+        ref_id BIGINT NOT NULL,
+        client_ref TEXT NOT NULL DEFAULT '',
+        org_client_ref TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        invc_no BIGINT NOT NULL DEFAULT 0,
+        cur_rcpt_no BIGINT NOT NULL DEFAULT 0,
+        tot_rcpt_no BIGINT NOT NULL DEFAULT 0,
+        intrl_data TEXT NOT NULL DEFAULT '',
+        rcpt_sign TEXT NOT NULL DEFAULT '',
+        sdc_date_time TEXT NOT NULL DEFAULT '',
+        sdc_id TEXT NOT NULL DEFAULT '',
+        mrc_no TEXT NOT NULL DEFAULT '',
+        qr TEXT NOT NULL DEFAULT '',
+        last_error TEXT NOT NULL DEFAULT '',
+        attempts BIGINT NOT NULL DEFAULT 0,
+        next_try_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        updated_at TEXT NOT NULL DEFAULT to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_etims_receipts_ref ON etims_receipts(kind, ref_id);
+CREATE INDEX IF NOT EXISTS idx_etims_receipts_status ON etims_receipts(status, next_try_at);
+`,
+	},
 }
 
 // backfillRolePermsV19 unions the v19 sales-oversight permission into the

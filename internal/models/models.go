@@ -150,6 +150,8 @@ type Product struct {
 	// (0 = fall back to the global low_stock_threshold setting).
 	WholesalePriceCents int64  `json:"wholesalePriceCents"`
 	LowStockUnits       int    `json:"lowStockUnits"`
+	EtimsTaxType        string `json:"etimsTaxType"` // v1.10: A-E, '' = shop default
+	EtimsClsCd          string `json:"etimsClsCd"`   // v1.10: KRA item class, '' = shop default
 	UpdatedAt           string `json:"updatedAt"`
 }
 
@@ -271,6 +273,26 @@ type Order struct {
 	// rides the detail payload the on-screen receipt prints (not stored
 	// on the orders table; loaded from gift_cards on the detail read).
 	GiftCards []string `json:"giftCards,omitempty"`
+	// v1.10.0 KRA eTIMS: the control-unit signature once KRA signed the
+	// sale (status "signed"), or where the send stands ("pending",
+	// "failed"). nil when eTIMS is off or the sale predates it.
+	Etims *EtimsStamp `json:"etims,omitempty"`
+}
+
+// EtimsStamp is what a KRA-signed receipt prints (OSCU response + device).
+type EtimsStamp struct {
+	Status      string `json:"status"` // pending | signed | failed
+	InvcNo      int64  `json:"invcNo"`
+	CurRcptNo   int64  `json:"curRcptNo"`
+	TotRcptNo   int64  `json:"totRcptNo"`
+	IntrlData   string `json:"intrlData"`
+	RcptSign    string `json:"rcptSign"`
+	SdcDateTime string `json:"sdcDateTime"`
+	SdcID       string `json:"sdcId"`
+	MrcNo       string `json:"mrcNo"`
+	QR          string `json:"qr"`
+	LastError   string `json:"lastError,omitempty"`
+	Attempts    int    `json:"attempts"`
 }
 
 // OrderSummary is one row of a customer's purchase history.
