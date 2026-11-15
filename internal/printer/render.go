@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"posapp/internal/escpos"
+	"posapp/internal/qrcode"
 
 	"posapp/internal/models"
 )
@@ -53,14 +54,19 @@ func formatMoneyFull(cents int64, symbol string) string {
 // ReceiptData is everything the renderer needs; built from an order plus
 // white-label settings.
 type ReceiptData struct {
-	StoreName     string
-	StoreAddress  string
-	StorePhone    string
-	KraPin        string             // eTIMS: printed under the phone line when set
-	BuyerPin      string             // customer KRA PIN — printed on a plain INVOICE (not eTIMS)
-	Etims         *models.EtimsStamp // v1.10: KRA signature; "signed" makes this a TAX INVOICE
-	GiftCards     []string           // codes minted by this sale — the customer's value
-	Logo          image.Image        // nil = skip; printed centered above the name
+	StoreName    string
+	StoreAddress string
+	StorePhone   string
+	KraPin       string             // eTIMS: printed under the phone line when set
+	BuyerPin     string             // customer KRA PIN — printed on a plain INVOICE (not eTIMS)
+	Etims        *models.EtimsStamp // v1.10: KRA signature; "signed" makes this a TAX INVOICE
+	// QRNative: print the eTIMS QR with the printer's own GS ( k command
+	// instead of as a raster image. Raster (default) works on every printer
+	// that prints the logo; native is sharper but some cheap printers
+	// don't support it and print nothing.
+	QRNative      bool
+	GiftCards     []string    // codes minted by this sale — the customer's value
+	Logo          image.Image // nil = skip; printed centered above the name
 	Footer        string
 	OrderNumber   string
 	When          string
@@ -186,11 +192,26 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 		p.Write(padlr(truncate(lbl, widthCols-14), "-"+formatMoneyFull(d.PointsCents, ""), widthCols) + "\n")
 	}
 	if d.TaxCents != 0 {
+		groups := models.VatBreakdown(d.Items)
 		lbl := fmt.Sprintf("VAT (%s%%)", trimPct(d.TaxPercent))
 		if d.TaxIncluded {
 			lbl = fmt.Sprintf("VAT (%s%%, incl.)", trimPct(d.TaxPercent))
 		}
+		if groups != nil {
+			lbl = "VAT"
+			if d.TaxIncluded {
+				lbl = "VAT (incl.)"
+			}
+		}
+		if !d.TaxIncluded && d.PointsCents > 0 {
+			lbl = "VAT in amount paid" // v1.11: points reduce VAT; doesn't add up row by row
+		}
 		p.Write(padlr(truncate(lbl, widthCols-14), formatMoneyFull(d.TaxCents, d.Currency), widthCols) + "\n")
+		// v1.11 mixed rates: VAT analysis per rate (KRA wants the split).
+		for _, g := range groups {
+			l := "  " + models.VatGroupLabel(g, trimPct) + " on " + formatMoneyFull(g.GrossCents, "")
+			p.Write(padlr(truncate(l, widthCols-12), formatMoneyFull(g.TaxCents, ""), widthCols) + "\n")
+		}
 	}
 	p.Bold(true)
 	p.Size(1, 1)
@@ -206,7 +227,7 @@ func Render(d ReceiptData, widthCols int) ([]byte, error) {
 	}
 	p.Write("\n")
 	if d.Etims != nil {
-		writeEtimsBlock(p, d.Etims, widthCols)
+		writeEtimsBlock(p, d.Etims, widthCols, d.QRNative)
 	}
 
 	if d.Footer != "" {
@@ -304,7 +325,7 @@ func formatQtyMilli(m int64) string {
 
 // writeEtimsBlock prints the KRA control-unit block of a signed sale (or a
 // one-line note while it is still being sent).
-func writeEtimsBlock(p *escpos.Escpos, st *models.EtimsStamp, widthCols int) {
+func writeEtimsBlock(p *escpos.Escpos, st *models.EtimsStamp, widthCols int, native bool) {
 	if st.Status != "signed" {
 		p.Justify(escpos.JustifyCenter)
 		p.Write(truncate("KRA eTIMS: sending to KRA", widthCols) + "\n\n")
@@ -329,11 +350,26 @@ func writeEtimsBlock(p *escpos.Escpos, st *models.EtimsStamp, widthCols int) {
 	}
 	if st.QR != "" {
 		p.Justify(escpos.JustifyCenter)
-		size := uint8(5)
-		if widthCols < 40 {
-			size = 4
+		printed := false
+		if !native {
+			// ~45% of the paper width: 58mm = 384 dots, 80mm = 576 dots
+			px := 256
+			if widthCols < 40 {
+				px = 176
+			}
+			if img := QRImage(st.QR, px); img != nil {
+				if _, err := p.PrintImage(img); err == nil {
+					printed = true
+				}
+			}
 		}
-		_, _ = p.QRCode(st.QR, true, size, 1)
+		if !printed {
+			size := uint8(5)
+			if widthCols < 40 {
+				size = 4
+			}
+			_, _ = p.QRCode(st.QR, true, size, 1)
+		}
 		p.Write("\n")
 		p.Justify(escpos.JustifyLeft)
 	}
@@ -346,4 +382,14 @@ func EtimsDate(s string) string {
 		return s
 	}
 	return s[6:8] + "/" + s[4:6] + "/" + s[0:4] + " " + s[8:10] + ":" + s[10:12] + ":" + s[12:14]
+}
+
+// QRImage renders text as a QR code image (medium error correction, quiet
+// zone included), scaled to px pixels. nil when the text can't be encoded.
+func QRImage(text string, px int) image.Image {
+	q, err := qrcode.New(text, qrcode.Medium)
+	if err != nil {
+		return nil
+	}
+	return q.Image(px)
 }

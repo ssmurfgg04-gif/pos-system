@@ -148,11 +148,13 @@ type Product struct {
 	TrackBatches  bool   `json:"trackBatches"`
 	// v1.6.3: wholesale tier pricing + per-product low-stock threshold
 	// (0 = fall back to the global low_stock_threshold setting).
-	WholesalePriceCents int64  `json:"wholesalePriceCents"`
-	LowStockUnits       int    `json:"lowStockUnits"`
-	EtimsTaxType        string `json:"etimsTaxType"` // v1.10: A-E, '' = shop default
-	EtimsClsCd          string `json:"etimsClsCd"`   // v1.10: KRA item class, '' = shop default
-	UpdatedAt           string `json:"updatedAt"`
+	WholesalePriceCents int64   `json:"wholesalePriceCents"`
+	LowStockUnits       int     `json:"lowStockUnits"`
+	EtimsTaxType        string  `json:"etimsTaxType"` // v1.10: A-E, '' = shop default
+	EtimsClsCd          string  `json:"etimsClsCd"`   // v1.10: KRA item class, '' = shop default
+	VatType             string  `json:"vatType"`      // v1.11: effective tax type (A-E, X = gift card)
+	VatRate             float64 `json:"vatRate"`      // v1.11: effective VAT percent the till prices with
+	UpdatedAt           string  `json:"updatedAt"`
 }
 
 // ---- Orders ----
@@ -200,6 +202,11 @@ type OrderItem struct {
 	UnitPriceCents int64  `json:"unitPriceCents"`
 	LineTotalCents int64  `json:"lineTotalCents"`
 	CostCents      int64  `json:"costCents"` // v1.7.0: unit cost snapshot at sale time (0 = pre-v26 line)
+	// v1.11 per-line VAT, frozen at sale time ('' / 0 = pre-v31 line):
+	TaxType   string  `json:"taxType"`   // KRA A-E, or X (outside VAT: gift cards)
+	TaxRate   float64 `json:"taxRate"`   // VAT percent
+	TaxCents  int64   `json:"taxCents"`  // the line's share of the order VAT
+	PaidCents int64   `json:"paidCents"` // paid for the line, VAT incl., after discount + points
 }
 
 // QtyDisplay renders a milli-unit quantity for receipts/documents: whole
@@ -1132,4 +1139,53 @@ type CreateExpenseRequest struct {
 	Reference     string `json:"reference"`
 	Note          string `json:"note"`
 	SpentOn       string `json:"spentOn"` // YYYY-MM-DD; defaults to today (EAT)
+}
+
+// VatGroup is one line of a mixed-rate receipt's VAT analysis.
+type VatGroup struct {
+	Rate       float64
+	TaxType    string // first KRA type seen at this rate (X = gift cards)
+	TaxCents   int64
+	GrossCents int64 // paid at this rate, VAT incl.
+}
+
+// VatBreakdown (v1.11) groups a sale's VAT by rate. It returns nil when
+// the sale has one rate (or predates per-line VAT): the receipt then keeps
+// its single "VAT (16%)" line.
+func VatBreakdown(items []OrderItem) []VatGroup {
+	var out []VatGroup
+	idx := map[float64]int{}
+	for _, it := range items {
+		if it.TaxType == "" {
+			return nil
+		}
+		k, ok := idx[it.TaxRate]
+		if !ok {
+			k = len(out)
+			idx[it.TaxRate] = k
+			out = append(out, VatGroup{Rate: it.TaxRate, TaxType: it.TaxType})
+		}
+		out[k].TaxCents += it.TaxCents
+		out[k].GrossCents += it.PaidCents
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
+}
+
+// VatGroupLabel: "VAT 16%", "VAT 8%", "Exempt", "Zero-rated", "No VAT", "Gift cards".
+func VatGroupLabel(g VatGroup, pct func(float64) string) string {
+	if g.Rate > 0 {
+		return "VAT " + pct(g.Rate) + "%"
+	}
+	switch g.TaxType {
+	case "A":
+		return "Exempt"
+	case "C":
+		return "Zero-rated"
+	case "X":
+		return "Gift cards (no VAT)"
+	}
+	return "No VAT"
 }

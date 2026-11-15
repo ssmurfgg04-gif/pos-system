@@ -14,7 +14,7 @@ import { api, CheckoutRequest, Customer, Order, PaymentConfig, Product, SplitLeg
 import { useCart } from '../stores/cart'
 import { useBranding } from '../stores/branding'
 import { useAuth } from '../stores/auth'
-import { formatMoney, formatMoneyCompact, normalizePhoneKe, splitRemaining } from '../lib/money'
+import { cartTotals, formatMoney, formatMoneyCompact, normalizePhoneKe, splitRemaining } from '../lib/money'
 import { fmtQty, lineTotalCents } from '../lib/qty'
 import { Button, EmptyState, Field, Input, MoneyInput, Spinner, StatusPill, Modal } from './ui'
 import { ProductPhoto } from './ProductPhoto'
@@ -200,10 +200,13 @@ export function CheckoutRail({
   // Order-level adjustments — an APPROXIMATION of the server's math (the
   // backend recomputes tax on the discounted subtotal and caps redemption
   // authoritatively; it trims whole points when the cap bites).
-  const discountedSub = Math.max(0, totals.subtotal - (canDiscount ? Math.min(discountCents, totals.subtotal) : 0))
-  const estTotal = branding.tax_included
-    ? discountedSub
-    : discountedSub + Math.round((discountedSub * branding.tax_percent) / 100)
+  // v1.11: the SAME per-line VAT rule as the server (cartTotals →
+  // computeLines), so a mixed-rate basket with a discount asks for the
+  // exact amount the server will charge.
+  const appliedDiscount = canDiscount ? Math.min(discountCents, totals.subtotal) : 0
+  const estTotal = appliedDiscount > 0
+    ? cartTotals(cart.lines, branding.tax_percent, branding.tax_included, appliedDiscount).total
+    : totals.total
   const estRedeemCents = redeem > 0 ? Math.min(redeem * 100, Math.floor(estTotal / 2)) : 0
   const due = Math.max(0, estTotal - estRedeemCents)
   const tenderDue = (canDiscount && discountCents > 0) || estRedeemCents > 0 ? due : totals.total
@@ -497,6 +500,21 @@ export function CheckoutRail({
     if (cart.lines.length === 0) setStep('cart')
   }, [cart.lines.length])
 
+  // F12 = pay (keyboard tills): on the cart it opens the payment step; on
+  // the payment step it presses the main pay button, only when that button
+  // is enabled. Not Enter: barcode scanners end every scan with Enter.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'F12' || cart.lines.length === 0) return
+      e.preventDefault()
+      if (step === 'cart') { setStep('pay'); return }
+      const btn = document.querySelector<HTMLButtonElement>('[data-primary-charge]')
+      if (btn && !btn.disabled) btn.click()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [step, cart.lines.length])
+
   const productById = useMemo(() => {
     const m = new Map<number, Product>()
     for (const p of products ?? []) m.set(p.id, p)
@@ -692,7 +710,12 @@ export function CheckoutRail({
       <footer className={`border-t border-line bg-shell-edge rounded-b-card px-3.5 pt-2.5 pb-6 flex flex-col ${step === 'pay' && cart.lines.length > 0 ? 'flex-1 min-h-0 mt-2.5' : 'shrink-0'}`}>
         <div className="space-y-1 shrink-0 pb-2">
           <Row label="Subtotal" value={formatMoney(totals.subtotal)} />
-          <Row label={`${branding.tax_percent}% ${branding.tax_included ? 'VAT (incl.)' : 'VAT'}`} value={formatMoney(totals.tax)} />
+          <Row
+            label={(totals.byRate?.length ?? 0) > 1
+              ? (branding.tax_included ? 'VAT (incl., mixed rates)' : 'VAT (mixed rates)')
+              : `${branding.tax_percent}% ${branding.tax_included ? 'VAT (incl.)' : 'VAT'}`}
+            value={formatMoney(totals.tax)}
+          />
           <div className="flex items-baseline justify-between border-t border-line-strong pt-1.5 mt-1.5">
             <span className="font-bold text-ink">TOTAL</span>
             <span className="font-extrabold text-[25px] leading-none text-ink tabular tracking-tight">{formatMoney(totals.total)}</span>
@@ -707,7 +730,7 @@ export function CheckoutRail({
           </div>
         ) : mode === 'idle' && step === 'cart' ? (
           <div className="shrink-0 space-y-2">
-            <Button variant="primary" size="lg" className="w-full h-[50px] text-base" onClick={() => setStep('pay')}>
+            <Button variant="primary" size="lg" className="w-full h-[50px] text-base" onClick={() => setStep('pay')} aria-keyshortcuts="F12" title="Shortcut: F12">
               Charge {formatMoney(totals.total)} →
             </Button>
             {canHold && (
@@ -1159,6 +1182,8 @@ function PaymentForm(props: {
         size="lg"
         className="w-full h-[50px] text-base"
         disabled={chargeDisabled}
+        data-primary-charge=""
+        aria-keyshortcuts="F12"
         onClick={() =>
           splitMode
             ? checkout((splitLegs[0]?.method as Method) ?? 'cash', splitAsyncLeg?.method === 'mpesa' ? (branding.payment_mode as 'auto' | 'stk' | 'manual') : undefined, splitLegs)

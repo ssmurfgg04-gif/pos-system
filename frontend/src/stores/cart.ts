@@ -15,6 +15,8 @@ export interface CartLine {
   qtyMilli: number
   trackStock: boolean
   stockQtyMilli: number
+  /** v1.11: the product's VAT percent (undefined = the shop rate) */
+  vatRate?: number
 }
 
 interface CartState {
@@ -38,7 +40,7 @@ interface CartState {
   clear: () => void
   setCustomerName: (v: string) => void
   setNote: (v: string) => void
-  totals: () => { subtotal: number; tax: number; total: number; count: number }
+  totals: () => { subtotal: number; tax: number; total: number; count: number; byRate?: { rate: number; taxCents: number; grossCents: number }[] }
 }
 
 // The cart survives a full page reload in-session (sessionStorage): the 401
@@ -108,6 +110,7 @@ export const useCart = create<CartState>((set, get) => ({
             qtyMilli: Math.min(MAX_QTY_MILLI, Math.max(0, qtyMilli)),
             trackStock: p.trackStock,
             stockQtyMilli: p.stockQtyMilli,
+            vatRate: p.vatRate,
           },
         ],
       }
@@ -151,7 +154,7 @@ export const useCart = create<CartState>((set, get) => ({
   totals: () => {
     const b = useBranding.getState().branding
     const t = cartTotals(
-      get().lines.map((l) => ({ qtyMilli: l.qtyMilli, unitPriceCents: l.unitPriceCents })),
+      get().lines.map((l) => ({ qtyMilli: l.qtyMilli, unitPriceCents: l.unitPriceCents, vatRate: l.vatRate })),
       b.tax_percent,
       b.tax_included,
     )

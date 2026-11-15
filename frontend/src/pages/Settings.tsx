@@ -323,6 +323,12 @@ export function Settings() {
                 <option value="58">58mm (32 columns)</option>
               </Select>
             </Field>
+            <Field label="KRA QR code" hint="If the QR prints blank or as garbage, switch this">
+              <Select value={values.printer_qr_mode ?? 'image'} onChange={(e) => set('printer_qr_mode', e.target.value)}>
+                <option value="image">As a picture (works on any printer)</option>
+                <option value="native">Printer's own QR (sharper, newer printers)</option>
+              </Select>
+            </Field>
             <label className="flex items-center gap-2 min-h-11 text-sm font-semibold text-ink sm:col-span-2">
               <input
                 type="checkbox"

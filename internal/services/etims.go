@@ -89,6 +89,40 @@ func (s *Service) etimsDefaultTax() string {
 
 func validTaxType(t string) bool { return len(t) == 1 && strings.Contains("ABCDE", t) }
 
+// vatFor (v1.11) is THE rule for what VAT a product sells at:
+//   - gift cards are outside VAT (type X, 0%): the VAT is charged when the
+//     card is spent on goods, not when it is sold;
+//   - a shop with no VAT (tax_percent 0) charges none on anything;
+//   - otherwise by KRA tax type (the product's, else the shop default):
+//     B = the shop's standard rate, E = 8%, A / C / D = 0%.
+func (s *Service) vatFor(productType string, isGiftCard bool, shopPct float64) (string, float64) {
+	if isGiftCard {
+		return "X", 0
+	}
+	t := strings.ToUpper(strings.TrimSpace(productType))
+	if !validTaxType(t) {
+		t = s.etimsDefaultTax()
+	}
+	if shopPct <= 0 {
+		if t == "B" || t == "E" {
+			t = "D"
+		}
+		return t, 0
+	}
+	switch t {
+	case "B":
+		return t, shopPct
+	case "E":
+		return t, 8
+	}
+	return t, 0
+}
+
+// VatRateFor is vatFor for display (product lists, the till's cart).
+func (s *Service) VatRateFor(productType string, isGiftCard bool) (string, float64) {
+	return s.vatFor(productType, isGiftCard, s.settings.GetFloat("tax_percent", 16))
+}
+
 func errOf(out map[string]any, status int, err error) error {
 	if err != nil {
 		return err
@@ -267,6 +301,7 @@ func (s *Service) etimsEnqueue() {
 	if err != nil {
 		log.Printf("[etims] enqueue voids: %v", err)
 	}
+	s.etimsEnqueueStock()
 	// A sale voided BEFORE KRA signed it is never sent.
 	_, _ = s.db.Exec(`UPDATE etims_receipts SET status = 'skipped', last_error = 'voided before sending', next_try_at = ''
 		WHERE kind = 'S' AND status IN ('pending','failed')
@@ -332,12 +367,15 @@ func (s *Service) etimsSendOne(r etimsRow) bool {
 		sale, err = s.etimsReturnBody(r.RefID)
 	case "V":
 		sale, err = s.etimsVoidBody(r.RefID)
-		if errors.Is(err, errEtimsNothingLeft) {
-			_, _ = s.db.Exec(s.db.Rebind(`UPDATE etims_receipts SET status = 'skipped', last_error = 'fully returned already', updated_at = ? WHERE id = ?`), nowStamp(), r.ID)
-			return false
-		}
+	case "M":
+		return s.etimsSendStock(r)
 	default:
 		sale, err = s.etimsSaleBody(r.RefID)
+	}
+	if errors.Is(err, errEtimsNothingLeft) {
+		// gift cards only, or already fully credited: not a supply for KRA
+		_, _ = s.db.Exec(s.db.Rebind(`UPDATE etims_receipts SET status = 'skipped', last_error = 'nothing for KRA (gift cards / already credited)', updated_at = ? WHERE id = ?`), nowStamp(), r.ID)
+		return false
 	}
 	if err != nil {
 		s.etimsMark(r, "failed", err.Error(), false, nil)
@@ -403,13 +441,17 @@ func (s *Service) etimsMark(r etimsRow, status, msg string, retry bool, stamp ma
 }
 
 // etimsLine builds one wire line from an order/return line + its product.
-func (s *Service) etimsLine(productID int64, name, sku string, qtyMilli, unitPrice, lineTotal int64) map[string]any {
+// frozenType is the tax type frozen on the sale line (v1.11); ” = old
+// line, use the product's current type.
+func (s *Service) etimsLine(productID int64, name, sku, frozenType string, qtyMilli, unitPrice, lineTotal int64) map[string]any {
 	var barcode, unit, taxTy, cls string
 	trackStock := 1
 	_ = s.db.QueryRow(s.db.Rebind(`SELECT COALESCE(barcode,''), COALESCE(unit,''), COALESCE(track_stock,1),
 		COALESCE(etims_tax_type,''), COALESCE(etims_cls_cd,'') FROM products WHERE id = ?`), productID).
 		Scan(&barcode, &unit, &trackStock, &taxTy, &cls)
-	if !validTaxType(taxTy) {
+	if validTaxType(frozenType) {
+		taxTy = frozenType
+	} else if !validTaxType(taxTy) {
 		taxTy = s.etimsDefaultTax()
 	}
 	key := "name:" + strings.ToLower(strings.TrimSpace(name))
@@ -427,44 +469,62 @@ func (s *Service) etimsSaleBody(orderID int64) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sale %d not found", orderID)
 	}
-	lines := []map[string]any{}
-	for _, it := range o.Items {
-		lines = append(lines, s.etimsLine(it.ProductID, it.Name, it.SKU, it.QtyMilli, it.UnitPriceCents, it.LineTotalCents))
-	}
-	if len(lines) == 0 {
+	if len(o.Items) == 0 {
 		return nil, fmt.Errorf("sale %s has no lines", o.Number)
 	}
-	// Order-level discount and redeemed points both come off what the
-	// customer paid; eTIMS spreads them over the lines.
-	var linesTotal int64
-	for _, it := range o.Items {
-		linesTotal += it.LineTotalCents
+	body := map[string]any{
+		"traderInvoiceNo": o.Number, "confirmedAt": kenyaStampOf(firstNonEmpty(o.PaidAt, o.CreatedAt)),
+		"customerPin": o.BuyerPIN, "customerName": o.CustomerName, "customerPhone": etimsPhoneOf(o),
+		"payment": etimsPaymentOf(o), "cashierId": fmt.Sprint(o.CashierID), "cashierName": o.CashierName,
 	}
-	gross := linesTotal
-	if !o.TaxIncluded && o.TaxPercent > 0 {
-		// tax-exclusive pricing: eTIMS amounts include VAT, so scale lines
-		// up to what was actually charged (the total carries the VAT).
-		for i, l := range lines {
-			lt := l["lineTotalCents"].(int64)
-			lines[i]["lineTotalCents"] = lt + (lt*int64(o.TaxPercent*100)+5000)/10000
+	lines := []map[string]any{}
+	if o.Items[0].TaxType != "" {
+		// v1.11 lines carry their frozen VAT: send exactly what the receipt
+		// shows. Per line: gross before discount (VAT incl.), its discount
+		// share and its VAT. Gift cards (X) are not a supply: left out.
+		for _, it := range o.Items {
+			if it.TaxType == "X" {
+				continue
+			}
+			l := s.etimsLine(it.ProductID, it.Name, it.SKU, it.TaxType, it.QtyMilli, it.UnitPriceCents, it.PaidCents)
+			if o.TaxIncluded && it.LineTotalCents >= it.PaidCents {
+				l["lineTotalCents"] = it.LineTotalCents
+				l["discountCents"] = it.LineTotalCents - it.PaidCents
+			} else {
+				l["discountCents"] = int64(0)
+			}
+			l["taxCents"] = it.TaxCents
+			lines = append(lines, l)
 		}
-		gross = 0
-		for _, l := range lines {
-			gross += l["lineTotalCents"].(int64)
+		if len(lines) == 0 {
+			return nil, errEtimsNothingLeft // gift cards only: nothing for KRA
 		}
+		body["lines"] = lines
+		body["discountCents"] = int64(0)
+		return body, nil
+	}
+	// Pre-v1.11 sale (no per-line VAT): one rate, discount and points
+	// spread by the builder.
+	for _, it := range o.Items {
+		lines = append(lines, s.etimsLine(it.ProductID, it.Name, it.SKU, "", it.QtyMilli, it.UnitPriceCents, it.LineTotalCents))
+	}
+	var gross int64
+	for i, l := range lines {
+		lt := l["lineTotalCents"].(int64)
+		if !o.TaxIncluded && o.TaxPercent > 0 {
+			lt = lt + (lt*int64(o.TaxPercent*100)+5000)/10000
+			lines[i]["lineTotalCents"] = lt
+		}
+		gross += lt
 	}
 	discount := gross - o.TotalCents
 	if discount < 0 {
-		// rounding of exclusive VAT can leave the lines a cent short: put it on the first line
 		lines[0]["lineTotalCents"] = lines[0]["lineTotalCents"].(int64) - discount
 		discount = 0
 	}
-	return map[string]any{
-		"traderInvoiceNo": o.Number, "confirmedAt": kenyaStampOf(firstNonEmpty(o.PaidAt, o.CreatedAt)),
-		"customerPin": o.BuyerPIN, "customerName": o.CustomerName, "customerPhone": etimsPhoneOf(o),
-		"payment": etimsPaymentOf(o), "discountCents": discount,
-		"cashierId": fmt.Sprint(o.CashierID), "cashierName": o.CashierName, "lines": lines,
-	}, nil
+	body["lines"] = lines
+	body["discountCents"] = discount
+	return body, nil
 }
 
 func (s *Service) etimsReturnBody(returnID int64) (map[string]any, error) {
@@ -475,8 +535,11 @@ func (s *Service) etimsReturnBody(returnID int64) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("return %d not found", returnID)
 	}
-	rows, err := s.db.Query(s.db.Rebind(`SELECT product_id, name, COALESCE(sku,''), qty_milli, unit_price_cents, line_total_cents
-		FROM return_items WHERE return_id = ? ORDER BY id`), returnID)
+	// The refund per line, with the tax type frozen on the original sale line.
+	rows, err := s.db.Query(s.db.Rebind(`SELECT ri.product_id, ri.name, COALESCE(ri.sku,''), ri.qty_milli, ri.unit_price_cents, ri.line_total_cents,
+		COALESCE(oi.tax_type,'')
+		FROM return_items ri LEFT JOIN order_items oi ON oi.id = ri.order_item_id
+		WHERE ri.return_id = ? ORDER BY ri.id`), returnID)
 	if err != nil {
 		return nil, err
 	}
@@ -484,13 +547,13 @@ func (s *Service) etimsReturnBody(returnID int64) (map[string]any, error) {
 	lines := []map[string]any{}
 	for rows.Next() {
 		var pid, qty, unit, total int64
-		var name, sku string
-		if rows.Scan(&pid, &name, &sku, &qty, &unit, &total) == nil && qty > 0 {
-			lines = append(lines, s.etimsLine(pid, name, sku, qty, unit, total))
+		var name, sku, tt string
+		if rows.Scan(&pid, &name, &sku, &qty, &unit, &total, &tt) == nil && qty > 0 && tt != "X" {
+			lines = append(lines, s.etimsLine(pid, name, sku, tt, qty, unit, total))
 		}
 	}
 	if len(lines) == 0 {
-		return nil, fmt.Errorf("return %s has no lines", number)
+		return nil, errEtimsNothingLeft
 	}
 	o, _ := s.GetOrder(orderID)
 	body := map[string]any{
@@ -505,7 +568,7 @@ func (s *Service) etimsReturnBody(returnID int64) (map[string]any, error) {
 	return body, nil
 }
 
-var errEtimsNothingLeft = errors.New("nothing left to credit")
+var errEtimsNothingLeft = errors.New("nothing to send to KRA")
 
 // etimsVoidBody: credit note for a voided, KRA-signed sale: every line,
 // less what earlier returns already credited.
@@ -529,17 +592,26 @@ func (s *Service) etimsVoidBody(orderID int64) (map[string]any, error) {
 	}
 	lines := body["lines"].([]map[string]any)
 	var left []map[string]any
-	for i, it := range o.Items {
-		if i >= len(lines) {
+	j := 0 // lines skip gift cards (X): walk them in step with the items
+	for _, it := range o.Items {
+		if it.TaxType == "X" {
+			continue
+		}
+		if j >= len(lines) {
 			break
 		}
+		l := lines[j]
+		j++
 		rest := it.QtyMilli - returned[it.ID]
 		if rest <= 0 {
 			continue
 		}
-		l := lines[i]
 		if rest < it.QtyMilli {
-			l["lineTotalCents"] = l["lineTotalCents"].(int64) * rest / it.QtyMilli
+			for _, k := range []string{"lineTotalCents", "discountCents", "taxCents"} {
+				if v, ok := l[k].(int64); ok {
+					l[k] = v * rest / it.QtyMilli
+				}
+			}
 			l["qtyMilli"] = rest
 		}
 		left = append(left, l)
@@ -622,4 +694,176 @@ func (s *Service) etimsStampFor(kind string, refID int64) *models.EtimsStamp {
 		return nil
 	}
 	return &st
+}
+
+// ---- stock movements (v1.11) ------------------------------------------------
+// Every stock movement made on this till after eTIMS was switched on goes
+// to KRA as a "stored and released" record (insertStockIO) plus the
+// item's remaining stock (saveStockMaster). A movement tied to an invoice
+// (sale, void, return) waits until that invoice is signed; if the invoice
+// was never sent (voided first, gift cards), the movement is skipped too.
+
+var errEtimsWait = errors.New("waiting for the invoice")
+
+// sarTypeFor maps a ledger move to KRA's stock movement type (spec 4.15).
+func sarTypeFor(kind string, delta int64) string {
+	switch kind {
+	case models.MoveSale:
+		return "11"
+	case models.MoveReturnRestock, models.MoveVoidRestore:
+		return "03"
+	case models.MovePOReceive, models.MoveBatchIn:
+		return "02"
+	case models.MoveDisposal, models.MoveBatchRecall:
+		return "15"
+	case models.MoveAdjustment, models.MoveCount, models.MoveOpening:
+		if delta < 0 {
+			return "16"
+		}
+		return "06"
+	}
+	return ""
+}
+
+func (s *Service) etimsEnqueueStock() {
+	since := s.settings.Get("etims_stock_since_id")
+	if since == "" {
+		// first run after switching on: only movements from now on
+		var maxID int64
+		_ = s.db.QueryRow(`SELECT COALESCE(MAX(id),0) FROM stock_movements`).Scan(&maxID)
+		_ = s.settings.Set("etims_stock_since_id", fmt.Sprint(maxID))
+		return
+	}
+	dev := s.deviceID()
+	_, err := s.db.Exec(s.db.Rebind(`
+		INSERT INTO etims_receipts (kind, ref_id, client_ref, status)
+		SELECT 'M', m.id, 'mv:' || ? || ':' || CAST(m.id AS TEXT), 'pending'
+		FROM stock_movements m
+		WHERE m.id > ? AND COALESCE(m.device_id,'') = ? AND COALESCE(m.delta_milli,0) != 0
+		  AND m.kind IN ('SALE','RETURN_RESTOCK','VOID_RESTORE','PO_RECEIVE','BATCH_IN','DISPOSAL','BATCH_RECALL','ADJUSTMENT','COUNT','OPENING')
+		  AND NOT EXISTS (SELECT 1 FROM etims_receipts r WHERE r.kind = 'M' AND r.ref_id = m.id)`),
+		dev, since, dev)
+	if err != nil {
+		log.Printf("[etims] enqueue stock: %v", err)
+		return
+	}
+}
+
+// etimsInvoiceGate: the state of the invoice a movement depends on.
+// "go" = signed (send the movement), "skip" = never sent, "wait" = not yet.
+func (s *Service) etimsInvoiceGate(kind, reference string) string {
+	var status string
+	var err error
+	switch kind {
+	case models.MoveSale:
+		err = s.db.QueryRow(s.db.Rebind(`SELECT r.status FROM etims_receipts r JOIN orders o ON o.id = r.ref_id
+			WHERE r.kind = 'S' AND o.number = ?`), reference).Scan(&status)
+	case models.MoveVoidRestore:
+		err = s.db.QueryRow(s.db.Rebind(`SELECT r.status FROM etims_receipts r JOIN orders o ON o.id = r.ref_id
+			WHERE r.kind = 'V' AND o.number = ?`), reference).Scan(&status)
+		if err != nil {
+			// voided before it was ever signed: the sale was skipped, so is this
+			var st string
+			if s.db.QueryRow(s.db.Rebind(`SELECT r.status FROM etims_receipts r JOIN orders o ON o.id = r.ref_id
+				WHERE r.kind = 'S' AND o.number = ?`), reference).Scan(&st) == nil && st == "skipped" {
+				return "skip"
+			}
+		}
+	case models.MoveReturnRestock:
+		err = s.db.QueryRow(s.db.Rebind(`SELECT r.status FROM etims_receipts r JOIN returns rt ON rt.id = r.ref_id
+			WHERE r.kind = 'R' AND rt.number = ?`), reference).Scan(&status)
+	default:
+		return "go"
+	}
+	if err != nil {
+		// sale from before eTIMS (never queued) → nothing to tie it to: skip
+		if kind == models.MoveSale {
+			var n int
+			_ = s.db.QueryRow(s.db.Rebind(`SELECT COUNT(*) FROM orders WHERE number = ?`), reference).Scan(&n)
+			if n > 0 {
+				var queued int
+				_ = s.db.QueryRow(s.db.Rebind(`SELECT COUNT(*) FROM etims_receipts r JOIN orders o ON o.id = r.ref_id WHERE o.number = ?`), reference).Scan(&queued)
+				if queued == 0 {
+					return "wait" // the sale is about to be queued (same tick)
+				}
+			}
+		}
+		return "wait"
+	}
+	switch status {
+	case "signed":
+		return "go"
+	case "skipped":
+		return "skip"
+	}
+	return "wait"
+}
+
+func (s *Service) etimsSendStock(r etimsRow) bool {
+	var productID, delta, balance, userID int64
+	var kind, reference, note, username, createdAt string
+	err := s.db.QueryRow(s.db.Rebind(`SELECT product_id, COALESCE(delta_milli,0), COALESCE(balance_after_milli,0), kind,
+		COALESCE(reference,''), COALESCE(note,''), COALESCE(user_id,0), COALESCE(username,''), CAST(created_at AS TEXT)
+		FROM stock_movements WHERE id = ?`), r.RefID).
+		Scan(&productID, &delta, &balance, &kind, &reference, &note, &userID, &username, &createdAt)
+	if err != nil {
+		s.etimsMark(r, "failed", "stock movement not found", false, nil)
+		return false
+	}
+	sar := sarTypeFor(kind, delta)
+	if sar == "" {
+		s.etimsSkip(r, "not a stock movement KRA tracks")
+		return false
+	}
+	switch s.etimsInvoiceGate(kind, reference) {
+	case "skip":
+		s.etimsSkip(r, "its invoice was never sent to KRA")
+		return false
+	case "wait":
+		// not a failure: look again shortly, without burning attempts
+		_, _ = s.db.Exec(s.db.Rebind(`UPDATE etims_receipts SET next_try_at = ?, last_error = 'waiting for its invoice' WHERE id = ?`),
+			time.Now().UTC().Add(15*time.Second).Format(nowStampLayout), r.ID)
+		return false
+	}
+	var name, sku string
+	var price, cost int64
+	var gift, track int
+	_ = s.db.QueryRow(s.db.Rebind(`SELECT name, COALESCE(sku,''), price_cents, COALESCE(cost_cents,0), COALESCE(is_gift_card,0), COALESCE(track_stock,1)
+		FROM products WHERE id = ?`), productID).Scan(&name, &sku, &price, &cost, &gift, &track)
+	if name == "" || gift == 1 || track == 0 {
+		s.etimsSkip(r, "not a stocked good")
+		return false
+	}
+	unit := cost
+	if sar == "11" || unit <= 0 {
+		unit = price
+	}
+	line := s.etimsLine(productID, name, sku, "", absI64(delta), unit, 0)
+	body := map[string]any{
+		"clientRef": r.ClientRef, "sarTyCd": sar, "occurredAt": kenyaStampOf(createdAt), "line": line,
+		"remainQtyMilli": balance, "remark": truncStr(strings.TrimSpace(kind+" "+reference+" "+note), 400),
+		"userId": fmt.Sprint(userID), "userName": username,
+	}
+	out, code, err := etimsCall(s, "stock", body)
+	if e := errOf(out, code, err); e != nil {
+		retry := err != nil || code >= 500 || code == 0
+		if v, ok := out["retry"].(bool); ok {
+			retry = v
+		}
+		s.etimsMark(r, "", e.Error(), retry, nil)
+		return false
+	}
+	_, _ = s.db.Exec(s.db.Rebind(`UPDATE etims_receipts SET status = 'signed', last_error = '', attempts = attempts + 1, next_try_at = '', updated_at = ? WHERE id = ?`), nowStamp(), r.ID)
+	return true
+}
+
+func (s *Service) etimsSkip(r etimsRow, why string) {
+	_, _ = s.db.Exec(s.db.Rebind(`UPDATE etims_receipts SET status = 'skipped', last_error = ?, next_try_at = '', updated_at = ? WHERE id = ?`), why, nowStamp(), r.ID)
+}
+
+func absI64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

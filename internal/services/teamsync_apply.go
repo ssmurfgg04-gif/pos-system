@@ -251,6 +251,9 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
 		Wholesale     int64  `json:"wholesalePriceCents"`
 		LowStock      int    `json:"lowStockUnits"`
 		UpdatedAt     string `json:"updatedAt"`
+		// v1.11 (pointers: an older till's event without them keeps ours)
+		EtimsTaxType *string `json:"etimsTaxType"`
+		EtimsClsCd   *string `json:"etimsClsCd"`
 	}
 	if err := json.Unmarshal(payload, &pr); err != nil {
 		return err
@@ -291,6 +294,7 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
 			pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.Wholesale, pr.LowStock, pr.UpdatedAt, localID); err != nil {
 			return err
 		}
+		s.applyEtimsFields(localID, pr.EtimsTaxType, pr.EtimsClsCd)
 		if pr.StockSet {
 			_, err = s.db.Exec(s.db.Rebind(`UPDATE products SET stock_qty_milli = ?, stock_qty = ? / 1000 WHERE id = ?`), pr.StockQtyMilli, pr.StockQtyMilli, localID)
 		}
@@ -307,7 +311,35 @@ func (s *Service) applyProduct(payload json.RawMessage) error {
                 INSERT INTO products (sku, barcode, name, category_id, price_cents, cost_cents, stock_qty_milli, track_stock, is_active, is_gift_card, wholesale_price_cents, low_stock_units, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		sku, pr.Barcode, pr.Name, catID, pr.PriceCents, pr.CostCents, pr.StockQtyMilli, btoi(pr.TrackStock), btoi(pr.Active), btoi(pr.IsGiftCard), pr.Wholesale, pr.LowStock, pr.UpdatedAt)
+	if err == nil {
+		var id int64
+		if s.db.QueryRow(s.db.Rebind(`SELECT id FROM products WHERE sku = ?`), sku).Scan(&id) == nil {
+			s.applyEtimsFields(id, pr.EtimsTaxType, pr.EtimsClsCd)
+		}
+	}
 	return err
+}
+
+// applyEtimsFields stores synced KRA fields, validated like a local edit.
+func (s *Service) applyEtimsFields(id int64, taxType, clsCd *string) {
+	if taxType != nil {
+		t := strings.ToUpper(strings.TrimSpace(*taxType))
+		if t == "" || validTaxType(t) {
+			_, _ = s.db.Exec(s.db.Rebind(`UPDATE products SET etims_tax_type = ? WHERE id = ?`), t, id)
+		}
+	}
+	if clsCd != nil {
+		c := strings.TrimSpace(*clsCd)
+		ok := len(c) <= 10
+		for _, r := range c {
+			if r < '0' || r > '9' {
+				ok = false
+			}
+		}
+		if ok {
+			_, _ = s.db.Exec(s.db.Rebind(`UPDATE products SET etims_cls_cd = ? WHERE id = ?`), c, id)
+		}
+	}
 }
 
 func (s *Service) applyStockDelta(payload json.RawMessage) error {

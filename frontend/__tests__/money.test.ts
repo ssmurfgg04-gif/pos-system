@@ -63,11 +63,11 @@ describe('tax math', () => {
       { qtyMilli: 2000, unitPriceCents: 55000 },
       { qtyMilli: 1000, unitPriceCents: 45000 },
     ]
-    expect(cartTotals(lines, 16, true)).toEqual({ subtotal: 155000, tax: 21379, total: 155000 })
-    expect(cartTotals(lines, 16, false)).toEqual({ subtotal: 155000, tax: 24800, total: 179800 })
+    expect(cartTotals(lines, 16, true)).toMatchObject({ subtotal: 155000, tax: 21379, total: 155000 })
+    expect(cartTotals(lines, 16, false)).toMatchObject({ subtotal: 155000, tax: 24800, total: 179800 })
   })
   it('zero-rated carts', () => {
-    expect(cartTotals([{ qtyMilli: 1000, unitPriceCents: 100 }], 0, true)).toEqual({ subtotal: 100, tax: 0, total: 100 })
+    expect(cartTotals([{ qtyMilli: 1000, unitPriceCents: 100 }], 0, true)).toMatchObject({ subtotal: 100, tax: 0, total: 100 })
   })
   it('fractional milli lines price with the half-up formula', () => {
     expect(cartTotals([{ qtyMilli: 1500, unitPriceCents: 333 }], 0, true).subtotal).toBe(500) // 499.5 → 500

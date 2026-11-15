@@ -254,3 +254,71 @@ func TestEtimsVoidCreditNote(t *testing.T) {
 		t.Fatalf("unsent voided sale: %+v", st)
 	}
 }
+
+// v1.11 stock: a sale's stock movement goes to KRA (type 11) only after
+// the sale's invoice is signed, with the item's remaining stock; goods-in
+// goes as 02 at once.
+func TestEtimsStockMovements(t *testing.T) {
+	f := newMoneyTill(t)
+	signSales := false
+	fake := &fakeEtims{reply: func(b map[string]any) (map[string]any, int, error) {
+		if b["action"] == "stock" {
+			return map[string]any{"ok": true, "status": "done"}, 200, nil
+		}
+		if !signSales {
+			return nil, 0, errors.New("KRA down")
+		}
+		return signedReply(1), 200, nil
+	}}
+	useFakeEtims(t, fake)
+	etimsOn(f)
+	f.s.db.Exec(`UPDATE products SET track_stock = 1 WHERE id = ?`, f.prodID)
+	f.s.EtimsTick() // first run: remembers where the ledger starts
+	if _, err := f.checkout("cash", 0, "uuid-stock-1"); err != nil {
+		t.Fatalf("checkout: %v", err)
+	}
+	f.s.EtimsTick()
+	for _, c := range fake.calls {
+		if c["action"] == "stock" {
+			t.Fatal("stock movement sent before its invoice was signed")
+		}
+	}
+	signSales = true
+	f.s.db.Exec(`UPDATE etims_receipts SET next_try_at = ''`)
+	f.s.EtimsTick()
+	f.s.db.Exec(`UPDATE etims_receipts SET next_try_at = ''`)
+	f.s.EtimsTick()
+	var stockCall map[string]any
+	for _, c := range fake.calls {
+		if c["action"] == "stock" {
+			stockCall = c
+		}
+	}
+	if stockCall == nil {
+		t.Fatalf("no stock movement sent: %v", fake.calls)
+	}
+	if stockCall["sarTyCd"] != "11" || stockCall["remainQtyMilli"] != int64(49000) {
+		t.Fatalf("bad stock call: %v", stockCall)
+	}
+	line := stockCall["line"].(map[string]any)
+	if line["qtyMilli"] != int64(1000) {
+		t.Fatalf("bad stock line: %v", line)
+	}
+}
+
+func TestSarTypeFor(t *testing.T) {
+	cases := map[[2]any]string{
+		{models.MoveSale, int64(-1000)}:         "11",
+		{models.MoveReturnRestock, int64(1000)}: "03",
+		{models.MovePOReceive, int64(5000)}:     "02",
+		{models.MoveDisposal, int64(-1000)}:     "15",
+		{models.MoveAdjustment, int64(-1)}:      "16",
+		{models.MoveAdjustment, int64(1)}:       "06",
+		{"WEIRD", int64(1)}:                     "",
+	}
+	for in, want := range cases {
+		if got := sarTypeFor(in[0].(string), in[1].(int64)); got != want {
+			t.Errorf("sarTypeFor(%v) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -313,6 +313,9 @@ export interface Product {
   /** v1.10 KRA eTIMS: tax type A-E and item class ("" = shop default) */
   etimsTaxType?: string
   etimsClsCd?: string
+  /** v1.11 effective VAT the till prices this product at (server rule) */
+  vatType?: string
+  vatRate?: number
   active: boolean
   updatedAt: string
 }
@@ -440,6 +443,11 @@ export interface OrderItem {
   lineTotalCents: number
   /** v1.7.0: unit cost frozen at sale time (0 = pre-v26 line). */
   costCents?: number
+  /** v1.11 per-line VAT frozen at sale time ('' = older line) */
+  taxType?: string
+  taxRate?: number
+  taxCents?: number
+  paidCents?: number
 }
 
 export interface Payment {
@@ -714,6 +722,7 @@ export interface DailySummary {
   uncostedLines?: number
   uncostedSalesCents?: number
   returnsProfitCents?: number
+  giftCardSalesCents?: number
   /** P6 multi-store: present (with per-shop rows) on the ?shop=all consolidated view. */
   consolidated?: boolean
   shops?: { id: string; name: string; salesCents: number; ordersPaid: number; cashCents: number; mpesaCents: number; paystackCents: number; creditCents: number; ordersVoided?: number; discrepancies?: number }[]
@@ -752,6 +761,7 @@ export interface MonthlySummary {
   uncostedLines?: number
   uncostedSalesCents?: number
   returnsProfitCents?: number
+  giftCardSalesCents?: number
 }
 
 export interface BackupResult {

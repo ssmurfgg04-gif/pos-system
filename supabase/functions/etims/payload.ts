@@ -28,6 +28,12 @@ export interface SaleLine {
    *  order-level discount */
   lineTotalCents: number
   taxTy: TaxType
+  /** v1.11: this line's share of the discount (when the till already
+   *  spread it); when ANY line sets it, no order-level spreading happens */
+  discountCents?: number
+  /** v1.11: the line's VAT as the till computed and printed it; used when
+   *  it is within a cent of the exact formula, so KRA and the receipt agree */
+  taxCents?: number
 }
 
 export interface SaleInput {
@@ -72,20 +78,29 @@ export function inclusiveTax(amountCents: number, rate: number): number {
   return divHalfUp(amountCents * rate, 100 + rate)
 }
 
-/** Spread an order discount over lines by value (largest remainder), so the
- *  pieces add up to exactly the discount. */
+/** Spread an order discount over lines by value: integer largest
+ *  remainder, ties to the earlier line, so the pieces add up to exactly
+ *  the discount. Same rule as the till (internal/money.Spread). */
 export function spreadDiscount(lineTotals: number[], discount: number): number[] {
-  const total = lineTotals.reduce((a, b) => a + b, 0)
-  if (discount <= 0 || total <= 0) return lineTotals.map(() => 0)
-  const d = Math.min(discount, total)
-  const raw = lineTotals.map((t) => (t * d) / total)
-  const out = raw.map(Math.floor)
-  let left = d - out.reduce((a, b) => a + b, 0)
-  const order = raw.map((r, i) => [r - Math.floor(r), i] as const).sort((a, b) => b[0] - a[0])
-  for (const [, i] of order) {
-    if (left <= 0) break
-    out[i]++
-    left--
+  const out = lineTotals.map(() => 0)
+  const total = lineTotals.reduce((a, w) => a + (w > 0 ? w : 0), 0)
+  if (discount <= 0 || total <= 0) return out
+  const amt = BigInt(Math.min(discount, total))
+  const bt = BigInt(total)
+  const rems: { r: bigint; i: number }[] = []
+  let given = 0n
+  lineTotals.forEach((w, i) => {
+    if (w <= 0) { rems.push({ r: -1n, i }); return }
+    const p = BigInt(w) * amt
+    out[i] = Number(p / bt)
+    given += p / bt
+    rems.push({ r: p % bt, i })
+  })
+  rems.sort((a, b) => (a.r === b.r ? a.i - b.i : a.r > b.r ? -1 : 1))
+  for (let k = 0; given < amt && k < rems.length; k++) {
+    if (rems[k].r < 0n) continue
+    out[rems[k].i]++
+    given++
   }
   return out
 }
@@ -106,7 +121,10 @@ function qtyAndPrice(l: SaleLine): { qty: number; prcCents: number; name: string
 
 export function buildSale(input: SaleInput) {
   if (input.lines.length === 0) throw new Error('a sale needs at least one line')
-  const disc = spreadDiscount(input.lines.map((l) => l.lineTotalCents), input.discountCents ?? 0)
+  const perLine = input.lines.some((l) => l.discountCents !== undefined)
+  const disc = perLine
+    ? input.lines.map((l) => Math.max(0, Math.min(l.lineTotalCents, Math.round(l.discountCents ?? 0))))
+    : spreadDiscount(input.lines.map((l) => l.lineTotalCents), input.discountCents ?? 0)
   const taxbl: Record<TaxType, number> = { A: 0, B: 0, C: 0, D: 0, E: 0 }
   const tax: Record<TaxType, number> = { A: 0, B: 0, C: 0, D: 0, E: 0 }
   const itemList = input.lines.map((l, i) => {
@@ -114,7 +132,11 @@ export function buildSale(input: SaleInput) {
     const sply = l.lineTotalCents
     const dc = disc[i]
     const taxable = sply - dc
-    const t = inclusiveTax(taxable, TAX_RATES[l.taxTy])
+    const exact = inclusiveTax(taxable, TAX_RATES[l.taxTy])
+    const given = l.taxCents
+    const t = given !== undefined && Number.isFinite(given) && Math.abs(given - exact) <= 1 && (TAX_RATES[l.taxTy] > 0 || given === 0)
+      ? Math.round(given)
+      : exact
     taxbl[l.taxTy] += taxable
     tax[l.taxTy] += t
     return {

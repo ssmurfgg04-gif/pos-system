@@ -146,7 +146,8 @@ func (s *Service) ListOrders(f OrderFilter, p *auth.Principal) ([]models.Order, 
 
 func (s *Service) itemsForOrders(ids []string) (map[int64][]models.OrderItem, error) {
 	out := map[int64][]models.OrderItem{}
-	q := s.db.Rebind(`SELECT order_id, id, product_id, name, COALESCE(sku,''), qty_milli, unit_price_cents, line_total_cents, COALESCE(cost_cents,0)
+	q := s.db.Rebind(`SELECT order_id, id, product_id, name, COALESCE(sku,''), qty_milli, unit_price_cents, line_total_cents, COALESCE(cost_cents,0),
+                COALESCE(tax_type,''), COALESCE(tax_rate,0), COALESCE(tax_cents,0), COALESCE(paid_cents,0)
                 FROM order_items WHERE order_id IN (` + placeholders(len(ids)) + `) ORDER BY id`)
 	args := toAny(ids)
 	rows, err := s.db.Query(q, args...)
@@ -157,7 +158,8 @@ func (s *Service) itemsForOrders(ids []string) (map[int64][]models.OrderItem, er
 	for rows.Next() {
 		var orderID int64
 		var it models.OrderItem
-		if err := rows.Scan(&orderID, &it.ID, &it.ProductID, &it.Name, &it.SKU, &it.QtyMilli, &it.UnitPriceCents, &it.LineTotalCents, &it.CostCents); err != nil {
+		if err := rows.Scan(&orderID, &it.ID, &it.ProductID, &it.Name, &it.SKU, &it.QtyMilli, &it.UnitPriceCents, &it.LineTotalCents, &it.CostCents,
+			&it.TaxType, &it.TaxRate, &it.TaxCents, &it.PaidCents); err != nil {
 			return out, err
 		}
 		out[orderID] = append(out[orderID], it)

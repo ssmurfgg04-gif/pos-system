@@ -64,6 +64,11 @@ type checkoutLine struct {
 	trackStock     bool
 	trackBatches   bool // v1.8.0: FEFO lot allocation on deduction
 	allowFraction  bool
+	isGiftCard     bool
+	taxType        string  // v1.11: KRA tax type A-E, or X (outside VAT: gift cards)
+	taxRate        float64 // v1.11: VAT percent frozen on the line
+	taxCents       int64   // v1.11: the line's share of the order VAT
+	paidCents      int64   // v1.11: what the customer pays for the line, VAT incl., after discount + points
 }
 
 // roundToShilling rounds cents to the nearest whole shilling (M-Pesa STK
@@ -197,12 +202,12 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 			continue
 		}
 		var l checkoutLine
-		var track, active, batches, fraction int
+		var track, active, batches, fraction, gift int
 		err := s.db.QueryRow(s.db.Rebind(
 			`SELECT id, name, COALESCE(sku,''), price_cents, COALESCE(track_stock,1), COALESCE(is_active,1), COALESCE(cost_cents,0),
-                                COALESCE(track_batches,0), COALESCE(allow_fraction,0)
+                                COALESCE(track_batches,0), COALESCE(allow_fraction,0), COALESCE(is_gift_card,0), COALESCE(etims_tax_type,'')
                          FROM products WHERE id = ?`), it.ProductID).
-			Scan(&l.productID, &l.name, &l.sku, &l.unitPriceCents, &track, &active, &l.costCents, &batches, &fraction)
+			Scan(&l.productID, &l.name, &l.sku, &l.unitPriceCents, &track, &active, &l.costCents, &batches, &fraction, &gift, &l.taxType)
 		if err != nil {
 			return nil, fmt.Errorf("product %d: %w", it.ProductID, err)
 		}
@@ -212,6 +217,7 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 		l.trackStock = track == 1
 		l.trackBatches = batches == 1
 		l.allowFraction = fraction == 1
+		l.isGiftCard = gift == 1
 		// Price override is a permission-gated feature.
 		if it.UnitPriceCents != 0 && it.UnitPriceCents != l.unitPriceCents {
 			if !p.Can("payments.override_price") {
@@ -273,10 +279,16 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 	if discount > 0 && !p.Can("payments.apply_discount") {
 		return nil, fmt.Errorf("applying a discount requires payments.apply_discount permission")
 	}
-	discountedSub := subtotal - discount
-
-	var tax, total int64
-	tax, total = money.Totals(discountedSub, pct, included)
+	// v1.11 per-line VAT: each line sells at its product's rate (exempt,
+	// zero-rated, 8%, gift cards outside VAT); a sale where every line has
+	// the shop rate is exactly the old single-rate maths (money.ComputeLines).
+	mlines := make([]money.Line, len(lines))
+	for i := range lines {
+		lines[i].taxType, lines[i].taxRate = s.vatFor(lines[i].taxType, lines[i].isGiftCard, pct)
+		mlines[i] = money.Line{AmountCents: lines[i].lineTotalCents, Rate: lines[i].taxRate}
+	}
+	priced := money.ComputeLines(mlines, discount, 0, included)
+	tax, total := priced.TaxCents, priced.TotalCents
 
 	// Loyalty redemption: points × point value, capped at a configured
 	// share of the order total. The spent points are deducted now and
@@ -312,6 +324,16 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 	}
 	// Payable is what changes hands (discount + points already applied).
 	payable := total - redeemCents
+	// VAT is the VAT INSIDE what is paid: points reduce it like a discount
+	// (receipt and KRA eTIMS then show the same VAT).
+	if redeemCents > 0 {
+		priced = money.ComputeLines(mlines, discount, redeemCents, included)
+		tax = priced.TaxCents
+	}
+	for i := range lines {
+		lines[i].taxCents = priced.Lines[i].TaxCents
+		lines[i].paidCents = priced.Lines[i].PaidCents
+	}
 
 	immediateCash := method == models.MethodCash
 	immediateCredit := method == models.MethodCredit
@@ -455,9 +477,9 @@ func (s *Service) Checkout(ctx context.Context, p *auth.Principal, req models.Ch
 		itemIDs := make([]int64, len(lines))
 		for li, l := range lines {
 			res, err := tx.Exec(s.db.Rebind(`
-                                INSERT INTO order_items (order_id, product_id, name, sku, qty_milli, qty, unit_price_cents, line_total_cents, cost_cents)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-				id, l.productID, l.name, l.sku, l.qtyMilli, l.qtyMilli/1000, l.unitPriceCents, l.lineTotalCents, l.costCents)
+                                INSERT INTO order_items (order_id, product_id, name, sku, qty_milli, qty, unit_price_cents, line_total_cents, cost_cents, tax_type, tax_rate, tax_cents, paid_cents)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+				id, l.productID, l.name, l.sku, l.qtyMilli, l.qtyMilli/1000, l.unitPriceCents, l.lineTotalCents, l.costCents, l.taxType, l.taxRate, l.taxCents, l.paidCents)
 			if err != nil {
 				tx.Rollback()
 				return nil, err

@@ -342,3 +342,22 @@ describe('Two-step rail — every cart line stays visible', () => {
     expect(removeBtns()).toBe(5)
   })
 })
+
+describe('F12 pays from the keyboard', () => {
+  afterEach(unmount)
+  test('F12 opens the payment step, a second F12 presses the enabled pay button', () => {
+    useCart.setState({ lines: [line({ productId: 1, name: 'Item 1' })] })
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    act(() => { root!.render(<CheckoutRail products={null} payConfig={null} onOrderPaid={() => {}} onOrderVoided={() => {}} />) })
+    expect(container.querySelector('[data-primary-charge]')).toBeNull()
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F12' })) })
+    const pay = container.querySelector<HTMLButtonElement>('[data-primary-charge]')
+    expect(pay).not.toBeNull()
+    let clicked = 0
+    pay!.addEventListener('click', () => { clicked++ })
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F12' })) })
+    expect(clicked).toBe(pay!.disabled ? 0 : 1)
+  })
+})

@@ -205,14 +205,32 @@ func TestRenderEtimsSignedReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(out)
-	for _, want := range []string{"TAX INVOICE", "SCU INFORMATION", "KRACU0100000001/7", "SIGNATURE1", "14/11/2026 14:30:05", "\x1d(k"} {
+	for _, want := range []string{"TAX INVOICE", "SCU INFORMATION", "KRACU0100000001/7", "SIGNATURE1", "14/11/2026 14:30:05", "\x1dv0"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("signed receipt missing %q", want)
 		}
 	}
+	if strings.Contains(s, "\x1d(k") {
+		t.Error("default QR must be a raster image (works on every printer), not GS ( k")
+	}
+	// native mode: the printer's own QR command
+	d.QRNative = true
+	out, _ = Render(d, 48)
+	if !strings.Contains(string(out), "\x1d(k") {
+		t.Error("native QR mode must use GS ( k")
+	}
+	d.QRNative = false
 	d.Etims = &models.EtimsStamp{Status: "pending"}
 	out, _ = Render(d, 48)
 	if s = string(out); strings.Contains(s, "TAX INVOICE") || !strings.Contains(s, "sending to KRA") {
 		t.Errorf("pending receipt must not claim TAX INVOICE")
+	}
+}
+
+// The vendored encoder produces a scannable-size QR for a KRA URL.
+func TestQRImageForKRAURL(t *testing.T) {
+	img := QRImage("https://etims.kra.go.ke/common/link/etims/receipt/indexEtimsReceiptData?Data=P051234567X00ABCDEFGHIJKLMNOP", 256)
+	if img == nil || img.Bounds().Dx() != 256 {
+		t.Fatalf("QR image: %v", img)
 	}
 }
