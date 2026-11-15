@@ -23,6 +23,10 @@ import { DesignBoard } from './pages/DesignBoard'
 import { Shifts } from './pages/Shifts'
 import { Reports } from './pages/Reports'
 import { Expenses } from './pages/Expenses'
+import { Timecards } from './pages/Timecards'
+import { Transfers } from './pages/Transfers'
+import { Books } from './pages/Books'
+import { Promotions } from './pages/Promotions'
 import { Users } from './pages/Users'
 import { Settings } from './pages/Settings'
 import { Help } from './pages/Help'
@@ -112,6 +116,14 @@ function GatedApp({ path, user }: { path: string; user: User }) {
         return user.permissions.includes('reports.view') ? <Reports /> : <NoPerm perm="reports.view" />
       case path.startsWith('/expenses'):
         return user.permissions.includes('expenses.view') ? <Expenses /> : <NoPerm perm="expenses.view" />
+      case path.startsWith('/time'):
+        return <Timecards />
+      case path.startsWith('/transfers'):
+        return user.permissions.includes('transfers.manage') ? <Transfers /> : <NoPerm perm="transfers.manage" />
+      case path.startsWith('/books'):
+        return user.permissions.includes('accounting.export') ? <Books /> : <NoPerm perm="accounting.export" />
+      case path.startsWith('/promotions'):
+        return user.permissions.includes('marketing.send') ? <Promotions /> : <NoPerm perm="marketing.send" />
       case path.startsWith('/users'):
         return user.permissions.includes('users.manage') ? <Users /> : <NoPerm perm="users.manage" />
       case path.startsWith('/settings'):

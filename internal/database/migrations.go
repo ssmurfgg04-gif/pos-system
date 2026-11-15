@@ -1740,6 +1740,186 @@ ALTER TABLE order_items ADD COLUMN IF NOT EXISTS tax_cents BIGINT NOT NULL DEFAU
 ALTER TABLE order_items ADD COLUMN IF NOT EXISTS paid_cents BIGINT NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		// v1.12.0 (v32) — staff timecards, stock transfers between the
+		// shops of one business, and customer promotions.
+		//   time_entries      one row per clock-in; breaks accumulate in
+		//                     break_seconds; edits keep who/why; client_uuid
+		//                     is the team-sync identity (LWW by updated_at)
+		//   users.hourly_rate_cents  optional pay rate for the timecard
+		//   stock_transfers   this shop's side of a transfer (out: stock
+		//                     left here when sent; in: stock arrives once,
+		//                     applied=1, when received)
+		//   customers.marketing_opt_in  consent to offers (Kenya Data
+		//                     Protection Act: direct marketing needs it);
+		//                     off for everyone until the shop records it
+		//   promo_campaigns / promo_recipients  one bulk send, resumable
+		//                     per recipient (a crash never double-sends)
+		Version: 32,
+		SQLite: `
+ALTER TABLE users ADD COLUMN hourly_rate_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE customers ADD COLUMN marketing_opt_in INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE customers ADD COLUMN marketing_updated_at TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS time_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_uuid TEXT NOT NULL DEFAULT '',
+        user_id INTEGER NOT NULL DEFAULT 0,
+        username TEXT NOT NULL DEFAULT '',
+        clock_in TEXT NOT NULL,
+        clock_out TEXT NOT NULL DEFAULT '',
+        break_seconds INTEGER NOT NULL DEFAULT 0,
+        break_started TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        device_id TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'active',
+        edited_by_name TEXT NOT NULL DEFAULT '',
+        edit_reason TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_time_entries_uuid ON time_entries(client_uuid) WHERE client_uuid != '';
+CREATE INDEX IF NOT EXISTS idx_time_entries_user ON time_entries(user_id, clock_in);
+CREATE INDEX IF NOT EXISTS idx_time_entries_in ON time_entries(clock_in);
+CREATE TABLE IF NOT EXISTS stock_transfers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_ref TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        other_team TEXT NOT NULL DEFAULT '',
+        other_name TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'queued',
+        lines_json TEXT NOT NULL DEFAULT '[]',
+        received_json TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        created_by_name TEXT NOT NULL DEFAULT '',
+        received_by_name TEXT NOT NULL DEFAULT '',
+        applied INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT '',
+        sent_at TEXT NOT NULL DEFAULT '',
+        received_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_transfers_ref ON stock_transfers(direction, client_ref);
+CREATE INDEX IF NOT EXISTS idx_stock_transfers_status ON stock_transfers(status);
+CREATE TABLE IF NOT EXISTS promo_campaigns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_uuid TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        body TEXT NOT NULL,
+        segment_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'draft',
+        total INTEGER NOT NULL DEFAULT 0,
+        sent INTEGER NOT NULL DEFAULT 0,
+        failed INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL DEFAULT '',
+        created_by_name TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT '',
+        started_at TEXT NOT NULL DEFAULT '',
+        finished_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS promo_recipients (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id INTEGER NOT NULL REFERENCES promo_campaigns(id) ON DELETE CASCADE,
+        customer_id INTEGER NOT NULL DEFAULT 0,
+        name TEXT NOT NULL DEFAULT '',
+        phone TEXT NOT NULL,
+        body TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        provider_ref TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        next_try_at TEXT NOT NULL DEFAULT '',
+        sent_at TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_recipients_phone ON promo_recipients(campaign_id, phone);
+CREATE INDEX IF NOT EXISTS idx_promo_recipients_status ON promo_recipients(campaign_id, status);
+`,
+		Pg: `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS hourly_rate_cents BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS marketing_opt_in INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS marketing_updated_at TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS time_entries (
+        id SERIAL PRIMARY KEY,
+        client_uuid TEXT NOT NULL DEFAULT '',
+        user_id BIGINT NOT NULL DEFAULT 0,
+        username TEXT NOT NULL DEFAULT '',
+        clock_in TEXT NOT NULL,
+        clock_out TEXT NOT NULL DEFAULT '',
+        break_seconds BIGINT NOT NULL DEFAULT 0,
+        break_started TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        device_id TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'active',
+        edited_by_name TEXT NOT NULL DEFAULT '',
+        edit_reason TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_time_entries_uuid ON time_entries(client_uuid) WHERE client_uuid != '';
+CREATE INDEX IF NOT EXISTS idx_time_entries_user ON time_entries(user_id, clock_in);
+CREATE INDEX IF NOT EXISTS idx_time_entries_in ON time_entries(clock_in);
+CREATE TABLE IF NOT EXISTS stock_transfers (
+        id SERIAL PRIMARY KEY,
+        client_ref TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        other_team TEXT NOT NULL DEFAULT '',
+        other_name TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'queued',
+        lines_json TEXT NOT NULL DEFAULT '[]',
+        received_json TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        created_by_name TEXT NOT NULL DEFAULT '',
+        received_by_name TEXT NOT NULL DEFAULT '',
+        applied INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT '',
+        sent_at TEXT NOT NULL DEFAULT '',
+        received_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_transfers_ref ON stock_transfers(direction, client_ref);
+CREATE INDEX IF NOT EXISTS idx_stock_transfers_status ON stock_transfers(status);
+CREATE TABLE IF NOT EXISTS promo_campaigns (
+        id SERIAL PRIMARY KEY,
+        client_uuid TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        body TEXT NOT NULL,
+        segment_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'draft',
+        total INTEGER NOT NULL DEFAULT 0,
+        sent INTEGER NOT NULL DEFAULT 0,
+        failed INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL DEFAULT '',
+        created_by_name TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT '',
+        started_at TEXT NOT NULL DEFAULT '',
+        finished_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS promo_recipients (
+        id SERIAL PRIMARY KEY,
+        campaign_id BIGINT NOT NULL REFERENCES promo_campaigns(id) ON DELETE CASCADE,
+        customer_id BIGINT NOT NULL DEFAULT 0,
+        name TEXT NOT NULL DEFAULT '',
+        phone TEXT NOT NULL,
+        body TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        provider_ref TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        next_try_at TEXT NOT NULL DEFAULT '',
+        sent_at TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_recipients_phone ON promo_recipients(campaign_id, phone);
+CREATE INDEX IF NOT EXISTS idx_promo_recipients_status ON promo_recipients(campaign_id, status);
+`,
+		Go: func(d *DB, tx *sql.Tx) error {
+			return unionRolePerms(d, tx, map[string][]string{
+				"Admin":      {"timecards.manage", "transfers.manage", "accounting.export", "marketing.send"},
+				"Owner":      {"timecards.manage", "transfers.manage", "accounting.export", "marketing.send"},
+				"Front Desk": {"transfers.manage"},
+			})
+		},
+	},
 }
 
 // backfillRolePermsV19 unions the v19 sales-oversight permission into the

@@ -101,6 +101,23 @@ var DefaultSettings = map[string]string{
 	"sync_endpoint":    "", // Supabase project URL
 	"sync_service_key": "", // SECRET — service_role key
 	"sync_team_code":   "", // short code shared by the team's devices
+	// v1.12 timecards: normal week (Regulation of Wages (General) Order:
+	// 52 hours) and the overtime multiplier (Employment Act: 1.5x).
+	"timecard_weekly_hours":  "52",
+	"timecard_overtime_rate": "1.5",
+	// v1.12 accounting export (QuickBooks / Xero)
+	"accounting_accounts":      "",           // JSON {key: {name, code}} over the built-in defaults
+	"accounting_date_format":   "dd/mm/yyyy", // dd/mm/yyyy | mm/dd/yyyy | yyyy-mm-dd (match the books' region)
+	"accounting_xero_tax_rate": "Tax Exempt", // Xero tax rate name on journal lines (VAT has its own line)
+	// v1.12 promotions: SMS via the shop's own Africa's Talking account
+	"sms_username":      "", // Africa's Talking app username ("sandbox" to test)
+	"sms_api_key":       "", // secret
+	"sms_sender_id":     "", // approved alphanumeric sender ID (blank = shared)
+	"sms_env":           "production",
+	"sms_api_url":       "", // override for tests / a reseller gateway
+	"promo_quiet_start": "20:00",
+	"promo_quiet_end":   "08:00",
+	"promo_footer":      "To stop offers, tell us or call {phone}.",
 }
 
 type seedProduct struct {

@@ -49,6 +49,16 @@ type Service struct {
 	shopID string // ws broadcast scoping (set by the ShopPool)
 
 	orderSeqMu sync.Mutex
+
+	clockMu    sync.Mutex // v1.12 timecard punches/edits (no double clock-in)
+	transferMu sync.Mutex // v1.12 stock transfers (send/receive/cancel one at a time)
+	promoMu    sync.Mutex // v1.12 promotion sender (one drain at a time)
+
+	// transferRPCForTest replaces the cloud for stock-transfer tests.
+	transferRPCForTest transferRPCFunc
+	// promo senders replaced in tests
+	promoSMSForTest      func(phones []string, body string) ([]promoSendResult, error)
+	promoWhatsappForTest func(phone, body string) error
 }
 
 func New(db *database.DB, st *settings.Store, hub *ws.Hub, pw *printer.Worker) *Service {

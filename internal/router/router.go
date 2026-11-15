@@ -91,6 +91,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	api.POST("/auth/login", h.Login)
 	api.GET("/auth/pin-users", h.PinUsers)
 	api.POST("/auth/pin", h.PinLogin)
+	api.POST("/timeclock/punch", h.PinPunch) // v1.12: clock in/out from the PIN pad (own PIN)
 	// Authentication lifecycle: first-run owner setup (replaces seeded
 	// demo accounts) + the recovery-code forgot-password flow.
 	api.GET("/auth/has-users", h.HasUsers)
@@ -202,6 +203,44 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	// X/Z cash-session report (X = live for the caller's open shift,
 	// Z = any closed shift via ?shift=id).
 	authd.GET("/shifts/report", perm("shifts.manage"), h.ShiftReportXZ)
+
+	// Time clock + timecards (v1.12). Everyone clocks themselves;
+	// managers see and correct everyone's.
+	authd.GET("/timeclock/me", h.MyClock)
+	authd.POST("/timeclock/me", h.MyPunch)
+	tc := authd.Group("", perm("timecards.manage"))
+	tc.GET("/timecards", h.Timecards)
+	tc.GET("/timecards.csv", h.TimecardsCSV)
+	tc.POST("/timecards", h.AddTimeEntry)
+	tc.PUT("/timecards/:id", h.EditTimeEntry)
+	tc.POST("/timecards/:id/void", h.VoidTimeEntry)
+	tc.PUT("/timecard-rates/:userId", h.SetHourlyRate)
+
+	// Stock transfers between the shops of one business (v1.12).
+	tr := authd.Group("", perm("transfers.manage"))
+	tr.GET("/transfers", h.ListTransfers)
+	tr.POST("/transfers", h.SendTransfer)
+	tr.POST("/transfers/cancel", h.CancelTransfer)
+	tr.POST("/transfers/:id/receive", h.ReceiveTransfer)
+
+	// The books for QuickBooks / Xero (v1.12).
+	ac := authd.Group("", perm("accounting.export"))
+	ac.GET("/accounting/journal", h.AccountingJournal)
+	ac.GET("/accounting/export.csv", h.AccountingExport)
+	ac.GET("/accounting/accounts", h.AccountingAccounts)
+	ac.PUT("/accounting/accounts", h.SaveAccountingAccounts)
+
+	// Customer promotions by SMS / WhatsApp (v1.12). Consent is part of
+	// the customer record; anyone who manages customers can record it.
+	authd.PUT("/customers/:id/marketing", perm("customers.manage"), h.SetMarketingConsent)
+	authd.POST("/promotions/opt-out", permAny("marketing.send", "customers.manage"), h.PromoOptOut)
+	pm := authd.Group("", perm("marketing.send"))
+	pm.GET("/promotions", h.ListPromos)
+	pm.POST("/promotions", h.CreatePromo)
+	pm.POST("/promotions/audience", h.PromoAudience)
+	pm.POST("/promotions/test", h.PromoTest)
+	pm.GET("/promotions/:id", h.GetPromo)
+	pm.POST("/promotions/:id/:action", h.PromoAction)
 
 	// Design board.
 	authd.GET("/design", perm("design.view"), h.ListDesignJobs)

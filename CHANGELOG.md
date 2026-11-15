@@ -3,6 +3,30 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.12.0 — Timecards, stock transfers, the books, promotions
+
+- **Staff time clock.** Clock in and out with your PIN right on the PIN
+  screen, or from Time with breaks. Managers see everyone's hours, normal
+  and overtime (52-hour week, 1.5x, both adjustable), estimated pay from an
+  hourly rate, and fix missed punches with a reason that is kept.
+  Payroll CSV.
+- **Stock transfers between your shops.** Send stock to another shop of the
+  business (works offline, goes when the internet is back); they receive
+  what actually arrived; anything short is recorded. Cancel before it is
+  received and the goods come back. Reported to KRA as stock movements.
+- **QuickBooks and Xero.** Books: one balanced journal entry per day (sales,
+  VAT, every way of payment, returns, cost of goods, write-offs, expenses,
+  tabs, store credit, gift cards) as a QuickBooks Online or Xero import file.
+  Account names and codes match your accountant's chart.
+- **Promotions by SMS or WhatsApp.** Only to customers who agreed (a new
+  "OK to send offers" tick on the customer), with an opt-out line on every
+  message, quiet hours, and a preview of who and how many before sending.
+  SMS through your own Africa's Talking account. Pauses itself when the SMS
+  account runs out of credit, and never sends anyone the same promotion
+  twice.
+- Guide: docs/STAFF-STOCK-BOOKS-PROMOS.md. Migration v32; cloud
+  `db/deploy-v1120-transfers.sql` (applied).
+
 ## v1.11.1 — Updates reach every till, WhatsApp opens the customer's chat
 
 - **Tills now find a quiet moment to update.** The "selling right now"

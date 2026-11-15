@@ -772,6 +772,7 @@ func (s *Service) TeamSyncLoop(ctx context.Context, version string) {
 			// Photos uploaded before image-sync shipped (or while a
 			// backfill is mid-flight) drain at a rate-limited pace.
 			s.backfillProductImages()
+			s.PushTransfers() // v1.12: queued stock transfers go out
 			ticks++
 			// v1.9: keep stk_available in step with the cloud's payment
 			// profile (a shop verified for its own short code starts getting

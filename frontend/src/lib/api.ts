@@ -845,6 +845,8 @@ export interface Customer {
    *  on it. Optional: older backends predate the field. */
   priceTier?: 'retail' | 'wholesale' | string
   active: boolean
+  /** v1.12: agreed to receive offers (SMS / WhatsApp) */
+  marketingOptIn?: boolean
   createdAt: string
   updatedAt: string
 }

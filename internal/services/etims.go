@@ -716,6 +716,10 @@ func sarTypeFor(kind string, delta int64) string {
 		return "02"
 	case models.MoveDisposal, models.MoveBatchRecall:
 		return "15"
+	case models.MoveTransferOut:
+		return "13" // stock movement out (to another branch)
+	case models.MoveTransferIn, models.MoveTransferReturn:
+		return "04" // stock movement in
 	case models.MoveAdjustment, models.MoveCount, models.MoveOpening:
 		if delta < 0 {
 			return "16"

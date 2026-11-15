@@ -12,6 +12,7 @@ import { backendMode, isDemoSync, getDesktopStatus, api, type DesktopStatus, set
 import {
   ShoppingCart, ReceiptText, Palette, Package, Coins, BarChart3, Users, Settings,
   LogOut, RefreshCw, FlaskConical, Power, PowerOff, BookUser, Truck, Search, AlertTriangle, FileText, LifeBuoy, Wallet,
+  Clock, ArrowRightLeft, BookOpen, Megaphone,
 } from 'lucide-react'
 
 // Nav items: shown strictly by permission (server enforces regardless).
@@ -27,8 +28,12 @@ const NAV: { to: string; label: string; perm: string; icon: typeof ShoppingCart 
   { to: '/inventory', label: 'Inventory', perm: 'products.view', icon: Package },
   { to: '/suppliers', label: 'Suppliers', perm: 'suppliers.view', icon: Truck },
   { to: '/shifts', label: 'Shifts', perm: 'shifts.manage', icon: Coins },
+  { to: '/time', label: 'Time', perm: '', icon: Clock },
+  { to: '/transfers', label: 'Transfers', perm: 'transfers.manage', icon: ArrowRightLeft },
   { to: '/reports', label: 'Reports', perm: 'reports.view', icon: BarChart3 },
   { to: '/expenses', label: 'Expenses', perm: 'expenses.view', icon: Wallet },
+  { to: '/books', label: 'Books', perm: 'accounting.export', icon: BookOpen },
+  { to: '/promotions', label: 'Promotions', perm: 'marketing.send', icon: Megaphone },
   { to: '/users', label: 'People', perm: 'users.manage', icon: Users },
   { to: '/settings', label: 'Settings', perm: 'settings.manage', icon: Settings },
   { to: '/help', label: 'Help', perm: '', icon: LifeBuoy },

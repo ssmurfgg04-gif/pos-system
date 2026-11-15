@@ -372,8 +372,11 @@ type Customer struct {
 	StoreCreditCents int64  `json:"storeCreditCents"` // >0 means the shop owes the customer (prepaid)
 	PriceTier        string `json:"priceTier"`        // 'retail' (default) | 'wholesale' — till auto-prices
 	Active           bool   `json:"active"`
-	CreatedAt        string `json:"createdAt"`
-	UpdatedAt        string `json:"updatedAt"`
+	// v1.12: consent to promotions (Data Protection Act); when it changed
+	MarketingOptIn     bool   `json:"marketingOptIn"`
+	MarketingUpdatedAt string `json:"marketingUpdatedAt"`
+	CreatedAt          string `json:"createdAt"`
+	UpdatedAt          string `json:"updatedAt"`
 }
 
 type LedgerEntry struct {
@@ -983,16 +986,19 @@ type RedeemGiftCardRequest struct {
 // Stock-movement kinds. The ledger is append-only: products.stock_qty is
 // the fast projection, stock_movements is the audit trail (OSPOS pattern).
 const (
-	MoveOpening       = "OPENING"        // migration anchor / new tracked product
-	MoveSale          = "SALE"           // stock left the shelf through the till
-	MoveVoidRestore   = "VOID_RESTORE"   // voided paid order puts stock back
-	MoveAdjustment    = "ADJUSTMENT"     // manual +/- on Inventory
-	MoveCount         = "COUNT"          // stock-take apply
-	MovePOReceive     = "PO_RECEIVE"     // supplier goods-in
-	MoveReturnRestock = "RETURN_RESTOCK" // customer return puts stock back
-	MoveDisposal      = "DISPOSAL"       // v1.7.0: written-off stock (expired/spoilt/lost/damaged)
-	MoveBatchIn       = "BATCH_IN"       // v1.8.0: manual goods-in recorded directly on a batch
-	MoveBatchRecall   = "BATCH_RECALL"   // v1.8.0: a lot pulled off the shelf (safety/quality)
+	MoveOpening        = "OPENING"         // migration anchor / new tracked product
+	MoveSale           = "SALE"            // stock left the shelf through the till
+	MoveVoidRestore    = "VOID_RESTORE"    // voided paid order puts stock back
+	MoveAdjustment     = "ADJUSTMENT"      // manual +/- on Inventory
+	MoveCount          = "COUNT"           // stock-take apply
+	MovePOReceive      = "PO_RECEIVE"      // supplier goods-in
+	MoveReturnRestock  = "RETURN_RESTOCK"  // customer return puts stock back
+	MoveDisposal       = "DISPOSAL"        // v1.7.0: written-off stock (expired/spoilt/lost/damaged)
+	MoveBatchIn        = "BATCH_IN"        // v1.8.0: manual goods-in recorded directly on a batch
+	MoveBatchRecall    = "BATCH_RECALL"    // v1.8.0: a lot pulled off the shelf (safety/quality)
+	MoveTransferOut    = "TRANSFER_OUT"    // v1.12.0: sent to another shop of the business
+	MoveTransferIn     = "TRANSFER_IN"     // v1.12.0: received from another shop
+	MoveTransferReturn = "TRANSFER_RETURN" // v1.12.0: a cancelled/refused transfer back on the shelf
 )
 
 // StockMovement is one audited stock change.
