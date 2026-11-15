@@ -3557,6 +3557,49 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     requirePerm(perms, 'reports.view')
     return [] as T
   }
+
+  // ---- v1.12 demo parity: time clock, transfers, books, promotions ----
+  // The demo is one shop in one browser: the clock works in memory; the
+  // cloud-backed features explain themselves instead of failing.
+  if (p === '/timeclock/me') {
+    const w = window as unknown as { __demoClock?: { in: string; out: string; brk: number; brkAt: string }[] }
+    const list = (w.__demoClock ??= [])
+    const open = list.find((e) => !e.out)
+    if (m === 'POST') {
+      const a = String(body?.action || '')
+      if (a === 'in' && !open) list.push({ in: nowIso(), out: '', brk: 0, brkAt: '' })
+      else if (a === 'break' && open && !open.brkAt) open.brkAt = nowIso()
+      else if (a === 'resume' && open?.brkAt) { open.brk += (Date.now() - Date.parse(open.brkAt)) / 1000; open.brkAt = '' }
+      else if (a === 'out' && open) {
+        if (open.brkAt) { open.brk += (Date.now() - Date.parse(open.brkAt)) / 1000; open.brkAt = '' }
+        open.out = nowIso()
+      } else throw new ApiError(409, a === 'in' ? 'already clocked in' : 'not clocked in')
+    }
+    const view = (e: { in: string; out: string; brk: number; brkAt: string }, i: number) => {
+      const end = e.brkAt ? Date.parse(e.brkAt) : e.out ? Date.parse(e.out) : Date.now()
+      return {
+        id: i + 1, userId: 1, username: 'demo', fullName: 'You', clockIn: e.in, clockOut: e.out, breakSeconds: Math.round(e.brk),
+        breakStarted: e.brkAt, onBreak: !!e.brkAt, open: !e.out, note: '', status: 'active', editedBy: '', editReason: '',
+        workedSeconds: Math.max(0, Math.round((end - Date.parse(e.in)) / 1000 - e.brk)), flag: '',
+      }
+    }
+    const entries = list.map(view)
+    const worked = entries.reduce((a, e) => a + e.workedSeconds, 0)
+    const cur = list.find((e) => !e.out)
+    const report = {
+      from: '', to: '', weeklyHours: 52, overtimeRate: 1.5, entries, totalSeconds: worked, totalPayCents: 0,
+      people: entries.length ? [{ userId: 1, username: 'demo', fullName: 'You', hourlyRateCents: 0, daysWorked: 1, workedSeconds: worked,
+        normalSeconds: worked, overtimeSeconds: 0, breakSeconds: 0, payCents: 0, openEntries: cur ? 1 : 0, flags: 0, days: [] }] : [],
+    }
+    if (m === 'POST') return view(list[list.length - 1], list.length - 1) as T
+    return { open: cur ? view(cur, list.indexOf(cur)) : null, report } as T
+  }
+  if (m === 'GET' && p === '/transfers') {
+    return { online: false, error: 'The web demo is a single shop: stock transfers need two shops linked to the cloud', myTeam: '', shops: [], transfers: [] } as T
+  }
+  if (p.startsWith('/accounting') || p.startsWith('/promotions') || p.startsWith('/timecards')) {
+    throw new ApiError(422, 'Not in the web demo: install LedgerPOS to use this')
+  }
   throw new ApiError(404, 'not found: ' + m + ' ' + p)
 }
 

@@ -207,6 +207,12 @@ func (s *Service) Punch(userID int64, username, action string) (*TimeEntry, erro
 		return nil, err
 	}
 	now := stampOf(time.Now())
+	if action == "toggle" { // the PIN pad's one button: in when out, out when in
+		action = "in"
+		if open != nil {
+			action = "out"
+		}
+	}
 	var id int64
 	switch action {
 	case "in":

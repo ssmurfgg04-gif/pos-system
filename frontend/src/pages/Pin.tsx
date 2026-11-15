@@ -6,7 +6,7 @@ import { Keypad, Spinner } from '../components/ui'
 import { navigate, homeFor } from '../lib/router'
 import { reconnectWs } from '../ws/client'
 import { toast } from '../stores/toasts'
-import { LifeBuoy } from 'lucide-react'
+import { LifeBuoy, Clock } from 'lucide-react'
 
 // Shift-handoff screen: pick your face, tap your 4-digit PIN. PINs are
 // bcrypt-hashed server-side with escalating lockout — brute force is slow.
@@ -38,6 +38,8 @@ export function Pin() {
   }
   const [error, setError] = useState('')
   const [lockNote, setLockNote] = useState('')
+  // v1.12: the same PIN clocks you in/out without signing in
+  const [mode, setMode] = useState<'signin' | 'clock'>('signin')
 
   useEffect(() => {
     api.get<PinUser[]>('/api/v1/auth/pin-users').then(setUsers).catch(() => setUsers([]))
@@ -78,6 +80,18 @@ export function Pin() {
       // v1.3.2: bind the sign-in to the shop this user list came from —
       // per-shop user ids collide, and the shop picker already made the choice.
       const u = users?.find((x) => x.id === userId)
+      if (mode === 'clock') {
+        const r = await api.post<{ entry: { open: boolean; clockIn: string; clockOut: string } }>('/api/v1/timeclock/punch', {
+          userId, pin: code, shopId: u?.shopId, action: 'toggle',
+        })
+        const at = new Date(r.entry.open ? r.entry.clockIn : r.entry.clockOut)
+          .toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Nairobi' })
+        toast.success(r.entry.open ? `${u?.fullName ?? 'You'}: clocked in at ${at}` : `${u?.fullName ?? 'You'}: clocked out at ${at}`)
+        setPin('')
+        setUserId(null)
+        setMode('signin')
+        return
+      }
       await pinLogin(userId, code, u?.shopId)
       reconnectWs()
       toast.success('Signed in')
@@ -162,8 +176,26 @@ export function Pin() {
           {recover ? 'Forgot your PIN?' : selected ? `Hello, ${selected.fullName}` : branding.store_name || branding.app_name}
         </h1>
         <p className="text-ink-muted text-sm text-center mb-5">
-          {recover ? 'The owner can get you back in, it takes a minute' : selected ? 'Enter your 4-digit PIN' : 'Who is starting this shift?'}
+          {recover ? 'The owner can get you back in, it takes a minute'
+            : selected ? (mode === 'clock' ? 'Enter your PIN to clock in or out' : 'Enter your 4-digit PIN')
+              : mode === 'clock' ? 'Who is clocking in or out?' : 'Who is starting this shift?'}
         </p>
+        {!recover && (
+          <div role="tablist" className="flex gap-1 p-1 bg-surface-muted rounded-input mb-4">
+            {(['signin', 'clock'] as const).map((m) => (
+              <button
+                key={m}
+                role="tab"
+                aria-selected={mode === m}
+                onClick={() => { cancelPendingSubmit(); setMode(m); setPin(''); setError('') }}
+                className={`flex-1 min-h-10 rounded-[7px] text-sm font-semibold inline-flex items-center justify-center gap-1.5 ${
+                  mode === m ? 'bg-surface text-ink shadow-brutal-sm' : 'text-ink-muted hover:text-ink'}`}
+              >
+                {m === 'clock' && <Clock size={14} aria-hidden />}{m === 'signin' ? 'Sign in' : 'Clock in / out'}
+              </button>
+            ))}
+          </div>
+        )}
 
         {recover ? (
           <ForgotPinPanel

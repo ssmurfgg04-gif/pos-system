@@ -165,3 +165,16 @@ func TestPayRounding(t *testing.T) {
 		t.Fatal("no rate must be no pay")
 	}
 }
+
+func TestPunchToggle(t *testing.T) {
+	f := newMoneyTill(t)
+	p := f.principal()
+	e, err := f.s.Punch(p.ID, p.Username, "toggle")
+	if err != nil || !e.Open {
+		t.Fatalf("toggle in: %v", err)
+	}
+	e, err = f.s.Punch(p.ID, p.Username, "toggle")
+	if err != nil || e.Open {
+		t.Fatalf("toggle out: %v", err)
+	}
+}

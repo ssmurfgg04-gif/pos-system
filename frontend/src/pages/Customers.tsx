@@ -270,6 +270,8 @@ function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: (
   // priceTier come back undefined and stay retail.
   const [tier, setTier] = useState<'retail' | 'wholesale'>(initial?.priceTier === 'wholesale' ? 'wholesale' : 'retail')
   const [active, setActive] = useState(initial?.active ?? true)
+  // v1.12: consent to offers (Data Protection Act) — off until the customer says yes
+  const [offers, setOffers] = useState(!!initial?.marketingOptIn)
   const [busy, setBusy] = useState(false)
 
   const save = async () => {
@@ -288,12 +290,17 @@ function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: (
         priceTier: tier,
         ...(initial ? { active } : {}),
       }
+      let id = initial?.id ?? 0
       if (initial) {
         await api.put(`/api/v1/customers/${initial.id}`, body)
         toast.success('Customer updated')
       } else {
-        await api.post('/api/v1/customers', body)
+        const c = await api.post<Customer>('/api/v1/customers', body)
+        id = c?.id ?? 0
         toast.success('Customer added')
+      }
+      if (id && offers !== !!initial?.marketingOptIn) {
+        await api.put(`/api/v1/customers/${id}/marketing`, { optIn: offers })
       }
       onDone()
     } catch (e: any) {
@@ -326,6 +333,10 @@ function CustomerForm({ initial, onDone }: { initial: Customer | null; onDone: (
           <option value="wholesale">Wholesale prices</option>
         </Select>
       </Field>
+      <label className="flex items-start gap-2 text-[13px] font-semibold text-ink">
+        <input type="checkbox" checked={offers} onChange={(e) => setOffers(e.target.checked)} className="w-5 h-5 mt-0.5" />
+        <span>OK to send offers by SMS / WhatsApp<span className="block text-xs font-normal text-ink-subtle">Tick only when the customer agreed. They can stop any time.</span></span>
+      </label>
       {initial && (
         <label className="flex items-center gap-2 text-[13px] font-semibold text-ink">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="w-5 h-5" />

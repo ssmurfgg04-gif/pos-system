@@ -130,6 +130,26 @@
     "label": "Open and close shifts"
   },
   {
+    "key": "timecards.manage",
+    "group": "Shifts",
+    "label": "See and correct everyone's timecards and pay rates"
+  },
+  {
+    "key": "transfers.manage",
+    "group": "Catalog",
+    "label": "Send and receive stock between shops"
+  },
+  {
+    "key": "accounting.export",
+    "group": "Insights",
+    "label": "Export the books (QuickBooks / Xero)"
+  },
+  {
+    "key": "marketing.send",
+    "group": "Selling",
+    "label": "Send promotions to customers (SMS / WhatsApp)"
+  },
+  {
     "key": "design.view",
     "group": "Production",
     "label": "View design board"
