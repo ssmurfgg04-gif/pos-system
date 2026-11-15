@@ -254,16 +254,16 @@ type Order struct {
 	// v1.12: the number a receipt goes to (customer record, else the payer
 	// leg), 2547… form; "" when the sale has none.
 	CustomerPhone string `json:"customerPhone"`
-	CashierName    string  `json:"cashierName"`
-	CustomerName   string  `json:"customerName"`
-	CustomerID     int64   `json:"customerId"`
-	Note           string  `json:"note"`
-	ClientUUID     string  `json:"clientUuid"`
-	Discrepancy    bool    `json:"discrepancy"`
-	CreatedAt      string  `json:"createdAt"`
-	PaidAt         string  `json:"paidAt"`
-	VoidedAt       string  `json:"voidedAt"`
-	VoidReason     string  `json:"voidReason"`
+	CashierName   string `json:"cashierName"`
+	CustomerName  string `json:"customerName"`
+	CustomerID    int64  `json:"customerId"`
+	Note          string `json:"note"`
+	ClientUUID    string `json:"clientUuid"`
+	Discrepancy   bool   `json:"discrepancy"`
+	CreatedAt     string `json:"createdAt"`
+	PaidAt        string `json:"paidAt"`
+	VoidedAt      string `json:"voidedAt"`
+	VoidReason    string `json:"voidReason"`
 	// Originating till (v19). '' on pre-v19 rows; visibility is
 	// scoped on cashier_id + orders.view.all, never on this alone.
 	DeviceID string      `json:"deviceId"`
