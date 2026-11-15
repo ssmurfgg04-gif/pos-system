@@ -1079,9 +1079,17 @@ func TestAdversarialProbeWSAuthHandshake(t *testing.T) {
 	srv := httptest.NewServer(engine)
 	defer srv.Close()
 
-	// (a) No Authorization header → upgrade refused.
-	if _, _, err := a5DialWS(t, srv, ""); err == nil {
-		t.Error("ws upgrade without bearer token must fail")
+	// (a) Browsers cannot send an Authorization header on a WebSocket, so the
+	// upgrade is allowed without one; identity is proven by the first
+	// message. With no token in it, the hub says so and closes.
+	if c0, _, err := a5DialWS(t, srv, ""); err != nil {
+		t.Errorf("ws upgrade must work without a header (browsers send none): %v", err)
+	} else {
+		defer c0.Close()
+		_ = c0.WriteMessage(websocket.TextMessage, []byte(`{}`))
+		if typ, _, err := a5ReadEvent(t, c0, 3*time.Second); err != nil || typ != "ERROR" {
+			t.Errorf("no token in first message must produce ERROR frame, got type=%q err=%v", typ, err)
+		}
 	}
 	// (b) Valid bearer + garbage first message → ERROR frame then close.
 	conn, _, err := a5DialWS(t, srv, cashier)

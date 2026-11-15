@@ -119,13 +119,18 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	// cannot send Authorization headers) — public like the brand logo.
 	api.GET("/products/:id/image", h.GetProductImage)
 
+	// WebSocket: browsers cannot send an Authorization header on a socket,
+	// so this route sits outside authRequired. The hub authenticates the
+	// first message itself ({"token":...}, 10s, 4KB) and scopes broadcasts
+	// to the token's shop.
+	api.GET("/ws", gin.WrapH(h.Hub))
+
 	// ---- Authenticated ----
 	authd := api.Group("", authRequired)
 	authd.GET("/me", h.Me)
 	authd.POST("/me/recovery-code", h.NewRecoveryCode)
 	authd.GET("/shops", h.MyShops)
 	authd.POST("/auth/switch", h.SwitchShop)
-	authd.GET("/ws", gin.WrapH(h.Hub))
 
 	// Products & categories (POS reads; manage gated).
 	authd.GET("/products", h.ListProducts)

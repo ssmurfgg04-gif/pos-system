@@ -122,7 +122,10 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	client := &Client{conn: conn, send: make(chan []byte, 32)}
 
-	// Auth handshake: first message must be {"token":"..."}.
+	// Auth handshake: first message must be {"token":"..."}. The socket is
+	// reachable before sign-in, so keep what an anonymous peer can make us
+	// read tiny and short-lived.
+	conn.SetReadLimit(4096)
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, raw, err := conn.ReadMessage()
 	if err != nil {

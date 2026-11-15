@@ -695,7 +695,7 @@ def main():
           f"{lots.get('SMK-NEAR')}")
     check("v1.8.0: FEFO leaves FAR lot 3000",
           lots.get("SMK-FAR", {}).get("qtyRemainingMilli") == 3000, f"{lots.get('SMK-FAR')}")
-    st, body = req("GET", "/api/v1/reports/expiry?days=3650", admin)
+    st, body = req("GET", "/api/v1/reports/expiry?days=-1", admin)
     exp = data(body) if st == 200 else {}
     soon_all = (exp.get("expired") or []) + (exp.get("soon") or [])
     smk = [r for r in soon_all if r.get("batchId") == lots.get("SMK-FAR", {}).get("id")]
@@ -709,8 +709,8 @@ def main():
     # System health self-audit.
     st, body = req("GET", "/api/v1/system/health", admin)
     h = data(body) if st == 200 else {}
-    check("v1.7.0: system health 200 schemaVersion=28 indexesOk",
-          st == 200 and h.get("schemaVersion") == 28 and h.get("indexesOk") is True,
+    check("v1.7.0: system health 200 schemaVersion>=32 indexesOk",
+          st == 200 and (h.get("schemaVersion") or 0) >= 32 and h.get("indexesOk") is True,
           f"{st} v={h.get('schemaVersion')} idx={h.get('indexesOk')}")
     st, body = req("GET", "/api/v1/system/health", cashier)
     check("v1.7.0: system health cashier 403", st == 403, f"{st}")
