@@ -3,6 +3,29 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.11.1 — Updates reach every till, WhatsApp opens the customer's chat
+
+- **Tills now find a quiet moment to update.** The "selling right now"
+  check compared two different time formats, so after the first sale of
+  the day a till looked busy until 3am, and a PC switched off at night
+  never updated. An open customer tab or an abandoned M-Pesa prompt also
+  blocked updates forever. Now only a sale in the last 15 minutes or a
+  payment prompt in the last 10 minutes holds an update back.
+- **WhatsApp opens straight to the customer.** A cash sale to a saved
+  customer now uses the customer's own number (it used to look only at
+  the M-Pesa payer, so the chat opened with no contact).
+- **Cashier PCs on the shop network.** A second PC using the POS in a
+  browser now opens WhatsApp on its own screen; before, the request
+  opened WhatsApp on the main till instead and nothing happened at the
+  counter.
+- **No Windows share sheet when the number is known.** On a PC it opened
+  WhatsApp without the contact; the chat now opens with the contact
+  loaded and the receipt on the clipboard (Ctrl+V, Enter).
+- When the till itself has no WhatsApp Desktop, the receipt screen falls
+  back to WhatsApp Web instead of stopping at "not installed". Windows
+  now asks the system properly whether WhatsApp is installed, and spaces
+  in the message no longer show as "+".
+
 ## v1.11.0 — Mixed VAT, strict KRA order, stock to KRA, QR everywhere
 
 - **Mixed VAT in one sale.** Each product's KRA tax type now sets its VAT:

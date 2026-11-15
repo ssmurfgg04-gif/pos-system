@@ -250,6 +250,7 @@ func (s *Service) GetOrder(orderID int64) (*models.Order, error) {
 			}
 		}
 	}
+	o.CustomerPhone = s.customerPhone(&o)
 	return &o, nil
 }
 

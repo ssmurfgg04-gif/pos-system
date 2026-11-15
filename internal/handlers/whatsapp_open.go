@@ -14,6 +14,7 @@ package handlers
 import (
 	"context"
 	"log"
+	"net"
 	"net/url"
 	"os/exec"
 	"runtime"
@@ -48,23 +49,36 @@ func sanitizeWhatsAppDigits(raw string) string {
 	}
 }
 
-// openWhatsAppApp hands the deep link to the OS. Synchronous with a short
-// timeout so the response can honestly report whether the OS accepted it
-// (no WhatsApp installed / headless box → opened=false, UI falls back).
+// openWhatsAppApp hands the deep link to the OS. Windows uses
+// ShellExecute (whatsapp_open_windows.go), which reports honestly when no
+// app is registered for whatsapp:// — rundll32 said "ok" either way, so a
+// PC without WhatsApp Desktop showed nothing and never fell back.
 func openWhatsAppApp(link string, timeout time.Duration) bool {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", link)
-	case "darwin":
-		cmd = exec.Command("open", link)
-	default:
-		cmd = exec.Command("xdg-open", link)
+	if runtime.GOOS == "windows" {
+		return shellOpen(link)
+	}
+	name := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		name = "open"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
-	return cmd.Run() == nil
+	return exec.CommandContext(ctx, name, link).Run() == nil
+}
+
+// whatsAppQuery encodes like WhatsApp expects: spaces as %20 (url.Values
+// writes "+", which WhatsApp Desktop showed literally in the caption).
+func whatsAppQuery(q url.Values) string {
+	return strings.ReplaceAll(q.Encode(), "+", "%20")
+}
+
+// fromThisMachine: the host leg only makes sense when the browser asking
+// runs on the same computer as this server. A second cashier PC using the
+// POS over the shop network must open WhatsApp on ITS screen, not on the
+// main till's (v1.12 fix: the share "did nothing" on such PCs).
+func fromThisMachine(c *gin.Context) bool {
+	ip := net.ParseIP(c.RemoteIP())
+	return ip != nil && ip.IsLoopback()
 }
 
 // WhatsAppOpen (orders.notify or pos.sell) opens the installed WhatsApp app
@@ -91,7 +105,12 @@ func (h *H) WhatsAppOpen(c *gin.Context) {
 	}
 	link := "whatsapp://send"
 	if len(q) > 0 {
-		link += "?" + q.Encode()
+		link += "?" + whatsAppQuery(q)
+	}
+	if !fromThisMachine(c) {
+		// the page opens the app on its own computer (deep link / wa.me)
+		h.ok(c, gin.H{"opened": false, "url": link, "remote": true})
+		return
 	}
 	opened := openWhatsAppApp(link, 4*time.Second)
 	if p := h.principal(c); p != nil {

@@ -49,6 +49,10 @@ export interface ShareDeps {
    *  runs the OS opener itself). Resolves {opened:false} on an old
    *  server / browser-only box / WhatsApp missing. */
   hostOpen: (phone: string, text: string) => Promise<{ opened: boolean }>
+  /** v1.12: phone/tablet (the share sheet is the way to attach the image
+   *  there); on a PC the share sheet loses the contact, so a known number
+   *  goes straight to the customer's chat. */
+  isMobile: () => boolean
 }
 
 const IMG_NAME = (order: Order) => `receipt-${order.number}.png`
@@ -63,8 +67,11 @@ export function receiptCaption(order: Order, store: string): string {
  *  produced an invalid click-to-chat link — normalize exactly like the
  *  server does for automatic sends (services/whatsapp.go). */
 export function receiptPhoneDigits(order: Order): string {
+  // v1.12: the server resolves the number (customer record first, then the
+  // payer leg) — a cash sale to a saved customer has no payment phone, and
+  // the chat used to open with no contact.
   const p = (order.payments ?? []).find((x) => (x.phone || '').replace(/\D/g, '').length >= 9)
-  let d = (p?.phone || '').replace(/\D/g, '')
+  let d = (order.customerPhone || p?.phone || '').replace(/\D/g, '')
   if (d.startsWith('0')) d = '254' + d.slice(1)
   else if (d.startsWith('7') || d.startsWith('1')) d = '254' + d
   return d
@@ -127,6 +134,7 @@ function defaultDeps(order: Order): ShareDeps {
     // v1.6.2: the HOST leg. A non-2xx (endpoint missing on an old
     // server) resolves {opened:false} so the caller falls back to the
     // in-page hop — the decision tree never throws on it.
+    isMobile: () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || ''),
     hostOpen: async (phone, text) => {
       try {
         return await api.post<{ opened: boolean }>('/api/v1/whatsapp-open', { phone, text })
@@ -162,8 +170,10 @@ export async function shareReceiptWhatsapp(
   const b = await d.fetchImage()
 
   // Leg 2 — native share sheet (Android, Windows 11 + Store WhatsApp).
+  // On a PC with the customer's number known, skip it: Windows' sheet
+  // opens WhatsApp without the contact (the cashier then had to search).
   const file = new File([b], IMG_NAME(order), { type: 'image/png' })
-  if (d.canShareFiles(file)) {
+  if ((!digits || d.isMobile()) && d.canShareFiles(file)) {
     try {
       await d.share({ files: [file], text: caption })
       return { ...base, kind: 'shared' }

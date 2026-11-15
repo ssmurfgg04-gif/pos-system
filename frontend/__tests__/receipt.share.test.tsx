@@ -125,7 +125,7 @@ describe('Receipt share via WhatsApp', () => {
     downloadSpy.mockRestore()
   })
 
-  test('HOST opened=false (WhatsApp not installed) → honest hint, no silent nothing', async () => {
+  test('HOST opened=false (not installed there, or a cashier PC on the network) → this screen opens the chat itself', async () => {
     apiPostMock.mockImplementation(async (path: string) => {
       if (path.endsWith('/whatsapp-send')) throw new Error('gateway not connected')
       if (path.endsWith('/whatsapp-open')) return { opened: false, hint: 'install WhatsApp Desktop' }
@@ -136,8 +136,8 @@ describe('Receipt share via WhatsApp', () => {
     await act(async () => {
       findBtn('Share via WhatsApp')!.click()
     })
-    expect(container.textContent).toContain('WhatsApp is not installed')
-    expect(waChatMock).not.toHaveBeenCalled()
+    // v1.12: never a dead end — the deep link / WhatsApp Web carries it
+    expect(waChatMock).toHaveBeenCalledWith('254722123456', expect.stringContaining('Thank you'))
   })
 
   test('HOST endpoint missing (old server / browser-only) → deep link with digits + caption', async () => {
