@@ -111,7 +111,7 @@ func seedBuniLeg(t *testing.T, s *Service, checkout string, createdOld bool) (in
 	cashier := seedCashierOnce(t, s)
 	created := nowStamp()
 	if createdOld {
-		created = time.Now().Add(-10 * time.Minute).Format("2006-01-02 15:04:05")
+		created = time.Now().UTC().Add(-10 * time.Minute).Format("2006-01-02 15:04:05")
 	}
 	res, err := s.db.Exec(s.db.Rebind(`INSERT INTO orders (number, status, subtotal_cents, total_cents, cashier_id, client_uuid, created_at)
                 VALUES (?, 'PENDING', 100000, 116000, ?, ?, ?)`), "ORD-BUNI-"+checkout, cashier, "uuid-buni-"+checkout, created)

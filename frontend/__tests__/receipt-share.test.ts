@@ -47,6 +47,7 @@ function deps(over: Partial<ShareDeps> = {}): ShareDeps {
     // default = old server / browser-only: the host leg answers
     // opened:false so the in-page hop carries (v1.6.1 behaviour).
     hostOpen: vi.fn().mockResolvedValue({ opened: false }),
+    isMobile: vi.fn().mockReturnValue(true),
     ...over,
   }
 }
@@ -71,6 +72,24 @@ describe('receipt-share phone + link builders', () => {
     const c = receiptCaption(order(), 'Duka Kubwa')
     expect(c.startsWith('Hi Amina!')).toBe(true)
     expect(c).toContain('Duka Kubwa')
+  })
+})
+
+describe('v1.12 cashier PC: the customer chat opens with the contact', () => {
+  it('uses the customer record number when the sale has no payment phone (cash to a saved customer)', () => {
+    expect(receiptPhoneDigits(order({ payments: [], customerPhone: '254700111222' } as Partial<Order>))).toBe('254700111222')
+  })
+  it('on a PC with the number known, the Windows share sheet is skipped (it drops the contact)', async () => {
+    const d = deps({ canShareFiles: vi.fn().mockReturnValue(true), isMobile: vi.fn().mockReturnValue(false) })
+    const r = await shareReceiptWhatsapp(order(), 'Duka', d)
+    expect(d.share).not.toHaveBeenCalled()
+    expect(r.kind).toBe('app-opened')
+    expect((d.openExternal as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('phone=254712345678')
+  })
+  it('on a PC with NO number, the share sheet is still the way', async () => {
+    const d = deps({ canShareFiles: vi.fn().mockReturnValue(true), isMobile: vi.fn().mockReturnValue(false) })
+    const r = await shareReceiptWhatsapp(order({ payments: [] }), 'Duka', d)
+    expect(r.kind).toBe('shared')
   })
 })
 
