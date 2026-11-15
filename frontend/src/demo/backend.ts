@@ -3567,12 +3567,12 @@ export async function demoRequest<T>(method: string, path: string, body?: Body):
     const open = list.find((e) => !e.out)
     if (m === 'POST') {
       const a = String(body?.action || '')
-      if (a === 'in' && !open) list.push({ in: nowIso(), out: '', brk: 0, brkAt: '' })
-      else if (a === 'break' && open && !open.brkAt) open.brkAt = nowIso()
+      if (a === 'in' && !open) list.push({ in: new Date().toISOString(), out: '', brk: 0, brkAt: '' })
+      else if (a === 'break' && open && !open.brkAt) open.brkAt = new Date().toISOString()
       else if (a === 'resume' && open?.brkAt) { open.brk += (Date.now() - Date.parse(open.brkAt)) / 1000; open.brkAt = '' }
       else if (a === 'out' && open) {
         if (open.brkAt) { open.brk += (Date.now() - Date.parse(open.brkAt)) / 1000; open.brkAt = '' }
-        open.out = nowIso()
+        open.out = new Date().toISOString()
       } else throw new ApiError(409, a === 'in' ? 'already clocked in' : 'not clocked in')
     }
     const view = (e: { in: string; out: string; brk: number; brkAt: string }, i: number) => {

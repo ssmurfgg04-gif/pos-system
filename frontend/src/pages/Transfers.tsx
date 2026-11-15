@@ -58,7 +58,7 @@ export function Transfers() {
       {data && !data.online && (
         <div className="flex items-start gap-2 bg-pending-bg text-pending-text rounded-input px-3 py-2.5 text-sm font-semibold">
           <WifiOff size={16} className="mt-0.5 shrink-0" aria-hidden />
-          <span>{data.error || 'Offline'}. Transfers you send now wait here and go when the internet is back.</span>
+          <span>{data.myTeam ? `${data.error || 'Offline'}. Transfers you send now wait here and go when the internet is back.` : data.error}</span>
         </div>
       )}
       {incoming.length > 0 && (
@@ -79,7 +79,7 @@ export function Transfers() {
       <Card
         title="Stock transfers"
         sub="Move stock between the shops of your business."
-        actions={<Button variant="primary" disabled={!data || data.shops.length === 0 && data.online} onClick={() => setSending(true)}><Send size={15} aria-hidden />Send stock</Button>}
+        actions={<Button variant="primary" disabled={!data || !data.myTeam || (data.shops.length === 0 && data.online)} onClick={() => setSending(true)}><Send size={15} aria-hidden />Send stock</Button>}
         pad={false}
       >
         {!data ? <div className="py-10 flex justify-center"><Spinner /></div> : data.transfers.length === 0 ? (
