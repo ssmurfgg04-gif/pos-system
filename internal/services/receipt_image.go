@@ -540,6 +540,15 @@ func (s *Service) renderReceiptImage(o *models.Order) (image.Image, error) {
 			drawTextRight(canvas, fSub, ink, right, y, kv[1])
 			y += 26
 		}
+		// v1.11: the verification QR, centred (the buyer scans it to check
+		// the invoice on KRA's site)
+		if etims.QR != "" {
+			if qr := printer.QRImage(etims.QR, 220); qr != nil {
+				x0 := (receiptW - 220) / 2
+				draw.Draw(canvas, image.Rect(x0, y, x0+220, y+220), qr, image.Point{}, draw.Src)
+				y += 232
+			}
+		}
 	} else if etims != nil {
 		y += 4
 		drawText(canvas, fSub, muted, receiptMargin, y, "KRA eTIMS: sending to KRA")

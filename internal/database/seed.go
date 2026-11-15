@@ -53,7 +53,10 @@ var DefaultSettings = map[string]string{
 	"printer_target":      "", // e.g. tcp://192.168.1.200:9100 or file:///dev/usb/lp0
 	"printer_width":       "80",
 	"auto_print_receipts": "true",
-	"receipt_logo":        "true", // print brand-logo.png atop receipts when present
+	// v1.11: how the KRA eTIMS QR prints: "image" (raster, works on every
+	// printer that prints a logo) or "native" (the printer's QR command)
+	"printer_qr_mode": "image",
+	"receipt_logo":    "true", // print brand-logo.png atop receipts when present
 	// eTIMS-ready invoice identity (P6): the business's own KRA PIN
 	// prints on tax invoices; a per-order buyer PIN (customer's KRA PIN)
 	// is captured at checkout when this is on file.

@@ -107,13 +107,16 @@ func (s *Service) EmitProduct(productID int64, stockSet bool) {
 		Gift      int
 		Wholesale int64
 		LowStock  int
+		TaxType   string
+		ClsCd     string
 	}
 	err := s.db.QueryRow(s.db.Rebind(`
                 SELECT COALESCE(p.sku,''), COALESCE(p.barcode,''), p.name, COALESCE(c.slug,''),
                         p.price_cents, p.cost_cents, p.stock_qty_milli, COALESCE(p.track_stock,1), COALESCE(p.is_active,1), COALESCE(p.is_gift_card,0),
-                        COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0)
+                        COALESCE(p.wholesale_price_cents,0), COALESCE(p.low_stock_units,0),
+                        COALESCE(p.etims_tax_type,''), COALESCE(p.etims_cls_cd,'')
                 FROM products p LEFT JOIN categories c ON c.id = p.category_id WHERE p.id = ?`), productID).
-		Scan(&pr.SKU, &pr.Barcode, &pr.Name, &pr.Slug, &pr.Price, &pr.Cost, &pr.Stock, &pr.Track, &pr.Active, &pr.Gift, &pr.Wholesale, &pr.LowStock)
+		Scan(&pr.SKU, &pr.Barcode, &pr.Name, &pr.Slug, &pr.Price, &pr.Cost, &pr.Stock, &pr.Track, &pr.Active, &pr.Gift, &pr.Wholesale, &pr.LowStock, &pr.TaxType, &pr.ClsCd)
 	if err != nil {
 		return
 	}
@@ -123,6 +126,9 @@ func (s *Service) EmitProduct(productID int64, stockSet bool) {
 		"stockSet": stockSet, "trackStock": pr.Track == 1, "active": pr.Active == 1,
 		"isGiftCard": pr.Gift == 1, "wholesalePriceCents": pr.Wholesale,
 		"lowStockUnits": pr.LowStock, "updatedAt": nowStamp(),
+		// v1.11: KRA tax type + item class travel with the product, so
+		// every till prices VAT and reports to KRA the same way.
+		"etimsTaxType": pr.TaxType, "etimsClsCd": pr.ClsCd,
 	})
 }
 

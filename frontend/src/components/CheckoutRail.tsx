@@ -500,6 +500,21 @@ export function CheckoutRail({
     if (cart.lines.length === 0) setStep('cart')
   }, [cart.lines.length])
 
+  // F12 = pay (keyboard tills): on the cart it opens the payment step; on
+  // the payment step it presses the main pay button, only when that button
+  // is enabled. Not Enter: barcode scanners end every scan with Enter.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'F12' || cart.lines.length === 0) return
+      e.preventDefault()
+      if (step === 'cart') { setStep('pay'); return }
+      const btn = document.querySelector<HTMLButtonElement>('[data-primary-charge]')
+      if (btn && !btn.disabled) btn.click()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [step, cart.lines.length])
+
   const productById = useMemo(() => {
     const m = new Map<number, Product>()
     for (const p of products ?? []) m.set(p.id, p)
@@ -715,7 +730,7 @@ export function CheckoutRail({
           </div>
         ) : mode === 'idle' && step === 'cart' ? (
           <div className="shrink-0 space-y-2">
-            <Button variant="primary" size="lg" className="w-full h-[50px] text-base" onClick={() => setStep('pay')}>
+            <Button variant="primary" size="lg" className="w-full h-[50px] text-base" onClick={() => setStep('pay')} aria-keyshortcuts="F12" title="Shortcut: F12">
               Charge {formatMoney(totals.total)} →
             </Button>
             {canHold && (
@@ -1167,6 +1182,8 @@ function PaymentForm(props: {
         size="lg"
         className="w-full h-[50px] text-base"
         disabled={chargeDisabled}
+        data-primary-charge=""
+        aria-keyshortcuts="F12"
         onClick={() =>
           splitMode
             ? checkout((splitLegs[0]?.method as Method) ?? 'cash', splitAsyncLeg?.method === 'mpesa' ? (branding.payment_mode as 'auto' | 'stk' | 'manual') : undefined, splitLegs)

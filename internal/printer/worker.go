@@ -180,6 +180,7 @@ func (w *Worker) printJob(ctx context.Context, jobID int64) {
 		}
 	}
 	data.Etims = w.etimsStamp(order.ID)
+	data.QRNative = w.settings.Get("printer_qr_mode") == "native"
 	// Loyalty redemption as MONEY — the printed rows must reconcile
 	// (Subtotal − Discount − Points ± VAT = TOTAL), like the branded
 	// image. Points are minted whole, so cents are exact.
