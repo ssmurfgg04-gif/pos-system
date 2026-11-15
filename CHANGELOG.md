@@ -3,6 +3,23 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.12.1 — Live updates actually live, review fixes
+
+- **Live updates were never connecting.** The WebSocket route sat behind the
+  `Authorization`-header check, which a browser cannot send on a socket, so
+  every till got HTTP 401 and quietly fell back to polling. The route is now
+  reachable and the hub authenticates the first message itself (10 s, 4 KB
+  limit), still scoped to the signed-in shop.
+- **No duplicate sockets.** Logging in or switching shop left a second socket
+  behind (the old socket's late close re-armed a retry), which would have made
+  every live event fire twice. One socket at a time now, retries cancelled on
+  sign-out.
+- A fractional quantity on a whole-unit product returned HTTP 500; it is a
+  clean 422 now.
+- Cloud: `_transfer_lines_ok` pinned to a fixed `search_path` (Supabase
+  security advisor).
+- Smoke test: stale assertions fixed (schema version, expiry window).
+
 ## v1.12.0 — Timecards, stock transfers, the books, promotions
 
 - **Staff time clock.** Clock in and out with your PIN right on the PIN

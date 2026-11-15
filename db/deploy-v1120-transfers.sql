@@ -206,3 +206,6 @@ grant execute on function public.transfer_send(text, text, text, text, jsonb, te
 grant execute on function public.transfer_list(text, text, integer) to anon, authenticated, service_role;
 grant execute on function public.transfer_receive(text, text, uuid, jsonb, text) to anon, authenticated, service_role;
 grant execute on function public.transfer_cancel(text, text, text, text, text) to anon, authenticated, service_role;
+
+-- v1.12.1: pin the helper search_path (Supabase advisor 0011)
+alter function public._transfer_lines_ok(jsonb) set search_path = public;

@@ -23,6 +23,7 @@ const reconnectHandlers = new Set<() => void>()
 let ws: WebSocket | null = null
 let retry = 0
 let closed = false
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
 export function onWsEvent(event: WsEvent, handler: Handler): () => void {
   if (!handlers.has(event)) handlers.set(event, new Set())
@@ -61,6 +62,10 @@ export function connectWs() {
 }
 
 function openSocket() {
+  // One live socket at a time: a retry timer, a login and a shop switch
+  // can all ask for one, and two sockets would deliver every event twice
+  // (double receipts, double prints).
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return
   // Same-origin by default; the Android client overrides via the stored
   // till address (serverUrl()).
   let target = `${location.host}`
@@ -69,17 +74,22 @@ function openSocket() {
     if (stored) target = stored.replace(/^https?:\/\//, '').replace(/\/+$/, '')
   } catch { /* private mode — stay same-origin */ }
   const proto = location.protocol === 'https:' || target.startsWith('https') ? 'wss' : 'ws'
+  let sock: WebSocket
   try {
-    ws = new WebSocket(`${proto}://${target}/api/v1/ws`)
+    sock = new WebSocket(`${proto}://${target}/api/v1/ws`)
   } catch {
     scheduleReconnect()
     return
   }
+  ws = sock
 
-  ws.onopen = () => {
+  sock.onopen = () => {
+    if (sock !== ws) { sock.close(); return } // replaced while connecting
     const wasReconnect = retry > 0
     retry = 0
-    ws?.send(JSON.stringify({ token: token() }))
+    const tk = token()
+    if (!tk) { sock.close(); return } // signed out meanwhile
+    sock.send(JSON.stringify({ token: tk }))
     if (wasReconnect) {
       reconnectHandlers.forEach((h) => {
         try {
@@ -91,7 +101,8 @@ function openSocket() {
     }
   }
 
-  ws.onmessage = (ev) => {
+  sock.onmessage = (ev) => {
+    if (sock !== ws) return
     try {
       const msg = JSON.parse(ev.data)
       if (msg && typeof msg.type === 'string') dispatch(msg.type as WsEvent, msg.data)
@@ -100,26 +111,37 @@ function openSocket() {
     }
   }
 
-  ws.onclose = () => {
+  sock.onclose = () => {
+    // Only the current socket may schedule a retry: the old socket of a
+    // reconnectWs() closes late, after connectWs() has cleared `closed`.
+    if (sock !== ws) return
+    ws = null
     if (!closed) scheduleReconnect()
   }
-  ws.onerror = () => {
-    ws?.close()
+  sock.onerror = () => {
+    sock.close()
   }
 }
 
 function scheduleReconnect() {
   retry++
   const delay = Math.min(15000, 1000 * Math.pow(2, Math.min(retry, 4)))
-  setTimeout(() => {
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
     if (!closed) openSocket()
   }, delay)
 }
 
 export function disconnectWs() {
   closed = true
-  ws?.close()
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  const old = ws
   ws = null
+  old?.close()
 }
 
 /** Re-auth after login/switch (server validates the first message). */

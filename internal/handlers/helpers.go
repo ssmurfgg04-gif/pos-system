@@ -207,6 +207,7 @@ func (h *H) mapErr(c *gin.Context, err error) {
 		strings.Contains(msg, "invalid design status"), strings.Contains(msg, "invalid payment mode"),
 		strings.Contains(msg, "out of range"), strings.Contains(msg, "must be positive"),
 		strings.Contains(msg, "exceeds maximum"),
+		strings.Contains(msg, "whole units"),
 		strings.Contains(msg, "too many lines"):
 		h.fail(c, 422, err.Error())
 	case strings.Contains(msg, "needs a customer"):
