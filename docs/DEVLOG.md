@@ -1,4 +1,30 @@
 ---
+Task ID: v1.11.1 + v1.12.0
+Agent: main (Claude)
+Task: "Cashier cyber pc ... not picking updates and has issues with opening
+  sharing directly to the customers WhatsApp number" + "finish all"
+  (timecards, transfers, QuickBooks/Xero, bulk SMS/WhatsApp).
+
+Work Log:
+- Updates: HasUnfinishedWork compared "…T…Z" app stamps with SQLite
+  datetime('now') as text, so every till was "busy" all UTC day; open tabs
+  (PENDING account legs) and abandoned STK legs blocked forever. Now
+  parsed in Go, account legs excluded, prompt window 10 min. Also: the
+  v1.11.0 OTA publish was never run (blocked), so the cloud still offered
+  v1.10.0.
+- WhatsApp: receipt took the phone only from payments (cash sale to a
+  saved customer → no contact); now order.customerPhone (server-resolved).
+  PC with a known number skips the Windows share sheet (drops the contact).
+  /whatsapp-open only launches for loopback clients (a LAN cashier PC was
+  opening WhatsApp on the main till). Windows ShellExecute (honest
+  opened=false), %20 not "+", no dead end on opened=false.
+- Test fix: Buni stale-leg seed formatted local time without a zone.
+- v1.12: timecards.go, transfers.go (+cloud SQL applied and probed),
+  accounting.go, promotions.go with tests; pages Time, Transfers, Books,
+  Promotions; PIN-pad clock; offers consent; demo parity.
+- Blocked for Jack: merging/releasing (PR #12, #13) and the OTA publish.
+
+---
 Task ID: v1.11.0
 Agent: main (Claude)
 Task: "fix all those issues just make the code bulletproof ... think long
