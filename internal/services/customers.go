@@ -16,14 +16,16 @@ const loyaltyPerCents = 10000
 // customerColumns is the shared SELECT list (email + notes joined CRM).
 const customerColumns = `
         id, name, COALESCE(phone,''), COALESCE(email,''), COALESCE(notes,''), credit_limit_cents, loyalty_points,
-        balance_cents, COALESCE(store_credit_cents,0), is_active, created_at, updated_at, COALESCE(price_tier,'retail')`
+        balance_cents, COALESCE(store_credit_cents,0), is_active, created_at, updated_at, COALESCE(price_tier,'retail'),
+        COALESCE(marketing_opt_in,0), COALESCE(marketing_updated_at,'')`
 
 func scanCustomer(scan func(...any) error) (models.Customer, error) {
 	var c models.Customer
-	var active int
+	var active, optIn int
 	err := scan(&c.ID, &c.Name, &c.Phone, &c.Email, &c.Notes, &c.CreditLimitCents, &c.LoyaltyPoints,
-		&c.BalanceCents, &c.StoreCreditCents, &active, &c.CreatedAt, &c.UpdatedAt, &c.PriceTier)
+		&c.BalanceCents, &c.StoreCreditCents, &active, &c.CreatedAt, &c.UpdatedAt, &c.PriceTier, &optIn, &c.MarketingUpdatedAt)
 	c.Active = active == 1
+	c.MarketingOptIn = optIn == 1
 	return c, err
 }
 

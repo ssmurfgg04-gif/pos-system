@@ -49,6 +49,16 @@ type Service struct {
 	shopID string // ws broadcast scoping (set by the ShopPool)
 
 	orderSeqMu sync.Mutex
+
+	clockMu    sync.Mutex // v1.12 timecard punches/edits (no double clock-in)
+	transferMu sync.Mutex // v1.12 stock transfers (send/receive/cancel one at a time)
+	promoMu    sync.Mutex // v1.12 promotion sender (one drain at a time)
+
+	// transferRPCForTest replaces the cloud for stock-transfer tests.
+	transferRPCForTest transferRPCFunc
+	// promo senders replaced in tests
+	promoSMSForTest      func(phones []string, body string) ([]promoSendResult, error)
+	promoWhatsappForTest func(phone, body string) error
 }
 
 func New(db *database.DB, st *settings.Store, hub *ws.Hub, pw *printer.Worker) *Service {
@@ -192,18 +202,53 @@ func (s *Service) SetLanAddr(addr string) {
 // interruption is rude). Open shifts are durable on disk and do NOT
 // block — a forgotten overnight shift must never wedge updates.
 func (s *Service) HasUnfinishedWork() bool {
-	var paying int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM payments WHERE status = ?`, models.PaymentPending).Scan(&paying)
-	if paying > 0 {
-		return true
+	return s.hasUnfinishedWorkAt(time.Now())
+}
+
+// Busy windows for the auto-update gate.
+const (
+	otaPaymentWindow = 10 * time.Minute // an M-Pesa/card prompt in flight (STK times out in ~2 min)
+	otaSellingWindow = 15 * time.Minute // someone rang up a sale just now
+)
+
+// hasUnfinishedWorkAt decides in Go, never by comparing time strings in
+// SQL: the app writes "2006-01-02T15:04:05.000Z" while SQLite's
+// datetime('now') is "2006-01-02 15:04:05" — compared as text, every
+// order of the day looked "recent" ('T' > ' '), so a till that is switched
+// off at night never found a quiet moment and never updated (v1.12 fix).
+// Tab sales keep a PENDING 'account' leg until the customer pays — that
+// is a debt, not money in flight, and must not block updates forever;
+// neither may an abandoned prompt from last week.
+func (s *Service) hasUnfinishedWorkAt(now time.Time) bool {
+	recent := func(raw string, window time.Duration) bool {
+		t, err := parseClock(normTime(raw))
+		if err != nil {
+			return false
+		}
+		return now.Sub(t) < window && t.Sub(now) < time.Hour // clock skew guard
 	}
-	var recent int
-	if s.db.IsSQLite() {
-		_ = s.db.QueryRow(`SELECT COUNT(*) FROM orders WHERE created_at >= datetime('now', '-15 minutes')`).Scan(&recent)
-	} else {
-		_ = s.db.QueryRow(`SELECT COUNT(*) FROM orders WHERE created_at >= NOW() - interval '15 minutes'`).Scan(&recent)
+	if rows, err := s.db.Query(s.db.Rebind(`SELECT COALESCE(created_at,'') FROM payments
+		WHERE status = ? AND method != 'account' ORDER BY id DESC LIMIT 50`), models.PaymentPending); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var at string
+			if rows.Scan(&at) == nil && recent(at, otaPaymentWindow) {
+				return true
+			}
+		}
 	}
-	return recent > 0
+	rows, err := s.db.Query(`SELECT COALESCE(created_at,'') FROM orders ORDER BY id DESC LIMIT 20`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var at string
+		if rows.Scan(&at) == nil && recent(at, otaSellingWindow) {
+			return true
+		}
+	}
+	return false
 }
 
 // AppVersion returns the stamped build version ("dev" when unset).

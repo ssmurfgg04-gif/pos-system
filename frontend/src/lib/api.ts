@@ -488,6 +488,8 @@ export interface Order {
   cashierName: string
   customerName: string
   customerId: number
+  /** v1.12: where the receipt goes (2547…), resolved by the server */
+  customerPhone?: string
   note: string
   clientUuid: string
   discrepancy: boolean

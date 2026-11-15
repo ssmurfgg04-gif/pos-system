@@ -72,8 +72,9 @@ export function ReceiptModal({ order: given, branding, open, onClose }: {
   // produced an invalid click-to-chat link — normalize like the server
   // does for automatic sends (services/whatsapp.go normalizeWhatsappPhone).
   const customerDigits = (): string => {
+    // v1.12: the customer's saved number first (a cash sale has no payer phone)
     const p = (order.payments ?? []).find((x) => (x.phone || '').replace(/\D/g, '').length >= 9)
-    let d = (p?.phone || '').replace(/\D/g, '')
+    let d = (order.customerPhone || p?.phone || '').replace(/\D/g, '')
     if (d.startsWith('0')) d = '254' + d.slice(1)
     else if (d.startsWith('7') || d.startsWith('1')) d = '254' + d
     return d
@@ -127,15 +128,15 @@ export function ReceiptModal({ order: given, branding, open, onClose }: {
       // inside the WebView2 app window, where in-page window.open and
       // custom-protocol navigation go nowhere (the customer complaint).
       try {
-        const r = await api.post<{ opened: boolean }>(`/api/v1/whatsapp-open`, { phone: digits, text: caption() })
+        const r = await api.post<{ opened: boolean; remote?: boolean }>(`/api/v1/whatsapp-open`, { phone: digits, text: caption() })
         if (r.opened) {
           setShareState('saved')
           toast.success('WhatsApp opened', digits ? `Chat to ${digits} is loaded — attach the saved receipt image and send.` : 'Pick the chat, attach the saved receipt image and send.')
           return
         }
-        setShareError('WhatsApp is not installed on this machine — the receipt image is saved; open a browser and press Share again, or install WhatsApp Desktop.')
-        setShareState('saved')
-        return
+        // v1.12: opened=false is never a dead end. A cashier PC using the
+        // POS over the shop network (remote) opens WhatsApp on its own
+        // screen below; a till without WhatsApp Desktop gets WhatsApp Web.
       } catch {
         /* browser-only mode or an older server — deep-link below */
       }

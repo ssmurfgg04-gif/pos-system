@@ -58,6 +58,10 @@ func (s *Service) applyEvent(entity, op string, payload json.RawMessage) error {
 		return s.applyReturn(payload)
 	case "expense":
 		return s.applyExpense(payload)
+	case "timecard":
+		return s.applyTimecard(payload)
+	case "consent":
+		return s.applyConsent(payload)
 	default:
 		return nil // unknown entity types are skipped (forward compatibility)
 	}

@@ -288,34 +288,30 @@ type pinBody struct {
 	ShopID string `json:"shopId"`
 }
 
-// PinLogin is the fast shift-switch path (4-digit PIN, bcrypt-hashed at
-// rest, escalating lockout, rate limited).
-func (h *H) PinLogin(c *gin.Context) {
-	var body pinBody
-	if err := c.ShouldBindJSON(&body); err != nil {
-		h.fail(c, 400, "userId and 4-digit pin required")
-		return
-	}
+// checkPin verifies a PIN pad attempt (rate limits, shop binding,
+// escalating lockout) and writes the failure response itself. Shared by
+// PIN sign-in and the PIN-pad time clock, so both have the same defences.
+func (h *H) checkPin(c *gin.Context, body pinBody) (string, *auth.Principal, bool) {
 	// Rate limit on the composite (shop, user) + source — a spray across
 	// shops or users cannot share one bucket.
 	if !h.PinRL.Allow("pin:"+body.ShopID+":"+itoa64(body.UserID)) || !h.IPRL.Allow("pin-ip:"+c.ClientIP()) {
 		h.fail(c, 429, "too many attempts, wait a minute")
-		return
+		return "", nil, false
 	}
 	if h.Shops == nil {
 		h.fail(c, 500, "tenancy not configured")
-		return
+		return "", nil, false
 	}
 	var shopID string
 	if body.ShopID != "" {
 		// EXPLICIT binding: the shop must exist and hold this user.
 		if h.Tenants == nil {
 			h.fail(c, 500, "tenancy not configured")
-			return
+			return "", nil, false
 		}
 		if _, ok := h.Tenants.Find(body.ShopID); !ok {
 			h.fail(c, 404, "unknown shop")
-			return
+			return "", nil, false
 		}
 		shopID = body.ShopID
 	} else {
@@ -323,18 +319,18 @@ func (h *H) PinLogin(c *gin.Context) {
 		sid, ok := h.Shops.FindUserShop(body.UserID)
 		if !ok {
 			h.fail(c, 401, "invalid user")
-			return
+			return "", nil, false
 		}
 		shopID = sid
 	}
 	db, err := h.Shops.DB(shopID)
 	if err != nil {
 		h.fail(c, 401, "invalid user")
-		return
+		return "", nil, false
 	}
 	if wait := auth.PINLockRemaining(db, body.UserID); wait > 0 {
 		h.fail(c, 423, "PIN locked, try again in "+itoa(wait)+"s")
-		return
+		return "", nil, false
 	}
 	var pinHash string
 	err = db.QueryRow(db.Rebind(
@@ -343,25 +339,40 @@ func (h *H) PinLogin(c *gin.Context) {
 		// The user simply does not exist in the bound shop — 401,
 		// identical wording to a wrong PIN path (no shop enumeration).
 		h.fail(c, 401, "invalid user")
-		return
+		return "", nil, false
 	}
 	if !auth.VerifyPassword(pinHash, body.PIN) {
 		lock := auth.RegisterPINFailure(db, body.UserID)
 		if lock > 0 {
 			h.fail(c, 423, "wrong PIN, locked for "+itoa(lock)+"s")
-			return
+			return "", nil, false
 		}
 		h.fail(c, 401, "wrong PIN")
-		return
+		return "", nil, false
 	}
 	auth.ResetPINFailures(db, body.UserID)
 	p, err := auth.LoadPrincipal(db, body.UserID)
 	if err != nil {
 		h.fail(c, 403, "account inactive")
-		return
+		return "", nil, false
 	}
 	p.ShopID = shopID
 	h.PinRL.Forget("pin:" + body.ShopID + ":" + itoa64(body.UserID))
+	return shopID, p, true
+}
+
+// PinLogin is the fast shift-switch path (4-digit PIN, bcrypt-hashed at
+// rest, escalating lockout, rate limited).
+func (h *H) PinLogin(c *gin.Context) {
+	var body pinBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.fail(c, 400, "userId and 4-digit pin required")
+		return
+	}
+	shopID, p, ok := h.checkPin(c, body)
+	if !ok {
+		return
+	}
 	token, err := auth.IssueToken(h.MasterSecret, p.ID, p.Username, shopID)
 	if err != nil {
 		h.fail(c, 500, "token error")
