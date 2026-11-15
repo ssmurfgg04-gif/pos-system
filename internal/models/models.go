@@ -251,8 +251,8 @@ type Order struct {
 	TaxPercent     float64 `json:"taxPercent"`
 	TaxIncluded    bool    `json:"taxIncluded"`
 	CashierID      int64   `json:"cashierId"`
-	// v1.12: the number a receipt goes to (customer record, else the payer
-	// leg), 2547… form; "" when the sale has none.
+	// v1.11.1: the number a receipt goes to (customer record, else the
+	// payer leg), 2547… form; "" when the sale has none.
 	CustomerPhone string `json:"customerPhone"`
 	CashierName   string `json:"cashierName"`
 	CustomerName  string `json:"customerName"`

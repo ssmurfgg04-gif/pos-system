@@ -221,7 +221,7 @@ const (
 // neither may an abandoned prompt from last week.
 func (s *Service) hasUnfinishedWorkAt(now time.Time) bool {
 	recent := func(raw string, window time.Duration) bool {
-		t, err := parseClock(normTime(raw))
+		t, err := time.Parse(time.RFC3339, normTime(raw))
 		if err != nil {
 			return false
 		}

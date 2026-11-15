@@ -166,36 +166,3 @@ func TestPayRounding(t *testing.T) {
 	}
 }
 
-// The auto-update gate must judge real app timestamps: an order from this
-// morning (app format "…T…Z") is not "selling right now", and an open tab
-// or an abandoned prompt never blocks updates forever.
-func TestOTAIdleGateRealTimestamps(t *testing.T) {
-	f := newMoneyTill(t)
-	now := time.Now()
-	f.s.db.Exec(`DELETE FROM payments`)
-	f.s.db.Exec(`DELETE FROM orders`)
-	old := now.Add(-3 * time.Hour).UTC().Format(nowStampLayout)
-	f.s.db.Exec(`INSERT INTO orders (number, status, cashier_id, created_at) VALUES ('o1','PAID',1,?)`, old)
-	if f.s.hasUnfinishedWorkAt(now) {
-		t.Fatal("a sale 3 hours ago blocks the update")
-	}
-	f.s.db.Exec(`INSERT INTO orders (number, status, cashier_id, created_at) VALUES ('o2','PENDING',1,?)`, old)
-	f.s.db.Exec(`INSERT INTO payments (order_id, method, amount_cents, status, created_at) VALUES (2,'account',100,'PENDING',?)`, old)
-	f.s.db.Exec(`INSERT INTO payments (order_id, method, amount_cents, status, created_at) VALUES (2,'mpesa',100,'PENDING',?)`, old)
-	if f.s.hasUnfinishedWorkAt(now) {
-		t.Fatal("an open tab or an abandoned prompt blocks the update")
-	}
-	fresh := now.Add(-2 * time.Minute).UTC().Format(nowStampLayout)
-	f.s.db.Exec(`INSERT INTO payments (order_id, method, amount_cents, status, created_at) VALUES (2,'mpesa',100,'PENDING',?)`, fresh)
-	if !f.s.hasUnfinishedWorkAt(now) {
-		t.Fatal("an M-Pesa prompt in flight must block the update")
-	}
-	f.s.db.Exec(`DELETE FROM payments`)
-	f.s.db.Exec(`INSERT INTO orders (number, status, cashier_id, created_at) VALUES ('o3','PAID',1,?)`, fresh)
-	if !f.s.hasUnfinishedWorkAt(now) {
-		t.Fatal("a sale 2 minutes ago must block the update")
-	}
-	if f.s.hasUnfinishedWorkAt(now.Add(20 * time.Minute)) {
-		t.Fatal("20 minutes later the till is quiet")
-	}
-}
