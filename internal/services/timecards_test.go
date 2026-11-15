@@ -165,4 +165,3 @@ func TestPayRounding(t *testing.T) {
 		t.Fatal("no rate must be no pay")
 	}
 }
-

@@ -230,6 +230,18 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	ac.GET("/accounting/accounts", h.AccountingAccounts)
 	ac.PUT("/accounting/accounts", h.SaveAccountingAccounts)
 
+	// Customer promotions by SMS / WhatsApp (v1.12). Consent is part of
+	// the customer record; anyone who manages customers can record it.
+	authd.PUT("/customers/:id/marketing", perm("customers.manage"), h.SetMarketingConsent)
+	authd.POST("/promotions/opt-out", permAny("marketing.send", "customers.manage"), h.PromoOptOut)
+	pm := authd.Group("", perm("marketing.send"))
+	pm.GET("/promotions", h.ListPromos)
+	pm.POST("/promotions", h.CreatePromo)
+	pm.POST("/promotions/audience", h.PromoAudience)
+	pm.POST("/promotions/test", h.PromoTest)
+	pm.GET("/promotions/:id", h.GetPromo)
+	pm.POST("/promotions/:id/:action", h.PromoAction)
+
 	// Design board.
 	authd.GET("/design", perm("design.view"), h.ListDesignJobs)
 	// Creating a job is a DELEGATION action (the front desk hands
