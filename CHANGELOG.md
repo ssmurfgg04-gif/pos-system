@@ -3,6 +3,35 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.11.0 — Mixed VAT, strict KRA order, stock to KRA, QR everywhere
+
+- **Mixed VAT in one sale.** Each product's KRA tax type now sets its VAT:
+  16% standard, 8%, or 0% for exempt and zero-rated goods (maize flour,
+  milk, ...). The cart, the receipt and KRA all agree to the cent, with a
+  VAT line per rate when a sale mixes them. Shops that only sell 16% goods
+  get exactly the same totals as before.
+- **Points lower the VAT too.** When a customer pays part with loyalty
+  points, the VAT is the VAT inside what they actually paid, on the
+  receipt and at KRA.
+- **Gift cards are not income until spent.** Selling a gift card is no
+  longer counted as profit and is never sent to KRA as a sale.
+- **KRA always gets invoices in order.** With several tills, or after the
+  internet was down, invoices reach KRA strictly in number order with no
+  gaps, even if a send is cut off half way.
+- **Stock reported to KRA.** Goods received, adjustments, write-offs and
+  returns are sent to KRA as stock movements, with the remaining stock.
+- **KRA QR on every receipt.** Thermal receipts print the QR as a picture
+  that works on any ESC/POS printer (switchable to the printer's own QR in
+  Settings → Printer), and the WhatsApp receipt image carries it too.
+- **KRA product settings sync.** A product's tax type and KRA item class
+  set on one till now reach every till in the shop.
+- **F12 to charge.** F12 opens the payment step; F12 again takes the
+  payment. Cash is two key presses.
+- Under the hood: migration v31 (per-line tax on order items), cloud
+  schema `db/deploy-v1110-etims-order.sql`, `etims` function v3, one
+  shared money fixture (`testdata/money_lines.json`) pinning the Go and
+  TypeScript maths to the same answers.
+
 ## v1.10.0 — KRA eTIMS, real profit, a cart that shows everything
 
 - **KRA eTIMS (OSCU).** Connect the shop's eTIMS device in Settings →

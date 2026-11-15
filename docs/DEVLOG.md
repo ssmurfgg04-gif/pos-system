@@ -1,4 +1,30 @@
 ---
+Task ID: v1.11.0
+Agent: main (Claude)
+Task: "fix all those issues just make the code bulletproof ... think long
+  term a lot of the stuff like printers i dont have rn but clients will"
+
+Work Log:
+- Per-line VAT: internal/money/lines.go (Spread, ComputeLines) mirrored in
+  frontend/src/lib/money.ts, both pinned by testdata/money_lines.json.
+  Same-rate sales are exactly the old maths (equivalence test). Migration
+  v31 freezes tax_type/tax_rate/tax_cents/paid_cents per order item, so
+  receipts, returns and KRA read what was charged, not today's product.
+- Gift cards: tax type X (never sent; sale with only gift cards skipped),
+  taken off profit as "Gift cards sold".
+- KRA order: per-store lease + drainHead (oldest pending first, request
+  saved before send) + etims_release_invoice for refusals. Stock IO with
+  its own gapless sarNo, gated behind the related invoice on the till.
+  Edge function `etims` v3 deployed; SQL applied and probed.
+- QR: vendored skip2/go-qrcode (MIT) in internal/qrcode; raster GS v 0 by
+  default (prints on any ESC/POS), native GS ( k optional; QR on the
+  WhatsApp image.
+- Teamsync carries etimsTaxType / etimsClsCd (validated on apply).
+- F12: cart → pay step → charge.
+- Still needs Jack: KRA sandbox credentials, a real M-Pesa sale, a real
+  thermal printer to confirm the QR picture scans.
+
+---
 Task ID: v1.10.0-review
 Agent: main (Claude)
 Task: "Do an ultra criticism of the pos ... fix what needs to be fixed ...
