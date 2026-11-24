@@ -634,6 +634,10 @@ type TeamMember struct {
 	SalesToday      int64  `json:"salesToday"`
 	SalesTodayCents int64  `json:"salesTodayCents"`
 	LastOrderAt     string `json:"lastOrderAt"`
+	// v33 presence: last authenticated request (UTC RFC3339, "" = never)
+	// and whether they're clocked in on a timecard right now.
+	LastSeenAt string `json:"lastSeenAt"`
+	ClockedIn  bool   `json:"clockedIn"`
 }
 
 // ---- Team sync (cloud linking) ----

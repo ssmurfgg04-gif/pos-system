@@ -1066,6 +1066,10 @@ export interface TeamMember extends User {
   salesToday: number
   salesTodayCents: number
   lastOrderAt: string
+  /** v33: last authenticated request (UTC ISO, '' = never). */
+  lastSeenAt: string
+  /** v33: clocked in on a timecard right now. */
+  clockedIn: boolean
 }
 
 export interface DashboardConfig {

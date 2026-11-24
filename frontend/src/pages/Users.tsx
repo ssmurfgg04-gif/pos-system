@@ -79,7 +79,7 @@ export function Users() {
           // Older/demo backends without the overview endpoint still work —
           // just without the per-member sales stats.
           api.get<User[]>('/api/v1/users').then((us) =>
-            us.map((u) => ({ ...u, salesToday: 0, salesTodayCents: 0, lastOrderAt: '' })),
+            us.map((u) => ({ ...u, salesToday: 0, salesTodayCents: 0, lastOrderAt: '', lastSeenAt: '', clockedIn: false })),
           ),
         ),
         api.get<Role[]>('/api/v1/roles'),
@@ -104,6 +104,19 @@ export function Users() {
       toast.error('Failed', e?.message)
     }
   }
+
+  const remove = async (u: User) => {
+    if (!confirm(`Remove ${u.fullName || u.username} from the team? They can't sign in and drop off this list. Their past sales stay on record.`)) return
+    try {
+      await api.post(`/api/v1/users/${u.id}/remove`, {})
+      toast.success('Removed from the team', u.username)
+      load()
+    } catch (e: any) {
+      toast.error('Failed', e?.message)
+    }
+  }
+
+  const onlineNow = (members ?? []).filter((m) => m.active && isOnline(m.lastSeenAt))
 
   return (
     <div className="space-y-4">
@@ -130,13 +143,19 @@ export function Users() {
           />
         </div>
 
+        {tab === 'team' && members && members.length > 0 && (
+          <div className="px-4 pb-3 text-[12px] text-ink-muted">
+            <span className="font-bold text-ink">{onlineNow.length} active now</span>
+            {onlineNow.length > 0 && <>: {onlineNow.map((m) => m.fullName || m.username).join(', ')}</>}
+          </div>
+        )}
         {tab === 'team' ? (
           !members ? (
             <div className="py-12 flex justify-center"><Spinner /></div>
           ) : members.length === 0 ? (
             <EmptyState icon={<UsersIcon size={24} strokeWidth={2.25} />} title="No users" />
           ) : (
-            <Table head={['Member', 'Role', 'Today', 'Last order', 'Status', '']}>
+            <Table head={['Member', 'Role', 'Today', 'Last order', 'Seen', 'Status', '']}>
               {members.map((u) => (
                 <tr key={u.id} className={u.active ? '' : 'opacity-50'}>
                   <td className="px-3 py-2.5">
@@ -171,6 +190,16 @@ export function Users() {
                   <td className="px-3 py-2.5 text-[12px] text-ink-muted tabular whitespace-nowrap">
                     {u.lastOrderAt ? fmtDateTime(u.lastOrderAt) : ', '}
                   </td>
+                  <td className="px-3 py-2.5 text-[12px] whitespace-nowrap">
+                    {isOnline(u.lastSeenAt) ? (
+                      <span className="inline-flex items-center gap-1.5 font-bold text-ink">
+                        <span className="w-2 h-2 rounded-full bg-paid-text" aria-hidden /> Online now
+                      </span>
+                    ) : (
+                      <span className="text-ink-muted tabular">{u.lastSeenAt ? seenAgo(u.lastSeenAt) : 'never'}</span>
+                    )}
+                    {u.clockedIn && <span className="block text-[11px] text-ink-subtle">On the clock</span>}
+                  </td>
                   <td className="px-3 py-2.5">
                     <span className="inline-flex flex-wrap items-center gap-1">
                       <StatusPill status={u.active ? 'paid' : 'void'} label={u.active ? 'Active' : 'Inactive'} />
@@ -185,6 +214,9 @@ export function Users() {
                       <Button size="sm" variant="ghost" onClick={() => setPinFor(u)}>PIN</Button>
                       {u.active && u.id !== me?.id && (
                         <Button size="sm" variant="ghost" className="text-danger-text ml-2 border-l-2 border-line pl-3" onClick={() => deactivate(u)}>Deactivate</Button>
+                      )}
+                      {u.id !== me?.id && (
+                        <Button size="sm" variant="ghost" className="text-danger-text" onClick={() => remove(u)}>Remove</Button>
                       )}
                     </span>
                   </td>
@@ -592,4 +624,21 @@ function RoleModal({ role, catalog, onClose, onSaved }: { role: Role | null; cat
       </div>
     </Modal>
   )
+}
+
+/** Seen in the last 5 minutes (stamps are throttled to once a minute). */
+function isOnline(iso?: string): boolean {
+  if (!iso) return false
+  const t = Date.parse(iso)
+  return !Number.isNaN(t) && Date.now() - t < 5 * 60_000
+}
+
+function seenAgo(iso: string): string {
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return 'never'
+  const m = Math.round((Date.now() - t) / 60_000)
+  if (m < 60) return `${m} min ago`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h} h ago`
+  return fmtDateTime(iso)
 }

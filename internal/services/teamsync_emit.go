@@ -6,6 +6,9 @@
 package services
 
 import (
+	"strings"
+
+	"posapp/internal/auth"
 	"posapp/internal/models"
 )
 
@@ -31,7 +34,7 @@ func (s *Service) EmitOrder(orderID int64) {
 		DiscountLabel: order.DiscountLabel, PointsRedeemed: order.PointsRedeemed,
 		TaxCents: order.TaxCents, TotalCents: order.TotalCents,
 		TaxPercent: order.TaxPercent, TaxIncluded: order.TaxIncluded,
-		CashierName: order.CashierName, CustomerName: order.CustomerName,
+		CashierName: order.CashierName, CashierUsername: s.usernameOf(order.CashierID), CustomerName: order.CustomerName,
 		CustomerPhone: phone, Note: order.Note, BuyerPin: order.BuyerPIN,
 		InvoiceNumber: order.InvoiceNumber,
 		CreatedAt:     order.CreatedAt, PaidAt: order.PaidAt,
@@ -297,4 +300,23 @@ func (s *Service) EmitExpense(e *models.Expense) {
 		"note": e.Note, "spentOn": e.SpentOn, "createdByName": e.CreatedByName,
 		"createdAt": e.CreatedAt,
 	})
+}
+
+// usernameOf is the local username for a user id ("" when unknown) — sent
+// beside the display name so receiving tills attribute the sale exactly.
+func (s *Service) usernameOf(id int64) string {
+	var u string
+	_ = s.db.QueryRow(s.db.Rebind(`SELECT username FROM users WHERE id = ?`), id).Scan(&u)
+	return u
+}
+
+// principalDisplayName is the name stamped on a sale: full name, else username.
+func principalDisplayName(p *auth.Principal) string {
+	if p == nil {
+		return ""
+	}
+	if n := strings.TrimSpace(p.FullName); n != "" {
+		return n
+	}
+	return p.Username
 }

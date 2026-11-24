@@ -156,24 +156,17 @@ export async function shareReceiptWhatsapp(
   const waWeb = waMeLink(digits, caption)
   const base = { phone: digits, clipboardOk: false, hostOpened: false, waWebUrl: waWeb }
 
-  // Leg 1 — server queue (gateway connected, PAID order).
-  if (order.status === 'PAID') {
-    try {
-      const r = await d.apiPost(`/api/v1/orders/${order.id}/whatsapp-send`, {})
-      if (r?.queued) return { ...base, kind: 'queued', phone: r.phone || digits }
-    } catch {
-      /* gateway off (under review) or no phone — device legs carry the
-         very same image below. */
-    }
-  }
-
+  // v1.13 SAVE & SEND: the button always opens WhatsApp on the
+  // customer's number. The old server-queue leg answered "queued" and
+  // opened nothing, and the share sheet lost the contact — both gone
+  // whenever a number is known.
   const b = await d.fetchImage()
 
   // Leg 2 — native share sheet (Android, Windows 11 + Store WhatsApp).
   // On a PC with the customer's number known, skip it: Windows' sheet
   // opens WhatsApp without the contact (the cashier then had to search).
   const file = new File([b], IMG_NAME(order), { type: 'image/png' })
-  if ((!digits || d.isMobile()) && d.canShareFiles(file)) {
+  if (!digits && d.canShareFiles(file)) {
     try {
       await d.share({ files: [file], text: caption })
       return { ...base, kind: 'shared' }

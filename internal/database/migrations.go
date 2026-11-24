@@ -1920,6 +1920,31 @@ CREATE INDEX IF NOT EXISTS idx_promo_recipients_status ON promo_recipients(campa
 			})
 		},
 	},
+	{
+		// v33 — who made each sale, who is on, removing people.
+		//
+		// 1) orders.cashier_name snapshots the seller's display name at
+		//    checkout (and carries the ORIGIN till's name on synced
+		//    orders). Synced sales used to resolve cashier_id by
+		//    username against the receiving till's users and fall back
+		//    to its first account — every remote sale read as the
+		//    machine owner.
+		// 2) users.last_seen_at — stamped (throttled) on authenticated
+		//    requests so admins can see who is active right now.
+		// 3) users.removed_at — "Remove" takes a person off the team
+		//    list for good; the row stays so past sales keep their FK.
+		Version: 33,
+		SQLite: `
+ALTER TABLE orders ADD COLUMN cashier_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN last_seen_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN removed_at TEXT NOT NULL DEFAULT '';
+`,
+		Pg: `
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS cashier_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS removed_at TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // backfillRolePermsV19 unions the v19 sales-oversight permission into the

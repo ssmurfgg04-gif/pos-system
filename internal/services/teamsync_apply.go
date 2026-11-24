@@ -497,6 +497,8 @@ type orderEvent struct {
 	TaxPercent     float64 `json:"taxPercent"`
 	TaxIncluded    bool    `json:"taxIncluded"`
 	CashierName    string  `json:"cashierName"`
+	// v33: the seller's username on the origin till ("" from older tills).
+	CashierUsername string `json:"cashierUsername,omitempty"`
 	CustomerName   string  `json:"customerName"`
 	CustomerPhone  string  `json:"customerPhone"`
 	Note           string  `json:"note"`
@@ -590,13 +592,17 @@ func (s *Service) applyOrder(payload json.RawMessage) error {
 	// EVERY cross-device order insert fail (and the cursor still advanced,
 	// silently dropping synced orders). Resolve a local user: the same
 	// username when it exists here, else any local staff account.
-	cashierID := s.resolveLocalCashierID(tx, oe.CashierName)
+	// v33: resolve by the origin's USERNAME first (CashierName is the
+	// display name, which rarely equals a username — that miss is what
+	// stamped every remote sale onto this machine's first account), and
+	// keep the origin's display name on the row whatever we resolve.
+	cashierID := s.resolveLocalCashierID(tx, oe.CashierUsername, oe.CashierName)
 	res, err := tx.Exec(s.db.Rebind(`
                 INSERT INTO orders (number, status, subtotal_cents, tax_cents, total_cents, tax_percent, tax_included,
-                        discount_cents, discount_label, points_redeemed, cashier_id, customer_name, note, client_uuid, created_at, paid_at, customer_id, buyer_pin, invoice_number, device_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                        discount_cents, discount_label, points_redeemed, cashier_id, cashier_name, customer_name, note, client_uuid, created_at, paid_at, customer_id, buyer_pin, invoice_number, device_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		number, status, oe.SubtotalCents, oe.TaxCents, oe.TotalCents, oe.TaxPercent, taxInc,
-		oe.DiscountCents, oe.DiscountLabel, oe.PointsRedeemed, cashierID, oe.CustomerName, oe.Note, oe.ClientUUID, oe.CreatedAt, paidAt, custID, oe.BuyerPin, oe.InvoiceNumber, oe.DeviceID)
+		oe.DiscountCents, oe.DiscountLabel, oe.PointsRedeemed, cashierID, oe.CashierName, oe.CustomerName, oe.Note, oe.ClientUUID, oe.CreatedAt, paidAt, custID, oe.BuyerPin, oe.InvoiceNumber, oe.DeviceID)
 	if err != nil {
 		return err
 	}

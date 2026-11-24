@@ -58,6 +58,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 			return
 		}
 		p.ShopID = shopID
+		auth.TouchLastSeen(svc.DB(), shopID, p.ID)
 		auth.WithPrincipal(c, p)
 		auth.WithShopID(c, shopID)
 		handlers.WithShopService(c, svc)
@@ -319,6 +320,7 @@ func New(h *handlers.H, frontend fs.FS) *gin.Engine {
 	users.POST("/users", h.CreateUser)
 	users.PUT("/users/:id", h.UpdateUser)
 	users.DELETE("/users/:id", h.DeactivateUser)
+	users.POST("/users/:id/remove", h.RemoveUser)
 	// Everyone rotates their own credentials (self-service); managing
 	// others still needs users.manage (enforced inside the handlers).
 	authd.PUT("/users/:id/password", h.SetPassword)

@@ -295,8 +295,10 @@ func (s *Service) TeamOverview() ([]models.TeamMember, error) {
 	rows, err := s.db.Query(`
                 SELECT u.id, u.username, COALESCE(u.full_name,''), u.role_id, r.name,
                         COALESCE(u.is_active,1), COALESCE(u.must_rotate,0), COALESCE(u.pin_hash,'') != '',
-                        u.created_at
+                        u.created_at, COALESCE(u.last_seen_at,''),
+                        CASE WHEN EXISTS (SELECT 1 FROM time_entries t WHERE t.user_id = u.id AND t.clock_out = '' AND t.status = 'active') THEN 1 ELSE 0 END
                 FROM users u LEFT JOIN roles r ON r.id = u.role_id
+                WHERE COALESCE(u.removed_at,'') = ''
                 ORDER BY u.is_active DESC, u.id ASC`)
 	if err != nil {
 		return nil, err
@@ -309,15 +311,16 @@ func (s *Service) TeamOverview() ([]models.TeamMember, error) {
 	for rows.Next() {
 		var r row
 		var pinSet int
-		var active, rotate int
+		var active, rotate, clocked int
 		if err := rows.Scan(&r.m.ID, &r.m.Username, &r.m.FullName, &r.roleID, &r.m.RoleName,
-			&active, &rotate, &pinSet, &r.m.CreatedAt); err != nil {
+			&active, &rotate, &pinSet, &r.m.CreatedAt, &r.m.LastSeenAt, &clocked); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		r.m.Active = active == 1
 		r.m.MustRotate = rotate == 1
 		r.m.PINSet = pinSet == 1
+		r.m.ClockedIn = clocked == 1
 		r.m.Permissions = []string{}
 		list = append(list, r)
 	}

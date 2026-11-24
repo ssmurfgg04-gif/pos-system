@@ -30,7 +30,7 @@ func (h *H) ListUsers(c *gin.Context) {
 	rows, err := h.db(c).Query(h.db(c).Rebind(`
                 SELECT u.id, u.username, COALESCE(u.full_name,''), u.role_id, COALESCE(r.name,''),
                         u.is_active, CASE WHEN u.pin_hash != '' THEN 1 ELSE 0 END, u.created_at
-                FROM users u JOIN roles r ON r.id = u.role_id ORDER BY u.id`))
+                FROM users u JOIN roles r ON r.id = u.role_id WHERE COALESCE(u.removed_at,'') = '' ORDER BY u.id`))
 	if err != nil {
 		h.fail(c, 500, err.Error())
 		return
@@ -445,6 +445,33 @@ func (h *H) DeactivateUser(c *gin.Context) {
 	}
 	h.svc(c).Audit(p.ID, p.Username, "USER_DEACTIVATED", "user", itoa64(id), "")
 	h.ok(c, gin.H{"deactivated": true})
+}
+
+// RemoveUser (users.manage) takes a person off the team for good: they
+// can't sign in (password or PIN) and drop off every staff list. The row
+// is kept — past sales, shifts and audit entries still point at it.
+func (h *H) RemoveUser(c *gin.Context) {
+	p := h.principal(c)
+	id, ok := h.pathID(c, "id")
+	if !ok {
+		return
+	}
+	if id == p.ID {
+		h.fail(c, 409, "you cannot remove yourself")
+		return
+	}
+	if !h.lastOwnerGuard(c, id, 0, 0) {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := h.db(c).Exec(h.db(c).Rebind(`UPDATE users SET is_active = 0, pin_hash = '', removed_at = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND COALESCE(removed_at,'') = ''`), now, id)
+	if err != nil || n(res) != 1 {
+		h.fail(c, 404, "user not found")
+		return
+	}
+	h.svc(c).Audit(p.ID, p.Username, "USER_REMOVED", "user", itoa64(id), "")
+	h.ok(c, gin.H{"removed": true})
 }
 
 func n(res sql.Result) int64 {

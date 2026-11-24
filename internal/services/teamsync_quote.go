@@ -144,10 +144,18 @@ func (s *Service) applyQuote(payload json.RawMessage) error {
 // the same username when this device knows it, else any active user
 // (the receiving till owns the record — attribution stays informative).
 
-func (s *Service) resolveLocalCashierID(tx *sql.Tx, username string) int64 {
-	if username != "" {
+func (s *Service) resolveLocalCashierID(tx *sql.Tx, names ...string) int64 {
+	// v33: each candidate is tried as a username, then as a full name —
+	// orders carry the seller's display name, which is rarely a username.
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n == "" {
+			continue
+		}
 		var id int64
-		if err := tx.QueryRow(`SELECT id FROM users WHERE username = ?`, username).Scan(&id); err == nil {
+		if err := tx.QueryRow(s.db.Rebind(`SELECT id FROM users WHERE username = ?`), n).Scan(&id); err == nil {
+			return id
+		}
+		if err := tx.QueryRow(s.db.Rebind(`SELECT id FROM users WHERE full_name = ? ORDER BY id LIMIT 1`), n).Scan(&id); err == nil {
 			return id
 		}
 	}

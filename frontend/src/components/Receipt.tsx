@@ -95,6 +95,12 @@ export function ReceiptModal({ order: given, branding, open, onClose }: {
     a.click()
     a.remove()
     window.setTimeout(() => URL.revokeObjectURL(url), 8000)
+    // Also on the clipboard so Ctrl+V / long-press Paste drops it in the chat.
+    try {
+      if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': b })])
+      }
+    } catch { /* clipboard blocked — the downloaded file is the attach path */ }
     return b
   }
 
@@ -102,24 +108,9 @@ export function ReceiptModal({ order: given, branding, open, onClose }: {
     setShareState('working')
     setShareError('')
     try {
-      // SERVER leg first (PAID orders, gateway connected): the branded
-      // IMAGE is queued to the customer's WhatsApp with the thank-you
-      // caption — the customer receives the picture without the cashier
-      // touching their phone. The button is an honest RESEND: pressing it
-      // again is exactly what "I didn't get it" needs.
-      if (order.status === 'PAID') {
-        try {
-          const r = await api.post<{ queued: boolean; phone: string }>(`/api/v1/orders/${order.id}/whatsapp-send`, {})
-          if (r.queued) {
-            setShareState('queued')
-            toast.success('Receipt queued', `The branded image goes to ${r.phone} on WhatsApp — check Settings → WhatsApp if it fails.`)
-            return
-          }
-        } catch {
-          /* gateway not connected (it is under review) or the sale has no
-             phone — the HOST/DEVICE paths below carry the very same image. */
-        }
-      }
+      // v1.13 SAVE & SEND: no server queue, no share sheet. Save the
+      // branded image (Downloads + clipboard), then open WhatsApp straight
+      // on the customer's number — the cashier pastes/attaches and sends.
       await saveReceiptImage()
       const digits = customerDigits()
       // v1.6.2 HOST leg: the Go process on the till hands whatsapp:// to
@@ -131,7 +122,7 @@ export function ReceiptModal({ order: given, branding, open, onClose }: {
         const r = await api.post<{ opened: boolean; remote?: boolean }>(`/api/v1/whatsapp-open`, { phone: digits, text: caption() })
         if (r.opened) {
           setShareState('saved')
-          toast.success('WhatsApp opened', digits ? `Chat to ${digits} is loaded — attach the saved receipt image and send.` : 'Pick the chat, attach the saved receipt image and send.')
+          toast.success('WhatsApp opened', digits ? `Chat to ${digits} is open — paste (Ctrl+V) or attach the saved receipt, then send.` : 'Pick the chat, attach the saved receipt image and send.')
           return
         }
         // v1.12: opened=false is never a dead end. A cashier PC using the

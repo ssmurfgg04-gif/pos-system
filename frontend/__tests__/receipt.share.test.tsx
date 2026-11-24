@@ -81,22 +81,19 @@ function findBtn(text: string): HTMLButtonElement | undefined {
 }
 
 describe('Receipt share via WhatsApp', () => {
-  test('PAID order: the gateway leg queues the IMAGE first and skips the device share', async () => {
+  test('v1.13 save & send: no gateway queue — image saved, chat opened on the number', async () => {
     apiPostMock.mockImplementation(async (path: string) => {
-      if (path.endsWith('/whatsapp-send')) return { queued: true, phone: '254722123456' }
+      if (path.endsWith('/whatsapp-open')) return { opened: true }
       throw new Error('unexpected: ' + path)
     })
-
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     mount(React.createElement(ReceiptModal, { order: order(), branding, open: true, onClose: () => {} }))
     await act(async () => {
       findBtn('Share via WhatsApp')!.click()
     })
-    // Server send ONLY: the customer receives the branded image from the
-    // shop's own number — no download, no app launch, no deep link.
-    expect(apiPostMock).toHaveBeenCalledWith('/api/v1/orders/42/whatsapp-send', {})
-    expect(blobMock).not.toHaveBeenCalled()
-    expect(waChatMock).not.toHaveBeenCalled()
-    expect(findBtn('Image queued')).toBeTruthy()
+    expect(apiPostMock).not.toHaveBeenCalledWith('/api/v1/orders/42/whatsapp-send', {})
+    expect(blobMock).toHaveBeenCalledWith('/api/v1/orders/42/receipt-image')
+    expect(apiPostMock).toHaveBeenCalledWith('/api/v1/whatsapp-open', expect.objectContaining({ phone: '254722123456' }))
   })
 
   test('HOST leg: the till opens WhatsApp with the chat preloaded — no browser fallback', async () => {

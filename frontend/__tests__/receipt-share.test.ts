@@ -94,18 +94,20 @@ describe('v1.12 cashier PC: the customer chat opens with the contact', () => {
 })
 
 describe('receipt-share decision tree', () => {
-  it('PAID order + gateway connected → the SERVER queues the image, nothing else runs', async () => {
-    const d = deps({ apiPost: vi.fn().mockResolvedValue({ queued: true, phone: '254712345678' }) })
+  it('v1.13 save & send: a known number never goes to the server queue — the chat opens', async () => {
+    const apiPost = vi.fn().mockResolvedValue({ queued: true, phone: '254712345678' })
+    const d = deps({ apiPost, canShareFiles: vi.fn().mockReturnValue(true), isMobile: () => true })
     const r = await shareReceiptWhatsapp(order(), 'Duka', d)
-    expect(r.kind).toBe('queued')
-    expect(r.phone).toBe('254712345678')
-    expect(d.fetchImage).not.toHaveBeenCalled()
-    expect(d.openExternal).not.toHaveBeenCalled()
+    expect(apiPost).not.toHaveBeenCalled()
+    expect(d.share).not.toHaveBeenCalled()
+    expect(r.kind).toBe('app-opened')
+    expect(d.download).toHaveBeenCalledTimes(1)
+    expect(d.openExternal).toHaveBeenCalledTimes(1)
   })
 
-  it('gateway off + browser can share FILES → native share sheet carries image + caption', async () => {
+  it('no number + browser can share FILES → native share sheet carries image + caption', async () => {
     const d = deps({ canShareFiles: vi.fn().mockReturnValue(true) })
-    const r = await shareReceiptWhatsapp(order(), 'Duka', d)
+    const r = await shareReceiptWhatsapp(order({ payments: [], customerPhone: '' } as Partial<Order>), 'Duka', d)
     expect(r.kind).toBe('shared')
     expect(d.share).toHaveBeenCalledTimes(1)
     const call = (d.share as ReturnType<typeof vi.fn>).mock.calls[0][0] as { files: File[]; text: string }
@@ -166,13 +168,13 @@ describe('receipt-share decision tree', () => {
       canShareFiles: vi.fn().mockReturnValue(true),
       share: vi.fn().mockRejectedValue(new DOMException('user cancelled', 'AbortError')),
     })
-    const r = await shareReceiptWhatsapp(order(), 'Duka', d)
+    const r = await shareReceiptWhatsapp(order({ payments: [], customerPhone: '' } as Partial<Order>), 'Duka', d)
     expect(r.kind).toBe('cancelled')
     expect(d.download).not.toHaveBeenCalled()
     expect(d.openExternal).not.toHaveBeenCalled()
   })
 
-  it('non-PAID orders skip the server leg entirely (no gateway spam)', async () => {
+  it('non-PAID orders never touch the server leg either', async () => {
     const apiPost = vi.fn().mockResolvedValue({ queued: true, phone: '254712345678' })
     const d = deps({ apiPost })
     await shareReceiptWhatsapp(order({ status: 'PENDING' }), 'Duka', d)

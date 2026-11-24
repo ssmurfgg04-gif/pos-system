@@ -190,10 +190,10 @@ func (s *Service) GetDailySummary(date string) (*DailySummary, error) {
 
 	// Per-staff sales (who sold what today) + new customers captured.
 	rows, err = s.db.Query(s.db.Rebind(`
-                SELECT u.id, COALESCE(u.full_name, u.username), COUNT(o.id), COALESCE(SUM(o.total_cents),0)
+                SELECT MIN(u.id), COALESCE(NULLIF(o.cashier_name,''), NULLIF(u.full_name,''), u.username), COUNT(o.id), COALESCE(SUM(o.total_cents),0)
                 FROM orders o JOIN users u ON u.id = o.cashier_id
                 WHERE o.status = 'PAID' AND o.created_at >= ? AND o.created_at < ?
-                GROUP BY u.id, COALESCE(u.full_name, u.username)
+                GROUP BY COALESCE(NULLIF(o.cashier_name,''), NULLIF(u.full_name,''), u.username)
                 ORDER BY SUM(o.total_cents) DESC LIMIT 50`), from, to)
 	if err == nil {
 		for rows.Next() {
