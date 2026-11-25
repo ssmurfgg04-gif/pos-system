@@ -3,6 +3,29 @@
 Release notes and known limitations. The full commit history is on GitHub;
 this file records what each release means for the shop.
 
+## v1.12.2 — Cashier attribution, team remove/presence, WhatsApp save & send
+
+- **Cashier attribution fixed.** When a sale arrived from another till, the
+  system looked up the seller's display name as if it were a username. That
+  lookup failed, so the sale fell back to the first account on the receiving
+  machine. Now each sale stores the real seller's name and username, and the
+  receiving till matches by username first, then full name. Fixes the Orders
+  "Cashier" column, the "Served by" line on receipts, and per-staff reports.
+  Sales that already synced wrongly stay wrong.
+- **Removing people.** The Team page has a new **Remove** button. A removed
+  person can't sign in with a password or PIN and drops off staff lists.
+  Their past sales stay on record. Remove only works on the till where you
+  press it (staff accounts don't sync between tills).
+- **Who is active.** The Team page now shows "N active now" with names, plus
+  a Seen column ("Online now" or "last seen 2 h ago") and an "On the clock"
+  tag for anyone clocked in. "Online now" means active in the last 5 minutes.
+- **WhatsApp share.** When the customer's number is known, the button saves
+  the receipt image (to Downloads and the clipboard) and opens the chat straight
+  on that number. The cashier then pastes (Ctrl+V) or attaches the image and
+  sends. The server-queue step, which reported "queued" but never opened
+  WhatsApp, has been removed. The phone share sheet, which lost the contact,
+  now only appears when there's no number.
+
 ## v1.12.1 — Live updates actually live, review fixes
 
 - **Live updates were never connecting.** The WebSocket route sat behind the
