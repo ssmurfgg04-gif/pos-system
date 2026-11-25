@@ -1,6 +1,6 @@
-LedgerPOS 1.12.1 — SHA-256 of the download packages
+LedgerPOS 1.12.2 — SHA-256 of the download packages
 
-5cb69fb4b55a3a5cc2a91dd7c31b64bd349487ee1251f93ae600ddab6fe480ad  ledgerpos-setup-windows-x64.exe
-9304a02f2eb2bbfe3a439fc943c2599e68795992dcd63e5ed59648c859155030  ledgerpos-macos-apple-silicon.zip
-16f9113a1e862f4b8cb587ddcdf9a8fb4f01570daa81528bec01d45e97f11161  ledgerpos-macos-intel.zip
-360c51741990b7df6fe58008eb9d6a5fa557159b421d15382f744a3b9dfdd2ae  ledgerpos-linux-x64.tar.xz
+400c68b2f3fe58d3d8aee83c0c5fe0ddcd9da4e47168145778127f23b83e7214  ledgerpos-setup-windows-x64.exe
+7b845b35800b55c8607beea5fe33066f6ec86e5c61c014a8b3d03a382346eca4  ledgerpos-macos-apple-silicon.zip
+8d9a902dc3ae97084295937fb17898c74924d049bfb750939ce887be15921faa  ledgerpos-macos-intel.zip
+e722984ad531e33d68f503ca3513bd7bb5400446fe35ac363e3dd021b9eb34fe  ledgerpos-linux-x64.tar.xz
